@@ -140,11 +140,13 @@ enum
 };
 
 #define DEFAULT_BLOCKSIZE       4*1024
+#define DEFAULT_LOOP 0
 
 enum
 {
   PROP_0,
-  PROP_LOCATION
+  PROP_LOCATION,
+  PROP_LOOP
 };
 
 static void gst_file_src_finalize (GObject * object);
@@ -191,6 +193,11 @@ gst_file_src_class_init (GstFileSrcClass * klass)
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
           GST_PARAM_MUTABLE_READY));
 
+  g_object_class_install_property (gobject_class, PROP_LOOP,
+      g_param_spec_int ("loop", "Loop",
+          "How many times to loop when reaching EOF", 0, G_MAXINT, DEFAULT_LOOP,
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+
   gobject_class->finalize = gst_file_src_finalize;
 
   gst_element_class_set_static_metadata (gstelement_class,
@@ -218,6 +225,9 @@ gst_file_src_init (GstFileSrc * src)
   src->filename = NULL;
   src->fd = 0;
   src->uri = NULL;
+
+  src->loop = 0;
+  src->filesize = G_MAXUINT64;
 
   src->is_regular = FALSE;
 
@@ -298,6 +308,9 @@ gst_file_src_set_property (GObject * object, guint prop_id,
     case PROP_LOCATION:
       gst_file_src_set_location (src, g_value_get_string (value), NULL);
       break;
+    case PROP_LOOP:
+      src->loop = g_value_get_int (value);
+      break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
       break;
@@ -317,6 +330,9 @@ gst_file_src_get_property (GObject * object, guint prop_id, GValue * value,
   switch (prop_id) {
     case PROP_LOCATION:
       g_value_set_string (value, src->filename);
+      break;
+    case PROP_LOOP:
+      g_value_set_int (value, src->loop);
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
@@ -345,6 +361,8 @@ gst_file_src_fill (GstBaseSrc * basesrc, guint64 offset, guint length,
   guint8 *data;
 
   src = GST_FILE_SRC_CAST (basesrc);
+
+  offset = offset % src->filesize;
 
   if (G_UNLIKELY (offset != -1 && src->read_position != offset)) {
     off_t res;
@@ -448,7 +466,8 @@ gst_file_src_get_size (GstBaseSrc * basesrc, guint64 * size)
   if (fstat (src->fd, &stat_results) < 0)
     goto could_not_stat;
 
-  *size = stat_results.st_size;
+  src->filesize = stat_results.st_size;
+  *size = src->filesize * (src->loop + 1);
 
   return TRUE;
 
