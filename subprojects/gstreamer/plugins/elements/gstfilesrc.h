@@ -63,6 +63,9 @@ struct _GstFileSrc {
   gboolean seekable;                    /* whether the file is seekable */
   gboolean is_regular;                  /* whether it's a (symlink to a)
                                            regular file */
+
+  guint64 filesize;   /* file size */
+  gint loop;   /* number of loops before EOS */
 };
 
 struct _GstFileSrcClass {
