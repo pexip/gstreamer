@@ -159,6 +159,7 @@ struct _GstTaskClass {
 
   /*< private >*/
   GstTaskPool *pool;
+  GType        pool_type;
 
   /*< private >*/
   gpointer _gst_reserved[GST_PADDING];
@@ -209,6 +210,9 @@ gboolean        gst_task_pause          (GstTask *task);
 
 GST_API
 gboolean        gst_task_join           (GstTask *task);
+
+GST_EXPORT
+void            gst_task_class_set_default_task_pool_type (GType type);
 
 G_DEFINE_AUTOPTR_CLEANUP_FUNC(GstTask, gst_object_unref)
 
