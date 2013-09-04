@@ -159,8 +159,17 @@ G_DEFINE_TYPE_WITH_CODE (GstTask, gst_task, GST_TYPE_OBJECT,
 static void
 ensure_klass_pool (GstTaskClass * klass)
 {
-  if (G_UNLIKELY (_global_task_pool == NULL)) {
-    _global_task_pool = gst_task_pool_new ();
+  if (_global_task_pool) {
+    if (G_TYPE_FROM_INSTANCE (_global_task_pool) != klass->pool_type) {
+      GST_INFO ("task pool type changed. Recreating global pool");
+      gst_task_pool_cleanup (_global_task_pool);
+      gst_object_unref (_global_task_pool);
+      _global_task_pool = NULL;
+    }
+  }
+
+  if (_global_task_pool == NULL) {
+    _global_task_pool = g_object_new (klass->pool_type, NULL);
     gst_task_pool_prepare (_global_task_pool, NULL);
 
     /* Classes are never destroyed so this ref will never be dropped */
@@ -177,6 +186,17 @@ gst_task_class_init (GstTaskClass * klass)
   gobject_class = (GObjectClass *) klass;
 
   gobject_class->finalize = gst_task_finalize;
+
+  klass->pool_type = GST_TYPE_TASK_POOL;
+}
+
+void
+gst_task_class_set_default_task_pool_type (GType type)
+{
+  GstTaskClass *klass = g_type_class_peek (gst_task_get_type ());
+  g_mutex_lock (&pool_lock);
+  klass->pool_type = type;
+  g_mutex_unlock (&pool_lock);
 }
 
 static void
