@@ -161,7 +161,7 @@ init_klass_pool (GstTaskClass * klass)
     gst_task_pool_cleanup (klass->pool);
     gst_object_unref (klass->pool);
   }
-  klass->pool = gst_task_pool_new ();
+  klass->pool = g_object_new (klass->pool_type, NULL);
   /* Classes are never destroyed so this ref will never be dropped */
   GST_OBJECT_FLAG_SET (klass->pool, GST_OBJECT_FLAG_MAY_BE_LEAKED);
   gst_task_pool_prepare (klass->pool, NULL);
@@ -177,6 +177,15 @@ gst_task_class_init (GstTaskClass * klass)
 
   gobject_class->finalize = gst_task_finalize;
 
+  klass->pool_type = GST_TYPE_TASK_POOL;
+  init_klass_pool (klass);
+}
+
+void
+gst_task_class_set_default_task_pool_type (GType type)
+{
+  GstTaskClass * klass = g_type_class_peek (gst_task_get_type ());
+  klass->pool_type = type;
   init_klass_pool (klass);
 }
 
