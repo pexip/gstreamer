@@ -159,6 +159,7 @@ struct _GstTaskClass {
 
   /*< private >*/
   GstTaskPool *pool;
+  GType        pool_type;
 
   /*< private >*/
   gpointer _gst_reserved[GST_PADDING];
@@ -193,6 +194,9 @@ gboolean        gst_task_stop           (GstTask *task);
 gboolean        gst_task_pause          (GstTask *task);
 
 gboolean        gst_task_join           (GstTask *task);
+
+/* NOTE: This is a Pexip extension. Override default task pool type. */
+void            gst_task_class_set_default_task_pool_type (GType type);
 
 G_END_DECLS
 
