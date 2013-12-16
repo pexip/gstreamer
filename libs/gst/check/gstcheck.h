@@ -142,6 +142,7 @@ G_STMT_START {                        \
 #define GST_START_TEST(__testname) \
 static void __testname (int __i__)\
 {\
+  (void) __i__; \
   GST_DEBUG ("test start"); \
   GST_DO_CHECK_TEST_ENVIRONMENT; \
   tcase_fn_start (""# __testname, __FILE__, __LINE__);
