@@ -127,6 +127,7 @@ gst_check_message_error (msg, GST_MESSAGE_ERROR,                \
 #define GST_START_TEST(__testname) \
 static void __testname (int __i__)\
 {\
+  (void) __i__; \
   GST_DEBUG ("test start"); \
   tcase_fn_start (""# __testname, __FILE__, __LINE__);
 
