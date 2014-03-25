@@ -1,5 +1,6 @@
 /* GStreamer - GParamSpecs for some of our types
  * Copyright (C) 2007 Tim-Philipp Müller  <tim centricular net>
+ * Copyright (C) 2014 Haakon Sporsheim  <haakon pexip com>
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Library General Public
@@ -366,4 +367,148 @@ gst_param_spec_array (const gchar * name,
   }
 
   return G_PARAM_SPEC (aspec);
+}
+
+/* --- GstParamSpecIntRange --- */
+
+static void
+_gst_param_int_range_init (GParamSpec * pspec)
+{
+  GstParamSpecIntRange *irspec = GST_PARAM_SPEC_INT_RANGE (pspec);
+
+  irspec->min_min  = G_MININT;
+  irspec->min_max  = G_MININT;
+  irspec->min_step = G_MININT;
+  irspec->max_min  = G_MAXINT;
+  irspec->max_max  = G_MAXINT;
+  irspec->max_step = G_MAXINT;
+
+  irspec->def_min  = G_MININT;
+  irspec->def_max  = G_MAXINT;
+  irspec->def_step = 1;
+}
+
+static void
+_gst_param_int_range_set_default (GParamSpec * pspec, GValue * value)
+{
+  GstParamSpecIntRange *irspec = GST_PARAM_SPEC_INT_RANGE (pspec);
+
+  gst_value_set_int_range_step (value,
+      irspec->def_min, irspec->def_max, irspec->def_step);
+}
+
+static gboolean
+_gst_param_int_range_validate (GParamSpec * pspec, GValue * value)
+{
+  (void)pspec;
+
+  g_return_val_if_fail (GST_VALUE_HOLDS_INT_RANGE (value), TRUE);
+  g_return_val_if_fail (gst_value_get_int_range_step (value) > 0, TRUE);
+
+  if (gst_value_get_int_range_max (value) < gst_value_get_int_range_min (value)) {
+    gst_value_set_int_range (value, gst_value_get_int_range_min (value),
+        gst_value_get_int_range_min (value));
+    return TRUE;
+  }
+
+  return FALSE;
+}
+
+static gint
+_gst_param_int_range_values_cmp (GParamSpec * pspec, const GValue * value1,
+    const GValue * value2)
+{
+  /* GST_VALUE_LESS_THAN is -1, EQUAL is 0, and GREATER_THAN is 1 */
+  return gst_value_compare (value1, value2);
+}
+
+GType
+gst_param_spec_int_range_get_type (void)
+{
+  static GType type;            /* 0 */
+
+  /* register GST_TYPE_PARAM_INT_RANGE */
+  if (type == 0) {
+    static GParamSpecTypeInfo pspec_info = {
+      sizeof (GstParamSpecIntRange),     /* instance_size     */
+      0,                                 /* n_preallocs       */
+      _gst_param_int_range_init,         /* instance_init     */
+      G_TYPE_INVALID,                    /* value_type        */
+      NULL,                              /* finalize          */
+      _gst_param_int_range_set_default,  /* value_set_default */
+      _gst_param_int_range_validate,     /* value_validate    */
+      _gst_param_int_range_values_cmp,   /* values_cmp        */
+    };
+    pspec_info.value_type = GST_TYPE_INT_RANGE;
+    type = g_param_type_register_static ("GstParamIntRange", &pspec_info);
+  }
+  return type;
+}
+
+/**
+ * gst_param_spec_int_range:
+ * @name: canonical name of the property specified
+ * @nick: nick name for the property specified
+ * @blurb: description of the property specified
+ * @min_min:  minimum min value
+ * @min_max:  minimum max value
+ * @min_step: minimum step
+ * @max_min:  maximum min value
+ * @max_max:  maximum max value
+ * @max_step: maximum step
+ * @def_min:  default min value
+ * @def_max:  default max value
+ * @def_step: default step
+ * @flags: flags for the property specified
+ *
+ * This function creates an int range GParamSpec for use by objects/elements
+ * that want to expose properties of int range type. This function is typically
+ * used in connection with g_object_class_install_property() in a GObjects's
+ * instance_init function.
+ *
+ * Returns: (transfer full): a newly created parameter specification
+ */
+GParamSpec *
+gst_param_spec_int_range (const gchar * name, const gchar * nick, const gchar * blurb,
+    gint min_min, gint min_max, gint min_step,
+    gint max_min, gint max_max, gint max_step,
+    gint def_min, gint def_max, gint def_step,
+    GParamFlags flags)
+{
+  GstParamSpecIntRange *irspec;
+  GParamSpec *pspec;
+  GValue default_val = G_VALUE_INIT;
+
+  irspec =
+      g_param_spec_internal (GST_TYPE_PARAM_INT_RANGE, name, nick, blurb, flags);
+
+  irspec->min_min  = min_min;
+  irspec->min_max  = min_max;
+  irspec->min_step = min_step;
+  irspec->max_min  = max_min;
+  irspec->max_max  = max_max;
+  irspec->max_step = max_step;
+  irspec->def_min  = def_min;
+  irspec->def_max  = def_max;
+  irspec->def_step = def_step;
+
+  pspec = G_PARAM_SPEC (irspec);
+
+  /* check that min <= default <= max */
+  g_value_init (&default_val, GST_TYPE_INT_RANGE);
+  gst_value_set_int_range_step (&default_val, def_min, def_max, def_step);
+
+  if (_gst_param_int_range_validate (pspec, &default_val)) {
+    g_critical ("GstParamSpec of type 'int_range' for property '%s' has a "
+        "default value of %d->%d (%d), which is not within the allowed range of "
+        "%d->%d to %d->%d",
+        name, def_min, def_max, def_step, min_min, max_min, min_max, max_max);
+    g_param_spec_ref (pspec);
+    g_param_spec_sink (pspec);
+    g_param_spec_unref (pspec);
+    pspec = NULL;
+  }
+  g_value_unset (&default_val);
+
+  return pspec;
 }
