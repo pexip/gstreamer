@@ -74,15 +74,21 @@ G_BEGIN_DECLS
 #define GST_IS_PARAM_SPEC_FRACTION(pspec) (G_TYPE_CHECK_INSTANCE_TYPE ((pspec), GST_TYPE_PARAM_FRACTION))
 #define GST_PARAM_SPEC_FRACTION(pspec)    (G_TYPE_CHECK_INSTANCE_CAST ((pspec), GST_TYPE_PARAM_FRACTION, GstParamSpecFraction))
 
+#define GST_TYPE_PARAM_INT_RANGE           (gst_param_spec_int_range_get_type ())
+#define GST_IS_PARAM_SPEC_INT_RANGE(pspec) (G_TYPE_CHECK_INSTANCE_TYPE ((pspec), GST_TYPE_PARAM_INT_RANGE))
+#define GST_PARAM_SPEC_INT_RANGE(pspec)    (G_TYPE_CHECK_INSTANCE_CAST ((pspec), GST_TYPE_PARAM_INT_RANGE, GstParamSpecIntRange))
+
 
 /* --- get_type functions --- */
 
 GType  gst_param_spec_fraction_get_type (void);
+GType  gst_param_spec_int_range_get_type (void);
 
 
 /* --- typedefs & structures --- */
 
 typedef struct _GstParamSpecFraction GstParamSpecFraction;
+typedef struct _GstParamSpecIntRange GstParamSpecIntRange;
 
 /**
  * GstParamSpecFraction:
@@ -105,6 +111,29 @@ struct _GstParamSpecFraction {
   gint          def_num, def_den;
 };
 
+/**
+ * GstParamSpecIntRange:
+ * @parent_instance: super class
+ * @min_min:  minimal lowest value in range
+ * @min_max:  minimal hightst value in range
+ * @min_step: minimal step
+ * @max_min:  maximal lowest value in range
+ * @max_max:  maximal hightst value in range
+ * @max_step: maximal step
+ * @def_min:  default lowest value in range
+ * @def_max:  default hightst value in range
+ * @def_step: default step
+ *
+ * A GParamSpec derived structure that contains the meta data for int range
+ * properties.
+ */
+struct _GstParamSpecIntRange {
+  GParamSpec    parent_instance;
+
+  gint          min_min, min_max, min_step;
+  gint          max_min, max_max, max_step;
+  gint          def_min, def_max, def_step;
+};
 
 /* --- GParamSpec prototypes --- */
 
@@ -115,6 +144,15 @@ GParamSpec  * gst_param_spec_fraction (const gchar * name,
                                        gint max_num, gint max_denom,
                                        gint default_num, gint default_denom,
                                        GParamFlags flags) G_GNUC_MALLOC;
+
+GParamSpec * gst_param_spec_int_range (const gchar * name,
+                                       const gchar * nick,
+                                       const gchar * blurb,
+                                       gint min_min, gint min_max, gint min_step,
+                                       gint max_min, gint max_max, gint max_step,
+                                       gint def_min, gint def_max, gint def_step,
+                                       GParamFlags flags) G_GNUC_MALLOC;
+
 
 G_END_DECLS
 
