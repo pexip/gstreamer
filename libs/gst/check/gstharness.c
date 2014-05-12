@@ -146,6 +146,20 @@ gst_harness_decide_allocation (GstHarness * h, GstCaps * caps)
   h->pool = pool;
 }
 
+static void
+gst_harness_negotiate (GstHarness * h)
+{
+  GstCaps * caps;
+
+  caps = gst_pad_get_current_caps (h->srcpad);
+  if (caps != NULL) {
+    gst_harness_decide_allocation (h, caps);
+    gst_caps_unref (caps);
+  } else {
+    GST_FIXME_OBJECT (h, "Cannot negotiate allocation because caps is not set");
+  }
+}
+
 void
 gst_harness_set_src_caps (GstHarness * h, GstCaps * caps)
 {
@@ -153,8 +167,6 @@ gst_harness_set_src_caps (GstHarness * h, GstCaps * caps)
 
   g_assert (gst_pad_push_event (h->srcpad, gst_event_new_caps (caps)));
   gst_caps_take (&h->src_caps, caps);
-
-  gst_harness_decide_allocation (h, h->src_caps);
 
   gst_segment_init (&segment, GST_FORMAT_TIME);
   g_assert (gst_pad_push_event (h->srcpad, gst_event_new_segment (&segment)));
@@ -523,6 +535,9 @@ GstBuffer *
 gst_harness_create_buffer (GstHarness * h, gsize size)
 {
   GstBuffer * ret = NULL;
+
+  if (gst_pad_check_reconfigure (h->srcpad))
+    gst_harness_negotiate (h);
 
   if (h->pool) {
     g_assert_cmpint (gst_buffer_pool_acquire_buffer (h->pool, &ret, NULL), ==,
