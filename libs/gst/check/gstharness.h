@@ -57,6 +57,8 @@ struct _GstHarness {
   GstAllocator * allocator;
   GstAllocationParams allocation_params;
   GstBufferPool * pool;
+  GstAllocator * propose_allocator;
+  GstAllocationParams propose_params;
 
   gboolean pull_mode_active;
   GCond pull_cond;

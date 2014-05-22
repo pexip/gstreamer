@@ -180,11 +180,10 @@ gst_harness_set_sink_caps (GstHarness * h, GstCaps * caps)
 }
 
 static gboolean
-gst_harness_query (GstPad * pad, GstObject * parent, GstQuery * query)
+gst_harness_sink_query (GstPad * pad, GstObject * parent, GstQuery * query)
 {
   gboolean res = TRUE;
   GstHarness * h = g_object_get_data (G_OBJECT (pad), HARNESS_KEY);
-  (void) parent;
   g_assert (h != NULL);
 
   switch (GST_QUERY_TYPE (query)) {
@@ -195,12 +194,7 @@ gst_harness_query (GstPad * pad, GstObject * parent, GstQuery * query)
     {
       GstCaps * caps, * filter = NULL;
 
-      if (pad == h->srcpad)
-        caps = h->src_caps ? gst_caps_ref (h->src_caps) : gst_caps_new_any ();
-      else if (pad == h->sinkpad)
-        caps = h->sink_caps ? gst_caps_ref (h->sink_caps) : gst_caps_new_any ();
-      else
-        g_assert_not_reached ();
+      caps = h->sink_caps ? gst_caps_ref (h->sink_caps) : gst_caps_new_any ();
 
       gst_query_parse_caps (query, &filter);
       if (filter != NULL) {
@@ -210,8 +204,56 @@ gst_harness_query (GstPad * pad, GstObject * parent, GstQuery * query)
 
       gst_query_set_caps_result (query, caps);
       gst_caps_unref (caps);
+    }
+      break;
+    case GST_QUERY_ALLOCATION:
+    {
+      GstCaps * caps;
+      gboolean need_pool;
 
-      res = TRUE;
+      gst_query_parse_allocation (query, &caps, &need_pool);
+
+      /* FIXME: Can this be removed? */
+      g_assert_cmpuint (0, ==, gst_query_get_n_allocation_params (query));
+      gst_query_add_allocation_param (query,
+          h->propose_allocator, &h->propose_params);
+
+      GST_DEBUG_OBJECT (pad, "proposing allocation %" GST_PTR_FORMAT,
+          h->propose_allocator);
+      break;
+    }
+    default:
+      res = gst_pad_query_default (pad, parent, query);
+  }
+
+  return res;
+}
+
+static gboolean
+gst_harness_src_query (GstPad * pad, GstObject * parent, GstQuery * query)
+{
+  gboolean res = TRUE;
+  GstHarness * h = g_object_get_data (G_OBJECT (pad), HARNESS_KEY);
+  g_assert (h != NULL);
+
+  switch (GST_QUERY_TYPE (query)) {
+    case GST_QUERY_LATENCY:
+      gst_query_set_latency (query, TRUE, h->latency_min, h->latency_max);
+      break;
+    case GST_QUERY_CAPS:
+    {
+      GstCaps * caps, * filter = NULL;
+
+      caps = h->src_caps ? gst_caps_ref (h->src_caps) : gst_caps_new_any ();
+
+      gst_query_parse_caps (query, &filter);
+      if (filter != NULL) {
+        gst_caps_take (&caps,
+            gst_caps_intersect_full (filter, caps, GST_CAPS_INTERSECT_FIRST));
+      }
+
+      gst_query_set_caps_result (query, caps);
+      gst_caps_unref (caps);
     }
       break;
     default:
@@ -325,7 +367,7 @@ gst_harness_setup_src_pad (GstHarness * h,
   g_assert (h->srcpad);
   g_object_set_data (G_OBJECT (h->srcpad), HARNESS_KEY, h);
 
-  gst_pad_set_query_function (h->srcpad, gst_harness_query);
+  gst_pad_set_query_function (h->srcpad, gst_harness_src_query);
   gst_pad_set_event_function (h->srcpad, gst_harness_src_event);
 
   gst_pad_set_active (h->srcpad, TRUE);
@@ -349,7 +391,7 @@ gst_harness_setup_sink_pad (GstHarness * h,
   g_object_set_data (G_OBJECT (h->sinkpad), HARNESS_KEY, h);
 
   gst_pad_set_chain_function (h->sinkpad, gst_harness_chain);
-  gst_pad_set_query_function (h->sinkpad, gst_harness_query);
+  gst_pad_set_query_function (h->sinkpad, gst_harness_sink_query);
   gst_pad_set_event_function (h->sinkpad, gst_harness_sink_event);
 
   gst_pad_set_active (h->sinkpad, TRUE);
@@ -400,6 +442,9 @@ gst_harness_new_full (GstElement * element,
   h->sine_cont = 0;
   h->drop_buffers = FALSE;
   h->last_push_ts = GST_CLOCK_TIME_NONE;
+
+  h->propose_allocator = NULL;
+  gst_allocation_params_init (&h->propose_params);
 
   g_mutex_init (&h->pull_mutex);
   g_cond_init (&h->pull_cond);
