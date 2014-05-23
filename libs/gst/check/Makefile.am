@@ -141,6 +141,7 @@ LIBGSTCHECK_EXPORTED_FUNCS = \
 	gst_harness_stress_custom_start \
 	gst_harness_stress_property_start_full \
 	gst_harness_stress_push_buffer_start_full \
+	gst_harness_stress_push_buffer_with_cb_start_full \
 	gst_harness_stress_push_event_start_full \
 	gst_harness_stress_requestpad_start_full \
 	gst_harness_stress_statechange_start_full \

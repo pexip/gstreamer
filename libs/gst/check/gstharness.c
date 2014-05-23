@@ -1175,15 +1175,15 @@ typedef struct {
 
   GstCaps * caps;
   GstSegment segment;
-  GstBuffer * buf;
-  GstPad * srcpad;
+  GstHarnessPrepareBuffer func;
+  gpointer data;
+  GDestroyNotify notify;
 } GstHarnessPushBufferThread;
 
 typedef struct {
   GstHarnessThread t;
 
   GstEvent * event;
-  GstPad * srcpad;
 } GstHarnessPushEventThread;
 
 typedef struct {
@@ -1232,8 +1232,8 @@ gst_harness_push_buffer_thread_free (GstHarnessPushBufferThread * t)
 {
   if (t != NULL) {
     gst_caps_replace (&t->caps, NULL);
-    gst_buffer_replace (&t->buf, NULL);
-    gst_object_replace ((GstObject **)&t->srcpad, NULL);
+    if (t->notify != NULL)
+      t->notify (t->data);
     g_slice_free (GstHarnessPushBufferThread, t);
   }
 }
@@ -1243,7 +1243,6 @@ gst_harness_push_event_thread_free (GstHarnessPushEventThread * t)
 {
   if (t != NULL) {
     gst_event_replace (&t->event, NULL);
-    gst_object_replace ((GstObject **)&t->srcpad, NULL);
     g_slice_free (GstHarnessPushEventThread, t);
   }
 }
@@ -1368,14 +1367,14 @@ GST_HARNESS_STRESS_FUNC_BEGIN (buffer,
     )
 {
   GstHarnessPushBufferThread * pt = (GstHarnessPushBufferThread *)t;
-  gst_pad_push (pt->srcpad, gst_buffer_ref (pt->buf));
+  gst_harness_push (t->h, pt->func (t->h, pt->data));
 }
 GST_HARNESS_STRESS_FUNC_END ()
 
 GST_HARNESS_STRESS_FUNC_BEGIN (event, {})
 {
   GstHarnessPushEventThread * pet = (GstHarnessPushEventThread *)t;
-  gst_pad_push_event (pet->srcpad, gst_event_ref (pet->event));
+  gst_harness_push_event (t->h, gst_event_ref (pet->event));
 }
 GST_HARNESS_STRESS_FUNC_END ()
 
@@ -1447,9 +1446,26 @@ gst_harness_stress_statechange_start_full (GstHarness * h, gulong sleep)
   return t;
 }
 
+static GstBuffer *
+gst_harness_ref_buffer (GstHarness * h, gpointer data)
+{
+  (void) h;
+  return gst_buffer_ref (GST_BUFFER_CAST (data));
+}
+
 GstHarnessThread *
 gst_harness_stress_push_buffer_start_full (GstHarness * h,
-    GstCaps * caps, const GstSegment * segment, GstBuffer * buf, GstPad * pad,
+    GstCaps * caps, const GstSegment * segment, GstBuffer * buf, gulong sleep)
+{
+  return gst_harness_stress_push_buffer_with_cb_start_full (h, caps, segment,
+      gst_harness_ref_buffer, gst_buffer_ref (buf), (GDestroyNotify)gst_buffer_unref,
+      sleep);
+}
+
+GstHarnessThread *
+gst_harness_stress_push_buffer_with_cb_start_full (GstHarness * h,
+    GstCaps * caps, const GstSegment * segment,
+    GstHarnessPrepareBuffer func, gpointer data, GDestroyNotify notify,
     gulong sleep)
 {
   GstHarnessPushBufferThread * t = g_slice_new0 (GstHarnessPushBufferThread);
@@ -1459,8 +1475,9 @@ gst_harness_stress_push_buffer_start_full (GstHarness * h,
 
   gst_caps_replace (&t->caps, caps);
   t->segment = *segment;
-  t->buf = gst_buffer_ref (buf);
-  t->srcpad = gst_object_ref (pad);
+  t->func = func;
+  t->data = data;
+  t->notify = notify;
 
   GST_HARNESS_THREAD_START (buffer, t);
   return &t->t;
@@ -1468,7 +1485,7 @@ gst_harness_stress_push_buffer_start_full (GstHarness * h,
 
 GstHarnessThread *
 gst_harness_stress_push_event_start_full (GstHarness * h,
-    GstEvent * event, GstPad * pad, gulong sleep)
+    GstEvent * event, gulong sleep)
 {
   GstHarnessPushEventThread * t = g_slice_new0 (GstHarnessPushEventThread);
   gst_harness_thread_init (&t->t,
@@ -1476,7 +1493,6 @@ gst_harness_stress_push_event_start_full (GstHarness * h,
       h, sleep);
 
   t->event = gst_event_ref (event);
-  t->srcpad = gst_object_ref (pad);
   GST_HARNESS_THREAD_START (event, t);
   return &t->t;
 }
