@@ -185,19 +185,26 @@ GstHarnessThread * gst_harness_stress_custom_start (GstHarness * h,
 GstHarnessThread * gst_harness_stress_statechange_start_full (GstHarness * h,
     gulong sleep);
 
-#define gst_harness_stress_push_buffer_start(h, c, s, b, p)                    \
-  gst_harness_stress_push_buffer_start_full (h, c, s, b, p, 0)
+#define gst_harness_stress_push_buffer_start(h, c, s, b)                       \
+  gst_harness_stress_push_buffer_start_full (h, c, s, b, 0)
 GstHarnessThread * gst_harness_stress_push_buffer_start_full (GstHarness * h,
-    GstCaps * caps, const GstSegment * segment, GstBuffer * buf, GstPad * pad,
+    GstCaps * caps, const GstSegment * segment, GstBuffer * buf, gulong sleep);
+
+typedef GstBuffer * (*GstHarnessPrepareBuffer) (GstHarness * h, gpointer data);
+#define gst_harness_stress_push_buffer_with_cb_start(h, c, s, f, d, n)         \
+  gst_harness_stress_push_buffer_with_cb_start_full (h, c, s, f, d, n, 0)
+GstHarnessThread * gst_harness_stress_push_buffer_with_cb_start_full (
+    GstHarness * h, GstCaps * caps, const GstSegment * segment,
+    GstHarnessPrepareBuffer func, gpointer data, GDestroyNotify notify,
     gulong sleep);
 
 /* Pushing events should generally be OOB events.
  * If you need serialized events, you may use a custom stress thread which
  * both pushes buffers and events! */
-#define gst_harness_stress_push_event_start(h, e, p)                           \
-  gst_harness_stress_push_event_start_full (h, e, p, 0)
+#define gst_harness_stress_push_event_start(h, e)                              \
+  gst_harness_stress_push_event_start_full (h, e, 0)
 GstHarnessThread * gst_harness_stress_push_event_start_full (GstHarness * h,
-    GstEvent * event, GstPad * pad, gulong sleep);
+    GstEvent * event, gulong sleep);
 
 #define gst_harness_stress_property_start(h, n, v)                             \
   gst_harness_stress_property_start_full (h, n, v, G_USEC_PER_SEC / 1000)
