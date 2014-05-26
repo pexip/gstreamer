@@ -4962,7 +4962,7 @@ gst_rtspsrc_configure_caps (GstRTSPSrc * src, GstSegment * segment,
         gst_caps_set_simple (caps, "clock-base", G_TYPE_UINT,
             (guint) stream->timebase, NULL);
       if (stream->seqbase != -1)
-        gst_caps_set_simple (caps, "seqnum-base", G_TYPE_UINT,
+        gst_caps_set_simple (caps, "seqnum-offset", G_TYPE_UINT,
             (guint) stream->seqbase, NULL);
       gst_caps_set_simple (caps, "npt-start", G_TYPE_UINT64, start, NULL);
       if (stop != -1)
@@ -8556,7 +8556,7 @@ clear_rtp_base (GstRTSPSrc * src, GstRTSPStream * stream)
 
     item->caps = gst_caps_make_writable (item->caps);
     s = gst_caps_get_structure (item->caps, 0);
-    gst_structure_remove_fields (s, "clock-base", "seqnum-base", NULL);
+    gst_structure_remove_fields (s, "clock-base", "seqnum-offset", NULL);
     if (item->pt == stream->default_pt && stream->udpsrc[0])
       g_object_set (stream->udpsrc[0], "caps", item->caps, NULL);
   }
