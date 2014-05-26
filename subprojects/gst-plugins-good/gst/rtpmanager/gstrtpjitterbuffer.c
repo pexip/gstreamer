@@ -1425,7 +1425,7 @@ gst_jitter_buffer_sink_parse_caps (GstRtpJitterBuffer * jitterbuffer,
   GST_DEBUG_OBJECT (jitterbuffer, "got clock-base %" G_GINT64_FORMAT,
       priv->clock_base);
 
-  if (gst_structure_get_uint (caps_struct, "seqnum-base", &val)) {
+  if (gst_structure_get_uint (caps_struct, "seqnum-offset", &val)) {
     /* first expected seqnum, only update when we didn't have a previous base. */
     if (priv->next_in_seqnum == -1)
       priv->next_in_seqnum = val;
@@ -1438,10 +1438,10 @@ gst_jitter_buffer_sink_parse_caps (GstRtpJitterBuffer * jitterbuffer,
     priv->seqnum_base = -1;
   }
 
-  GST_DEBUG_OBJECT (jitterbuffer, "got seqnum-base %d", priv->next_in_seqnum);
+  GST_DEBUG_OBJECT (jitterbuffer, "got seqnum-offset %d", priv->next_in_seqnum);
 
-  /* the start and stop times. The seqnum-base corresponds to the start time. We
-   * will keep track of the seqnums on the output and when we reach the one
+  /* the start and stop times. The seqnum-offset corresponds to the start time.
+   * We will keep track of the seqnums on the output and when we reach the one
    * corresponding to npt-stop, we emit the npt-stop-reached signal */
   if (gst_structure_get_clock_time (caps_struct, "npt-start", &tval))
     priv->npt_start = tval;
