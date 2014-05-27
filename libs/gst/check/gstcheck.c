@@ -328,7 +328,9 @@ print_plugins (void)
 static void
 gst_check_deinit (void)
 {
+#if 0
   gst_deinit ();
+#endif
   gst_check_clear_log_filter ();
 }
 
