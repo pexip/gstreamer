@@ -771,6 +771,13 @@ gst_harness_add_sink (GstHarness * h, const gchar * sink_element_name)
 }
 
 void
+gst_harness_add_sink_parse (GstHarness * h, const gchar * launchline)
+{
+  h->sink_harness = gst_harness_new_parse (launchline);
+  h->sink_event_forward_pad = gst_object_ref (h->sink_harness->srcpad);
+}
+
+void
 gst_harness_push_to_sink (GstHarness * h)
 {
   GstBuffer * buf;
