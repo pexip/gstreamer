@@ -76,10 +76,23 @@ static gboolean
 gst_harness_sink_event (GstPad * pad, GstObject * parent, GstEvent * event)
 {
   GstHarness * h = g_object_get_data (G_OBJECT (pad), HARNESS_KEY);
+  gboolean forward;
+
   g_assert (h != NULL);
   (void) parent;
 
-  if (h->sink_event_forward_pad) {
+  switch (GST_EVENT_TYPE (event)) {
+    case GST_EVENT_STREAM_START:
+    case GST_EVENT_CAPS:
+    case GST_EVENT_SEGMENT:
+      forward = TRUE;
+      break;
+    default:
+      forward = FALSE;
+      break;
+  }
+
+  if (forward && h->sink_event_forward_pad) {
     g_assert (gst_pad_push_event (h->sink_event_forward_pad, event));
   } else {
     g_async_queue_push (h->sink_event_queue, event);
@@ -1539,4 +1552,3 @@ gst_harness_stress_requestpad_start_full (GstHarness * h,
   GST_HARNESS_THREAD_START (requestpad, t);
   return &t->t;
 }
-
