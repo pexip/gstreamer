@@ -93,7 +93,7 @@ gst_harness_sink_event (GstPad * pad, GstObject * parent, GstEvent * event)
   }
 
   if (forward && h->sink_event_forward_pad) {
-    g_assert (gst_pad_push_event (h->sink_event_forward_pad, event));
+    gst_pad_push_event (h->sink_event_forward_pad, event);
   } else {
     g_async_queue_push (h->sink_event_queue, event);
   }
