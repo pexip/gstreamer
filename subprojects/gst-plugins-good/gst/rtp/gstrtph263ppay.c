@@ -494,7 +494,6 @@ gst_rtp_h263p_pay_sink_getcaps (GstRTPBasePayload * payload, GstPad * pad,
         caps = gst_caps_merge_structure (caps, new_s);
       }
     } else {
-      gboolean f = FALSE, i = FALSE, j = FALSE, t = FALSE;
       /* FIXME: ffmpeg support the Appendix K too, how do we express it ?
        *   guint k;
        */
@@ -503,51 +502,44 @@ gst_rtp_h263p_pay_sink_getcaps (GstRTPBasePayload * payload, GstPad * pad,
           "variant", G_TYPE_STRING, "itu",
           NULL);
       gboolean added = FALSE;
+      GValue list = { 0 };
+      GValue vstr = { 0 };
+
+      g_value_init (&list, GST_TYPE_LIST);
+      g_value_init (&vstr, G_TYPE_STRING);
+
+      g_value_set_static_string (&vstr, "h263");
+      gst_value_list_append_value (&list, &vstr);
+      g_value_set_static_string (&vstr, "h263p");
+      gst_value_list_append_value (&list, &vstr);
+      g_value_unset (&vstr);
+
+      gst_structure_set_value (new_s, "h263version", &list);
+      g_value_unset (&list);
 
       str = gst_structure_get_string (s, "f");
-      if (str && !strcmp (str, "1"))
-        f = TRUE;
-
-      str = gst_structure_get_string (s, "i");
-      if (str && !strcmp (str, "1"))
-        i = TRUE;
-
-      str = gst_structure_get_string (s, "j");
-      if (str && !strcmp (str, "1"))
-        j = TRUE;
-
-      str = gst_structure_get_string (s, "t");
-      if (str && !strcmp (str, "1"))
-        t = TRUE;
-
-      if (f || i || j || t) {
-        GValue list = { 0 };
-        GValue vstr = { 0 };
-
-        g_value_init (&list, GST_TYPE_LIST);
-        g_value_init (&vstr, G_TYPE_STRING);
-
-        g_value_set_static_string (&vstr, "h263");
-        gst_value_list_append_value (&list, &vstr);
-        g_value_set_static_string (&vstr, "h263p");
-        gst_value_list_append_value (&list, &vstr);
-        g_value_unset (&vstr);
-
-        gst_structure_set_value (new_s, "h263version", &list);
-        g_value_unset (&list);
-      } else {
-        gst_structure_set (new_s, "h263version", G_TYPE_STRING, "h263", NULL);
+      if (str) {
+        gst_structure_set (new_s, "annex-f",
+            G_TYPE_BOOLEAN, !strcmp (str, "1"), NULL);
       }
 
-      if (!f)
-        gst_structure_set (new_s, "annex-f", G_TYPE_BOOLEAN, FALSE, NULL);
-      if (!i)
-        gst_structure_set (new_s, "annex-i", G_TYPE_BOOLEAN, FALSE, NULL);
-      if (!j)
-        gst_structure_set (new_s, "annex-j", G_TYPE_BOOLEAN, FALSE, NULL);
-      if (!t)
-        gst_structure_set (new_s, "annex-t", G_TYPE_BOOLEAN, FALSE, NULL);
+      str = gst_structure_get_string (s, "i");
+      if (str) {
+        gst_structure_set (new_s, "annex-i",
+            G_TYPE_BOOLEAN, !strcmp (str, "1"), NULL);
+      }
 
+      str = gst_structure_get_string (s, "j");
+      if (str) {
+        gst_structure_set (new_s, "annex-j",
+            G_TYPE_BOOLEAN, !strcmp (str, "1"), NULL);
+      }
+
+      str = gst_structure_get_string (s, "t");
+      if (str) {
+        gst_structure_set (new_s, "annex-t",
+            G_TYPE_BOOLEAN, !strcmp (str, "1"), NULL);
+      }
 
       str = gst_structure_get_string (s, "custom");
       if (str) {
