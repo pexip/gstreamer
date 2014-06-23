@@ -839,6 +839,9 @@ gst_vpx_enc_init (GstVPXEnc * gst_vpx_enc)
 
   gst_vpx_enc->cfg.g_profile = DEFAULT_PROFILE;
 
+  gst_video_encoder_set_min_force_key_unit_interval (
+      GST_VIDEO_ENCODER (gst_vpx_enc), 1500 * GST_MSECOND);
+
   g_mutex_init (&gst_vpx_enc->encoder_lock);
 }
 
