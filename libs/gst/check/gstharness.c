@@ -1424,6 +1424,13 @@ GST_HARNESS_STRESS_FUNC_BEGIN (event, {})
 }
 GST_HARNESS_STRESS_FUNC_END ()
 
+GST_HARNESS_STRESS_FUNC_BEGIN (upstream_event, {})
+{
+  GstHarnessPushEventThread * pet = (GstHarnessPushEventThread *)t;
+  gst_harness_send_upstream_event (t->h, gst_event_ref (pet->event));
+}
+GST_HARNESS_STRESS_FUNC_END ()
+
 GST_HARNESS_STRESS_FUNC_BEGIN (property, {})
 {
   GstHarnessPropThread * pt = (GstHarnessPropThread *)t;
@@ -1540,6 +1547,20 @@ gst_harness_stress_push_event_start_full (GstHarness * h,
 
   t->event = gst_event_ref (event);
   GST_HARNESS_THREAD_START (event, t);
+  return &t->t;
+}
+
+GstHarnessThread *
+gst_harness_stress_send_upstream_event_start_full (GstHarness * h,
+    GstEvent * event, gulong sleep)
+{
+  GstHarnessPushEventThread * t = g_slice_new0 (GstHarnessPushEventThread);
+  gst_harness_thread_init (&t->t,
+      (GDestroyNotify)gst_harness_push_event_thread_free,
+      h, sleep);
+
+  t->event = gst_event_ref (event);
+  GST_HARNESS_THREAD_START (upstream_event, t);
   return &t->t;
 }
 
