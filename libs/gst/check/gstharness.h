@@ -207,6 +207,11 @@ GstHarnessThread * gst_harness_stress_push_buffer_with_cb_start_full (
 GstHarnessThread * gst_harness_stress_push_event_start_full (GstHarness * h,
     GstEvent * event, gulong sleep);
 
+#define gst_harness_stress_send_upstream_event_start(h, e)                     \
+  gst_harness_stress_send_upstream_event_start_full (h, e, 0)
+GstHarnessThread * gst_harness_stress_send_upstream_event_start_full (
+    GstHarness * h, GstEvent * event, gulong sleep);
+
 #define gst_harness_stress_property_start(h, n, v)                             \
   gst_harness_stress_property_start_full (h, n, v, G_USEC_PER_SEC / 1000)
 GstHarnessThread * gst_harness_stress_property_start_full (GstHarness * h,
