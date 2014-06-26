@@ -401,7 +401,9 @@ gst_queue2_class_init (GstQueue2Class * klass)
 static void
 gst_queue2_init (GstQueue2 * queue)
 {
-  queue->sinkpad = gst_pad_new_from_static_template (&sinktemplate, "sink");
+  queue->sinkpad = gst_pad_new_from_template (
+      gst_element_class_get_pad_template (
+          GST_ELEMENT_GET_CLASS (queue), "sink"), "sink");
 
   gst_pad_set_chain_function (queue->sinkpad,
       GST_DEBUG_FUNCPTR (gst_queue2_chain));
@@ -416,7 +418,9 @@ gst_queue2_init (GstQueue2 * queue)
   GST_PAD_SET_PROXY_CAPS (queue->sinkpad);
   gst_element_add_pad (GST_ELEMENT (queue), queue->sinkpad);
 
-  queue->srcpad = gst_pad_new_from_static_template (&srctemplate, "src");
+  queue->srcpad = gst_pad_new_from_template (
+      gst_element_class_get_pad_template (
+          GST_ELEMENT_GET_CLASS (queue), "src"), "src");
 
   gst_pad_set_activatemode_function (queue->srcpad,
       GST_DEBUG_FUNCPTR (gst_queue2_src_activate_mode));
