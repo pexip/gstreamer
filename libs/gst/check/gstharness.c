@@ -1353,15 +1353,41 @@ GST_HARNESS_STRESS_FUNC_END ()
 GST_HARNESS_STRESS_FUNC_BEGIN (statechange, {})
 {
   GstClock * clock = gst_element_get_clock (t->h->element);
-  GstPad * sinkpad;
+  GstIterator * it;
+  gboolean done = FALSE;
+
   g_assert (gst_element_set_state (t->h->element, GST_STATE_NULL) ==
       GST_STATE_CHANGE_SUCCESS);
   g_thread_yield ();
 
-  sinkpad = gst_element_get_static_pad (t->h->element, t->h->element_sinkpad_name);
-  gst_pad_unlink (t->h->srcpad, sinkpad);
-  gst_pad_link (t->h->srcpad, sinkpad);
-  gst_object_unref (sinkpad);
+  it = gst_element_iterate_sink_pads (t->h->element);
+  while (!done) {
+    GValue item = G_VALUE_INIT;
+    switch (gst_iterator_next (it, &item)) {
+      case GST_ITERATOR_OK:
+      {
+        GstPad * sinkpad = g_value_get_object (&item);
+        GstPad * srcpad = gst_pad_get_peer (sinkpad);
+        if (srcpad != NULL) {
+          gst_pad_unlink (srcpad, sinkpad);
+          gst_pad_link (srcpad, sinkpad);
+          gst_object_unref (srcpad);
+        }
+        g_value_reset (&item);
+        break;
+      }
+      case GST_ITERATOR_RESYNC:
+        gst_iterator_resync (it);
+        break;
+      case GST_ITERATOR_ERROR:
+        g_assert_not_reached ();
+      case GST_ITERATOR_DONE:
+        done = TRUE;
+        break;
+    }
+    g_value_unset (&item);
+  }
+  gst_iterator_free (it);
 
   g_assert (gst_element_set_state (t->h->element, GST_STATE_PLAYING) ==
       GST_STATE_CHANGE_SUCCESS);
