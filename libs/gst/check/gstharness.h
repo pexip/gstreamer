@@ -150,7 +150,8 @@ void gst_harness_add_src (GstHarness * h,
 void gst_harness_add_src_parse (GstHarness * h,
     const gchar * launchline, gboolean has_clock_wait);
 void gst_harness_push_from_src (GstHarness * h);
-void gst_harness_src_crank_and_push_many (GstHarness * h, gint cranks, gint pushes);
+GstFlowReturn gst_harness_src_crank_and_push_many (GstHarness * h,
+    gint cranks, gint pushes);
 
 void gst_harness_add_sink (GstHarness * h, const gchar * sink_element_name);
 void gst_harness_add_sink_parse (GstHarness * h, const gchar * launchline);

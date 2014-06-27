@@ -754,9 +754,11 @@ gst_harness_push_from_src (GstHarness * h)
   gst_harness_push (h, buf);
 }
 
-void
+GstFlowReturn
 gst_harness_src_crank_and_push_many (GstHarness * h, gint cranks, gint pushes)
 {
+  GstFlowReturn ret = GST_FLOW_OK;
+
   g_assert (h->src_harness);
   gst_harness_play (h->src_harness);
 
@@ -766,8 +768,12 @@ gst_harness_src_crank_and_push_many (GstHarness * h, gint cranks, gint pushes)
   for (int i = 0; i < pushes; i++) {
     GstBuffer * buf;
     g_assert ((buf = gst_harness_pull (h->src_harness)) != NULL);
-    g_assert_cmpint (gst_harness_push (h, buf), ==, GST_FLOW_OK);
+    ret = gst_harness_push (h, buf);
+    if (ret != GST_FLOW_OK)
+      break;
   }
+
+  return ret;
 }
 
 void
