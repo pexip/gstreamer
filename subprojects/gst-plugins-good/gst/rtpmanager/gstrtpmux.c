@@ -965,7 +965,7 @@ gst_rtp_mux_ready_to_paused (GstRTPMux * rtp_mux)
   rtp_mux->send_stream_start = TRUE;
 
   if (rtp_mux->seqnum_offset == -1)
-    rtp_mux->seqnum_base = g_random_int_range (0, G_MAXUINT16);
+    rtp_mux->seqnum_base = g_random_int_range (0, G_MAXUINT16/2);
   else
     rtp_mux->seqnum_base = rtp_mux->seqnum_offset;
   rtp_mux->seqnum = rtp_mux->seqnum_base;
