@@ -31,7 +31,7 @@
 
 /* the default number of consecutive RTP packets we need to receive before the
  * source is considered valid */
-#define RTP_NO_PROBATION        0
+#define RTP_NO_PROBATION        1
 #define RTP_DEFAULT_PROBATION   2
 
 #define RTP_SEQ_MOD          (1 << 16)

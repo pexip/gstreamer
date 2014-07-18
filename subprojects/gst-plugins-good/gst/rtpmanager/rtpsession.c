@@ -1869,7 +1869,7 @@ obtain_source (RTPSession * sess, guint32 ssrc, gboolean * created,
     /* for RTP packets we need to set the source in probation. Receiving RTCP
      * packets of an SSRC, on the other hand, is a strong indication that we
      * are dealing with a valid source. */
-    g_object_set (source, "probation", rtp ? sess->probation : 0,
+    g_object_set (source, "probation", rtp ? sess->probation : RTP_NO_PROBATION,
         "max-dropout-time", sess->max_dropout_time, "max-misorder-time",
         sess->max_misorder_time, NULL);
 
@@ -1895,7 +1895,7 @@ obtain_source (RTPSession * sess, guint32 ssrc, gboolean * created,
     /* Receiving RTCP packets of an SSRC is a strong indication that we
      * are dealing with a valid source. */
     if (!rtp)
-      g_object_set (source, "probation", 0, NULL);
+      g_object_set (source, "probation", RTP_NO_PROBATION, NULL);
   }
   /* update last activity */
   source->last_activity = pinfo->current_time;
