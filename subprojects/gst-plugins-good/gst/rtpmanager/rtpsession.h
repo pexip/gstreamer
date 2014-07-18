@@ -246,6 +246,7 @@ struct _RTPSession {
   guint         probation;
   guint32       max_dropout_time;
   guint32       max_misorder_time;
+  gboolean      ssrc_collision_detection;
 
   GstRTPProfile rtp_profile;
 
