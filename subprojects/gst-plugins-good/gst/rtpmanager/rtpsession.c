@@ -77,6 +77,7 @@ enum
 #define DEFAULT_PROBATION            RTP_DEFAULT_PROBATION
 #define DEFAULT_MAX_DROPOUT_TIME     60000
 #define DEFAULT_MAX_MISORDER_TIME    2000
+#define DEFAULT_SSRC_COLLISION_DETECTION TRUE
 #define DEFAULT_RTP_PROFILE          GST_RTP_PROFILE_AVP
 #define DEFAULT_RTCP_REDUCED_SIZE    FALSE
 #define DEFAULT_RTCP_DISABLE_SR_TIMESTAMP FALSE
@@ -104,6 +105,7 @@ enum
   PROP_PROBATION,
   PROP_MAX_DROPOUT_TIME,
   PROP_MAX_MISORDER_TIME,
+  PROP_SSRC_COLLISION_DETECTION,
   PROP_STATS,
   PROP_STATS_NOTIFY_MIN_INTERVAL,
   PROP_RTP_PROFILE,
@@ -619,6 +621,13 @@ rtp_session_class_init (RTPSessionClass * klass)
           0, G_MAXUINT, DEFAULT_MAX_MISORDER_TIME,
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 
+  g_object_class_install_property (gobject_class, PROP_SSRC_COLLISION_DETECTION,
+      g_param_spec_boolean ("ssrc-collision-detection",
+          "SSRC collision detection",
+          "Enable/Disable SSRC collision detection for remote sources",
+          DEFAULT_SSRC_COLLISION_DETECTION,
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+
   /**
    * RTPSession:stats:
    *
@@ -736,6 +745,7 @@ rtp_session_init (RTPSession * sess)
   sess->probation = DEFAULT_PROBATION;
   sess->max_dropout_time = DEFAULT_MAX_DROPOUT_TIME;
   sess->max_misorder_time = DEFAULT_MAX_MISORDER_TIME;
+  sess->ssrc_collision_detection = DEFAULT_SSRC_COLLISION_DETECTION;
 
   /* some default SDES entries */
   sess->sdes = gst_structure_new_empty ("application/x-rtp-source-sdes");
@@ -959,6 +969,9 @@ rtp_session_set_property (GObject * object, guint prop_id,
     case PROP_STATS_NOTIFY_MIN_INTERVAL:
       sess->stats_notify_min_interval_ms = g_value_get_uint (value);
       break;
+    case PROP_SSRC_COLLISION_DETECTION:
+      sess->ssrc_collision_detection = g_value_get_boolean (value);
+      break;
     case PROP_RTP_PROFILE:
       sess->rtp_profile = g_value_get_enum (value);
       /* trigger reconsideration */
@@ -1047,6 +1060,9 @@ rtp_session_get_property (GObject * object, guint prop_id,
       break;
     case PROP_MAX_MISORDER_TIME:
       g_value_set_uint (value, sess->max_misorder_time);
+      break;
+    case PROP_SSRC_COLLISION_DETECTION:
+      g_value_set_boolean (value, sess->ssrc_collision_detection);
       break;
     case PROP_STATS:
       g_value_take_boxed (value, rtp_session_create_stats (sess));
@@ -1721,11 +1737,11 @@ check_collision (RTPSession * sess, RTPSource * source,
             gchar *buf1;
 
             buf1 = __g_socket_address_to_string (pinfo->address);
-            GST_LOG ("Known conflict on %x for %s, dropping packet", ssrc,
-                buf1);
+            GST_LOG ("Known conflict on %x for %s, %s packet", ssrc,
+                buf1, sess->ssrc_collision_detection ? "dropping" : "ignoring");
             g_free (buf1);
 
-            return TRUE;
+            return sess->ssrc_collision_detection;
           } else {
             gchar *buf1, *buf2;
 
@@ -1753,7 +1769,7 @@ check_collision (RTPSession * sess, RTPSource * source,
           }
         } else {
           /* Don't need to save old addresses, we ignore new sources */
-          return TRUE;
+          return sess->ssrc_collision_detection;        /* if enabled */
         }
       }
     } else {
