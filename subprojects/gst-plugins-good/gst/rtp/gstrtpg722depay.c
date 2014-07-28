@@ -53,7 +53,7 @@ static GstStaticPadTemplate gst_rtp_g722_depay_sink_template =
         "encoding-name = (string) \"G722\";"
         "application/x-rtp, "
         "media = (string) \"audio\", "
-        "payload = (int) " GST_RTP_PAYLOAD_G722_STRING ", "
+        "payload = (int) " GST_RTP_PAYLOAD_DYNAMIC_STRING ", "
         "clock-rate = (int) [ 1, MAX ]"
         /* "channels = (int) [1, MAX]" */
         /* "emphasis = (string) ANY" */
