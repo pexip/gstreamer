@@ -92,8 +92,8 @@ gst_harness_sink_event (GstPad * pad, GstObject * parent, GstEvent * event)
       break;
   }
 
-  if (forward && h->sink_event_forward_pad) {
-    gst_pad_push_event (h->sink_event_forward_pad, event);
+  if (forward && h->sink_forward_pad) {
+    gst_pad_push_event (h->sink_forward_pad, event);
   } else {
     g_async_queue_push (h->sink_event_queue, event);
   }
@@ -199,6 +199,8 @@ gst_harness_sink_query (GstPad * pad, GstObject * parent, GstQuery * query)
   GstHarness * h = g_object_get_data (G_OBJECT (pad), HARNESS_KEY);
   g_assert (h != NULL);
 
+  // FIXME: forward all queries?
+
   switch (GST_QUERY_TYPE (query)) {
     case GST_QUERY_LATENCY:
       gst_query_set_latency (query, TRUE, h->latency_min, h->latency_max);
@@ -221,18 +223,25 @@ gst_harness_sink_query (GstPad * pad, GstObject * parent, GstQuery * query)
       break;
     case GST_QUERY_ALLOCATION:
     {
-      GstCaps * caps;
-      gboolean need_pool;
+      if (h->sink_forward_pad != NULL) {
+        GstPad * peer = gst_pad_get_peer (h->sink_forward_pad);
+        g_assert (peer != NULL);
+        res = gst_pad_query (peer, query);
+        gst_object_unref (peer);
+      } else {
+        GstCaps * caps;
+        gboolean need_pool;
 
-      gst_query_parse_allocation (query, &caps, &need_pool);
+        gst_query_parse_allocation (query, &caps, &need_pool);
 
-      /* FIXME: Can this be removed? */
-      g_assert_cmpuint (0, ==, gst_query_get_n_allocation_params (query));
-      gst_query_add_allocation_param (query,
-          h->propose_allocator, &h->propose_params);
+        /* FIXME: Can this be removed? */
+        g_assert_cmpuint (0, ==, gst_query_get_n_allocation_params (query));
+        gst_query_add_allocation_param (query,
+            h->propose_allocator, &h->propose_params);
 
-      GST_DEBUG_OBJECT (pad, "proposing allocation %" GST_PTR_FORMAT,
-          h->propose_allocator);
+        GST_DEBUG_OBJECT (pad, "proposing allocation %" GST_PTR_FORMAT,
+            h->propose_allocator);
+      }
       break;
     }
     default:
@@ -714,7 +723,7 @@ gst_harness_try_pull_event (GstHarness * h)
 static void
 gst_harness_setup_src_harness (GstHarness * h, gboolean has_clock_wait)
 {
-  h->src_harness->sink_event_forward_pad = gst_object_ref (h->srcpad);
+  h->src_harness->sink_forward_pad = gst_object_ref (h->srcpad);
   gst_harness_use_testclock (h->src_harness);
   h->src_harness->has_clock_wait = has_clock_wait;
 }
@@ -786,14 +795,14 @@ void
 gst_harness_add_sink (GstHarness * h, const gchar * sink_element_name)
 {
   h->sink_harness = gst_harness_new (sink_element_name);
-  h->sink_event_forward_pad = gst_object_ref (h->sink_harness->srcpad);
+  h->sink_forward_pad = gst_object_ref (h->sink_harness->srcpad);
 }
 
 void
 gst_harness_add_sink_parse (GstHarness * h, const gchar * launchline)
 {
   h->sink_harness = gst_harness_new_parse (launchline);
-  h->sink_event_forward_pad = gst_object_ref (h->sink_harness->srcpad);
+  h->sink_forward_pad = gst_object_ref (h->sink_harness->srcpad);
 }
 
 void
@@ -875,8 +884,8 @@ gst_harness_teardown (GstHarness * h)
     g_async_queue_unref (h->sink_event_queue);
   }
 
-  if (h->sink_event_forward_pad)
-    gst_object_unref (h->sink_event_forward_pad);
+  if (h->sink_forward_pad)
+    gst_object_unref (h->sink_forward_pad);
 
   gst_object_replace ((GstObject**)&h->allocator, NULL);
   gst_object_replace ((GstObject**)&h->pool, NULL);

@@ -43,7 +43,7 @@ struct _GstHarness {
   GAsyncQueue * buffer_queue;
   GAsyncQueue * src_event_queue;
   GAsyncQueue * sink_event_queue;
-  GstPad * sink_event_forward_pad;
+  GstPad * sink_forward_pad;
   gchar * element_sinkpad_name;
   gchar * element_srcpad_name;
   GstClockTime latency_min;
