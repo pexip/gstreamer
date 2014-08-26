@@ -489,8 +489,14 @@ gst_harness_new_full (GstElement * element,
   if (h->srcpad != NULL) {
     gchar * stream_id = g_strdup_printf ("%s-%p",
         GST_OBJECT_NAME (h->element), h);
+
+    GstSegment segment;
+    gst_segment_init(&segment, GST_FORMAT_TIME);
+
     g_assert (gst_pad_push_event (h->srcpad,
           gst_event_new_stream_start (stream_id)));
+    g_assert (gst_pad_push_event (h->srcpad,
+          gst_event_new_segment (&segment)));
     g_free (stream_id);
   }
 
