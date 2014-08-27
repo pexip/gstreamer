@@ -423,6 +423,15 @@ gst_harness_setup_sink_pad (GstHarness * h,
 }
 
 void
+gst_harness_add_element_srcpad (GstHarness * h, GstPad * srcpad)
+{
+  gst_harness_setup_sink_pad (h, &hsinktemplate, NULL);
+  g_assert_cmpint (gst_pad_link (srcpad, h->sinkpad), ==, GST_PAD_LINK_OK);
+  g_free (h->element_srcpad_name);
+  h->element_srcpad_name = gst_pad_get_name (srcpad);
+}
+
+void
 gst_harness_play (GstHarness * h)
 {
   GstState state, pending;
