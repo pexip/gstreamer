@@ -95,6 +95,7 @@ LIBGSTCHECK_EXPORTED_FUNCS = \
 	gst_consistency_checker_new \
 	gst_consistency_checker_reset \
 	gst_consistency_checker_free \
+	gst_harness_add_element_srcpad \
 	gst_harness_add_probe \
 	gst_harness_add_sink \
 	gst_harness_add_sink_parse \

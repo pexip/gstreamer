@@ -79,6 +79,8 @@ GstHarness * gst_harness_new_full (GstElement * element,
     GstStaticPadTemplate * hsrc, const gchar * sinkpad,
     GstStaticPadTemplate * hsink, const gchar * srcpad);
 
+void gst_harness_add_element_srcpad (GstHarness * h, GstPad * srcpad);
+
 void gst_harness_teardown (GstHarness * h);
 
 void gst_harness_play (GstHarness * h);
