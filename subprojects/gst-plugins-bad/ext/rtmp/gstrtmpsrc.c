@@ -80,9 +80,12 @@ enum
 {
   PROP_0,
   PROP_LOCATION,
-  PROP_TIMEOUT
+  PROP_TIMEOUT,
+  PROP_BYTES_IN,
+  PROP_CLIENT_BW,
+  PROP_SERVER_BW,
 #if 0
-      PROP_SWF_URL,
+  PROP_SWF_URL,
   PROP_PAGE_URL
 #endif
 };
@@ -146,6 +149,21 @@ gst_rtmp_src_class_init (GstRTMPSrcClass * klass)
           "Time without receiving any data from the server to wait before to timeout the session",
           0, G_MAXINT,
           DEFAULT_TIMEOUT, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+
+  g_object_class_install_property (gobject_class, PROP_BYTES_IN,
+      g_param_spec_int ("bytes-in", "Bytes in",
+          "Number of bytes received (-1 = not available)", -1, G_MAXINT, -1,
+          G_PARAM_READABLE | G_PARAM_STATIC_STRINGS));
+
+  g_object_class_install_property (gobject_class, PROP_CLIENT_BW,
+      g_param_spec_int ("client-bandwidth", "Client bandwidth",
+          "Client bandwidth (-1 = not available)", -1, G_MAXINT, -1,
+          G_PARAM_READABLE | G_PARAM_STATIC_STRINGS));
+
+  g_object_class_install_property (gobject_class, PROP_SERVER_BW,
+      g_param_spec_int ("server-bandwidth", "Server bandwidth",
+          "Server bandwidth (-1 = not available)", -1, G_MAXINT, -1,
+          G_PARAM_READABLE | G_PARAM_STATIC_STRINGS));
 
   gst_element_class_add_static_pad_template (gstelement_class, &srctemplate);
 
@@ -318,6 +336,24 @@ gst_rtmp_src_get_property (GObject * object, guint prop_id, GValue * value,
       break;
     case PROP_TIMEOUT:
       g_value_set_int (value, src->timeout);
+      break;
+    case PROP_BYTES_IN:
+      if (src->rtmp)
+        g_value_set_int (value, src->rtmp->m_nBytesIn);
+      else
+        g_value_set_int (value, -1);
+      break;
+    case PROP_CLIENT_BW:
+      if (src->rtmp)
+        g_value_set_int (value, src->rtmp->m_nClientBW);
+      else
+        g_value_set_int (value, -1);
+      break;
+    case PROP_SERVER_BW:
+      if (src->rtmp)
+        g_value_set_int (value, src->rtmp->m_nServerBW);
+      else
+        g_value_set_int (value, -1);
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
