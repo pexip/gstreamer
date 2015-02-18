@@ -753,7 +753,7 @@ gst_harness_add_src_parse (GstHarness * h,
   gst_harness_setup_src_harness (h, has_clock_wait);
 }
 
-void
+GstFlowReturn
 gst_harness_push_from_src (GstHarness * h)
 {
   GstBuffer * buf;
@@ -769,7 +769,7 @@ gst_harness_push_from_src (GstHarness * h)
   }
 
   g_assert ((buf = gst_harness_pull (h->src_harness)) != NULL);
-  gst_harness_push (h, buf);
+  return gst_harness_push (h, buf);
 }
 
 GstFlowReturn
