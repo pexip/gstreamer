@@ -151,7 +151,7 @@ void gst_harness_add_src (GstHarness * h,
     const gchar * src_element_name, gboolean has_clock_wait);
 void gst_harness_add_src_parse (GstHarness * h,
     const gchar * launchline, gboolean has_clock_wait);
-void gst_harness_push_from_src (GstHarness * h);
+GstFlowReturn gst_harness_push_from_src (GstHarness * h);
 GstFlowReturn gst_harness_src_crank_and_push_many (GstHarness * h,
     gint cranks, gint pushes);
 
