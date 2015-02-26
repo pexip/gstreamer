@@ -519,6 +519,74 @@ GST_START_TEST (info_post_gst_init_category_registration)
 
 GST_END_TEST;
 
+
+typedef struct
+{
+  gboolean thread_running;
+  gpointer user_data;
+} StressTestData;
+
+static gpointer
+debug_pad_name_func (gpointer user_data)
+{
+  StressTestData *data = user_data;
+  GstPad *pad = data->user_data;
+
+  while (data->thread_running) {
+    gchar *name = g_strdup_printf ("%s:%s", GST_DEBUG_PAD_NAME (pad));
+    fail_unless (name != NULL);
+    g_free (name);
+  }
+
+  return NULL;
+}
+
+static gpointer
+unparent_func (gpointer user_data)
+{
+  StressTestData *data = user_data;
+  GstObject *obj = data->user_data;
+
+  while (data->thread_running) {
+    GstObject *parent = gst_object_get_parent (obj);
+    gst_object_unparent (obj);
+    g_thread_yield ();
+    gst_object_set_parent (obj, parent);
+    gst_object_unref (parent);
+  }
+
+  return NULL;
+}
+
+GST_START_TEST(gst_debug_pad_name_stress)
+{
+  GThread *pad_name_thread, *unparent_thread;
+  GstPad *pad = gst_pad_new ("testpad", GST_PAD_UNKNOWN);
+  GstElement *element = gst_element_factory_make ("identity", NULL);
+  StressTestData data = { TRUE, pad };
+
+  g_object_ref (G_OBJECT (pad));
+  gst_object_set_parent (GST_OBJECT (pad), GST_OBJECT (element));
+
+  pad_name_thread = g_thread_new (
+      "pad_name_thread", (GThreadFunc) debug_pad_name_func, &data);
+  unparent_thread = g_thread_new (
+      "gst_object_unparent_thread", (GThreadFunc) unparent_func, &data);
+
+  /* test duration */
+  g_usleep (G_USEC_PER_SEC / 10);
+
+  data.thread_running = FALSE;
+  g_thread_join (pad_name_thread);
+  g_thread_join (unparent_thread);
+
+  gst_object_unparent (GST_OBJECT (pad));
+  gst_object_unref (pad);
+  gst_object_unref (element);
+}
+
+GST_END_TEST;
+
 static Suite *
 gst_info_suite (void)
 {
@@ -541,6 +609,12 @@ gst_info_suite (void)
   tcase_add_test (tc_chain, info_set_and_unset_single);
   tcase_add_test (tc_chain, info_set_and_unset_multiple);
   tcase_add_test (tc_chain, info_post_gst_init_category_registration);
+#endif
+
+#if defined (__GNUC__)
+  tcase_add_test (tc_chain, gst_debug_pad_name_stress);
+#else
+  tcase_skip_broken_test (tc_chain, gst_debug_pad_name_stress);
 #endif
 
   return s;
