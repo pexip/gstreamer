@@ -239,6 +239,26 @@ struct _GstDebugCategory {
  */
 #define GST_STR_NULL(str) ((str) ? (str) : "(NULL)")
 
+#if defined (__GNUC__)
+#define _GST_OBJECT_PARENT_NAME(obj)                                  \
+  ({                                                                  \
+    GstObject * parent;                                               \
+    const gchar * parent_name;                                        \
+    if (G_LIKELY ((parent = GST_OBJECT_PARENT (obj)) != NULL)) {      \
+      /* parent may be disposed, but accessing name will not crash*/  \
+      parent_name = GST_OBJECT_NAME (parent);                         \
+    } else {                                                          \
+      parent_name = "''";                                             \
+    }                                                                 \
+    parent_name;                                                      \
+  })
+#else
+/* Not MT safe since object may be unparented after check */
+#define _GST_OBJECT_PARENT_NAME(obj)                                  \
+  (GST_OBJECT_PARENT (obj) != NULL) ?                                 \
+  GST_OBJECT_NAME (GST_OBJECT_PARENT (obj)) : "''"
+#endif
+
 /* FIXME, not MT safe */
 /**
  * GST_DEBUG_PAD_NAME:
@@ -248,10 +268,7 @@ struct _GstDebugCategory {
  * statements.
  */
 #define GST_DEBUG_PAD_NAME(pad) \
-  (pad != NULL) ?  \
-  ((GST_OBJECT_PARENT(pad) != NULL) ? \
-  GST_STR_NULL (GST_OBJECT_NAME (GST_OBJECT_PARENT(pad))) : \
-  "''" ) : "''", \
+  (pad != NULL) ? GST_STR_NULL (_GST_OBJECT_PARENT_NAME (pad)) : "''",  \
   (pad != NULL) ? GST_STR_NULL (GST_OBJECT_NAME (pad)) : "''"
 
 /**
