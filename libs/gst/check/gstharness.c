@@ -1413,12 +1413,12 @@ GST_HARNESS_STRESS_FUNC_BEGIN (statechange, {})
   }
   gst_iterator_free (it);
 
-  g_assert (gst_element_set_state (t->h->element, GST_STATE_PLAYING) ==
-      GST_STATE_CHANGE_SUCCESS);
   if (clock != NULL) {
     gst_element_set_clock (t->h->element, clock);
     gst_object_unref (clock);
   }
+  g_assert (gst_element_set_state (t->h->element, GST_STATE_PLAYING) ==
+      GST_STATE_CHANGE_SUCCESS);
 }
 GST_HARNESS_STRESS_FUNC_END ()
 
