@@ -33,26 +33,41 @@ plugin_init (GstPlugin * plugin)
   gboolean ret = FALSE;
 
 #ifdef HAVE_VP8_DECODER
-  ret |= GST_ELEMENT_REGISTER (vp8dec, plugin);
+  if (!g_type_from_name ("GstVP8Dec"))
+    ret |= GST_ELEMENT_REGISTER (vp8dec, plugin);
 #endif
 
 #ifdef HAVE_VP8_ENCODER
-  ret |= GST_ELEMENT_REGISTER (vp8enc, plugin);
+  if (!g_type_from_name ("GstVP8Enc"))
+    ret |= GST_ELEMENT_REGISTER (vp8enc, plugin);
 #endif
 
 #ifdef HAVE_VP9_DECODER
-  ret |= GST_ELEMENT_REGISTER (vp9dec, plugin);
+  if (!g_type_from_name ("GstVP9Dec"))
+    ret |= GST_ELEMENT_REGISTER (vp9dec, plugin);
 #endif
 
 #ifdef HAVE_VP9_ENCODER
-  ret |= GST_ELEMENT_REGISTER (vp9enc, plugin);
+  if (!g_type_from_name ("GstVP9Enc"))
+    ret |= GST_ELEMENT_REGISTER (vp9enc, plugin);
 #endif
 
   return ret;
 }
 
+/* Pexip Spesific */
+#if defined (GST_ISA_AVX)
+#  define GST_ISA_SUFFIX(name) G_PASTE (name, _avx)
+#elif defined (GST_ISA_AVX2)
+#  define GST_ISA_SUFFIX(name) G_PASTE (name, _avx2)
+#elif defined (GST_ISA_AVX512)
+#  define GST_ISA_SUFFIX(name) G_PASTE (name, _avx512)
+#else
+#  define GST_ISA_SUFFIX(name) name
+#endif
+
 GST_PLUGIN_DEFINE (GST_VERSION_MAJOR,
     GST_VERSION_MINOR,
-    vpx,
+    GST_ISA_SUFFIX (vpx),
     "VP8 plugin",
     plugin_init, VERSION, "LGPL", GST_PACKAGE_NAME, GST_PACKAGE_ORIGIN)
