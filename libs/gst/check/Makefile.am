@@ -101,11 +101,14 @@ LIBGSTCHECK_EXPORTED_FUNCS = \
 	gst_harness_add_sink_parse \
 	gst_harness_add_src \
 	gst_harness_add_src_parse \
+	gst_harness_buffers_received \
+	gst_harness_buffers_in_queue \
 	gst_harness_crank_multiple_clock_waits \
 	gst_harness_crank_single_clock_wait \
 	gst_harness_create_buffer \
 	gst_harness_dump_to_file \
 	gst_harness_events_received \
+	gst_harness_events_in_queue \
 	gst_harness_find_element \
 	gst_harness_get \
 	gst_harness_get_testclock \
@@ -120,19 +123,21 @@ LIBGSTCHECK_EXPORTED_FUNCS = \
 	gst_harness_pull_event \
 	gst_harness_pull_upstream_event \
 	gst_harness_push \
-	gst_harness_push_and_wait \
-	gst_harness_push_async \
+	gst_harness_push_and_pull \
 	gst_harness_push_event \
-	gst_harness_push_event_async \
 	gst_harness_push_from_src \
 	gst_harness_push_to_sink \
 	gst_harness_query_latency \
-	gst_harness_send_upstream_event \
+	gst_harness_push_upstream_event \
 	gst_harness_set \
+	gst_harness_set_caps \
+	gst_harness_set_caps_str \
 	gst_harness_set_drop_buffers \
 	gst_harness_set_pull_mode \
 	gst_harness_set_sink_caps \
 	gst_harness_set_src_caps \
+	gst_harness_set_src_caps_str \
+	gst_harness_set_sink_caps_str \
 	gst_harness_set_time \
 	gst_harness_set_us_latency \
 	gst_harness_signal \
@@ -145,7 +150,7 @@ LIBGSTCHECK_EXPORTED_FUNCS = \
 	gst_harness_stress_push_buffer_start_full \
 	gst_harness_stress_push_buffer_with_cb_start_full \
 	gst_harness_stress_push_event_start_full \
-	gst_harness_stress_send_upstream_event_start_full \
+	gst_harness_stress_push_upstream_event_start_full \
 	gst_harness_stress_requestpad_start_full \
 	gst_harness_stress_statechange_start_full \
 	gst_harness_stress_thread_stop \
@@ -154,6 +159,7 @@ LIBGSTCHECK_EXPORTED_FUNCS = \
 	gst_harness_try_pull_event \
 	gst_harness_try_pull_upstream_event \
 	gst_harness_upstream_events_received \
+	gst_harness_upstream_events_in_queue \
 	gst_harness_use_systemclock \
 	gst_harness_use_testclock \
 	gst_harness_wait_for_clock_id_waits \

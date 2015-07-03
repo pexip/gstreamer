@@ -1,6 +1,6 @@
 /* GstHarness - A test-harness for GStreamer testing
  *
- * Copyright (C) 2013 Pexip <pexip.com>
+ * Copyright (C) 2012-2015 Pexip <pexip.com>
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Library General Public
@@ -39,10 +39,15 @@ struct _GstHarness {
   GstPad * sinkpad;
   GstCaps * src_caps;
   GstCaps * sink_caps;
+
   volatile guint recv_buffers;
+  volatile guint recv_events;
+  volatile guint recv_upstream_events;
+
   GAsyncQueue * buffer_queue;
   GAsyncQueue * src_event_queue;
   GAsyncQueue * sink_event_queue;
+
   GstPad * sink_forward_pad;
   gchar * element_sinkpad_name;
   gchar * element_srcpad_name;
@@ -67,86 +72,76 @@ struct _GstHarness {
   GPtrArray * stress;
 };
 
-GstHarness * gst_harness_new (const char * name);
-GstHarness * gst_harness_new_parse (const gchar * launchline);
-GstHarness * gst_harness_new_with_element (GstElement * element,
-    const gchar * sinkpad, const gchar * srcpad);
-GstHarness * gst_harness_new_with_templates (const gchar * element_name,
-    GstStaticPadTemplate * hsrc, GstStaticPadTemplate * hsink);
-GstHarness * gst_harness_new_with_padnames (const gchar * element_name,
-    const gchar * sinkpad, const gchar * srcpad);
+/* Harness creation */
 GstHarness * gst_harness_new_full (GstElement * element,
     GstStaticPadTemplate * hsrc, const gchar * sinkpad,
     GstStaticPadTemplate * hsink, const gchar * srcpad);
+GstHarness * gst_harness_new_with_element (GstElement * element,
+    const gchar * sinkpad, const gchar * srcpad);
+GstHarness * gst_harness_new_with_padnames (const gchar * element_name,
+    const gchar * sinkpad, const gchar * srcpad);
+GstHarness * gst_harness_new_with_templates (const gchar * element_name,
+    GstStaticPadTemplate * hsrc, GstStaticPadTemplate * hsink);
+GstHarness * gst_harness_new (const gchar * element_name);
+GstHarness * gst_harness_new_parse (const gchar * launchline);
+void gst_harness_teardown (GstHarness * h);
 
 void gst_harness_add_element_srcpad (GstHarness * h, GstPad * srcpad);
+void gst_harness_add_element_sinkpad (GstHarness * h, GstPad * sinkpad);
 
-void gst_harness_teardown (GstHarness * h);
+/* Caps Functions */
+void gst_harness_set_src_caps (GstHarness * h, GstCaps * caps);
+void gst_harness_set_sink_caps (GstHarness * h, GstCaps * caps);
+void gst_harness_set_caps (GstHarness * h, GstCaps * in, GstCaps * out);
+void gst_harness_set_src_caps_str (GstHarness * h, const gchar * str);
+void gst_harness_set_sink_caps_str (GstHarness * h, const gchar * str);
+void gst_harness_set_caps_str (GstHarness * h,
+    const gchar * in, const gchar * out);
+
+/* Clock Functions */
+void gst_harness_use_systemclock (GstHarness * h);
+void gst_harness_use_testclock (GstHarness * h);
+GstTestClock * gst_harness_get_testclock (GstHarness * h);
+gboolean gst_harness_set_time (GstHarness * h, GstClockTime time);
+gboolean gst_harness_wait_for_clock_id_waits (GstHarness * h,
+    guint waits, guint timeout);
+gboolean gst_harness_crank_single_clock_wait (GstHarness * h);
+gboolean gst_harness_crank_multiple_clock_waits (GstHarness * h,
+    guint waits);
 
 void gst_harness_play (GstHarness * h);
 void gst_harness_set_pull_mode (GstHarness * h);
 
-void gst_harness_add_probe (GstHarness * h,
-    const gchar * element_name, const gchar * pad_name, GstPadProbeType mask,
-    GstPadProbeCallback callback, gpointer user_data,
-    GDestroyNotify destroy_data);
-
-void gst_harness_set (GstHarness * h,
-    const gchar * element_name, const gchar * first_property_name, ...);
-
-void gst_harness_get (GstHarness * h,
-    const gchar * element_name, const gchar * first_property_name, ...);
-
-void gst_harness_signal_connect (GstHarness * h,
-    const gchar * element_name, const gchar * signal_name,
-    GCallback handler, gpointer data);
-
-void gst_harness_signal (GstHarness * h,
-    const gchar * element_name, const gchar * signal_name);
-
-GstElement * gst_harness_find_element (GstHarness * h,
-    const gchar * element_name);
-
-void gst_harness_set_sink_caps (GstHarness * h, GstCaps * caps);
-void gst_harness_set_src_caps (GstHarness * h, GstCaps * caps);
-#define gst_harness_set_caps(h, in, out)  \
-  gst_harness_set_sink_caps (h, out), gst_harness_set_src_caps (h, in)
-
-#define gst_harness_set_sinkcaps_str(h,str) \
-  gst_harness_set_sink_caps (h, gst_caps_from_string (str))
-#define gst_harness_set_srccaps_str(h, str) \
-  gst_harness_set_src_caps (h, gst_caps_from_string (str))
-#define gst_harness_set_caps_str(h, in, out)  \
-  gst_harness_set_sinkcaps_str (h, out), gst_harness_set_srccaps_str (h, in)
-
-GstClockTime gst_harness_query_latency (GstHarness * h);
-void gst_harness_set_us_latency (GstHarness * h, GstClockTime latency);
-
 /* buffers */
+GstBuffer * gst_harness_create_buffer (GstHarness * h, gsize size);
 GstFlowReturn gst_harness_push (GstHarness * h, GstBuffer * buffer);
-GstBuffer * gst_harness_push_and_wait (GstHarness * h, GstBuffer * buffer);
 GstBuffer * gst_harness_pull (GstHarness * h);
 GstBuffer * gst_harness_try_pull (GstHarness * h);
-#define gst_harness_buffers_in_queue(h) g_async_queue_length ((h)->buffer_queue)
-#define gst_harness_buffers_received(h) (h)->recv_buffers
+GstBuffer * gst_harness_push_and_pull (GstHarness * h, GstBuffer * buffer);
+guint gst_harness_buffers_received (GstHarness * h);
+guint gst_harness_buffers_in_queue (GstHarness * h);
 void gst_harness_set_drop_buffers (GstHarness * h, gboolean drop_buffers);
 void gst_harness_dump_to_file (GstHarness * h, const gchar * filename);
 
-GstBuffer * gst_harness_create_buffer (GstHarness * h, gsize size);
-
 /* downstream events */
-gboolean gst_harness_push_event (GstHarness * h, GstEvent * ev);
+gboolean gst_harness_push_event (GstHarness * h, GstEvent * event);
 GstEvent * gst_harness_pull_event (GstHarness * h);
 GstEvent * gst_harness_try_pull_event (GstHarness * h);
-gint gst_harness_events_received (GstHarness * h);
+guint gst_harness_events_received (GstHarness * h);
+guint gst_harness_events_in_queue (GstHarness * h);
 
 /* upstream events */
-gboolean gst_harness_send_upstream_event (GstHarness * h, GstEvent * ev);
+gboolean gst_harness_push_upstream_event (GstHarness * h, GstEvent * event);
 GstEvent * gst_harness_pull_upstream_event (GstHarness * h);
-GstEvent * gst_harness_try_pull_upstream_event (GstHarness *h);
-gint gst_harness_upstream_events_received (GstHarness * h);
+GstEvent * gst_harness_try_pull_upstream_event (GstHarness * h);
+guint gst_harness_upstream_events_received (GstHarness * h);
+guint gst_harness_upstream_events_in_queue (GstHarness * h);
 
-/* harness src & sink*/
+/* latency */
+GstClockTime gst_harness_query_latency (GstHarness * h);
+void gst_harness_set_us_latency (GstHarness * h, GstClockTime latency);
+
+/* src-harness */
 void gst_harness_add_src (GstHarness * h,
     const gchar * src_element_name, gboolean has_clock_wait);
 void gst_harness_add_src_parse (GstHarness * h,
@@ -154,30 +149,30 @@ void gst_harness_add_src_parse (GstHarness * h,
 GstFlowReturn gst_harness_push_from_src (GstHarness * h);
 GstFlowReturn gst_harness_src_crank_and_push_many (GstHarness * h,
     gint cranks, gint pushes);
+gboolean gst_harness_src_push_event (GstHarness * h);
 
+/* sink-harness */
 void gst_harness_add_sink (GstHarness * h, const gchar * sink_element_name);
 void gst_harness_add_sink_parse (GstHarness * h, const gchar * launchline);
-void gst_harness_push_to_sink (GstHarness * h);
-void gst_harness_sink_push_many (GstHarness * h, gint pushes);
+GstFlowReturn gst_harness_push_to_sink (GstHarness * h);
+GstFlowReturn gst_harness_sink_push_many (GstHarness * h, gint pushes);
 
-void gst_harness_src_push_event (GstHarness * h);
-
-/* Async */
-gpointer gst_harness_push_async (GstHarness * h, GstBuffer * buffer,
-    GstTaskPool* task_pool);
-gpointer gst_harness_push_event_async (GstHarness * h, GstEvent * event,
-    GstTaskPool* task_pool);
-
-/* TestClock Functions */
-void gst_harness_use_testclock (GstHarness * h);
-GstTestClock * gst_harness_get_testclock (GstHarness * h);
-gboolean gst_harness_set_time (GstHarness * h, GstClockTime time);
-gboolean gst_harness_wait_for_clock_id_waits (GstHarness * h,
-           guint waits, guint timeout);
-gboolean gst_harness_crank_single_clock_wait (GstHarness * h);
-gboolean gst_harness_crank_multiple_clock_waits (GstHarness * h,
-           unsigned int waits);
-void gst_harness_use_systemclock (GstHarness * h);
+/* convenience functions */
+GstElement * gst_harness_find_element (GstHarness * h,
+    const gchar * element_name);
+void gst_harness_set (GstHarness * h,
+    const gchar * element_name, const gchar * first_property_name, ...);
+void gst_harness_get (GstHarness * h,
+    const gchar * element_name, const gchar * first_property_name, ...);
+void gst_harness_signal_connect (GstHarness * h,
+    const gchar * element_name, const gchar * signal_name,
+    GCallback handler, gpointer data);
+void gst_harness_signal (GstHarness * h,
+    const gchar * element_name, const gchar * signal_name);
+void gst_harness_add_probe (GstHarness * h,
+    const gchar * element_name, const gchar * pad_name, GstPadProbeType mask,
+    GstPadProbeCallback callback, gpointer user_data,
+    GDestroyNotify destroy_data);
 
 /* Stress */
 guint gst_harness_stress_thread_stop (GstHarnessThread * t);
@@ -211,8 +206,8 @@ GstHarnessThread * gst_harness_stress_push_event_start_full (GstHarness * h,
     GstEvent * event, gulong sleep);
 
 #define gst_harness_stress_send_upstream_event_start(h, e)                     \
-  gst_harness_stress_send_upstream_event_start_full (h, e, 0)
-GstHarnessThread * gst_harness_stress_send_upstream_event_start_full (
+  gst_harness_stress_push_upstream_event_start_full (h, e, 0)
+GstHarnessThread * gst_harness_stress_push_upstream_event_start_full (
     GstHarness * h, GstEvent * event, gulong sleep);
 
 #define gst_harness_stress_property_start(h, n, v)                             \
