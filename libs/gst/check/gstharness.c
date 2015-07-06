@@ -23,9 +23,34 @@
  * @short_description: A test-harness for writing GStreamer unit tests
  * @see_also: #GstTestClock,\
  *
- * GstHarness is ment to make writing unit test for GStreamer much easier.
+ * #GstHarness is ment to make writing unit test for GStreamer much easier.
  * It can be though of as a way of treating a #GstElement as a black box,
  * deterministially feeding it data, and controlling what data it outputs.
+ *
+ * The basic structure of #GstHarness is two "floating" #GstPads, that connects
+ * to the harnessed #GstElement src and sink #GstPads like so:
+ *
+ *           __________________________
+ *  _____   |  _____            _____  |   _____
+ * |     |  | |     |          |     | |  |     |
+ * | src |--+-| sink|  Element | src |-+--| sink|
+ * |_____|  | |_____|          |_____| |  |_____|
+ *          |__________________________|
+ *
+ *
+ * With this, you can now simulate any environment the #GstElement might find
+ * itself in. By specifying the #GstCaps of the harness #GstPads, using
+ * functions like gst_harness_set_src_caps or gst_harness_set_sink_caps_str,
+ * you can test how the #GstElement interacts with different capssets.
+ *
+ * Your harnessed #GstElement can of course also be a bin, and using
+ * gst_harness_new_parse supporting standard gst-launch syntax, you can
+ * easily test a whole pipeline instead of just one element.
+ *
+ * You can then go on to push #GstBuffers and #GstEvents on to the srcpad,
+ * using functions like gst_harness_push and gst_harness_push_event, and
+ * then pull them out to examine them with gst_harness_pull and
+ * gst_harness_pull_event.
  *
  * <example>
  * <title>A simple buffer-in buffer-out example</title>
@@ -61,8 +86,36 @@
  *   </programlisting>
  * </example>
  *
+ * Another main feature of the #GstHarness is its integration with the
+ * #GstTestClock. Operating the #GstTestClock can be very challenging, but
+ * #GstHarness simplifies some of the most desired actions a lot, like wanting
+ * to manually advance the clock while at the same time releasing a #GstClockID
+ * that is waiting, with functions like gst_harness_crank_single_clock_wait.
+ *
  * #GstHarness also supports sub-harnesses, as a way of generating and
- * validating data.
+ * validating data. A sub-harness is another #GstHarness that is managed by
+ * the "parent" harness, and can either be created by using the standard
+ * gst_harness_new type functions directly on the (GstHarness *)->src_harness,
+ * or using the much more convenient gst_harness_add_src or
+ * gst_harness_add_sink_parse. If you have a decoder-element you want to test,
+ * (like vp8dec) it can be very useful to add a src-harness with both a
+ * src-element (videotestsrc) and an encoder (vp8enc) to feed the decoder data
+ * with different configurations, by simply doing:
+ *
+ * <example>
+ * <programlisting language="c">
+ *   GstHarness * h = gst_harness_new (h, "vp8dec");
+ *   gst_harness_add_src_parse (h, "videotestsrc is-live=1 ! vp8enc", TRUE);
+ * </programlisting>
+ * </example>
+ *
+ * and then feeding it data with:
+ *
+ * <example>
+ * <programlisting language="c">
+ * gst_harness_push_from_src (h);
+ * </programlisting>
+ * </example>
  *
  */
 #ifdef HAVE_CONFIG_H
@@ -109,6 +162,7 @@ struct _GstHarnessPrivate {
   GstClockTime latency_max;
   gboolean has_clock_wait;
   gboolean drop_buffers;
+  GstClockTime last_push_ts;
 
   GstBufferPool * pool;
   GstAllocator * allocator;
@@ -526,7 +580,7 @@ gst_harness_new_full (GstElement * element,
 
   GST_DEBUG_OBJECT (h, "about to create new harness %p", h);
   h->element = gst_object_ref (element);
-  h->last_push_ts = GST_CLOCK_TIME_NONE;
+  priv->last_push_ts = GST_CLOCK_TIME_NONE;
   priv->latency_min = 0;
   priv->latency_max = GST_CLOCK_TIME_NONE;
   priv->drop_buffers = FALSE;
@@ -1342,8 +1396,9 @@ gst_harness_create_buffer (GstHarness * h, gsize size)
 GstFlowReturn
 gst_harness_push (GstHarness * h, GstBuffer * buffer)
 {
+  GstHarnessPrivate *priv = h->priv;
   g_assert (buffer != NULL);
-  h->last_push_ts = GST_BUFFER_TIMESTAMP (buffer);
+  priv->last_push_ts = GST_BUFFER_TIMESTAMP (buffer);
   return gst_pad_push (h->srcpad, buffer);
 }
 
@@ -1516,6 +1571,27 @@ gst_harness_dump_to_file (GstHarness * h, const gchar * filename)
 
   fflush (fd);
   fclose (fd);
+}
+
+/**
+ * gst_harness_get_last_pushed_timestamp:
+ * @h: a #GstHarness
+ *
+ * Get the timestamp of the last #GstBuffer pushed on the #GstHarness srcpad,
+ * typically with gst_harness_push or gst_harness_push_from_src.
+ *
+ * MT safe.
+ *
+ * Returns: a #GstClockTime with the timestamp or %GST_CLOCK_TIME_NONE if no
+ * #GstBuffer has been pushed on the #GstHarness srcpad
+ *
+ * Since: 1.6
+ */
+GstClockTime
+gst_harness_get_last_pushed_timestamp (GstHarness * h)
+{
+  GstHarnessPrivate *priv = h->priv;
+  return priv->last_push_ts;
 }
 
 /**
@@ -2638,6 +2714,27 @@ gst_harness_stress_push_buffer_start_full (GstHarness * h,
       (GDestroyNotify) gst_buffer_unref, sleep);
 }
 
+/**
+ * gst_harness_stress_push_buffer_with_cb_start_full: (skip)
+ * @h: a #GstHarness
+ * @caps: a #GstCaps for the #GstBuffer
+ * @segment: a #GstSegment
+ * @func: a #GstHarnessPrepareBuffer function called before every iteration
+ * to prepare / create a #GstBuffer for pushing
+ * @data: a #gpointer with data to the #GstHarnessPrepareBuffer function
+ * @notify: a #GDestroyNotify that is called for every push to allow cleaning
+ * up the #GstBuffer. (like gst_buffer_unref)
+ * @sleep: a #gulong specifying how long to sleep in (microseconds) for
+ * each call to gst_pad_push
+ *
+ * Push a #GstBuffer in intervals of @sleep microseconds.
+ *
+ * MT safe.
+ *
+ * Returns: a #GstHarnessThread
+ *
+ * Since: 1.6
+ */
 GstHarnessThread *
 gst_harness_stress_push_buffer_with_cb_start_full (GstHarness * h,
     GstCaps * caps, const GstSegment * segment,

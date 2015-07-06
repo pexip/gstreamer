@@ -112,6 +112,7 @@ LIBGSTCHECK_EXPORTED_FUNCS = \
 	gst_harness_find_element \
 	gst_harness_get \
 	gst_harness_get_allocator \
+	gst_harness_get_last_pushed_timestamp \
 	gst_harness_get_testclock \
 	gst_harness_new \
 	gst_harness_new_full \

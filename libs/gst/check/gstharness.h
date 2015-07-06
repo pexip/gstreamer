@@ -39,8 +39,6 @@ struct _GstHarness {
   GstHarness * src_harness;
   GstHarness * sink_harness;
 
-  GstClockTime last_push_ts;
-
   GstHarnessPrivate * priv;
 };
 
@@ -94,6 +92,7 @@ guint gst_harness_buffers_received (GstHarness * h);
 guint gst_harness_buffers_in_queue (GstHarness * h);
 void gst_harness_set_drop_buffers (GstHarness * h, gboolean drop_buffers);
 void gst_harness_dump_to_file (GstHarness * h, const gchar * filename);
+GstClockTime gst_harness_get_last_pushed_timestamp (GstHarness * h);
 
 /* downstream events */
 gboolean gst_harness_push_event (GstHarness * h, GstEvent * event);
