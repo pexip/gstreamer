@@ -90,6 +90,9 @@ static GstStaticPadTemplate hsinktemplate = GST_STATIC_PAD_TEMPLATE ("sink",
     GST_STATIC_CAPS_ANY);
 
 struct _GstHarnessPrivate {
+  gchar * element_sinkpad_name;
+  gchar * element_srcpad_name;
+
   GstCaps * src_caps;
   GstCaps * sink_caps;
   GstPad * sink_forward_pad;
@@ -386,8 +389,8 @@ gst_harness_link_element_srcpad (GstHarness * h,
     srcpad = gst_element_get_request_pad (h->element, element_srcpad_name);
   g_assert (srcpad);
   g_assert_cmpint (gst_pad_link (srcpad, h->sinkpad), ==, GST_PAD_LINK_OK);
-  g_free (h->element_srcpad_name);
-  h->element_srcpad_name = gst_pad_get_name (srcpad);
+  g_free (priv->element_srcpad_name);
+  priv->element_srcpad_name = gst_pad_get_name (srcpad);
 
   gst_object_unref (srcpad);
 }
@@ -403,8 +406,8 @@ gst_harness_link_element_sinkpad (GstHarness * h,
     sinkpad = gst_element_get_request_pad (h->element, element_sinkpad_name);
   g_assert (sinkpad);
   g_assert_cmpint (gst_pad_link (h->srcpad, sinkpad), ==, GST_PAD_LINK_OK);
-  g_free (h->element_sinkpad_name);
-  h->element_sinkpad_name = gst_pad_get_name (sinkpad);
+  g_free (priv->element_sinkpad_name);
+  priv->element_sinkpad_name = gst_pad_get_name (sinkpad);
 
   gst_object_unref (sinkpad);
 }
@@ -796,7 +799,7 @@ gst_harness_teardown (GstHarness * h)
   if (h->srcpad) {
     if (gst_pad_is_request_pad (GST_PAD_PEER (h->srcpad)))
       gst_element_release_request_pad (h->element, GST_PAD_PEER (h->srcpad));
-    g_free (h->element_sinkpad_name);
+    g_free (priv->element_sinkpad_name);
 
     gst_pad_set_active (h->srcpad, FALSE);
     gst_object_unref (h->srcpad);
@@ -807,7 +810,7 @@ gst_harness_teardown (GstHarness * h)
   if (h->sinkpad) {
     if (gst_pad_is_request_pad (GST_PAD_PEER (h->sinkpad)))
       gst_element_release_request_pad (h->element, GST_PAD_PEER (h->sinkpad));
-    g_free (h->element_srcpad_name);
+    g_free (priv->element_srcpad_name);
 
     gst_pad_set_active (h->sinkpad, FALSE);
     gst_object_unref (h->sinkpad);
@@ -862,8 +865,8 @@ gst_harness_add_element_src_pad (GstHarness * h, GstPad * srcpad)
   GstHarnessPrivate *priv = h->priv;
   gst_harness_setup_sink_pad (h, &hsinktemplate, NULL);
   g_assert_cmpint (gst_pad_link (srcpad, h->sinkpad), ==, GST_PAD_LINK_OK);
-  g_free (h->element_srcpad_name);
-  h->element_srcpad_name = gst_pad_get_name (srcpad);
+  g_free (priv->element_srcpad_name);
+  priv->element_srcpad_name = gst_pad_get_name (srcpad);
 }
 
 /**
@@ -883,8 +886,8 @@ gst_harness_add_element_sink_pad (GstHarness * h, GstPad * sinkpad)
   GstHarnessPrivate *priv = h->priv;
   gst_harness_setup_src_pad (h, &hsrctemplate, NULL);
   g_assert_cmpint (gst_pad_link (h->srcpad, sinkpad), ==, GST_PAD_LINK_OK);
-  g_free (h->element_sinkpad_name);
-  h->element_sinkpad_name = gst_pad_get_name (sinkpad);
+  g_free (priv->element_sinkpad_name);
+  priv->element_sinkpad_name = gst_pad_get_name (sinkpad);
 }
 
 /**

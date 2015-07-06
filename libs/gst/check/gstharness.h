@@ -36,14 +36,10 @@ struct _GstHarness {
   GstPad * srcpad;
   GstPad * sinkpad;
 
-  gchar * element_sinkpad_name;
-  gchar * element_srcpad_name;
-
   GstHarness * src_harness;
   GstHarness * sink_harness;
 
   GstClockTime last_push_ts;
-  gsize counter;
 
   GstHarnessPrivate * priv;
 };
