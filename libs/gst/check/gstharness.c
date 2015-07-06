@@ -106,8 +106,12 @@ struct _GstHarnessPrivate {
   GstClockTime latency_max;
   gboolean has_clock_wait;
   gboolean drop_buffers;
-  GstAllocator * allocator;
+
   GstBufferPool * pool;
+  GstAllocator * allocator;
+  GstAllocationParams allocation_params;
+  GstAllocator * propose_allocator;
+  GstAllocationParams propose_allocation_params;
 
   gboolean blocking_push_mode;
   GCond blocking_push_cond;
@@ -232,7 +236,7 @@ gst_harness_decide_allocation (GstHarness * h, GstCaps * caps)
       gst_buffer_pool_set_active (pool, TRUE);
   }
 
-  h->allocation_params = params;
+  priv->allocation_params = params;
   if (priv->allocator)
     gst_object_unref (priv->allocator);
   priv->allocator = allocator;
@@ -301,10 +305,10 @@ gst_harness_sink_query (GstPad * pad, GstObject * parent, GstQuery * query)
         /* FIXME: Can this be removed? */
         g_assert_cmpuint (0, ==, gst_query_get_n_allocation_params (query));
         gst_query_add_allocation_param (query,
-            h->propose_allocator, &h->propose_params);
+            priv->propose_allocator, &priv->propose_allocation_params);
 
         GST_DEBUG_OBJECT (pad, "proposing allocation %" GST_PTR_FORMAT,
-            h->propose_allocator);
+            priv->propose_allocator);
       }
       break;
     }
@@ -524,8 +528,8 @@ gst_harness_new_full (GstElement * element,
   priv->latency_max = GST_CLOCK_TIME_NONE;
   priv->drop_buffers = FALSE;
 
-  h->propose_allocator = NULL;
-  gst_allocation_params_init (&h->propose_params);
+  priv->propose_allocator = NULL;
+  gst_allocation_params_init (&priv->propose_allocation_params);
 
   g_mutex_init (&priv->blocking_push_mutex);
   g_cond_init (&priv->blocking_push_cond);
@@ -815,6 +819,7 @@ gst_harness_teardown (GstHarness * h)
   if (priv->sink_forward_pad)
     gst_object_unref (priv->sink_forward_pad);
 
+  gst_object_replace ((GstObject **) & priv->propose_allocator, NULL);
   gst_object_replace ((GstObject **) & priv->allocator, NULL);
   gst_object_replace ((GstObject **) & priv->pool, NULL);
 
@@ -1311,7 +1316,7 @@ gst_harness_create_buffer (GstHarness * h, gsize size)
   }
 
   if (!ret)
-    ret = gst_buffer_new_allocate (priv->allocator, size, &h->allocation_params);
+    ret = gst_buffer_new_allocate (priv->allocator, size, &priv->allocation_params);
 
   g_assert (ret != NULL);
   return ret;
@@ -1761,6 +1766,57 @@ gst_harness_set_upstream_latency (GstHarness * h, GstClockTime latency)
 {
   GstHarnessPrivate *priv = h->priv;
   priv->latency_min = latency;
+}
+
+/**
+ * gst_harness_get_allocator:
+ * @h: a #GstHarness
+ * @allocator: (out) (allow-none) (transfer none): the #GstAllocator
+ * used
+ * @params: (out) (allow-none) (transfer full): the
+ * #GstAllocatorParams of @allocator
+ *
+ * Gets the @allocator and its @params that has been decided to use after an
+ * allocation query.
+ *
+ * MT safe.
+ *
+ * Since: 1.6
+ */
+void
+gst_harness_get_allocator (GstHarness * h, GstAllocator ** allocator,
+    GstAllocationParams * params)
+{
+  GstHarnessPrivate *priv = h->priv;
+  if (allocator)
+    *allocator = priv->allocator;
+  if (params)
+    *params = priv->allocation_params;
+}
+
+
+/**
+ * gst_harness_get_allocator:
+ * @h: a #GstHarness
+ * @allocator: (allow-none) (transfer full): a #GstAllocator
+ * @params: (allow-none) (transfer none): a #GstAllocationParams
+ *
+ * Sets the @allocator and @params to propose when receiving an allocation
+ * query.
+ *
+ * MT safe.
+ *
+ * Since: 1.6
+ */
+void
+gst_harness_set_propose_allocator (GstHarness * h, GstAllocator * allocator,
+    const GstAllocationParams * params)
+{
+  GstHarnessPrivate *priv = h->priv;
+  if (allocator)
+    priv->propose_allocator = allocator;
+  if (params)
+    priv->propose_allocation_params = *params;
 }
 
 static void

@@ -42,10 +42,6 @@ struct _GstHarness {
   GstHarness * src_harness;
   GstHarness * sink_harness;
 
-  GstAllocationParams allocation_params;
-  GstAllocator * propose_allocator;
-  GstAllocationParams propose_params;
-
   GstClockTime last_push_ts;
   gsize counter;
 
@@ -120,6 +116,12 @@ guint gst_harness_upstream_events_in_queue (GstHarness * h);
 /* latency */
 GstClockTime gst_harness_query_latency (GstHarness * h);
 void gst_harness_set_upstream_latency (GstHarness * h, GstClockTime latency);
+
+/* allocator and allocation params */
+void gst_harness_set_propose_allocator (GstHarness * h, GstAllocator * allocator,
+    const GstAllocationParams * params);
+void gst_harness_get_allocator (GstHarness * h, GstAllocator ** allocator,
+    GstAllocationParams * params);
 
 /* src-harness */
 void gst_harness_add_src (GstHarness * h,

@@ -111,6 +111,7 @@ LIBGSTCHECK_EXPORTED_FUNCS = \
 	gst_harness_events_in_queue \
 	gst_harness_find_element \
 	gst_harness_get \
+	gst_harness_get_allocator \
 	gst_harness_get_testclock \
 	gst_harness_new \
 	gst_harness_new_full \
@@ -134,6 +135,7 @@ LIBGSTCHECK_EXPORTED_FUNCS = \
 	gst_harness_set_caps_str \
 	gst_harness_set_drop_buffers \
 	gst_harness_set_blocking_push_mode \
+	gst_harness_set_propose_allocator \
 	gst_harness_set_sink_caps \
 	gst_harness_set_src_caps \
 	gst_harness_set_src_caps_str \
