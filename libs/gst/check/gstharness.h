@@ -21,10 +21,6 @@
 #ifndef __GST_HARNESS_H__
 #define __GST_HARNESS_H__
 
-#ifdef HAVE_CONFIG_H
-#include "config.h"
-#endif
-
 #include <gst/gst.h>
 #include <gst/check/gsttestclock.h>
 
@@ -40,9 +36,9 @@ struct _GstHarness {
   GstCaps * src_caps;
   GstCaps * sink_caps;
 
-  volatile guint recv_buffers;
-  volatile guint recv_events;
-  volatile guint recv_upstream_events;
+  volatile gint recv_buffers;
+  volatile gint recv_events;
+  volatile gint recv_upstream_events;
 
   GAsyncQueue * buffer_queue;
   GAsyncQueue * src_event_queue;
@@ -65,9 +61,9 @@ struct _GstHarness {
   GstAllocator * propose_allocator;
   GstAllocationParams propose_params;
 
-  gboolean pull_mode_active;
-  GCond pull_cond;
-  GMutex pull_mutex;
+  gboolean blocking_push_mode;
+  GCond blocking_push_cond;
+  GMutex blocking_push_mutex;
 
   GPtrArray * stress;
 };
@@ -86,8 +82,8 @@ GstHarness * gst_harness_new (const gchar * element_name);
 GstHarness * gst_harness_new_parse (const gchar * launchline);
 void gst_harness_teardown (GstHarness * h);
 
-void gst_harness_add_element_srcpad (GstHarness * h, GstPad * srcpad);
-void gst_harness_add_element_sinkpad (GstHarness * h, GstPad * sinkpad);
+void gst_harness_add_element_src_pad (GstHarness * h, GstPad * srcpad);
+void gst_harness_add_element_sink_pad (GstHarness * h, GstPad * sinkpad);
 
 /* Caps Functions */
 void gst_harness_set_src_caps (GstHarness * h, GstCaps * caps);
@@ -110,7 +106,7 @@ gboolean gst_harness_crank_multiple_clock_waits (GstHarness * h,
     guint waits);
 
 void gst_harness_play (GstHarness * h);
-void gst_harness_set_pull_mode (GstHarness * h);
+void gst_harness_set_blocking_push_mode (GstHarness * h);
 
 /* buffers */
 GstBuffer * gst_harness_create_buffer (GstHarness * h, gsize size);
@@ -139,7 +135,7 @@ guint gst_harness_upstream_events_in_queue (GstHarness * h);
 
 /* latency */
 GstClockTime gst_harness_query_latency (GstHarness * h);
-void gst_harness_set_us_latency (GstHarness * h, GstClockTime latency);
+void gst_harness_set_upstream_latency (GstHarness * h, GstClockTime latency);
 
 /* src-harness */
 void gst_harness_add_src (GstHarness * h,
@@ -164,11 +160,6 @@ void gst_harness_set (GstHarness * h,
     const gchar * element_name, const gchar * first_property_name, ...);
 void gst_harness_get (GstHarness * h,
     const gchar * element_name, const gchar * first_property_name, ...);
-void gst_harness_signal_connect (GstHarness * h,
-    const gchar * element_name, const gchar * signal_name,
-    GCallback handler, gpointer data);
-void gst_harness_signal (GstHarness * h,
-    const gchar * element_name, const gchar * signal_name);
 void gst_harness_add_probe (GstHarness * h,
     const gchar * element_name, const gchar * pad_name, GstPadProbeType mask,
     GstPadProbeCallback callback, gpointer user_data,
@@ -197,9 +188,6 @@ GstHarnessThread * gst_harness_stress_push_buffer_with_cb_start_full (
     GstHarnessPrepareBuffer func, gpointer data, GDestroyNotify notify,
     gulong sleep);
 
-/* Pushing events should generally be OOB events.
- * If you need serialized events, you may use a custom stress thread which
- * both pushes buffers and events! */
 #define gst_harness_stress_push_event_start(h, e)                              \
   gst_harness_stress_push_event_start_full (h, e, 0)
 GstHarnessThread * gst_harness_stress_push_event_start_full (GstHarness * h,

@@ -95,7 +95,7 @@ LIBGSTCHECK_EXPORTED_FUNCS = \
 	gst_consistency_checker_new \
 	gst_consistency_checker_reset \
 	gst_consistency_checker_free \
-	gst_harness_add_element_srcpad \
+	gst_harness_add_element_src_pad \
 	gst_harness_add_probe \
 	gst_harness_add_sink \
 	gst_harness_add_sink_parse \
@@ -133,15 +133,13 @@ LIBGSTCHECK_EXPORTED_FUNCS = \
 	gst_harness_set_caps \
 	gst_harness_set_caps_str \
 	gst_harness_set_drop_buffers \
-	gst_harness_set_pull_mode \
+	gst_harness_set_blocking_push_mode \
 	gst_harness_set_sink_caps \
 	gst_harness_set_src_caps \
 	gst_harness_set_src_caps_str \
 	gst_harness_set_sink_caps_str \
 	gst_harness_set_time \
-	gst_harness_set_us_latency \
-	gst_harness_signal \
-	gst_harness_signal_connect \
+	gst_harness_set_upstream_latency \
 	gst_harness_sink_push_many \
 	gst_harness_src_crank_and_push_many \
 	gst_harness_src_push_event \
