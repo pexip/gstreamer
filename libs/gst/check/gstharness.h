@@ -35,7 +35,6 @@ struct _GstHarness {
 
   GstPad * srcpad;
   GstPad * sinkpad;
-  GstPad * sink_forward_pad;
 
   gchar * element_sinkpad_name;
   gchar * element_srcpad_name;

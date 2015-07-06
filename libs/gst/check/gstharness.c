@@ -92,6 +92,7 @@ static GstStaticPadTemplate hsinktemplate = GST_STATIC_PAD_TEMPLATE ("sink",
 struct _GstHarnessPrivate {
   GstCaps * src_caps;
   GstCaps * sink_caps;
+  GstPad * sink_forward_pad;
 
   volatile gint recv_buffers;
   volatile gint recv_events;
@@ -172,8 +173,8 @@ gst_harness_sink_event (GstPad * pad, GstObject * parent, GstEvent * event)
       break;
   }
 
-  if (forward && h->sink_forward_pad) {
-    gst_pad_push_event (h->sink_forward_pad, event);
+  if (forward && priv->sink_forward_pad) {
+    gst_pad_push_event (priv->sink_forward_pad, event);
   } else {
     g_async_queue_push (priv->sink_event_queue, event);
   }
@@ -286,8 +287,8 @@ gst_harness_sink_query (GstPad * pad, GstObject * parent, GstQuery * query)
       break;
     case GST_QUERY_ALLOCATION:
     {
-      if (h->sink_forward_pad != NULL) {
-        GstPad *peer = gst_pad_get_peer (h->sink_forward_pad);
+      if (priv->sink_forward_pad != NULL) {
+        GstPad *peer = gst_pad_get_peer (priv->sink_forward_pad);
         g_assert (peer != NULL);
         res = gst_pad_query (peer, query);
         gst_object_unref (peer);
@@ -811,8 +812,8 @@ gst_harness_teardown (GstHarness * h)
     g_async_queue_unref (priv->sink_event_queue);
   }
 
-  if (h->sink_forward_pad)
-    gst_object_unref (h->sink_forward_pad);
+  if (priv->sink_forward_pad)
+    gst_object_unref (priv->sink_forward_pad);
 
   gst_object_replace ((GstObject **) & priv->allocator, NULL);
   gst_object_replace ((GstObject **) & priv->pool, NULL);
@@ -1258,7 +1259,7 @@ gst_harness_play (GstHarness * h)
  * @h: a #GstHarness
  *
  * Setting this will make the harness block in the chain-function, and
- * then releasing this when gst_harness_pull or gst_harness_try_pull is called.
+ * then release when gst_harness_pull or gst_harness_try_pull is called.
  * Can be useful when wanting to control a src-element that is not implementing
  * gst_clock_id_wait so it can't be controlled by the #GstTestClock, since
  * it otherwise would produce buffers as fast as possible.
@@ -1765,7 +1766,7 @@ gst_harness_set_upstream_latency (GstHarness * h, GstClockTime latency)
 static void
 gst_harness_setup_src_harness (GstHarness * h, gboolean has_clock_wait)
 {
-  h->src_harness->sink_forward_pad = gst_object_ref (h->srcpad);
+  h->src_harness->priv->sink_forward_pad = gst_object_ref (h->srcpad);
   gst_harness_use_testclock (h->src_harness);
   h->src_harness->priv->has_clock_wait = has_clock_wait;
 }
@@ -1785,6 +1786,8 @@ gst_harness_setup_src_harness (GstHarness * h, gboolean has_clock_wait)
  * produce a buffer for you by simply cranking the clock, and not have it
  * spin out of control producing buffers as fast as possible.
  *
+ * If a src-harness already exists it will be replaced.
+ *
  * MT safe.
  *
  * Since: 1.6
@@ -1793,6 +1796,8 @@ void
 gst_harness_add_src (GstHarness * h,
     const gchar * src_element_name, gboolean has_clock_wait)
 {
+  if (h->src_harness)
+    gst_harness_teardown (h->src_harness);
   h->src_harness = gst_harness_new (src_element_name);
   gst_harness_setup_src_harness (h, has_clock_wait);
 }
@@ -1818,6 +1823,8 @@ void
 gst_harness_add_src_parse (GstHarness * h,
     const gchar * launchline, gboolean has_clock_wait)
 {
+  if (h->src_harness)
+    gst_harness_teardown (h->src_harness);
   h->src_harness = gst_harness_new_parse (launchline);
   gst_harness_setup_src_harness (h, has_clock_wait);
 }
@@ -1931,6 +1938,8 @@ gst_harness_src_push_event (GstHarness * h)
  * can be useful to your testing. If the goal is to test a sink-element itself,
  * this is better acheived using gst_harness_new directly on the sink.
  *
+ * If a sink-harness already exists it will be replaced.
+ *
  * MT safe.
  *
  * Since: 1.6
@@ -1938,8 +1947,14 @@ gst_harness_src_push_event (GstHarness * h)
 void
 gst_harness_add_sink (GstHarness * h, const gchar * sink_element_name)
 {
+  GstHarnessPrivate *priv = h->priv;
+
+  if (h->sink_harness) {
+    gst_harness_teardown (h->sink_harness);
+    gst_object_unref (priv->sink_forward_pad);
+  }
   h->sink_harness = gst_harness_new (sink_element_name);
-  h->sink_forward_pad = gst_object_ref (h->sink_harness->srcpad);
+  priv->sink_forward_pad = gst_object_ref (h->sink_harness->srcpad);
 }
 
 /**
@@ -1957,8 +1972,14 @@ gst_harness_add_sink (GstHarness * h, const gchar * sink_element_name)
 void
 gst_harness_add_sink_parse (GstHarness * h, const gchar * launchline)
 {
+  GstHarnessPrivate *priv = h->priv;
+
+  if (h->sink_harness) {
+    gst_harness_teardown (h->sink_harness);
+    gst_object_unref (priv->sink_forward_pad);
+  }
   h->sink_harness = gst_harness_new_parse (launchline);
-  h->sink_forward_pad = gst_object_ref (h->sink_harness->srcpad);
+  priv->sink_forward_pad = gst_object_ref (h->sink_harness->srcpad);
 }
 
 /**
