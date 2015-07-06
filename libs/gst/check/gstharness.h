@@ -27,45 +27,30 @@
 G_BEGIN_DECLS
 
 typedef struct _GstHarness GstHarness;
+typedef struct _GstHarnessPrivate GstHarnessPrivate;
 typedef struct _GstHarnessThread GstHarnessThread;
 
 struct _GstHarness {
   GstElement * element;
+
   GstPad * srcpad;
   GstPad * sinkpad;
-  GstCaps * src_caps;
-  GstCaps * sink_caps;
-
-  volatile gint recv_buffers;
-  volatile gint recv_events;
-  volatile gint recv_upstream_events;
-
-  GAsyncQueue * buffer_queue;
-  GAsyncQueue * src_event_queue;
-  GAsyncQueue * sink_event_queue;
-
   GstPad * sink_forward_pad;
+
   gchar * element_sinkpad_name;
   gchar * element_srcpad_name;
-  GstClockTime latency_min;
-  GstClockTime latency_max;
-  gsize sine_cont;
+
   GstHarness * src_harness;
   GstHarness * sink_harness;
-  gboolean has_clock_wait;
-  gboolean drop_buffers;
-  GstClockTime last_push_ts;
-  GstAllocator * allocator;
+
   GstAllocationParams allocation_params;
-  GstBufferPool * pool;
   GstAllocator * propose_allocator;
   GstAllocationParams propose_params;
 
-  gboolean blocking_push_mode;
-  GCond blocking_push_cond;
-  GMutex blocking_push_mutex;
+  GstClockTime last_push_ts;
+  gsize counter;
 
-  GPtrArray * stress;
+  GstHarnessPrivate * priv;
 };
 
 /* Harness creation */
@@ -148,8 +133,10 @@ GstFlowReturn gst_harness_src_crank_and_push_many (GstHarness * h,
 gboolean gst_harness_src_push_event (GstHarness * h);
 
 /* sink-harness */
-void gst_harness_add_sink (GstHarness * h, const gchar * sink_element_name);
-void gst_harness_add_sink_parse (GstHarness * h, const gchar * launchline);
+void gst_harness_add_sink (GstHarness * h,
+    const gchar * sink_element_name);
+void gst_harness_add_sink_parse (GstHarness * h,
+    const gchar * launchline);
 GstFlowReturn gst_harness_push_to_sink (GstHarness * h);
 GstFlowReturn gst_harness_sink_push_many (GstHarness * h, gint pushes);
 
