@@ -1525,6 +1525,8 @@ GstBuffer *
 gst_harness_pull (GstHarness * h)
 {
   GstHarnessPrivate *priv = h->priv;
+  GstBuffer *buf = (GstBuffer *) g_async_queue_timeout_pop (priv->buffer_queue,
+      G_USEC_PER_SEC * 60);
 
   if (priv->blocking_push_mode) {
     g_mutex_lock (&priv->blocking_push_mutex);
@@ -1532,8 +1534,7 @@ gst_harness_pull (GstHarness * h)
     g_mutex_unlock (&priv->blocking_push_mutex);
   }
 
-  return (GstBuffer *) g_async_queue_timeout_pop (priv->buffer_queue,
-      G_USEC_PER_SEC * 60);
+  return buf;
 }
 
 /**
@@ -1554,6 +1555,7 @@ GstBuffer *
 gst_harness_try_pull (GstHarness * h)
 {
   GstHarnessPrivate *priv = h->priv;
+  GstBuffer *buf = (GstBuffer *) g_async_queue_try_pop (priv->buffer_queue);
 
   if (priv->blocking_push_mode) {
     g_mutex_lock (&priv->blocking_push_mutex);
@@ -1561,7 +1563,7 @@ gst_harness_try_pull (GstHarness * h)
     g_mutex_unlock (&priv->blocking_push_mutex);
   }
 
-  return (GstBuffer *) g_async_queue_try_pop (priv->buffer_queue);
+  return buf;
 }
 
 /**
