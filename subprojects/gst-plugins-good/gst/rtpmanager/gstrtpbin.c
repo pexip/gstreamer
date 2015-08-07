@@ -1451,9 +1451,9 @@ gst_rtp_bin_associate (GstRtpBin * bin, GstRtpBinStream * stream, guint8 len,
   running_time_rtp = last_extrtptime - base_rtptime;
 
   GST_DEBUG_OBJECT (bin,
-      "base %" G_GUINT64_FORMAT ", extrtptime %" G_GUINT64_FORMAT
-      ", local RTP %" G_GUINT64_FORMAT ", clock-rate %d, "
-      "clock-base %" G_GINT64_FORMAT, base_rtptime,
+      "base_time %" G_GUINT64_FORMAT ", base_rtptime %" G_GUINT64_FORMAT
+      ", extrtptime %" G_GUINT64_FORMAT ", local RTP %" G_GUINT64_FORMAT
+      ", clock-rate %d, clock-base %" G_GINT64_FORMAT, base_time, base_rtptime,
       last_extrtptime, running_time_rtp, clock_rate, rtp_clock_base);
 
   /* calculate local RTP time in gstreamer timestamp, we essentially perform the
@@ -1468,7 +1468,10 @@ gst_rtp_bin_associate (GstRtpBin * bin, GstRtpBinStream * stream, guint8 len,
   ntpnstime = gst_util_uint64_scale (ntptime, GST_SECOND,
       (G_GINT64_CONSTANT (1) << 32));
 
-  stream->have_sync = TRUE;
+  /* A sender that has no notion of wallclock or elapsed time MAY set the NTP
+     timestamp to zero. It makes sense to not synchronize this stream.*/
+  if (ntptime != 0)
+    stream->have_sync = TRUE;
 
   GST_DEBUG_OBJECT (bin,
       "SR RTP running time %" G_GUINT64_FORMAT ", SR NTP %" G_GUINT64_FORMAT,
