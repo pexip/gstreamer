@@ -1539,8 +1539,9 @@ gst_rtp_bin_associate (GstRtpBin * bin, GstRtpBinStream * stream,
 
     if (!GST_CLOCK_TIME_IS_VALID (extrtptime)
         || !GST_CLOCK_TIME_IS_VALID (ntpnstime)
+        || ntpnstime == 0
         || extrtptime < base_rtptime) {
-      GST_DEBUG_OBJECT (bin, "invalidated sync data, bailing out");
+      GST_ERROR_OBJECT (bin, "invalidated sync data, bailing out");
       return;
     }
 
@@ -1550,10 +1551,13 @@ gst_rtp_bin_associate (GstRtpBin * bin, GstRtpBinStream * stream,
      * timestamp in the SR packet. */
     diff_rtp = extrtptime - base_rtptime;
 
-    GST_DEBUG_OBJECT (bin,
-        "base RTP time %" G_GUINT64_FORMAT ", SR RTP time %" G_GUINT64_FORMAT
-        ", RTP time difference %" G_GUINT64_FORMAT ", clock-rate %d",
-        base_rtptime, extrtptime, diff_rtp, clock_rate);
+  GST_DEBUG_OBJECT (bin,
+      "base time %" G_GUINT64_FORMAT
+      ", base RTP time %" G_GUINT64_FORMAT
+      ", SR RTP time %" G_GUINT64_FORMAT
+      ", RTP time difference %" G_GUINT64_FORMAT
+      ", clock-rate %d, clock-base %" G_GINT64_FORMAT,
+      base_time, base_rtptime, extrtptime, diff_rtp, clock_rate, rtp_clock_base);
 
     /* calculate local RTP time in GStreamer timestamp units, we essentially
      * perform the same conversion that a jitterbuffer would use to convert an
@@ -1644,6 +1648,7 @@ gst_rtp_bin_associate (GstRtpBin * bin, GstRtpBinStream * stream,
     case GST_RTP_BIN_RTCP_SYNC_INITIAL:{
       if (!GST_CLOCK_TIME_IS_VALID (extrtptime)
           || !GST_CLOCK_TIME_IS_VALID (ntpnstime)
+          || ntpnstime == 0
           || extrtptime < base_rtptime) {
         if (!GST_CLOCK_TIME_IS_VALID (npt_start)) {
           GST_DEBUG_OBJECT (bin, "invalidated sync data, bailing out");
@@ -1677,6 +1682,7 @@ gst_rtp_bin_associate (GstRtpBin * bin, GstRtpBinStream * stream,
     case GST_RTP_BIN_RTCP_SYNC_NTP:{
       if (!GST_CLOCK_TIME_IS_VALID (extrtptime)
           || !GST_CLOCK_TIME_IS_VALID (ntpnstime)
+          || ntpnstime == 0
           || extrtptime < base_rtptime) {
         GST_DEBUG_OBJECT (bin, "invalidated sync data, bailing out");
         return;
