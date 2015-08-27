@@ -344,9 +344,11 @@ gst_harness_sink_query (GstPad * pad, GstObject * parent, GstQuery * query)
     {
       GstCaps *caps, *filter = NULL;
 
-      caps =
-          priv->
-          sink_caps ? gst_caps_ref (priv->sink_caps) : gst_caps_new_any ();
+      if (priv->sink_caps) {
+        caps = gst_caps_ref (priv->sink_caps);
+      } else {
+        caps = gst_pad_get_pad_template_caps (pad);
+      }
 
       gst_query_parse_caps (query, &filter);
       if (filter != NULL) {
@@ -406,8 +408,11 @@ gst_harness_src_query (GstPad * pad, GstObject * parent, GstQuery * query)
     {
       GstCaps *caps, *filter = NULL;
 
-      caps =
-          priv->src_caps ? gst_caps_ref (priv->src_caps) : gst_caps_new_any ();
+      if (priv->src_caps) {
+        caps = gst_caps_ref (priv->src_caps);
+      } else {
+        caps = gst_pad_get_pad_template_caps (pad);
+      }
 
       gst_query_parse_caps (query, &filter);
       if (filter != NULL) {
@@ -553,14 +558,13 @@ static void
 check_element_type (GstElement * element, gboolean * has_sinkpad,
     gboolean * has_srcpad)
 {
-  GstElementFactory *factory;
+  GstElementClass *element_class = GST_ELEMENT_GET_CLASS (element);
   const GList *tmpl_list;
 
   *has_srcpad = element->numsrcpads > 0;
   *has_sinkpad = element->numsinkpads > 0;
 
-  factory = gst_element_get_factory (element);
-  tmpl_list = gst_element_factory_get_static_pad_templates (factory);
+  tmpl_list = gst_element_class_get_pad_template_list (element_class);
 
   while (tmpl_list) {
     GstStaticPadTemplate *pad_tmpl = (GstStaticPadTemplate *) tmpl_list->data;
