@@ -314,7 +314,10 @@ gst_speex_enc_set_format (GstAudioEncoder * benc, GstAudioInfo * info)
   /* feedback to base class */
   gst_audio_encoder_set_latency (benc,
       gst_speex_enc_get_latency (enc), gst_speex_enc_get_latency (enc));
-  gst_audio_encoder_set_lookahead (benc, enc->lookahead);
+
+  /* FIXME: awaiting a better solution, as lookahead does too much
+     wrong with both timestamp and duration. */
+  //gst_audio_encoder_set_lookahead (benc, enc->lookahead);
 
   if (enc->nframes == 0) {
     /* as many frames as available input allows */
