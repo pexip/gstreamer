@@ -51,6 +51,8 @@ GST_DEBUG_CATEGORY_STATIC (speexdec_debug);
 
 #define DEFAULT_ENH   TRUE
 
+#define GST_FLOW_NO_HEADER GST_FLOW_CUSTOM_ERROR
+
 enum
 {
   ARG_0,
@@ -195,6 +197,7 @@ gst_speex_dec_stop (GstAudioDecoder * dec)
 static GstFlowReturn
 gst_speex_dec_parse_header (GstSpeexDec * dec, GstBuffer * buf)
 {
+  SpeexHeader *header;
   GstMapInfo map;
   GstAudioInfo info;
   static const GstAudioChannelPosition chan_pos[2][2] = {
@@ -205,11 +208,17 @@ gst_speex_dec_parse_header (GstSpeexDec * dec, GstBuffer * buf)
 
   /* get the header */
   gst_buffer_map (buf, &map, GST_MAP_READ);
-  dec->header = speex_packet_to_header ((gchar *) map.data, map.size);
+  header = speex_packet_to_header ((gchar *) map.data, map.size);
   gst_buffer_unmap (buf, &map);
 
-  if (!dec->header)
+  if (!header)
     goto no_header;
+
+  if (dec->header) {
+    GST_DEBUG_OBJECT (dec, "Replacing speex-header, resetting state");
+    gst_speex_dec_reset (dec);
+  }
+  dec->header = header;
 
   if (dec->header->mode >= SPEEX_NB_MODES || dec->header->mode < 0)
     goto mode_too_old;
@@ -254,9 +263,8 @@ gst_speex_dec_parse_header (GstSpeexDec * dec, GstBuffer * buf)
   /* ERRORS */
 no_header:
   {
-    GST_ELEMENT_ERROR (GST_ELEMENT (dec), STREAM, DECODE,
-        (NULL), ("couldn't read header"));
-    return GST_FLOW_ERROR;
+    GST_INFO_OBJECT (dec, "couldn't read header");
+    return GST_FLOW_NO_HEADER;
   }
 mode_too_old:
   {
@@ -290,7 +298,7 @@ gst_speex_dec_parse_comments (GstSpeexDec * dec, GstBuffer * buf)
 
   if (!list) {
     GST_WARNING_OBJECT (dec, "couldn't decode comments");
-    list = gst_tag_list_new_empty ();
+    return GST_FLOW_NO_HEADER;
   }
 
   if (encoder) {
@@ -473,6 +481,9 @@ memcmp_buffers (GstBuffer * buf1, GstBuffer * buf2)
   gsize size1, size2;
   gboolean res;
 
+  if (buf1 == NULL || buf2 == NULL)
+    return FALSE;
+
   size1 = gst_buffer_get_size (buf1);
   size2 = gst_buffer_get_size (buf2);
 
@@ -489,8 +500,9 @@ memcmp_buffers (GstBuffer * buf1, GstBuffer * buf2)
 static GstFlowReturn
 gst_speex_dec_handle_frame (GstAudioDecoder * bdec, GstBuffer * buf)
 {
-  GstFlowReturn res;
+  GstFlowReturn res = GST_FLOW_OK;
   GstSpeexDec *dec;
+  gboolean header_packet = FALSE;
 
   /* no fancy draining */
   if (G_UNLIKELY (!buf))
@@ -498,41 +510,52 @@ gst_speex_dec_handle_frame (GstAudioDecoder * bdec, GstBuffer * buf)
 
   dec = GST_SPEEX_DEC (bdec);
 
-  /* If we have the streamheader and vorbiscomment from the caps already
-   * ignore them here */
-  if (dec->streamheader && dec->vorbiscomment) {
-    if (memcmp_buffers (dec->streamheader, buf)) {
-      GST_DEBUG_OBJECT (dec, "found streamheader");
-      gst_audio_decoder_finish_frame (bdec, NULL, 1);
-      res = GST_FLOW_OK;
-    } else if (memcmp_buffers (dec->vorbiscomment, buf)) {
-      GST_DEBUG_OBJECT (dec, "found vorbiscomments");
-      gst_audio_decoder_finish_frame (bdec, NULL, 1);
-      res = GST_FLOW_OK;
-    } else {
-      res = gst_speex_dec_parse_data (dec, buf);
-    }
-  } else {
-    /* Otherwise fall back to packet counting and assume that the
-     * first two packets are the headers. */
-    switch (dec->packetno) {
-      case 0:
-        GST_DEBUG_OBJECT (dec, "counted streamheader");
+  switch (dec->packetno) {
+    case 0:
+      GST_DEBUG_OBJECT (dec, "expecting streamheader");
+      header_packet = TRUE;
+      if (!memcmp_buffers (dec->streamheader, buf)) {
         res = gst_speex_dec_parse_header (dec, buf);
-        gst_audio_decoder_finish_frame (bdec, NULL, 1);
-        break;
-      case 1:
-        GST_DEBUG_OBJECT (dec, "counted vorbiscomments");
-        res = gst_speex_dec_parse_comments (dec, buf);
-        gst_audio_decoder_finish_frame (bdec, NULL, 1);
-        break;
-      default:
-      {
-        res = gst_speex_dec_parse_data (dec, buf);
-        break;
+        if (res == GST_FLOW_NO_HEADER) {
+          header_packet = FALSE;
+          GST_INFO_OBJECT (dec, "No streamheader in first buffer");
+          if (dec->streamheader == NULL) {
+            GST_ERROR_OBJECT (dec, "Can't proceed without a header");
+            return GST_FLOW_ERROR;
+          } else {
+            GST_INFO_OBJECT (dec, "Using streamheader from caps");
+          }
+        }
+        /* we prefer "inband" streamheaders to the ones in caps */
+        if (res == GST_FLOW_OK) {
+          GST_DEBUG_OBJECT (dec, "found streamheader");
+          gst_buffer_replace (&dec->streamheader, buf);
+        }
       }
-    }
+      break;
+    case 1:
+      GST_DEBUG_OBJECT (dec, "expecting vorbiscomment");
+      header_packet = TRUE;
+      if (!memcmp_buffers (dec->vorbiscomment, buf)) {
+        res = gst_speex_dec_parse_comments (dec, buf);
+        if (res == GST_FLOW_NO_HEADER) {
+          header_packet = FALSE;
+          GST_INFO_OBJECT (dec, "No vorbisheader in second buffer");
+        }
+        if (res == GST_FLOW_OK) {
+          GST_DEBUG_OBJECT (dec, "found vorbiscomment");
+          gst_buffer_replace (&dec->vorbiscomment, buf);
+        }
+      }
+      break;
+    default:
+      break;
   }
+
+  if (header_packet)
+    gst_audio_decoder_finish_frame (bdec, NULL, 1);
+  else
+    res = gst_speex_dec_parse_data (dec, buf);
 
   dec->packetno++;
 
