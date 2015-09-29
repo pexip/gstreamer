@@ -42,7 +42,7 @@
  *
  * With this, you can now simulate any environment the #GstElement might find
  * itself in. By specifying the #GstCaps of the harness #GstPads, using
- * functions like gst_harness_set_src_caps or gst_harness_set_sink_caps_str,
+ * functions like gst_harness_set_src_caps() or gst_harness_set_sink_caps_str(),
  * you can test how the #GstElement interacts with different capssets.
  *
  * Your harnessed #GstElement can of course also be a bin, and using
@@ -50,9 +50,9 @@
  * easily test a whole pipeline instead of just one element.
  *
  * You can then go on to push #GstBuffers and #GstEvents on to the srcpad,
- * using functions like gst_harness_push and gst_harness_push_event, and
- * then pull them out to examine them with gst_harness_pull and
- * gst_harness_pull_event.
+ * using functions like gst_harness_push() and gst_harness_push_event(), and
+ * then pull them out to examine them with gst_harness_pull() and
+ * gst_harness_pull_event().
  *
  * <example>
  * <title>A simple buffer-in buffer-out example</title>
@@ -92,14 +92,14 @@
  * #GstTestClock. Operating the #GstTestClock can be very challenging, but
  * #GstHarness simplifies some of the most desired actions a lot, like wanting
  * to manually advance the clock while at the same time releasing a #GstClockID
- * that is waiting, with functions like gst_harness_crank_single_clock_wait.
+ * that is waiting, with functions like gst_harness_crank_single_clock_wait().
  *
  * #GstHarness also supports sub-harnesses, as a way of generating and
  * validating data. A sub-harness is another #GstHarness that is managed by
  * the "parent" harness, and can either be created by using the standard
  * gst_harness_new type functions directly on the (GstHarness *)->src_harness,
- * or using the much more convenient gst_harness_add_src or
- * gst_harness_add_sink_parse. If you have a decoder-element you want to test,
+ * or using the much more convenient gst_harness_add_src() or
+ * gst_harness_add_sink_parse(). If you have a decoder-element you want to test,
  * (like vp8dec) it can be very useful to add a src-harness with both a
  * src-element (videotestsrc) and an encoder (vp8enc) to feed the decoder data
  * with different configurations, by simply doing:
@@ -709,7 +709,7 @@ gst_harness_new_full (GstElement * element,
  * srcpad that is then linked to the harness sinkpad. %NULL does not attach a
  * srcpad
  *
- * Creates a new harness. Works in the same way as gst_harness_new_full, only
+ * Creates a new harness. Works in the same way as gst_harness_new_full(), only
  * that generic padtemplates are used for the harness src and sinkpads, which
  * will be sufficient in most usecases.
  *
@@ -738,7 +738,7 @@ gst_harness_new_with_element (GstElement * element,
  * srcpad that is then linked to the harness sinkpad. %NULL does not attach a
  * srcpad
  *
- * Creates a new harness. Works in the same way as gst_harness_new_with_element,
+ * Creates a new harness. Works like gst_harness_new_with_element(),
  * except you specify the factoryname of the #GstElement
  *
  * MT safe.
@@ -770,7 +770,7 @@ gst_harness_new_with_padnames (const gchar * element_name,
  * @hsink: (allow-none): a #GstStaticPadTemplate describing the harness sinkpad.
  * %NULL will not create a harness sinkpad.
  *
- * Creates a new harness, like gst_harness_new_full, except it
+ * Creates a new harness, like gst_harness_new_full(), except it
  * assumes the #GstElement sinkpad is named "sink" and srcpad is named "src"
  *
  * MT safe.
@@ -797,7 +797,7 @@ gst_harness_new_with_templates (const gchar * element_name,
  * gst_harness_new: (skip)
  * @element_name: a #gchar describing the #GstElement name
  *
- * Creates a new harness. Works like gst_harness_new_with_padnames, except it
+ * Creates a new harness. Works like gst_harness_new_with_padnames(), except it
  * assumes the #GstElement sinkpad is named "sink" and srcpad is named "src"
  *
  * MT safe.
@@ -1338,7 +1338,7 @@ gst_harness_crank_single_clock_wait (GstHarness * h)
  * @h: a #GstHarness
  * @waits: a #guint describing the number of #GstClockIDs to crank
  *
- * Similar to gst_harness_crank_single_clock_wait, this is the function to use
+ * Similar to gst_harness_crank_single_clock_wait(), this is the function to use
  * if your harnessed element(s) are using more then one gst_clock_id_wait.
  * Failing to do so can (and will) make it racy which #GstClockID you actually
  * are releasing, where as this function will process all the waits at the
@@ -1381,7 +1381,7 @@ gst_harness_crank_multiple_clock_waits (GstHarness * h, guint waits)
  * Non-src #GstElements (like sinks and filters) are automatically set to
  * playing by the #GstHarness, but src #GstElements are not to avoid them
  * starting to produce buffers.
- * Hence, for src #GstElement you will need to call gst_harness_play explicitly.
+ * Hence, for src #GstElement you must call gst_harness_play() explicitly.
  *
  * MT safe.
  *
@@ -1404,9 +1404,9 @@ gst_harness_play (GstHarness * h)
  * @h: a #GstHarness
  *
  * Setting this will make the harness block in the chain-function, and
- * then release when gst_harness_pull or gst_harness_try_pull is called.
+ * then release when gst_harness_pull() or gst_harness_try_pull() is called.
  * Can be useful when wanting to control a src-element that is not implementing
- * gst_clock_id_wait so it can't be controlled by the #GstTestClock, since
+ * gst_clock_id_wait() so it can't be controlled by the #GstTestClock, since
  * it otherwise would produce buffers as fast as possible.
  *
  * MT safe.
@@ -1431,7 +1431,7 @@ gst_harness_set_blocking_push_mode (GstHarness * h)
  * the sink-harness. It will also forward the %GST_QUERY_ALLOCATION.
  *
  * If forwarding is disabled, the user will have to either manually push
- * these events from the src-harness using gst_harness_src_push_event, or
+ * these events from the src-harness using gst_harness_src_push_event(), or
  * create and push them manually. While this will allow full control and
  * inspection of these events, for the most cases having forwarding enabled
  * will be sufficient when writing a test where the src-harness' main function
