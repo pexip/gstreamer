@@ -148,6 +148,7 @@ LIBGSTCHECK_EXPORTED_FUNCS = \
 	gst_harness_set_blocking_push_mode \
 	gst_harness_set_forwarding \
 	gst_harness_set_propose_allocator \
+	gst_harness_set_single_segment \
 	gst_harness_set_sink_caps \
 	gst_harness_set_src_caps \
 	gst_harness_set_src_caps_str \
