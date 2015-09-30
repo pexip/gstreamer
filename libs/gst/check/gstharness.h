@@ -173,6 +173,10 @@ void           gst_harness_set_blocking_push_mode (GstHarness * h);
 GST_EXPORT
 void           gst_harness_set_forwarding (GstHarness * h, gboolean forwarding);
 
+GST_EXPORT
+void           gst_harness_set_single_segment (GstHarness * h,
+                                               gboolean single_segment);
+
 /* buffers */
 
 GST_EXPORT
