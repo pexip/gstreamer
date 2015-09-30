@@ -138,11 +138,15 @@ gboolean       gst_harness_crank_multiple_clock_waits (GstHarness * h,
                                                        guint waits);
 
 /* misc */
+
 void           gst_harness_play (GstHarness * h);
 
 void           gst_harness_set_blocking_push_mode (GstHarness * h);
 
 void           gst_harness_set_forwarding (GstHarness * h, gboolean forwarding);
+
+void           gst_harness_set_single_segment (GstHarness * h,
+                                               gboolean single_segment);
 
 /* buffers */
 
