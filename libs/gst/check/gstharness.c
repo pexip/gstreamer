@@ -183,6 +183,11 @@ struct _GstHarnessPrivate
   GstAllocator *propose_allocator;
   GstAllocationParams propose_allocation_params;
 
+  gboolean single_segment;
+  gboolean have_segment;
+  GstSegment segment;
+  GstClockTime running_time_offset;
+
   gboolean blocking_push_mode;
   GCond blocking_push_cond;
   GMutex blocking_push_mutex;
@@ -200,6 +205,17 @@ gst_harness_chain (GstPad * pad, GstObject * parent, GstBuffer * buffer)
   g_assert (h != NULL);
   g_mutex_lock (&priv->blocking_push_mutex);
   g_atomic_int_inc (&priv->recv_buffers);
+
+  /* rewrite timestamp according to segment if asked to single_segment */
+  if (priv->single_segment && priv->segment.format == GST_FORMAT_TIME) {
+    buffer = gst_buffer_make_writable (buffer);
+    GST_BUFFER_DTS (buffer) = gst_segment_to_running_time (&priv->segment,
+        GST_FORMAT_TIME, GST_BUFFER_DTS (buffer)) + priv->running_time_offset;
+    GST_BUFFER_PTS (buffer) = gst_segment_to_running_time (&priv->segment,
+        GST_FORMAT_TIME, GST_BUFFER_PTS (buffer)) + priv->running_time_offset;
+    GST_BUFFER_OFFSET (buffer) = GST_CLOCK_TIME_NONE;
+    GST_BUFFER_OFFSET_END (buffer) = GST_CLOCK_TIME_NONE;
+  }
 
   if (priv->drop_buffers)
     gst_buffer_unref (buffer);
@@ -232,7 +248,8 @@ gst_harness_sink_event (GstPad * pad, GstObject * parent, GstEvent * event)
   GstHarness *h = g_object_get_data (G_OBJECT (pad), HARNESS_KEY);
   GstHarnessPrivate *priv = h->priv;
   gboolean ret = TRUE;
-  gboolean forward;
+  gboolean forward = FALSE;
+  gboolean drop = FALSE;
 
   g_assert (h != NULL);
   (void) parent;
@@ -241,25 +258,58 @@ gst_harness_sink_event (GstPad * pad, GstObject * parent, GstEvent * event)
   switch (GST_EVENT_TYPE (event)) {
     case GST_EVENT_STREAM_START:
     case GST_EVENT_CAPS:
-    case GST_EVENT_SEGMENT:
       forward = TRUE;
       break;
+    case GST_EVENT_SEGMENT:
+      forward = TRUE;
+      if (priv->single_segment) {
+        GstClock *clock;
+        /* get the running-time */
+        clock = gst_element_get_clock (h->element);
+        if (clock) {
+          priv->running_time_offset = gst_clock_get_time (clock) -
+              gst_element_get_base_time (h->element);
+          gst_object_unref (clock);
+        }
+
+        if (!priv->have_segment) {
+          GstSegment segment;
+
+          gst_event_copy_segment (event, &segment);
+          gst_event_copy_segment (event, &priv->segment);
+          priv->have_segment = TRUE;
+
+          /* This is the first segment, send out a (0, -1) segment */
+          gst_segment_init (&segment, segment.format);
+          gst_event_unref (event);
+          event = gst_event_new_segment (&segment);
+
+        } else {
+          /* need to track segment for proper running time */
+          gst_event_copy_segment (event, &priv->segment);
+          drop = TRUE;
+        }
+      }
+      break;
     default:
-      forward = FALSE;
       break;
   }
 
-  HARNESS_LOCK (h);
-  if (priv->forwarding && forward && priv->sink_forward_pad) {
-    GstPad *fwdpad = gst_object_ref (priv->sink_forward_pad);
-    HARNESS_UNLOCK (h);
-    ret = gst_pad_push_event (fwdpad, event);
-    gst_object_unref (fwdpad);
-    HARNESS_LOCK (h);
+  if (drop) {
+    gst_event_unref (event);
   } else {
-    g_async_queue_push (priv->sink_event_queue, event);
+    HARNESS_LOCK (h);
+    if (priv->forwarding && forward && priv->sink_forward_pad) {
+      GstPad *fwdpad = gst_object_ref (priv->sink_forward_pad);
+      HARNESS_UNLOCK (h);
+      ret = gst_pad_push_event (fwdpad, event);
+      gst_object_unref (fwdpad);
+      HARNESS_LOCK (h);
+    } else {
+      g_async_queue_push (priv->sink_event_queue, event);
+    }
+    HARNESS_UNLOCK (h);
   }
-  HARNESS_UNLOCK (h);
 
   return ret;
 }
@@ -1512,6 +1562,36 @@ gst_harness_set_forward_pad (GstHarness * h, GstPad * fwdpad)
   gst_object_replace ((GstObject **) & h->priv->sink_forward_pad,
       (GstObject *) fwdpad);
   HARNESS_UNLOCK (h);
+}
+
+/**
+ * gst_harness_set_single_segment:
+ * @h: a #GstHarness
+ * @single_segment: a #gboolean to enable/disable single segment handling
+ *
+ * By turning on single segment handling, #GstHarness will use an inital
+ * %GST_TIME_FORMAT segment initialized with gst_segment_init() and drop
+ * any other #GstSegment. Instead it will re-timestamp the #GstBuffer based
+ * on the #GstSegment and the running-time of the pipeline.
+ *
+ * An example would be a demuxer starting its %GST_BUFFER_TIMESTAMP from T in a
+ * running pipeline, that already is at time X. This demuxer would then
+ * preceed its first #GstBuffer with a #GstSegment starting from T.
+ * The single segment handling would then re-timestamp every #GstBuffer with
+ * %GST_BUFFER_TIMESTAMP - T + X, producing timestamps that is coherent with
+ * a #GstSegment starting from 0.
+ *
+ * Single segment is disabled by default.
+ *
+ * MT safe.
+ *
+ * Since: 1.8
+ */
+void
+gst_harness_set_single_segment (GstHarness * h, gboolean single_segment)
+{
+  GstHarnessPrivate *priv = h->priv;
+  priv->single_segment = single_segment;
 }
 
 /**
