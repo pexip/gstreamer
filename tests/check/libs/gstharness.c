@@ -167,6 +167,58 @@ GST_START_TEST (test_forward_event_and_query_to_sink_harness_while_teardown)
 
 GST_END_TEST;
 
+static GstBuffer *
+create_timestamp_buffer (GstClockTime timestamp)
+{
+  GstBuffer * buf = gst_buffer_new ();
+  GST_BUFFER_PTS (buf) = timestamp;
+  GST_BUFFER_DTS (buf) = timestamp;
+  return buf;
+}
+
+GST_START_TEST(test_single_segment)
+{
+  GstHarness * h = gst_harness_new ("identity");
+  gint i;
+
+  gst_harness_set_single_segment (h, TRUE);
+  gst_harness_set_src_caps_str (h, "mycaps");
+  gst_harness_use_testclock (h);
+
+  for (i = 0; i < 3; i++) {
+    GstClockTime time = i * GST_SECOND;
+    GstSegment segment;
+    GstBuffer * buf;
+
+    /* set the current time */
+    gst_harness_set_time (h, time);
+    /* send a segment, saying buffertimestamps now starts from 0 */
+    gst_segment_init (&segment, GST_FORMAT_TIME);
+    gst_harness_push_event (h, gst_event_new_segment (&segment));
+
+    /* push a buffer with timestamp 0 */
+    gst_harness_push (h, create_timestamp_buffer (0));
+
+    /* verify the buffer is timestamped with the current time */
+    buf = gst_harness_pull (h);
+    fail_unless_equals_uint64 (time, GST_BUFFER_TIMESTAMP (buf));
+    gst_buffer_unref (buf);
+
+    /* push a buffer with timestamp 1 second */
+    gst_harness_push (h, create_timestamp_buffer (1 * GST_SECOND));
+
+    /* verify the buffer is timestamped with the current time + 1 second */
+    buf = gst_harness_pull (h);
+    fail_unless_equals_uint64 (time + 1 * GST_SECOND, GST_BUFFER_TIMESTAMP (buf));
+    gst_buffer_unref (buf);
+  }
+
+  /* should only have received STREAM_START, CAPS and a single SEGMENT */
+  fail_unless_equals_int (3, gst_harness_events_in_queue (h));
+  gst_harness_teardown (h);
+}
+GST_END_TEST;
+
 static Suite *
 gst_harness_suite (void)
 {
@@ -182,6 +234,7 @@ gst_harness_suite (void)
 
   tcase_add_test (tc_chain,
       test_forward_event_and_query_to_sink_harness_while_teardown);
+  tcase_add_test (tc_chain, test_single_segment);
 
   return s;
 }
