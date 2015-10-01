@@ -52,6 +52,8 @@ struct _GstRTMPSink {
 
   RTMP *rtmp;
   gchar *rtmp_uri; /* copy of url for librtmp */
+  GMutex rtmp_lock;
+  gboolean connecting;
 
   GstBuffer *header;
   gboolean first;
