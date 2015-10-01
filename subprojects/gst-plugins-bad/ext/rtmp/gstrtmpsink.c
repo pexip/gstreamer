@@ -49,9 +49,15 @@
 #endif
 
 #include <stdlib.h>
+#include <sys/socket.h>
+#include <unistd.h>
 
 GST_DEBUG_CATEGORY_STATIC (gst_rtmp_sink_debug);
 #define GST_CAT_DEFAULT gst_rtmp_sink_debug
+
+#define RTMP_LOCK(sink)    g_mutex_lock    (&(sink)->rtmp_lock)
+#define RTMP_UNLOCK(sink)  g_mutex_unlock  (&(sink)->rtmp_lock)
+#define RTMP_TRYLOCK(sink) g_mutex_trylock (&(sink)->rtmp_lock)
 
 #define DEFAULT_LOCATION NULL
 
@@ -74,6 +80,7 @@ static void gst_rtmp_sink_set_property (GObject * object, guint prop_id,
 static void gst_rtmp_sink_get_property (GObject * object, guint prop_id,
     GValue * value, GParamSpec * pspec);
 static void gst_rtmp_sink_finalize (GObject * object);
+static gboolean gst_rtmp_sink_unlock (GstBaseSink * sink);
 static gboolean gst_rtmp_sink_stop (GstBaseSink * sink);
 static gboolean gst_rtmp_sink_start (GstBaseSink * sink);
 static gboolean gst_rtmp_sink_event (GstBaseSink * sink, GstEvent * event);
@@ -116,6 +123,7 @@ gst_rtmp_sink_class_init (GstRTMPSinkClass * klass)
 
   gstbasesink_class->start = GST_DEBUG_FUNCPTR (gst_rtmp_sink_start);
   gstbasesink_class->stop = GST_DEBUG_FUNCPTR (gst_rtmp_sink_stop);
+  gstbasesink_class->unlock = GST_DEBUG_FUNCPTR (gst_rtmp_sink_unlock);
   gstbasesink_class->render = GST_DEBUG_FUNCPTR (gst_rtmp_sink_render);
   gstbasesink_class->set_caps = GST_DEBUG_FUNCPTR (gst_rtmp_sink_setcaps);
   gstbasesink_class->event = GST_DEBUG_FUNCPTR (gst_rtmp_sink_event);
@@ -137,6 +145,8 @@ gst_rtmp_sink_init (GstRTMPSink * sink)
     GST_ERROR_OBJECT (sink, "WSAStartup failed: 0x%08x", WSAGetLastError ());
   }
 #endif
+
+  g_mutex_init (&sink->rtmp_lock);
 }
 
 static void
@@ -148,6 +158,7 @@ gst_rtmp_sink_finalize (GObject * object)
   WSACleanup ();
 #endif
   g_free (sink->uri);
+  g_mutex_clear (&sink->rtmp_lock);
 
   G_OBJECT_CLASS (parent_class)->finalize (object);
 }
@@ -186,6 +197,7 @@ gst_rtmp_sink_start (GstBaseSink * basesink)
 
   sink->first = TRUE;
   sink->have_write_error = FALSE;
+  sink->connecting = FALSE;
 
   return TRUE;
 
@@ -198,6 +210,44 @@ error:
   sink->rtmp_uri = NULL;
   return FALSE;
 }
+
+static gboolean
+gst_rtmp_sink_unlock (GstBaseSink * basesink)
+{
+  GstRTMPSink *sink = GST_RTMP_SINK (basesink);
+
+  if (sink->rtmp == NULL)
+    return TRUE;
+
+  /* Check to see if we currently are doing any activity towards librtmp */
+  GST_DEBUG_OBJECT (sink, "Trying to lock");
+
+  if (!RTMP_TRYLOCK (sink)) {
+    GST_DEBUG_OBJECT (sink, "Lock NOT aquired...");
+    /* if we are trying to connect, but the internal socket are not yet
+        initialized, we keep trying until either connection have failed or
+        the socket comes up */
+    while (sink->connecting && sink->rtmp->m_sb.sb_socket == -1) {
+      g_thread_yield ();
+    }
+
+    if (sink->rtmp->m_sb.sb_socket >= 0) {
+      GST_DEBUG_OBJECT (sink, "Shutting down internal librtmp socket");
+      shutdown (sink->rtmp->m_sb.sb_socket, SHUT_RDWR);
+      close (sink->rtmp->m_sb.sb_socket);
+    }
+
+  } else {
+    GST_DEBUG_OBJECT (sink, "Lock aquired...");
+    RTMP_Close (sink->rtmp);
+    RTMP_Free (sink->rtmp);
+    sink->rtmp = NULL;
+    RTMP_UNLOCK (sink);
+  }
+
+  return TRUE;
+}
+
 
 static gboolean
 gst_rtmp_sink_stop (GstBaseSink * basesink)
@@ -228,30 +278,34 @@ gst_rtmp_sink_render (GstBaseSink * bsink, GstBuffer * buf)
   gboolean need_unref = FALSE;
   GstMapInfo map = GST_MAP_INFO_INIT;
 
-  if (sink->rtmp == NULL) {
-    /* Do not crash */
-    GST_ELEMENT_ERROR (sink, RESOURCE, WRITE, (NULL), ("Failed to write data"));
-    return GST_FLOW_ERROR;
-  }
-
   /* Ignore buffers that are in the stream headers (caps) */
   if (GST_BUFFER_FLAG_IS_SET (buf, GST_BUFFER_FLAG_HEADER)) {
     return GST_FLOW_OK;
   }
 
+  if (sink->have_write_error)
+    goto write_failed;
+
   if (sink->first) {
     /* open the connection */
-    if (!RTMP_IsConnected (sink->rtmp)) {
-      if (!RTMP_Connect (sink->rtmp, NULL))
-        goto connection_failed;
+    sink->connecting = TRUE;
+    RTMP_LOCK (sink);
 
-      if (!RTMP_ConnectStream (sink->rtmp, 0)) {
-        RTMP_Close (sink->rtmp);
+    if (sink->rtmp == NULL) {
+      RTMP_UNLOCK (sink);
+      goto connection_failed;
+    }
+    if (!RTMP_IsConnected (sink->rtmp)) {
+      if (!RTMP_Connect (sink->rtmp, NULL)
+          || !RTMP_ConnectStream (sink->rtmp, 0)) {
+        RTMP_UNLOCK (sink);
         goto connection_failed;
       }
 
       GST_DEBUG_OBJECT (sink, "Opened connection to %s", sink->rtmp_uri);
     }
+    RTMP_UNLOCK (sink);
+    sink->connecting = FALSE;
 
     /* Prepend the header from the caps to the first non header buffer */
     if (sink->header) {
@@ -259,20 +313,20 @@ gst_rtmp_sink_render (GstBaseSink * bsink, GstBuffer * buf)
           gst_buffer_ref (buf));
       need_unref = TRUE;
     }
-
     sink->first = FALSE;
   }
-
-  if (sink->have_write_error)
-    goto write_failed;
 
   GST_LOG_OBJECT (sink, "Sending %" G_GSIZE_FORMAT " bytes to RTMP server",
       gst_buffer_get_size (buf));
 
   gst_buffer_map (buf, &map, GST_MAP_READ);
 
-  if (RTMP_Write (sink->rtmp, (char *) map.data, map.size) <= 0)
+  RTMP_LOCK (sink);
+  if (sink->rtmp && RTMP_Write (sink->rtmp, (char *) map.data, map.size) <= 0) {
+    RTMP_UNLOCK (sink);
     goto write_failed;
+  }
+  RTMP_UNLOCK (sink);
 
   gst_buffer_unmap (buf, &map);
   if (need_unref)
@@ -298,6 +352,7 @@ connection_failed:
     RTMP_Free (sink->rtmp);
     sink->rtmp = NULL;
     g_free (sink->rtmp_uri);
+    sink->connecting = FALSE;
     sink->rtmp_uri = NULL;
     sink->have_write_error = TRUE;
 
@@ -414,25 +469,21 @@ gst_rtmp_sink_setcaps (GstBaseSink * sink, GstCaps * caps)
 
   GST_DEBUG_OBJECT (sink, "caps set to %" GST_PTR_FORMAT, caps);
 
+  s = gst_caps_get_structure (caps, 0);
+  sh = gst_structure_get_value (s, "streamheader");
+  if (sh == NULL) {
+    GST_DEBUG_OBJECT (rtmpsink, "No streamheader in caps");
+    return TRUE;
+  }
+
   /* Clear our current header buffer */
   if (rtmpsink->header) {
     gst_buffer_unref (rtmpsink->header);
     rtmpsink->header = NULL;
   }
 
-  s = gst_caps_get_structure (caps, 0);
-
-  sh = gst_structure_get_value (s, "streamheader");
-  if (sh == NULL)
-    goto out;
-
-  if (GST_VALUE_HOLDS_BUFFER (sh)) {
-    rtmpsink->header = gst_buffer_ref (gst_value_get_buffer (sh));
-  } else if (GST_VALUE_HOLDS_ARRAY (sh)) {
-    GArray *buffers;
-    gint i;
-
-    buffers = g_value_peek_pointer (sh);
+  rtmpsink->header = gst_buffer_new ();
+  buffers = g_value_peek_pointer (sh);
 
     /* Concatenate all buffers in streamheader into one */
     rtmpsink->header = gst_buffer_new ();
