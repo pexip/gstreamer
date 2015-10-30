@@ -1373,7 +1373,8 @@ gst_harness_crank_single_clock_wait (GstHarness * h)
       GST_WARNING ("testclock next id != pending (%p != %p)", res, pending);
     }
 
-    gst_clock_id_unref (res);
+    if (G_LIKELY (res != NULL))
+      gst_clock_id_unref (res);
     gst_clock_id_unref (pending);
 
     gst_object_unref (testclock);
