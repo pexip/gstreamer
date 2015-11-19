@@ -61,6 +61,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/socket.h>
 
 #include <gst/gst.h>
 
@@ -702,10 +703,11 @@ gst_rtmp_src_unlock (GstBaseSrc * basesrc)
 
   GST_DEBUG_OBJECT (rtmpsrc, "unlock");
 
-  /* This closes the socket, which means that any pending socket calls
-   * error out. */
-  if (rtmpsrc->rtmp) {
-    RTMP_Close (rtmpsrc->rtmp);
+  /* This cancels the recv() underlying RTMP_Read, but will cause a
+   * SIGPIPE.  Hopefully the app is ignoring it, or you've patched
+   * librtmp. */
+  if (rtmpsrc->rtmp && rtmpsrc->rtmp->m_sb.sb_socket > 0) {
+    shutdown (rtmpsrc->rtmp->m_sb.sb_socket, SHUT_RDWR);
   }
 
   return TRUE;
