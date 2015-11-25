@@ -293,20 +293,28 @@ _priv_gst_in_valgrind (void)
 }
 
 static gchar *
+_replace_pattern_in_gst_debug_file_name (gchar * name, const char * token, guint val)
+{
+  gchar * token_start;
+  if ((token_start = strstr (name, token))) {
+    gsize token_len = strlen (token);
+    gchar * name_prefix = name;
+    gchar * name_suffix = token_start + token_len;
+    token_start[0] = '\0';
+    name = g_strdup_printf ("%s%u%s", name_prefix, val, name_suffix);
+    g_free (name_prefix);
+  }
+  return name;
+}
+
+static gchar *
 _priv_gst_debug_file_name (const gchar * env)
 {
   gchar *name;
-  gchar *tmp;
 
-  /* Replace %p with PID. Does not support multiple %-chars in env as printf
-   * will be confused. Keeping it simple. */
   name = g_strdup (env);
-  if ((tmp = strstr (name, "%p"))) {
-    tmp[1] = 'u';
-    tmp = name;
-    name = g_strdup_printf (tmp, getpid ());
-    g_free (tmp);
-  }
+  name = _replace_pattern_in_gst_debug_file_name (name, "%p", getpid ());
+  name = _replace_pattern_in_gst_debug_file_name (name, "%r", g_random_int ());
 
   return name;
 }
