@@ -25,6 +25,7 @@
 
 #include <gst/check/gstcheck.h>
 #include <gst/base/gstbasesrc.h>
+#include <gst/check/gsttestclock.h>
 
 static void
 pop_async_done (GstBus * bus)
@@ -1855,6 +1856,57 @@ GST_START_TEST (test_suppressed_flags_when_removing)
 
 GST_END_TEST;
 
+GST_START_TEST (test_locked_state_sets_base_time_on_children)
+{
+  GstElement *pipeline, *bin, *identity;
+  GstClock *testclock;
+  GstStateChangeReturn state_res;
+  GstState current, pending;
+
+  /* create the pipeline, and have it use the testclock */
+  pipeline = gst_pipeline_new (NULL);
+  testclock = gst_test_clock_new ();
+  gst_pipeline_use_clock (GST_PIPELINE (pipeline), testclock);
+
+  /* create a bin, and add an identity element to it */
+  bin = gst_bin_new (NULL);
+  identity = gst_element_factory_make ("identity", NULL);
+  gst_bin_add (GST_BIN (bin), identity);
+
+  /* add the bin to the pipeline and set locked-state,
+     protecting the bin from the pipeline state-changes */
+  gst_bin_add (GST_BIN (pipeline), bin);
+  gst_element_set_locked_state (bin, TRUE);
+
+  /* advance the clock, and set to playing, making this our base-time */
+  gst_test_clock_set_time (GST_TEST_CLOCK (testclock), 123456789);
+  state_res = gst_element_set_state (pipeline, GST_STATE_PLAYING);
+  fail_unless_equals_int (GST_STATE_CHANGE_SUCCESS, state_res);
+  fail_unless_equals_int64 (123456789, gst_element_get_base_time (pipeline));
+
+  /* verify that neither the bin nor the identity-element got affected by
+     the state-change */
+  state_res = gst_element_get_state (GST_ELEMENT (bin),
+      &current, &pending, GST_CLOCK_TIME_NONE);
+  fail_unless_equals_int (GST_STATE_CHANGE_SUCCESS, state_res);
+  fail_unless_equals_int (GST_STATE_NULL, current);
+  fail_unless_equals_int (GST_STATE_VOID_PENDING, pending);
+
+  state_res = gst_element_get_state (GST_ELEMENT (identity),
+      &current, &pending, GST_CLOCK_TIME_NONE);
+  fail_unless_equals_int (GST_STATE_CHANGE_SUCCESS, state_res);
+  fail_unless_equals_int (GST_STATE_NULL, current);
+  fail_unless_equals_int (GST_STATE_VOID_PENDING, pending);
+
+  /* and check that base-time got distributed to everyone */
+  fail_unless_equals_int64 (123456789, gst_element_get_base_time (bin));
+  fail_unless_equals_int64 (123456789, gst_element_get_base_time (identity));
+
+  gst_object_unref (pipeline);
+}
+
+GST_END_TEST;
+
 static Suite *
 gst_bin_suite (void)
 {
@@ -1889,6 +1941,7 @@ gst_bin_suite (void)
   tcase_add_test (tc_chain, test_deep_added_removed);
   tcase_add_test (tc_chain, test_suppressed_flags);
   tcase_add_test (tc_chain, test_suppressed_flags_when_removing);
+  tcase_skip_broken_test (tc_chain, test_locked_state_sets_base_time_on_children);
 
   /* fails on OSX build bot for some reason, and is a bit silly anyway */
   if (0)
