@@ -109,6 +109,10 @@
 #  include <windows.h>          /* GetStdHandle, windows console */
 #endif
 
+#ifdef ENABLE_GST_DEBUG_SYSLOG
+#  include <syslog.h>
+#endif
+
 #include "gst_private.h"
 #include "gstutils.h"
 #include "gstquark.h"
@@ -224,6 +228,10 @@ GstDebugCategory *_priv_GST_CAT_PROTECTION = NULL;
 #endif /* !defined(GST_DISABLE_GST_DEBUG) || !defined(GST_REMOVE_DISABLED) */
 
 #ifndef GST_DISABLE_GST_DEBUG
+
+#ifdef ENABLE_GST_DEBUG_SYSLOG
+static gboolean _gst_debug_use_syslog = FALSE;
+#endif
 
 /* underscore is to prevent conflict with GST_CAT_DEBUG define */
 GST_DEBUG_CATEGORY_STATIC (_GST_CAT_DEBUG);
@@ -390,6 +398,14 @@ _priv_gst_debug_init (void)
 
     gst_debug_add_log_function (gst_debug_log_default, log_file, NULL);
   }
+
+#ifdef ENABLE_GST_DEBUG_SYSLOG
+  env = g_getenv ("GST_DEBUG_SYSLOG");
+  if (env != NULL && *env != '\0') {
+    _gst_debug_use_syslog = TRUE;
+    openlog (env, LOG_NDELAY | LOG_PID, LOG_LOCAL3);
+  }
+#endif
 
   __gst_printf_pointer_extension_set_func
       (gst_info_printf_pointer_extension_func);
@@ -1309,6 +1325,17 @@ gst_debug_log_default (GstDebugCategory * category, GstDebugLevel level,
         message_str);
     fflush (log_file);
   }
+
+#ifdef ENABLE_GST_DEBUG_SYSLOG
+  if (_gst_debug_use_syslog) {
+#define PRINT_FMT " "PID_FMT" "PTR_FMT" %s "CAT_FMT" %s\n"
+    syslog (LOG_INFO|LOG_LOCAL3, "%" GST_TIME_FORMAT PRINT_FMT, GST_TIME_ARGS (elapsed),
+        pid, g_thread_self (), gst_debug_level_get_name (level),
+        gst_debug_category_get_name (category), file, line, function, obj,
+        gst_debug_message_get (message));
+#undef PRINT_FMT
+  }
+#endif
 
   if (object != NULL)
     g_free (obj);
