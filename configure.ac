@@ -271,6 +271,22 @@ if test "x$USE_POISONING" = xyes; then
     [Define if we should poison deallocated memory])
 fi
 
+dnl logging to syslog
+AC_ARG_ENABLE(gst_debug_syslog,
+  AS_HELP_STRING([--enable-gst-debug-syslog],[enable logging gst-debug to syslog]),
+  [
+    case "${enableval}" in
+      yes) ENABLE_GST_DEBUG_SYSLOG=yes ;;
+      no)  ENABLE_GST_DEBUG_SYSLOG=no ;;
+      *)   AC_MSG_ERROR(bad value ${enableval} for --enable-gst-debug-syslog) ;;
+    esac
+  ],
+  [ENABLE_GST_DEBUG_SYSLOG=no]) dnl Default value
+if test "x$ENABLE_GST_DEBUG_SYSLOG" = xyes; then
+  AC_DEFINE(ENABLE_GST_DEBUG_SYSLOG, 1,
+    [Define if we should enable logging gst-debug to syslog])
+fi
+
 dnl PTP support parts
 AC_MSG_CHECKING([whether PTP support can be enabled])
 case "$host_os" in
