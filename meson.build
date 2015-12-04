@@ -397,6 +397,11 @@ if not gst_debug
   add_project_arguments(['-Wno-unused'], language: 'c')
 endif
 
+gst_debug_syslog = get_option('gst_debug_syslog')
+if gst_debug_syslog
+  add_project_arguments(['-DENABLE_GST_DEBUG_SYSLOG'], language: 'c')
+endif
+
 warning_flags = [
   '-Wmissing-declarations',
   '-Wmissing-prototypes',
