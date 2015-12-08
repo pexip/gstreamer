@@ -964,6 +964,7 @@ gst_harness_teardown (GstHarness * h)
     gst_harness_teardown (h->src_harness);
   }
 
+  gst_object_replace ((GstObject **) & priv->sink_forward_pad, NULL);
   if (h->sink_harness) {
     gst_harness_teardown (h->sink_harness);
   }
@@ -996,9 +997,6 @@ gst_harness_teardown (GstHarness * h)
     g_async_queue_unref (priv->buffer_queue);
     g_async_queue_unref (priv->sink_event_queue);
   }
-
-  if (priv->sink_forward_pad)
-    gst_object_unref (priv->sink_forward_pad);
 
   gst_object_replace ((GstObject **) & priv->propose_allocator, NULL);
   gst_object_replace ((GstObject **) & priv->allocator, NULL);
@@ -2319,8 +2317,8 @@ gst_harness_add_sink_harness (GstHarness * h, GstHarness * sink_harness)
   GstHarnessPrivate *priv = h->priv;
 
   if (h->sink_harness) {
+    gst_object_replace ((GstObject **) &priv->sink_forward_pad, NULL);
     gst_harness_teardown (h->sink_harness);
-    gst_object_unref (priv->sink_forward_pad);
   }
   h->sink_harness = sink_harness;
   priv->sink_forward_pad = gst_object_ref (h->sink_harness->srcpad);
