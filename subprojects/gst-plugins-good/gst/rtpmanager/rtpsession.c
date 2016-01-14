@@ -4301,6 +4301,26 @@ is_rtcp_time (RTPSession * sess, GstClockTime current_time, ReportData * data)
       }
     }
     sess->next_rtcp_check_time = current_time + interval;
+  } else {
+    /*
+     * Even though this is an early request if we haven't sent a regular packet
+     * for at least 'interval' then we need to include an RR/SR
+     */
+    if (sess->last_rtcp_send_time != GST_CLOCK_TIME_NONE
+        && interval != GST_CLOCK_TIME_NONE) {
+      GstClockTime elapsed = current_time - sess->last_rtcp_send_time;
+
+      if (elapsed > interval) {
+        data->is_early = FALSE;
+        GST_DEBUG_OBJECT (sess,
+            "Ajusting early request: current_time %" GST_TIME_FORMAT
+            " last_rtcp_send_time %" GST_TIME_FORMAT " elapsed %"
+            GST_TIME_FORMAT " interval %" GST_TIME_FORMAT
+            " updated is_early = %s", GST_TIME_ARGS (current_time),
+            GST_TIME_ARGS (sess->last_rtcp_send_time), GST_TIME_ARGS (elapsed),
+            GST_TIME_ARGS (interval), data->is_early ? "TRUE" : "FALSE");
+      }
+    }
   }
 
 
