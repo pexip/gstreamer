@@ -668,7 +668,7 @@ gst_pad_is_request_pad (GstPad * pad)
  * Since: 1.8
  */
 GstHarness *
-gst_harness_new_empty ()
+gst_harness_new_empty (void)
 {
   GstHarness *h;
   GstHarnessPrivate *priv;
