@@ -1493,6 +1493,12 @@ gst_harness_play (GstHarness * h)
 {
   GstState state, pending;
   gboolean state_change;
+
+  if (GST_ELEMENT_CLOCK (h->element)) {
+    GstClockTime base_time = gst_clock_get_time (GST_ELEMENT_CLOCK (h->element));
+    gst_element_set_base_time (h->element, base_time);
+  }
+
   state_change = gst_element_set_state (h->element, GST_STATE_PLAYING);
   g_assert_cmpint (GST_STATE_CHANGE_SUCCESS, ==, state_change);
   state_change = gst_element_get_state (h->element, &state, &pending, 0);
