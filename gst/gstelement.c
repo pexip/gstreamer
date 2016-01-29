@@ -754,8 +754,9 @@ gst_element_add_pad (GstElement * element, GstPad * pad)
 
   /* then check to see if there's already a pad by that name here */
   GST_OBJECT_LOCK (element);
-  if (G_UNLIKELY (!gst_object_check_uniqueness (element->pads, pad_name)))
-    goto name_exists;
+  if (!GST_OBJECT_FLAG_IS_SET (element, GST_ELEMENT_FLAG_NO_UNIQUE_CHECK))
+    if (G_UNLIKELY (!gst_object_check_uniqueness (element->pads, pad_name)))
+      goto name_exists;
 
   /* try to set the pad's parent */
   if (G_UNLIKELY (!gst_object_set_parent (GST_OBJECT_CAST (pad),
