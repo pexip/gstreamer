@@ -778,10 +778,13 @@ gst_element_add_pad (GstElement * element, GstPad * pad)
 
   GST_OBJECT_LOCK (element);
 
-  /* Use the hash table to look up whether we already have an pad with that
-   * name */
-  if (g_hash_table_contains (priv->pads_hash, pad_name)) {
-    goto name_exists;
+  /* Check if we skip the uniqueness-check altogether */
+  if (!GST_OBJECT_FLAG_IS_SET (element, GST_ELEMENT_FLAG_NO_UNIQUE_CHECK)) {
+    /* Use the hash table to look up whether we already have an pad with that
+     * name */
+    if (g_hash_table_contains (priv->pads_hash, pad_name)) {
+      goto name_exists;
+    }
   }
   /* try to set the pad's parent */
   if (G_UNLIKELY (!gst_object_set_parent (GST_OBJECT_CAST (pad),

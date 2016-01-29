@@ -1189,6 +1189,7 @@ gst_bin_add_func (GstBin * bin, GstElement * element)
   gchar *elem_name;
   GstIterator *it;
   gboolean is_sink, is_source, provides_clock, requires_clock;
+  gboolean no_unique_check;
   GstMessage *clock_message = NULL, *async_message = NULL;
   GstStateChangeReturn ret;
   GList *l, *elem_contexts, *need_context_messages;
@@ -1204,6 +1205,8 @@ gst_bin_add_func (GstBin * bin, GstElement * element)
       GST_OBJECT_FLAG_IS_SET (element, GST_ELEMENT_FLAG_PROVIDE_CLOCK);
   requires_clock =
       GST_OBJECT_FLAG_IS_SET (element, GST_ELEMENT_FLAG_REQUIRE_CLOCK);
+  no_unique_check =
+      GST_OBJECT_FLAG_IS_SET (element, GST_ELEMENT_FLAG_NO_UNIQUE_CHECK);
   GST_OBJECT_UNLOCK (element);
 
   GST_OBJECT_LOCK (bin);
@@ -1212,7 +1215,7 @@ gst_bin_add_func (GstBin * bin, GstElement * element)
    * we can safely take the lock here. This check is probably bogus because
    * you can safely change the element name after this check and before setting
    * the object parent. The window is very small though... */
-  if (g_hash_table_contains (priv->children_hash, elem_name)) {
+  if (!no_unique_check && g_hash_table_contains (priv->children_hash, elem_name)) {
     goto duplicate_name;
   }
 
