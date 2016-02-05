@@ -316,7 +316,6 @@ static gchar *
 _priv_gst_debug_file_name (const gchar * env)
 {
   gchar *name;
-  gchar *tmp;
 
   name = g_strdup (env);
   name = _replace_pattern_in_gst_debug_file_name (name, "%p", getpid ());
