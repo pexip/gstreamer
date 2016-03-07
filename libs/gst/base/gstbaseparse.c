@@ -1408,7 +1408,7 @@ gst_base_parse_sink_event_default (GstBaseParse * parse, GstEvent * event)
           GST_DEBUG_OBJECT (parse,
               "Store caps event to pending list for initial pre-rolling");
           parse->priv->pending_events =
-              g_list_prepend (parse->priv->pending_events,
+              g_list_append (parse->priv->pending_events,
               gst_event_new_caps (default_caps));
           gst_caps_unref (default_caps);
         } else {
