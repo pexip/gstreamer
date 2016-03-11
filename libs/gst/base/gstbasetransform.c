@@ -163,11 +163,16 @@ enum
   PROP_QOS
 };
 
+#define PRIV_LOCK(trans) g_rec_mutex_lock (&(trans)->priv->lock)
+#define PRIV_UNLOCK(trans) g_rec_mutex_unlock (&(trans)->priv->lock)
+
 struct _GstBaseTransformPrivate
 {
   /* Set by sub-class */
   gboolean passthrough;
   gboolean always_in_place;
+
+  GRecMutex lock;
 
   GstCaps *cache_caps1;
   gsize cache_caps1_size;
@@ -314,6 +319,10 @@ gst_base_transform_default_transform_meta (GstBaseTransform * trans,
 static void
 gst_base_transform_finalize (GObject * object)
 {
+  GstBaseTransform *trans = GST_BASE_TRANSFORM_CAST (object);
+
+  g_rec_mutex_clear (&trans->priv->lock);
+
   G_OBJECT_CLASS (parent_class)->finalize (object);
 }
 
@@ -381,6 +390,7 @@ gst_base_transform_init (GstBaseTransform * trans,
   GST_DEBUG ("gst_base_transform_init");
 
   priv = trans->priv = gst_base_transform_get_instance_private (trans);
+  g_rec_mutex_init (&priv->lock);
 
   pad_template =
       gst_element_class_get_pad_template (GST_ELEMENT_CLASS (bclass), "sink");
@@ -753,7 +763,7 @@ gst_base_transform_set_allocation (GstBaseTransform * trans,
   GstQuery *oldquery;
   GstBaseTransformPrivate *priv = trans->priv;
 
-  GST_OBJECT_LOCK (trans);
+  PRIV_LOCK (trans);
   oldpool = priv->pool;
   priv->pool = pool;
   priv->pool_active = FALSE;
@@ -768,7 +778,7 @@ gst_base_transform_set_allocation (GstBaseTransform * trans,
     priv->params = *params;
   else
     gst_allocation_params_init (&priv->params);
-  GST_OBJECT_UNLOCK (trans);
+  PRIV_UNLOCK (trans);
 
   if (oldpool) {
     GST_DEBUG_OBJECT (trans, "deactivating old pool %p", oldpool);
@@ -1353,9 +1363,9 @@ done:
   if (prev_outcaps)
     gst_caps_unref (prev_outcaps);
 
-  GST_OBJECT_LOCK (trans);
+  PRIV_LOCK (trans);
   priv->negotiated = ret;
-  GST_OBJECT_UNLOCK (trans);
+  PRIV_UNLOCK (trans);
 
   return ret;
 
@@ -1510,17 +1520,17 @@ gst_base_transform_default_query (GstBaseTransform * trans,
       if (G_UNLIKELY (!ret))
         goto done;
 
-      GST_OBJECT_LOCK (trans);
+      PRIV_LOCK (trans);
       if (!priv->negotiated && !priv->passthrough && (klass->set_caps != NULL)) {
         GST_DEBUG_OBJECT (trans,
             "not negotiated yet but need negotiation, can't answer ALLOCATION query");
-        GST_OBJECT_UNLOCK (trans);
+        PRIV_UNLOCK (trans);
         goto done;
       }
 
       decide_query = trans->priv->query;
       trans->priv->query = NULL;
-      GST_OBJECT_UNLOCK (trans);
+      PRIV_UNLOCK (trans);
 
       GST_DEBUG_OBJECT (trans,
           "calling propose allocation with query %" GST_PTR_FORMAT,
@@ -1533,14 +1543,14 @@ gst_base_transform_default_query (GstBaseTransform * trans,
         ret = FALSE;
 
       if (decide_query) {
-        GST_OBJECT_LOCK (trans);
+        PRIV_LOCK (trans);
 
         if (trans->priv->query == NULL)
           trans->priv->query = decide_query;
         else
           gst_query_unref (decide_query);
 
-        GST_OBJECT_UNLOCK (trans);
+        PRIV_UNLOCK (trans);
       }
 
       GST_DEBUG_OBJECT (trans, "ALLOCATION ret %d, %" GST_PTR_FORMAT, ret,
@@ -1913,14 +1923,14 @@ gst_base_transform_sink_eventfunc (GstBaseTransform * trans, GstEvent * event)
     case GST_EVENT_FLUSH_START:
       break;
     case GST_EVENT_FLUSH_STOP:
-      GST_OBJECT_LOCK (trans);
+      PRIV_LOCK (trans);
       /* reset QoS parameters */
       priv->proportion = 1.0;
       priv->earliest_time = -1;
       priv->discont = FALSE;
       priv->processed = 0;
       priv->dropped = 0;
-      GST_OBJECT_UNLOCK (trans);
+      PRIV_UNLOCK (trans);
       /* we need new segment info after the flush. */
       trans->have_segment = FALSE;
       gst_segment_init (&trans->segment, GST_FORMAT_UNDEFINED);
@@ -2044,7 +2054,8 @@ default_submit_input_buffer (GstBaseTransform * trans, gboolean is_discont,
    * or if the class doesn't implement a set_caps function (in which case it doesn't
    * care about caps)
    */
-  if (!priv->negotiated && !priv->passthrough && (bclass->set_caps != NULL))
+  if (!priv->negotiated && !priv->passthrough &&
+      (bclass->set_caps != NULL))
     goto not_negotiated;
 
   /* can only do QoS if the segment is in TIME */
@@ -2063,14 +2074,14 @@ default_submit_input_buffer (GstBaseTransform * trans, gboolean is_discont,
 
     /* lock for getting the QoS parameters that are set (in a different thread)
      * with the QOS events */
-    GST_OBJECT_LOCK (trans);
+    PRIV_LOCK (trans);
     earliest_time = priv->earliest_time;
     proportion = priv->proportion;
     /* check for QoS, don't perform conversion for buffers
      * that are known to be late. */
     need_skip = priv->qos_enabled &&
         earliest_time != -1 && running_time <= earliest_time;
-    GST_OBJECT_UNLOCK (trans);
+    PRIV_UNLOCK (trans);
 
     if (need_skip) {
       GstMessage *qos_msg;
@@ -2305,6 +2316,8 @@ gst_base_transform_chain (GstPad * pad, GstObject * parent, GstBuffer * buffer)
   GstClockTime timestamp, duration;
   GstBuffer *outbuf = NULL;
 
+  PRIV_LOCK (trans);
+
   timestamp = GST_BUFFER_TIMESTAMP (buffer);
   duration = GST_BUFFER_DURATION (buffer);
 
@@ -2334,6 +2347,8 @@ gst_base_transform_chain (GstPad * pad, GstObject * parent, GstBuffer * buffer)
     outbuf = NULL;
 
     ret = klass->generate_output (trans, &outbuf);
+
+    PRIV_UNLOCK (trans);
 
     /* outbuf can be NULL, this means a dropped buffer, if we have a buffer but
      * GST_BASE_TRANSFORM_FLOW_DROPPED we will not push either. */
@@ -2375,9 +2390,12 @@ gst_base_transform_chain (GstPad * pad, GstObject * parent, GstBuffer * buffer)
         gst_buffer_unref (outbuf);
       }
     }
+    PRIV_LOCK (trans);
   } while (ret == GST_FLOW_OK && outbuf != NULL);
 
 done:
+  PRIV_UNLOCK (trans);
+
   /* convert internal flow to OK and mark discont for the next buffer. */
   if (ret == GST_BASE_TRANSFORM_FLOW_DROPPED) {
     GST_DEBUG_OBJECT (trans, "dropped a buffer, marking DISCONT");
@@ -2443,7 +2461,7 @@ gst_base_transform_activate (GstBaseTransform * trans, gboolean active)
     incaps = gst_pad_get_current_caps (trans->sinkpad);
     outcaps = gst_pad_get_current_caps (trans->srcpad);
 
-    GST_OBJECT_LOCK (trans);
+    PRIV_LOCK (trans);
     if (incaps && outcaps)
       priv->have_same_caps =
           gst_caps_is_equal (incaps, outcaps) || priv->passthrough;
@@ -2459,7 +2477,7 @@ gst_base_transform_activate (GstBaseTransform * trans, gboolean active)
     priv->discont = FALSE;
     priv->processed = 0;
     priv->dropped = 0;
-    GST_OBJECT_UNLOCK (trans);
+    PRIV_UNLOCK (trans);
 
     if (incaps)
       gst_caps_unref (incaps);
@@ -2571,7 +2589,7 @@ gst_base_transform_set_passthrough (GstBaseTransform * trans,
 
   bclass = GST_BASE_TRANSFORM_GET_CLASS (trans);
 
-  GST_OBJECT_LOCK (trans);
+  PRIV_LOCK (trans);
   if (!passthrough) {
     if (bclass->transform_ip || bclass->transform || (bclass->generate_output
             && bclass->generate_output != default_generate_output))
@@ -2581,7 +2599,7 @@ gst_base_transform_set_passthrough (GstBaseTransform * trans,
   }
 
   GST_DEBUG_OBJECT (trans, "set passthrough %d", trans->priv->passthrough);
-  GST_OBJECT_UNLOCK (trans);
+  PRIV_UNLOCK (trans);
 }
 
 /**
@@ -2601,9 +2619,9 @@ gst_base_transform_is_passthrough (GstBaseTransform * trans)
 
   g_return_val_if_fail (GST_IS_BASE_TRANSFORM (trans), FALSE);
 
-  GST_OBJECT_LOCK (trans);
+  PRIV_LOCK (trans);
   result = trans->priv->passthrough;
-  GST_OBJECT_UNLOCK (trans);
+  PRIV_UNLOCK (trans);
 
   return result;
 }
@@ -2631,7 +2649,7 @@ gst_base_transform_set_in_place (GstBaseTransform * trans, gboolean in_place)
 
   bclass = GST_BASE_TRANSFORM_GET_CLASS (trans);
 
-  GST_OBJECT_LOCK (trans);
+  PRIV_LOCK (trans);
 
   if (in_place) {
     if (bclass->transform_ip) {
@@ -2645,7 +2663,7 @@ gst_base_transform_set_in_place (GstBaseTransform * trans, gboolean in_place)
     }
   }
 
-  GST_OBJECT_UNLOCK (trans);
+  PRIV_UNLOCK (trans);
 }
 
 /**
@@ -2665,9 +2683,9 @@ gst_base_transform_is_in_place (GstBaseTransform * trans)
 
   g_return_val_if_fail (GST_IS_BASE_TRANSFORM (trans), FALSE);
 
-  GST_OBJECT_LOCK (trans);
+  PRIV_LOCK (trans);
   result = trans->priv->always_in_place;
-  GST_OBJECT_UNLOCK (trans);
+  PRIV_UNLOCK (trans);
 
   return result;
 }
@@ -2696,10 +2714,10 @@ gst_base_transform_update_qos (GstBaseTransform * trans,
       "qos: proportion: %lf, diff %" G_GINT64_FORMAT ", timestamp %"
       GST_TIME_FORMAT, proportion, diff, GST_TIME_ARGS (timestamp));
 
-  GST_OBJECT_LOCK (trans);
+  PRIV_LOCK (trans);
   trans->priv->proportion = proportion;
   trans->priv->earliest_time = timestamp + diff;
-  GST_OBJECT_UNLOCK (trans);
+  PRIV_UNLOCK (trans);
 }
 
 /**
@@ -2718,9 +2736,9 @@ gst_base_transform_set_qos_enabled (GstBaseTransform * trans, gboolean enabled)
 
   GST_CAT_DEBUG_OBJECT (GST_CAT_QOS, trans, "enabled: %d", enabled);
 
-  GST_OBJECT_LOCK (trans);
+  PRIV_LOCK (trans);
   trans->priv->qos_enabled = enabled;
-  GST_OBJECT_UNLOCK (trans);
+  PRIV_UNLOCK (trans);
 }
 
 /**
@@ -2740,9 +2758,9 @@ gst_base_transform_is_qos_enabled (GstBaseTransform * trans)
 
   g_return_val_if_fail (GST_IS_BASE_TRANSFORM (trans), FALSE);
 
-  GST_OBJECT_LOCK (trans);
+  PRIV_LOCK (trans);
   result = trans->priv->qos_enabled;
-  GST_OBJECT_UNLOCK (trans);
+  PRIV_UNLOCK (trans);
 
   return result;
 }
@@ -2766,10 +2784,10 @@ gst_base_transform_set_gap_aware (GstBaseTransform * trans, gboolean gap_aware)
 {
   g_return_if_fail (GST_IS_BASE_TRANSFORM (trans));
 
-  GST_OBJECT_LOCK (trans);
+  PRIV_LOCK (trans);
   trans->priv->gap_aware = gap_aware;
   GST_DEBUG_OBJECT (trans, "set gap aware %d", trans->priv->gap_aware);
-  GST_OBJECT_UNLOCK (trans);
+  PRIV_UNLOCK (trans);
 }
 
 /**
@@ -2797,10 +2815,10 @@ gst_base_transform_set_prefer_passthrough (GstBaseTransform * trans,
 {
   g_return_if_fail (GST_IS_BASE_TRANSFORM (trans));
 
-  GST_OBJECT_LOCK (trans);
+  PRIV_LOCK (trans);
   trans->priv->prefer_passthrough = prefer_passthrough;
   GST_DEBUG_OBJECT (trans, "prefer passthrough %d", prefer_passthrough);
-  GST_OBJECT_UNLOCK (trans);
+  PRIV_UNLOCK (trans);
 }
 
 /**
