@@ -25,6 +25,7 @@
 #endif
 #include <gst/gst.h>
 #include <gst/check/gstcheck.h>
+#include <gst/check/gstharness.h>
 #include <gst/base/gstbasetransform.h>
 
 #include "test_transform.c"
@@ -941,6 +942,170 @@ GST_START_TEST (basetransform_invalid_fixatecaps_impl)
 
 GST_END_TEST;
 
+static GstFlowReturn
+transform_ip_assert_writable (GstBaseTransform * trans, GstBuffer * buf)
+{
+  GST_DEBUG_OBJECT (trans, "transform called");
+
+  if (!gst_base_transform_is_passthrough (trans))
+    fail_unless (gst_buffer_is_writable (buf));
+
+  return GST_FLOW_OK;
+}
+
+static void
+toggle_passthrough (gpointer data, gpointer user_data)
+{
+  GstBaseTransform *basetrans = GST_BASE_TRANSFORM (user_data);
+
+  gst_base_transform_set_passthrough (basetrans, TRUE);
+  g_thread_yield ();
+  gst_base_transform_set_passthrough (basetrans, FALSE);
+}
+
+GST_START_TEST (basetransform_stress_pt_ip)
+{
+  GstHarness *h[10];
+  GstHarnessThread *push[10], *pt[10];
+  GstElement *trans;
+  GstBuffer *buffer;
+  GstSegment segment;
+  GstCaps *caps;
+  guint i;
+
+  klass_transform_ip = transform_ip_assert_writable;
+  gst_segment_init (&segment, GST_FORMAT_TIME);
+  caps = gst_caps_from_string ("foo/x-bar");
+  buffer = gst_buffer_new ();
+
+  for (i = 0; i < G_N_ELEMENTS (h); i++) {
+    trans = gst_test_trans_element_new ();
+    h[i] = gst_harness_new_with_element (trans, "sink", "src");
+    push[i] = gst_harness_stress_push_buffer_start (h[i], caps, &segment, buffer);
+    pt[i] = gst_harness_stress_custom_start (h[i], NULL, toggle_passthrough, trans, 0);
+    g_object_unref (trans);
+  }
+  gst_caps_unref (caps);
+  gst_buffer_unref (buffer);
+
+  g_usleep (G_USEC_PER_SEC/10);
+
+  for (i = 0; i < G_N_ELEMENTS(h); i++) {
+    gst_harness_stress_thread_stop (pt[i]);
+    gst_harness_stress_thread_stop (push[i]);
+    gst_harness_teardown (h[i]);
+  }
+}
+
+GST_END_TEST;
+
+static gboolean
+test_harness_sink_query (GstPad * pad, GstObject * parent, GstQuery * query)
+{
+  GstPadQueryFunction query_func = g_object_get_qdata (G_OBJECT (pad),
+      g_quark_from_static_string ("test-data-harness-query-func"));
+
+  if (GST_QUERY_TYPE (query) == GST_QUERY_ALLOCATION) {
+    GstPromise **p = g_object_get_qdata (G_OBJECT (pad),
+        g_quark_from_static_string ("test-data-promises"));
+
+    GstPromise *padblocked = p[0];
+    GstPromise *padunblocked = p[1];
+    // Notifay main thread that basetransform sent allocation query
+    // and waite while the main thread changes the 'passthrough' flag
+    gst_promise_reply (padblocked, NULL);
+    gst_promise_wait (padunblocked);
+  }
+  return query_func (pad, parent, query);
+}
+
+static GstFlowReturn
+transform_pt_ct_alloc_query (GstBaseTransform * trans,
+    GstBuffer * in, GstBuffer * out)
+{
+  return GST_FLOW_OK;
+}
+
+static gboolean
+reconfigure_each_pad (GstElement * element,
+                          GstPad     * pad,
+                          gpointer     user_data)
+{
+  (void) user_data;
+  gst_pad_mark_reconfigure (pad);
+  return TRUE;
+}
+
+static GstBuffer *
+before_buffer_push (GstHarness * h, gpointer data)
+{
+  gst_element_foreach_src_pad(h->element, reconfigure_each_pad, NULL);
+  gst_base_transform_set_passthrough (GST_BASE_TRANSFORM (h->element), FALSE);
+  return gst_buffer_ref (GST_BUFFER_CAST (data));
+}
+
+/* Test for capability to modification/read basetransform privat data
+ * while it is wating for query results (in this case allocation query).
+*/
+GST_START_TEST (basetransform_stress_pt_ct_alloc_query)
+{
+  GstHarness *h = NULL;
+  GstHarnessThread *push = NULL;
+  GstElement *trans = NULL;
+  GstBuffer *buffer = NULL;
+  GstSegment segment;
+  GstCaps *caps = NULL;
+  GstPromise *padblocked   = gst_promise_new ();
+  GstPromise *padunblocked = gst_promise_new ();
+  GstPromise *p[2] = {padblocked, padunblocked};
+  GstPadQueryFunction old_query_func = NULL;
+
+  klass_transform = transform_pt_ct_alloc_query;
+  gst_segment_init (&segment, GST_FORMAT_TIME);
+  caps = gst_caps_from_string ("foo/x-bar");
+  buffer = gst_buffer_new ();
+
+  trans = gst_test_trans_element_new ();
+  h = gst_harness_new_with_element (trans, "sink", "src");
+
+  old_query_func = GST_PAD_QUERYFUNC (h->sinkpad);
+  // Store the old harness query handler
+  g_object_set_qdata (G_OBJECT (h->sinkpad),
+      g_quark_from_static_string ("test-data-harness-query-func"),
+      old_query_func);
+
+  g_object_set_qdata (G_OBJECT (h->sinkpad),
+      g_quark_from_static_string ("test-data-promises"), p);
+
+  // Set the new harness query handler to intercect the allocation
+  // queries.
+  gst_pad_set_query_function (h->sinkpad, test_harness_sink_query);
+
+  // Start the dedicated push buffer thread.
+  push = gst_harness_stress_push_buffer_with_cb_start(h, caps, &segment,
+      before_buffer_push, buffer, (GDestroyNotify) gst_buffer_unref);
+
+  // Wait for notification from harness pad when basetransform sents allocation query.
+  gst_promise_wait (padblocked);
+  // Now we should be able to modifay the basetransform passthrough mode.
+  gst_base_transform_set_passthrough (GST_BASE_TRANSFORM (h->element), TRUE);
+  // Notifay harness thread to continue buffer processing
+  gst_promise_reply (padunblocked, NULL);
+
+  gst_harness_stress_thread_stop (push);
+
+  GST_PAD_QUERYFUNC (h->sinkpad) = old_query_func;
+
+  gst_buffer_unref (buffer);
+  gst_caps_unref (caps);
+  g_object_unref (trans);
+  gst_harness_teardown (h);
+  gst_promise_unref (padblocked);
+  gst_promise_unref (padunblocked);
+}
+
+GST_END_TEST;
+
 static void
 transform1_setup (void)
 {
@@ -981,6 +1146,9 @@ gst_basetransform_suite (void)
   tcase_add_test (tc, basetransform_chain_ct1);
   tcase_add_test (tc, basetransform_chain_ct2);
   tcase_add_test (tc, basetransform_chain_ct3);
+  /* stress */
+  tcase_add_test (tc, basetransform_stress_pt_ip);
+  tcase_add_test (tc, basetransform_stress_pt_ct_alloc_query);
 
   tcase_add_test (tc, basetransform_invalid_fixatecaps_impl);
 
