@@ -161,30 +161,36 @@ result_buffer_alloc (GstPad * pad, guint64 offset, guint size, GstCaps * caps,
 }
 #endif
 
+static GstElement *
+gst_test_trans_element_new (void)
+{
+  GType type;
+
+  /* we register a new sub-class for every test-run, so the class init
+   * function is called for every test run and can be set up properly
+   * even with CK_FORK=no */
+  static gint counter = 0;
+  gchar name[100];
+
+  g_snprintf (name, sizeof (name), "GstTestTrans%d", ++counter);
+
+  type = g_type_register_static_simple (GST_TYPE_BASE_TRANSFORM, name,
+      sizeof (GstTestTransClass), (GClassInitFunc) gst_test_trans_class_init,
+      sizeof (GstTestTrans), (GInstanceInitFunc) gst_test_trans_init, 0);
+
+  return g_object_new (type, NULL);
+}
+
+
 static TestTransData *
 gst_test_trans_new (void)
 {
   TestTransData *res;
   GstPad *tmp;
   GstPadTemplate *templ;
-  GType type;
-
-  /* we register a new sub-class for every test-run, so the class init
-   * function is called for every test run and can be set up properly
-   * even with CK_FORK=no */
-  {
-    static gint counter = 0;
-    gchar name[100];
-
-    g_snprintf (name, sizeof (name), "GstTestTrans%d", ++counter);
-
-    type = g_type_register_static_simple (GST_TYPE_BASE_TRANSFORM, name,
-        sizeof (GstTestTransClass), (GClassInitFunc) gst_test_trans_class_init,
-        sizeof (GstTestTrans), (GInstanceInitFunc) gst_test_trans_init, 0);
-  }
 
   res = g_new0 (TestTransData, 1);
-  res->trans = g_object_new (type, NULL);
+  res->trans = gst_test_trans_element_new ();
 
   templ = gst_static_pad_template_get (sink_template);
   templ->direction = GST_PAD_SRC;
