@@ -25,6 +25,7 @@
 #endif
 #include <gst/gst.h>
 #include <gst/check/gstcheck.h>
+#include <gst/check/gstharness.h>
 #include <gst/base/gstbasetransform.h>
 
 #include "test_transform.c"
@@ -887,6 +888,63 @@ GST_START_TEST (basetransform_chain_ct3)
 
 GST_END_TEST;
 
+static GstFlowReturn
+transform_ip_assert_writable (GstBaseTransform * trans, GstBuffer * buf)
+{
+  GST_DEBUG_OBJECT (trans, "transform called");
+
+  if (!gst_base_transform_is_passthrough (trans))
+    fail_unless (gst_buffer_is_writable (buf));
+
+  return GST_FLOW_OK;
+}
+
+static void
+toggle_passthrough (gpointer data, gpointer user_data)
+{
+  GstBaseTransform *basetrans = GST_BASE_TRANSFORM (user_data);
+
+  gst_base_transform_set_passthrough (basetrans, TRUE);
+  g_thread_yield ();
+  gst_base_transform_set_passthrough (basetrans, FALSE);
+}
+
+GST_START_TEST (basetransform_stress_pt_ip)
+{
+  GstHarness *h[10];
+  GstHarnessThread *push[10], *pt[10];
+  GstElement *trans;
+  GstBuffer *buffer;
+  GstSegment segment;
+  GstCaps *caps;
+  guint i;
+
+  klass_transform_ip = transform_ip_assert_writable;
+  gst_segment_init (&segment, GST_FORMAT_TIME);
+  caps = gst_caps_from_string ("foo/x-bar");
+  buffer = gst_buffer_new ();
+
+  for (i = 0; i < G_N_ELEMENTS (h); i++) {
+    trans = gst_test_trans_element_new ();
+    h[i] = gst_harness_new_with_element (trans, "sink", "src");
+    push[i] = gst_harness_stress_push_buffer_start (h[i], caps, &segment, buffer);
+    pt[i] = gst_harness_stress_custom_start (h[i], NULL, toggle_passthrough, trans, 0);
+    g_object_unref (trans);
+  }
+  gst_caps_unref (caps);
+  gst_buffer_unref (buffer);
+
+  g_usleep (G_USEC_PER_SEC/10);
+
+  for (i = 0; i < G_N_ELEMENTS(h); i++) {
+    gst_harness_stress_thread_stop (pt[i]);
+    gst_harness_stress_thread_stop (push[i]);
+    gst_harness_teardown (h[i]);
+  }
+}
+
+GST_END_TEST;
+
 static void
 transform1_setup (void)
 {
@@ -926,6 +984,8 @@ gst_basetransform_suite (void)
   tcase_add_test (tc, basetransform_chain_ct1);
   tcase_add_test (tc, basetransform_chain_ct2);
   tcase_add_test (tc, basetransform_chain_ct3);
+  /* stress */
+  tcase_add_test (tc, basetransform_stress_pt_ip);
 
   return s;
 }
