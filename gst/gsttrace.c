@@ -56,10 +56,21 @@ _at_exit (void)
     _priv_gst_alloc_trace_dump ();
 }
 
+static gboolean
+_at_timeout_alloc_trace_dump (gpointer user_data)
+{
+  g_print ("#### alloc trace start (%p) ####\n", g_thread_self());
+  _priv_gst_alloc_trace_dump ();
+  g_print ("#### alloc trace end (%p)  ####\n", g_thread_self());
+
+  return G_SOURCE_CONTINUE;
+}
+
 void
 _priv_gst_alloc_trace_initialize (void)
 {
   const gchar *trace;
+  const gchar *trace_poll;
 
   trace = g_getenv ("GST_TRACE");
   if (trace != NULL) {
@@ -69,6 +80,12 @@ _priv_gst_alloc_trace_initialize (void)
     };
     _gst_trace_flags = g_parse_debug_string (trace, keys, G_N_ELEMENTS (keys));
     atexit (_at_exit);
+  }
+
+  trace_poll = g_getenv ("GST_TRACE_POLL");
+  if (trace_poll != NULL) {
+    gint poll_interval = atoi (trace_poll);
+    g_timeout_add_seconds (poll_interval, _at_timeout_alloc_trace_dump, NULL);
   }
 
   g_mutex_init (&_gst_trace_mutex);
