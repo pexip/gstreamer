@@ -157,6 +157,9 @@ struct _GstFlvDemux
   gboolean audio_done;
   gint64 from_offset;
   gint64 to_offset;
+
+  /* properties */
+  gint64 no_more_pads_threshold;
 };
 
 struct _GstFlvDemuxClass
