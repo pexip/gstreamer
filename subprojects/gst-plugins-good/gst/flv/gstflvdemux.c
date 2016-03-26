@@ -86,6 +86,12 @@ static GstStaticPadTemplate video_src_template =
         "video/x-h264, stream-format=avc;")
     );
 
+enum
+{
+  PROP_00, /* PROP_0 already used by included gstindex.c */
+  PROP_NO_MORE_PADS_THRESHOLD
+};
+
 #define gst_flv_demux_parent_class parent_class
 G_DEFINE_TYPE (GstFlvDemux, gst_flv_demux, GST_TYPE_ELEMENT);
 GST_ELEMENT_REGISTER_DEFINE_WITH_CODE (flvdemux, "flvdemux",
@@ -100,7 +106,7 @@ GST_ELEMENT_REGISTER_DEFINE_WITH_CODE (flvdemux, "flvdemux",
 #define RESYNC_THRESHOLD 2000
 
 /* how much stream time to wait for audio tags to appear after we have video, or vice versa */
-#define NO_MORE_PADS_THRESHOLD (6 * GST_SECOND)
+#define DEFAULT_NO_MORE_PADS_THRESHOLD (6 * GST_SECOND)
 
 static gboolean flv_demux_handle_seek_push (GstFlvDemux * demux,
     GstEvent * event);
@@ -1357,9 +1363,10 @@ gst_flv_demux_parse_tag_audio (GstFlvDemux * demux, GstBuffer * buffer)
     demux->audio_first_ts = GST_BUFFER_TIMESTAMP (outbuf);
   }
 
-  if (G_UNLIKELY (!demux->no_more_pads
-          && (GST_CLOCK_DIFF (demux->audio_start,
-                  GST_BUFFER_TIMESTAMP (outbuf)) > NO_MORE_PADS_THRESHOLD))) {
+  if (G_UNLIKELY (!demux->no_more_pads &&
+          (demux->no_more_pads_threshold != -1) &&
+          (GST_CLOCK_DIFF (demux->audio_start,
+          GST_BUFFER_TIMESTAMP (outbuf)) > demux->no_more_pads_threshold))) {
     GST_DEBUG_OBJECT (demux,
         "Signalling no-more-pads because no video stream was found"
         " after 6 seconds of audio");
@@ -1800,9 +1807,10 @@ gst_flv_demux_parse_tag_video (GstFlvDemux * demux, GstBuffer * buffer)
     demux->video_first_ts = GST_BUFFER_TIMESTAMP (outbuf);
   }
 
-  if (G_UNLIKELY (!demux->no_more_pads
-          && (GST_CLOCK_DIFF (demux->video_start,
-                  GST_BUFFER_TIMESTAMP (outbuf)) > NO_MORE_PADS_THRESHOLD))) {
+  if (G_UNLIKELY (!demux->no_more_pads &&
+          (demux->no_more_pads_threshold != -1) &&
+          (GST_CLOCK_DIFF (demux->video_start,
+          GST_BUFFER_TIMESTAMP (outbuf)) > demux->no_more_pads_threshold))) {
     GST_DEBUG_OBJECT (demux,
         "Signalling no-more-pads because no audio stream was found"
         " after 6 seconds of video");
@@ -3705,6 +3713,38 @@ gst_flv_demux_get_index (GstElement * element)
 }
 
 static void
+gst_flv_demux_get_property (GObject * object,
+    guint prop_id, GValue * value, GParamSpec * pspec)
+{
+  GstFlvDemux *demux = GST_FLV_DEMUX (object);
+
+  switch (prop_id) {
+    case PROP_NO_MORE_PADS_THRESHOLD:
+      g_value_set_int64 (value, demux->no_more_pads_threshold);
+      break;
+    default:
+      G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
+      break;
+  }
+}
+
+static void
+gst_flv_demux_set_property (GObject * object,
+    guint prop_id, const GValue * value, GParamSpec * pspec)
+{
+  GstFlvDemux *demux = GST_FLV_DEMUX (object);
+
+  switch (prop_id) {
+    case PROP_NO_MORE_PADS_THRESHOLD:
+      demux->no_more_pads_threshold = g_value_get_int64 (value);
+      break;
+    default:
+      G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
+      break;
+  }
+}
+
+static void
 gst_flv_demux_dispose (GObject * object)
 {
   GstFlvDemux *demux = GST_FLV_DEMUX (object);
@@ -3786,6 +3826,8 @@ gst_flv_demux_class_init (GstFlvDemuxClass * klass)
   GstElementClass *gstelement_class = GST_ELEMENT_CLASS (klass);
   GObjectClass *gobject_class = G_OBJECT_CLASS (klass);
 
+  gobject_class->get_property = gst_flv_demux_get_property;
+  gobject_class->set_property = gst_flv_demux_set_property;
   gobject_class->dispose = gst_flv_demux_dispose;
 
   gstelement_class->change_state =
@@ -3805,6 +3847,13 @@ gst_flv_demux_class_init (GstFlvDemuxClass * klass)
   gst_element_class_set_static_metadata (gstelement_class, "FLV Demuxer",
       "Codec/Demuxer", "Demux FLV feeds into digital streams",
       "Julien Moutte <julien@moutte.net>");
+
+  g_object_class_install_property (gobject_class, PROP_NO_MORE_PADS_THRESHOLD,
+      g_param_spec_int64 ("no-more-pads-threshold", "No-More-Pads Threshold",
+          "How much stream time to wait for audio tags to appear after we "
+          "have video, or vice versa (-1 waits forever)",
+          -1, G_MAXINT64, DEFAULT_NO_MORE_PADS_THRESHOLD,
+          G_PARAM_CONSTRUCT | G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 }
 
 static void
