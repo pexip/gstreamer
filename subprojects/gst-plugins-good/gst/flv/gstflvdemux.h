@@ -129,6 +129,9 @@ struct _GstFlvDemux
   GPtrArray *video_tracks;
   gint16 default_audio_track_id;
   gint16 default_video_track_id;
+
+  /* properties */
+  gint64 no_more_pads_threshold;
 };
 
 struct _GstFlvDemuxClass
