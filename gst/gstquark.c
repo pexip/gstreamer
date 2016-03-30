@@ -70,7 +70,7 @@ static const gchar *_quark_strings[] = {
   "GstMessageNeedContext", "GstMessageHaveContext", "context", "context-type",
   "GstMessageStreamStart", "group-id", "uri-redirection",
   "GstMessageDeviceAdded", "GstMessageDeviceRemoved", "device",
-  "uri-redirection-permanent"
+  "uri-redirection-permanent", "latency-changed"
 };
 
 GQuark _priv_gst_quark_table[GST_QUARK_MAX];
