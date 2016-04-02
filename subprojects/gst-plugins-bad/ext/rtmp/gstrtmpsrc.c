@@ -384,7 +384,7 @@ gst_rtmp_src_create (GstPushSrc * pushsrc, GstBuffer ** buffer)
   if (!RTMP_IsConnected (src->rtmp)) {
     GST_DEBUG_OBJECT (src, "reconnecting");
     if (!gst_rtmp_src_connect (src))
-      return GST_FLOW_ERROR;
+      return GST_FLOW_EOS;
   }
 
   size = GST_BASE_SRC_CAST (pushsrc)->blocksize;
