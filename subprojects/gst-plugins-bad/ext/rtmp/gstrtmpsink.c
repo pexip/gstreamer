@@ -64,7 +64,8 @@ GST_DEBUG_CATEGORY_STATIC (gst_rtmp_sink_debug);
 enum
 {
   PROP_0,
-  PROP_LOCATION
+  PROP_LOCATION,
+  PROP_PACKETS_SENT
 };
 
 static GstStaticPadTemplate sink_template = GST_STATIC_PAD_TEMPLATE ("sink",
@@ -113,6 +114,11 @@ gst_rtmp_sink_class_init (GstRTMPSinkClass * klass)
   g_object_class_install_property (gobject_class, PROP_LOCATION,
       g_param_spec_string ("location", "RTMP Location", "RTMP url",
           DEFAULT_LOCATION, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+
+  g_object_class_install_property (gobject_class, PROP_PACKETS_SENT,
+      g_param_spec_int ("packets-sent", "Packets sent",
+          "Number of packets sent (-1 = not available)", -1, G_MAXINT, -1,
+          G_PARAM_READABLE | G_PARAM_STATIC_STRINGS));
 
   gst_element_class_set_static_metadata (gstelement_class,
       "RTMP output sink",
@@ -536,6 +542,12 @@ gst_rtmp_sink_get_property (GObject * object, guint prop_id,
   switch (prop_id) {
     case PROP_LOCATION:
       g_value_set_string (value, sink->uri);
+      break;
+    case PROP_PACKETS_SENT:
+      if (sink->rtmp)
+        g_value_set_int (value, sink->rtmp->m_nPacketsSent);
+      else
+        g_value_set_int (value, -1);
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
