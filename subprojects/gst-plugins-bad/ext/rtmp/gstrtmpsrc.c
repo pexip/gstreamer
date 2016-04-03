@@ -5,6 +5,7 @@
  *                    2002,2003 Colin Walters <walters@gnu.org>
  *                    2001,2010 Bastien Nocera <hadess@hadess.net>
  *                    2010 Sebastian Dröge <sebastian.droege@collabora.co.uk>
+ *                    2016 Pexip <pexip.com>
  *
  * rtmpsrc.c:
  *
@@ -62,6 +63,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <unistd.h>
 
 #include <gst/gst.h>
 
@@ -91,6 +93,10 @@ enum
 #endif
 };
 
+#define RTMP_LOCK(src)    g_mutex_lock    (&(src)->rtmp_lock)
+#define RTMP_UNLOCK(src)  g_mutex_unlock  (&(src)->rtmp_lock)
+#define RTMP_TRYLOCK(src) g_mutex_trylock (&(src)->rtmp_lock)
+
 #define DEFAULT_LOCATION NULL
 #define DEFAULT_TIMEOUT 120
 
@@ -103,7 +109,6 @@ static void gst_rtmp_src_get_property (GObject * object, guint prop_id,
     GValue * value, GParamSpec * pspec);
 static void gst_rtmp_src_finalize (GObject * object);
 
-static gboolean gst_rtmp_src_connect (GstRTMPSrc * src);
 static gboolean gst_rtmp_src_unlock (GstBaseSrc * src);
 static gboolean gst_rtmp_src_stop (GstBaseSrc * src);
 static gboolean gst_rtmp_src_start (GstBaseSrc * src);
@@ -203,6 +208,7 @@ gst_rtmp_src_init (GstRTMPSrc * rtmpsrc)
   rtmpsrc->last_timestamp = 0;
   rtmpsrc->timeout = DEFAULT_TIMEOUT;
 
+  g_mutex_init (&rtmpsrc->rtmp_lock);
   gst_base_src_set_format (GST_BASE_SRC (rtmpsrc), GST_FORMAT_TIME);
 }
 
@@ -212,6 +218,7 @@ gst_rtmp_src_finalize (GObject * object)
   GstRTMPSrc *rtmpsrc = GST_RTMP_SRC (object);
 
   g_free (rtmpsrc->uri);
+  g_mutex_clear (&rtmpsrc->rtmp_lock);
   rtmpsrc->uri = NULL;
 
 #ifdef G_OS_WIN32
@@ -379,12 +386,25 @@ gst_rtmp_src_create (GstPushSrc * pushsrc, GstBuffer ** buffer)
 
   src = GST_RTMP_SRC (pushsrc);
 
-  g_return_val_if_fail (src->rtmp != NULL, GST_FLOW_ERROR);
+  if (src->first) {
+    /* open the connection */
+    src->first = FALSE;
+    src->connecting = TRUE;
+    RTMP_LOCK (src);
 
-  if (!RTMP_IsConnected (src->rtmp)) {
-    GST_DEBUG_OBJECT (src, "reconnecting");
-    if (!gst_rtmp_src_connect (src))
-      return GST_FLOW_EOS;
+    if (src->rtmp == NULL) {
+      RTMP_UNLOCK (src);
+      goto connect_error;
+    }
+
+    if (!RTMP_IsConnected (src->rtmp)) {
+      if (!RTMP_Connect (src->rtmp, NULL)) {
+        RTMP_UNLOCK (src);
+        goto connect_error;
+      }
+    }
+    RTMP_UNLOCK (src);
+    src->connecting = FALSE;
   }
 
   size = GST_BASE_SRC_CAST (pushsrc)->blocksize;
@@ -404,7 +424,11 @@ gst_rtmp_src_create (GstPushSrc * pushsrc, GstBuffer ** buffer)
   bsize = 0;
 
   while (todo > 0) {
-    int read = RTMP_Read (src->rtmp, (char *) data, todo);
+    gint read = 0;
+    RTMP_LOCK (src);
+    if (src->rtmp)
+      read = RTMP_Read (src->rtmp, (char *) data, todo);
+    RTMP_UNLOCK (src);
 
     if (G_UNLIKELY (read == 0 && todo == size))
       goto eos;
@@ -457,6 +481,14 @@ gst_rtmp_src_create (GstPushSrc * pushsrc, GstBuffer ** buffer)
 
   return GST_FLOW_OK;
 
+  /* ERRORS */
+connect_error:
+  {
+    GST_ERROR_OBJECT (src, "Could not connect to RTMP stream \"%s\" for reading",
+        src->uri);
+    src->connecting = FALSE;
+    return GST_FLOW_EOS;
+  }
 read_failed:
   {
     gst_buffer_unmap (buf, &map);
@@ -604,22 +636,15 @@ gst_rtmp_src_do_seek (GstBaseSrc * basesrc, GstSegment * segment)
     return FALSE;
   }
 
+  src->discont = TRUE;
+
   /* Initial seek */
   if (src->cur_offset == 0 && segment->start == 0)
-    goto success;
+    return TRUE;
 
   if (!src->seekable) {
     GST_LOG_OBJECT (src, "Not a seekable stream");
     return FALSE;
-  }
-
-  /* If we have just disconnected in unlock(), we need to re-connect
-   * and also let librtmp read some data before sending a seek,
-   * otherwise it will stall. Calling create() does both. */
-  if (!RTMP_IsConnected (src->rtmp)) {
-    GstBuffer *buffer = NULL;
-    gst_rtmp_src_create (GST_PUSH_SRC (basesrc), &buffer);
-    gst_buffer_replace (&buffer, NULL);
   }
 
   src->last_timestamp = GST_CLOCK_TIME_NONE;
@@ -629,40 +654,16 @@ gst_rtmp_src_do_seek (GstBaseSrc * basesrc, GstSegment * segment)
     return FALSE;
   }
 
-success:
-  /* This is set here so that the call to create() above doesn't clear it */
-  src->discont = TRUE;
-
   GST_DEBUG_OBJECT (src, "Seek to %" GST_TIME_FORMAT " successful",
       GST_TIME_ARGS (segment->start));
 
   return TRUE;
 }
 
-static gboolean
-gst_rtmp_src_connect (GstRTMPSrc * src)
-{
-  RTMP_Init (src->rtmp);
-  src->rtmp->Link.timeout = src->timeout;
-  if (!RTMP_SetupURL (src->rtmp, src->uri)) {
-    GST_ELEMENT_ERROR (src, RESOURCE, OPEN_READ, (NULL),
-        ("Failed to setup URL '%s'", src->uri));
-    return FALSE;
-  }
-  src->seekable = !(src->rtmp->Link.lFlags & RTMP_LF_LIVE);
-  GST_INFO_OBJECT (src, "seekable %d", src->seekable);
-
-  /* open if required */
-  if (!RTMP_IsConnected (src->rtmp)) {
-    if (!RTMP_Connect (src->rtmp, NULL)) {
-      GST_ELEMENT_ERROR (src, RESOURCE, OPEN_READ, (NULL),
-          ("Could not connect to RTMP stream \"%s\" for reading", src->uri));
-      return FALSE;
-    }
-  }
-
-  return TRUE;
-}
+#define STR2AVAL(av,str) G_STMT_START { \
+  av.av_val = str; \
+  av.av_len = strlen(av.av_val); \
+} G_STMT_END;
 
 /* open the file, do stuff necessary to go to PAUSED state */
 static gboolean
@@ -681,14 +682,24 @@ gst_rtmp_src_start (GstBaseSrc * basesrc)
   src->last_timestamp = 0;
   src->discont = TRUE;
 
+  src->first = TRUE;
+  src->connecting = FALSE;
+
   src->rtmp = RTMP_Alloc ();
   if (!src->rtmp) {
     GST_ERROR_OBJECT (src, "Could not allocate librtmp's RTMP context");
     goto error;
   }
 
-  if (!gst_rtmp_src_connect (src))
+  RTMP_Init (src->rtmp);
+  src->rtmp->Link.timeout = src->timeout;
+  if (!RTMP_SetupURL (src->rtmp, src->uri)) {
+    GST_ELEMENT_ERROR (src, RESOURCE, OPEN_READ, (NULL),
+        ("Failed to setup URL '%s'", src->uri));
     goto error;
+  }
+  src->seekable = !(src->rtmp->Link.lFlags & RTMP_LF_LIVE);
+  GST_INFO_OBJECT (src, "seekable %d", src->seekable);
 
   return TRUE;
 
@@ -700,18 +711,39 @@ error:
   return FALSE;
 }
 
+#undef STR2AVAL
+
 static gboolean
 gst_rtmp_src_unlock (GstBaseSrc * basesrc)
 {
-  GstRTMPSrc *rtmpsrc = GST_RTMP_SRC (basesrc);
+  GstRTMPSrc *src = GST_RTMP_SRC (basesrc);
 
-  GST_DEBUG_OBJECT (rtmpsrc, "unlock");
+  if (src->rtmp == NULL)
+    return TRUE;
 
-  /* This cancels the recv() underlying RTMP_Read, but will cause a
-   * SIGPIPE.  Hopefully the app is ignoring it, or you've patched
-   * librtmp. */
-  if (rtmpsrc->rtmp && rtmpsrc->rtmp->m_sb.sb_socket > 0) {
-    shutdown (rtmpsrc->rtmp->m_sb.sb_socket, SHUT_RDWR);
+  /* Check to see if we currently are doing any activity towards librtmp */
+  GST_DEBUG_OBJECT (src, "Trying to lock");
+
+  if (!RTMP_TRYLOCK (src)) {
+    GST_DEBUG_OBJECT (src, "Lock NOT aquired...");
+    /* if we are trying to connect, but the internal socket are not yet
+        initialized, we keep trying until either connection have failed or
+        the socket comes up */
+    while (src->connecting && src->rtmp->m_sb.sb_socket == -1) {
+      g_thread_yield ();
+    }
+
+    if (src->rtmp->m_sb.sb_socket >= 0) {
+      GST_DEBUG_OBJECT (src, "Shutting down internal librtmp socket");
+      shutdown (src->rtmp->m_sb.sb_socket, SHUT_RDWR);
+    }
+
+  } else {
+    GST_DEBUG_OBJECT (src, "Lock aquired...");
+    RTMP_Close (src->rtmp);
+    RTMP_Free (src->rtmp);
+    src->rtmp = NULL;
+    RTMP_UNLOCK (src);
   }
 
   return TRUE;
