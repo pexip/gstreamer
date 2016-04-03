@@ -1,6 +1,7 @@
 /*
  * GStreamer
  * Copyright (C) 2010 Jan Schmidt <thaytan@noraisin.net>
+ * Copyright (C) 2016 Pexip <pexip.com>
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Library General Public
@@ -355,14 +356,9 @@ connection_failed:
   {
     GST_ELEMENT_ERROR (sink, RESOURCE, OPEN_WRITE, (NULL),
         ("Could not connect to RTMP stream \"%s\" for writing", sink->uri));
-    RTMP_Free (sink->rtmp);
-    sink->rtmp = NULL;
-    g_free (sink->rtmp_uri);
     sink->connecting = FALSE;
-    sink->rtmp_uri = NULL;
     sink->have_write_error = TRUE;
-
-    return GST_FLOW_ERROR;
+    return GST_FLOW_OK;
   }
 }
 
@@ -472,6 +468,8 @@ gst_rtmp_sink_setcaps (GstBaseSink * sink, GstCaps * caps)
   GstRTMPSink *rtmpsink = GST_RTMP_SINK (sink);
   GstStructure *s;
   const GValue *sh;
+  GArray *buffers;
+  gint i;
 
   GST_DEBUG_OBJECT (sink, "caps set to %" GST_PTR_FORMAT, caps);
 
@@ -492,7 +490,6 @@ gst_rtmp_sink_setcaps (GstBaseSink * sink, GstCaps * caps)
   buffers = g_value_peek_pointer (sh);
 
   /* Concatenate all buffers in streamheader into one */
-  rtmpsink->header = gst_buffer_new ();
   for (i = 0; i < buffers->len; ++i) {
     GValue *val;
     GstBuffer *buf;
@@ -504,19 +501,11 @@ gst_rtmp_sink_setcaps (GstBaseSink * sink, GstCaps * caps)
 
     rtmpsink->header = gst_buffer_append (rtmpsink->header, buf);
   }
-}
 
-else {
-  GST_ERROR_OBJECT (rtmpsink, "streamheader field has unexpected type %s",
-      G_VALUE_TYPE_NAME (sh));
-}
+  GST_DEBUG_OBJECT (rtmpsink, "have %" G_GSIZE_FORMAT " bytes of header data",
+      gst_buffer_get_size (rtmpsink->header));
 
-GST_DEBUG_OBJECT (rtmpsink, "have %" G_GSIZE_FORMAT " bytes of header data",
-    gst_buffer_get_size (rtmpsink->header));
-
-out:
-
-return TRUE;
+  return TRUE;
 }
 
 static gboolean
