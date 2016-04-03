@@ -99,6 +99,29 @@ GST_START_TEST (rtmpsink_unlock_race)
 
 GST_END_TEST;
 
+GST_START_TEST(rtmpsrc_unlock)
+{
+  gint fd;
+  GstHarness *h;
+  GTimer *timer;
+
+  fd = add_listen_fd (23000);
+  h = gst_harness_new_parse (
+      "rtmpsrc location=rtmp://localhost:23000/app/streamname1");
+
+  timer = g_timer_new ();
+  gst_harness_play (h);
+
+  if (__i__ == 1)
+    g_usleep (G_USEC_PER_SEC / 10);
+
+  gst_harness_teardown (h);
+  fail_unless (g_timer_elapsed (timer, NULL) < 2.0);
+
+  g_timer_destroy (timer);
+  close (fd);
+}
+GST_END_TEST;
 
 static Suite *
 rtmp_suite (void)
@@ -109,6 +132,8 @@ rtmp_suite (void)
 
   tcase_add_loop_test (tc_chain, rtmpsink_unlock, 0, 2);
   tcase_add_test (tc_chain, rtmpsink_unlock_race);
+
+  tcase_add_loop_test (tc_chain, rtmpsrc_unlock, 0, 2);
 
   return s;
 }
