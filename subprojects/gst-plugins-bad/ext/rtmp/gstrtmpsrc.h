@@ -64,6 +64,10 @@ struct _GstRTMPSrc
 
   RTMP *rtmp;
   int timeout;
+  GMutex rtmp_lock;
+  gboolean connecting;
+  gboolean first;
+
   gint64 cur_offset;
   GstClockTime last_timestamp;
   gboolean seekable;
