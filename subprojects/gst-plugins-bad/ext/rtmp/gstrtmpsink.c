@@ -244,7 +244,6 @@ gst_rtmp_sink_unlock (GstBaseSink * basesink)
     if (sink->rtmp->m_sb.sb_socket >= 0) {
       GST_DEBUG_OBJECT (sink, "Shutting down internal librtmp socket");
       shutdown (sink->rtmp->m_sb.sb_socket, SHUT_RDWR);
-      close (sink->rtmp->m_sb.sb_socket);
     }
 
   } else {
@@ -298,6 +297,7 @@ gst_rtmp_sink_render (GstBaseSink * bsink, GstBuffer * buf)
 
   if (sink->first) {
     /* open the connection */
+    sink->first = FALSE;
     sink->connecting = TRUE;
     RTMP_LOCK (sink);
 
@@ -323,7 +323,6 @@ gst_rtmp_sink_render (GstBaseSink * bsink, GstBuffer * buf)
           gst_buffer_ref (buf));
       need_unref = TRUE;
     }
-    sink->first = FALSE;
   }
 
   GST_LOG_OBJECT (sink, "Sending %" G_GSIZE_FORMAT " bytes to RTMP server",
