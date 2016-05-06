@@ -116,6 +116,8 @@ typedef enum {
  *                        to upstream elements.
  * @GST_EVENT_LATENCY: Notification of new latency adjustment. Sinks will use
  *                     the latency information to adjust their synchronisation.
+ * @GST_EVENT_LATENCY_CHANGED: Notification of new latency adjustment upstream.
+                               Sinks can use this to query upstream for the new latency.
  * @GST_EVENT_STEP: A request for stepping through the media. Sinks will usually
  *                  execute the step operation.
  * @GST_EVENT_RECONFIGURE: A request for upstream renegotiating caps and reconfiguring.
@@ -162,6 +164,7 @@ typedef enum {
   /* non-sticky downstream serialized */
   GST_EVENT_SEGMENT_DONE          = GST_EVENT_MAKE_TYPE (150, FLAG(DOWNSTREAM) | FLAG(SERIALIZED)),
   GST_EVENT_GAP                   = GST_EVENT_MAKE_TYPE (160, FLAG(DOWNSTREAM) | FLAG(SERIALIZED)),
+  GST_EVENT_LATENCY_CHANGED       = GST_EVENT_MAKE_TYPE (170, FLAG(DOWNSTREAM) | FLAG(SERIALIZED)),
 
   /* upstream events */
   GST_EVENT_QOS                   = GST_EVENT_MAKE_TYPE (190, FLAG(UPSTREAM)),
@@ -572,6 +575,9 @@ GstEvent*       gst_event_new_navigation        (GstStructure *structure) G_GNUC
 /* latency event */
 GstEvent*       gst_event_new_latency           (GstClockTime latency) G_GNUC_MALLOC;
 void            gst_event_parse_latency         (GstEvent *event, GstClockTime *latency);
+
+/* latency-changed event */
+GstEvent*       gst_event_new_latency_changed   (void) G_GNUC_MALLOC;
 
 /* step event */
 GstEvent*       gst_event_new_step              (GstFormat format, guint64 amount, gdouble rate,
