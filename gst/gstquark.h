@@ -231,7 +231,8 @@ typedef enum _GstQuarkId
   GST_QUARK_PLUGIN_API = 200,
   GST_QUARK_PLUGIN_API_FLAGS = 201,
   GST_QUARK_GAP_FLAGS = 202,
-  GST_QUARK_MAX = 203
+  GST_QUARK_EVENT_LATENCY_CHANGED = 203,
+  GST_QUARK_MAX = 204
 } GstQuarkId;
 
 extern GQuark _priv_gst_quark_table[GST_QUARK_MAX];
