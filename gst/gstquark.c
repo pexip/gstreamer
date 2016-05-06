@@ -75,7 +75,7 @@ static const gchar *_quark_strings[] = {
   "GstMessageStreamCollection", "collection", "stream", "stream-collection",
   "GstMessageStreamsSelected", "GstMessageRedirect", "redirect-entry-locations",
   "redirect-entry-taglists", "redirect-entry-structures",
-  "GstEventStreamGroupDone"
+  "GstEventStreamGroupDone", "latency-changed"
 };
 
 GQuark _priv_gst_quark_table[GST_QUARK_MAX];

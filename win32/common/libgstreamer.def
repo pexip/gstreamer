@@ -592,6 +592,7 @@ EXPORTS
 	gst_event_new_flush_stop
 	gst_event_new_gap
 	gst_event_new_latency
+	gst_event_new_latency_changed
 	gst_event_new_navigation
 	gst_event_new_protection
 	gst_event_new_qos
