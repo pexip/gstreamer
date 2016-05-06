@@ -122,6 +122,7 @@ static GstEventQuarks event_quarks[] = {
   {GST_EVENT_SEEK, "seek", 0},
   {GST_EVENT_NAVIGATION, "navigation", 0},
   {GST_EVENT_LATENCY, "latency", 0},
+  {GST_EVENT_LATENCY_CHANGED, "latency-changed", 0},
   {GST_EVENT_STEP, "step", 0},
   {GST_EVENT_RECONFIGURE, "reconfigure", 0},
   {GST_EVENT_TOC_SELECT, "toc-select", 0},
@@ -1504,6 +1505,30 @@ gst_event_parse_latency (GstEvent * event, GstClockTime * latency)
     *latency =
         g_value_get_uint64 (gst_structure_id_get_value (GST_EVENT_STRUCTURE
             (event), GST_QUARK (LATENCY)));
+}
+
+/**
+ * gst_event_new_latency_changed:
+ *
+ * Create a new latency-changed event. The event is sent downstream from
+ * an element that changes its latency while running, notifying any
+ * downstream element of this change.
+ *
+ * This information is most useful in mixer and sinks, that might send
+ * an upstream latency-query as a response to figure out the new latency.
+ *
+ * Returns: (transfer full): a new #GstEvent
+ */
+GstEvent *
+gst_event_new_latency_changed (void)
+{
+  GstEvent *event;
+
+  GST_CAT_INFO (GST_CAT_EVENT, "creating latency-changed event");
+
+  event = gst_event_new_custom (GST_EVENT_LATENCY_CHANGED, NULL);
+
+  return event;
 }
 
 /**
