@@ -1157,6 +1157,8 @@ gst_event_new_navigation
 gst_event_new_latency
 gst_event_parse_latency
 
+gst_event_new_latency_changed
+
 gst_event_new_step
 gst_event_parse_step
 
