@@ -1407,12 +1407,11 @@ gst_rtp_jitter_buffer_getcaps (GstPad * pad, GstCaps * filter)
 
 static gboolean
 gst_jitter_buffer_sink_parse_caps (GstRtpJitterBuffer * jitterbuffer,
-    GstCaps * caps, gint pt)
+    GstCaps * caps)
 {
   GstRtpJitterBufferPrivate *priv;
   GstStructure *caps_struct;
   guint val;
-  gint payload = -1;
   GstClockTime tval;
   const gchar *ts_refclk, *mediaclk;
   GstCaps *ts_meta_ref = NULL;
@@ -1422,19 +1421,7 @@ gst_jitter_buffer_sink_parse_caps (GstRtpJitterBuffer * jitterbuffer,
   /* first parse the caps */
   caps_struct = gst_caps_get_structure (caps, 0);
 
-  GST_DEBUG_OBJECT (jitterbuffer, "got caps %" GST_PTR_FORMAT, caps);
-
-  if (gst_structure_get_int (caps_struct, "payload", &payload) && pt != -1
-      && payload != pt) {
-    GST_ERROR_OBJECT (jitterbuffer,
-        "Got caps with wrong payload type (got %d, expected %d)", pt, payload);
-    return FALSE;
-  }
-
-  if (payload != -1) {
-    GST_DEBUG_OBJECT (jitterbuffer, "Got payload type %d", payload);
-    priv->last_pt = payload;
-  }
+  GST_DEBUG_OBJECT (jitterbuffer, "got caps");
 
   /* we need a clock-rate to convert the rtp timestamps to GStreamer time and to
    * measure the amount of data in the buffer */
@@ -1827,7 +1814,7 @@ queue_event (GstRtpJitterBuffer * jitterbuffer, GstEvent * event)
       GstCaps *caps;
 
       gst_event_parse_caps (event, &caps);
-      gst_jitter_buffer_sink_parse_caps (jitterbuffer, caps, -1);
+      gst_jitter_buffer_sink_parse_caps (jitterbuffer, caps);
       break;
     }
     case GST_EVENT_SEGMENT:
@@ -1999,7 +1986,7 @@ gst_rtp_jitter_buffer_get_clock_rate (GstRtpJitterBuffer * jitterbuffer,
   if (!caps)
     goto no_caps;
 
-  res = gst_jitter_buffer_sink_parse_caps (jitterbuffer, caps, pt);
+  res = gst_jitter_buffer_sink_parse_caps (jitterbuffer, caps);
   gst_caps_unref (caps);
 
   if (G_UNLIKELY (!res))
@@ -3030,7 +3017,7 @@ gst_rtp_jitter_buffer_chain (GstPad * pad, GstObject * parent,
     /* Try to get the clock-rate from the caps first if we can. If there are no
      * caps we must fire the signal to get the clock-rate. */
     if ((caps = gst_pad_get_current_caps (pad))) {
-      gst_jitter_buffer_sink_parse_caps (jitterbuffer, caps, pt);
+      gst_jitter_buffer_sink_parse_caps (jitterbuffer, caps);
       gst_caps_unref (caps);
     }
   }
