@@ -73,6 +73,9 @@ LIBGSTCHECK_EXPORTED_FUNCS = \
 	gst_check_element_push_buffer \
 	gst_check_element_push_buffer_list \
 	gst_check_init \
+	gst_check_log_filter_add \
+	gst_check_log_filter_remove \
+	gst_check_log_filter_clear \
 	gst_check_message_error \
 	gst_check_run_suite \
 	gst_check_setup_element \
