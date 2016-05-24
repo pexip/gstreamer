@@ -62,6 +62,7 @@ struct _GstRtpSessionClass {
   /* signals */
   GstCaps* (*request_pt_map) (GstRtpSession *sess, guint pt);
   void     (*clear_pt_map)   (GstRtpSession *sess);
+  void     (*send_bye)       (GstRtpSession *sess);
 
   void     (*on_new_ssrc)       (GstRtpSession *sess, guint32 ssrc);
   void     (*on_ssrc_collision) (GstRtpSession *sess, guint32 ssrc);
