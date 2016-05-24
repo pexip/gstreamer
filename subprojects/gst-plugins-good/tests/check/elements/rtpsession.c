@@ -4390,6 +4390,56 @@ GST_START_TEST (test_send_rtcp_instantly)
 
 GST_END_TEST;
 
+GST_START_TEST (test_send_bye_signal)
+{
+  SessionHarness *h = session_harness_new ();
+  GstBuffer *buf;
+  GstRTCPBuffer rtcp = GST_RTCP_BUFFER_INIT;
+  GstRTCPPacket rtcp_packet;
+  guint32 ssrc;
+
+  /* push a buffer to establish an internal source */
+  fail_unless_equals_int (GST_FLOW_OK,
+      session_harness_send_rtp (h, generate_test_buffer (0, 0xDEADBEEF)));
+
+  /* emit the signal to signal bye on all sources */
+  g_signal_emit_by_name (h->session, "send-bye");
+
+  session_harness_produce_rtcp (h, 1);
+  buf = session_harness_pull_rtcp (h);
+
+  fail_unless (gst_rtcp_buffer_validate (buf));
+  gst_rtcp_buffer_map (buf, GST_MAP_READ, &rtcp);
+  /* our RTCP buffer has 3 packets */
+  fail_unless_equals_int (3, gst_rtcp_buffer_get_packet_count (&rtcp));
+
+  /* first a Sender Report */
+  fail_unless (gst_rtcp_buffer_get_first_packet (&rtcp, &rtcp_packet));
+  fail_unless_equals_int (GST_RTCP_TYPE_SR,
+      gst_rtcp_packet_get_type (&rtcp_packet));
+  gst_rtcp_packet_sr_get_sender_info (&rtcp_packet, &ssrc, NULL, NULL,
+      NULL, NULL);
+  fail_unless_equals_int (0xDEADBEEF, ssrc);
+  fail_unless (gst_rtcp_packet_move_to_next (&rtcp_packet));
+
+  /* then a SDES */
+  fail_unless_equals_int (GST_RTCP_TYPE_SDES,
+      gst_rtcp_packet_get_type (&rtcp_packet));
+  fail_unless_equals_int (0xDEADBEEF,
+      gst_rtcp_packet_sdes_get_ssrc (&rtcp_packet));
+  fail_unless (gst_rtcp_packet_move_to_next (&rtcp_packet));
+
+  /* and finally the BYE we asked for */
+  fail_unless_equals_int (GST_RTCP_TYPE_BYE,
+      gst_rtcp_packet_get_type (&rtcp_packet));
+
+  gst_rtcp_buffer_unmap (&rtcp);
+  gst_buffer_unref (buf);
+  session_harness_free (h);
+}
+
+GST_END_TEST;
+
 
 static Suite *
 rtpsession_suite (void)
@@ -4472,6 +4522,7 @@ rtpsession_suite (void)
   tcase_add_test (tc_chain, test_twcc_feedback_old_seqnum);
 
   tcase_add_test (tc_chain, test_send_rtcp_instantly);
+  tcase_add_test (tc_chain, test_send_bye_signal);
   return s;
 }
 
