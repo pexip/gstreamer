@@ -192,6 +192,7 @@ enum
 {
   SIGNAL_REQUEST_PT_MAP,
   SIGNAL_CLEAR_PT_MAP,
+  SIGNAL_SEND_BYE,
 
   SIGNAL_ON_NEW_SSRC,
   SIGNAL_ON_SSRC_COLLISION,
@@ -357,6 +358,7 @@ static gboolean gst_rtp_session_setcaps_send_rtp (GstPad * pad,
     GstRtpSession * rtpsession, GstCaps * caps);
 
 static void gst_rtp_session_clear_pt_map (GstRtpSession * rtpsession);
+static void gst_rtp_session_send_bye (GstRtpSession * rtpsession);
 
 static GstStructure *gst_rtp_session_create_stats (GstRtpSession * rtpsession);
 
@@ -529,6 +531,18 @@ gst_rtp_session_class_init (GstRtpSessionClass * klass)
       G_SIGNAL_RUN_LAST | G_SIGNAL_ACTION,
       G_STRUCT_OFFSET (GstRtpSessionClass, clear_pt_map),
       NULL, NULL, NULL, G_TYPE_NONE, 0, G_TYPE_NONE);
+
+  /**
+   * GstRtpSession::send-bye:
+   * @sess: the object which received the signal
+   *
+   * Send BYE on all active sources in the session.
+   */
+  gst_rtp_session_signals[SIGNAL_SEND_BYE] =
+      g_signal_new ("send-bye", G_TYPE_FROM_CLASS (klass),
+      G_SIGNAL_RUN_LAST | G_SIGNAL_ACTION,
+      G_STRUCT_OFFSET (GstRtpSessionClass, send_bye),
+      NULL, NULL, g_cclosure_marshal_generic, G_TYPE_NONE, 0, G_TYPE_NONE);
 
   /**
    * GstRtpSession::on-new-ssrc:
@@ -813,6 +827,7 @@ gst_rtp_session_class_init (GstRtpSessionClass * klass)
       GST_DEBUG_FUNCPTR (gst_rtp_session_release_pad);
 
   klass->clear_pt_map = GST_DEBUG_FUNCPTR (gst_rtp_session_clear_pt_map);
+  klass->send_bye = GST_DEBUG_FUNCPTR (gst_rtp_session_send_bye);
 
   /* sink pads */
   gst_element_class_add_static_pad_template (gstelement_class,
@@ -1360,6 +1375,15 @@ gst_rtp_session_clear_pt_map (GstRtpSession * rtpsession)
   GST_RTP_SESSION_LOCK (rtpsession);
   g_hash_table_foreach_remove (rtpsession->priv->ptmap, return_true, NULL);
   GST_RTP_SESSION_UNLOCK (rtpsession);
+}
+
+static void
+gst_rtp_session_send_bye (GstRtpSession * rtpsession)
+{
+  GstClockTime current_time = gst_clock_get_time (rtpsession->priv->sysclock);
+  GST_DEBUG_OBJECT (rtpsession, "scheduling BYE message");
+  rtp_session_mark_all_bye (rtpsession->priv->session, "End Of Stream");
+  rtp_session_schedule_bye (rtpsession->priv->session, current_time);
 }
 
 /* called when the session manager has an RTP packet ready to be pushed */
@@ -2244,16 +2268,10 @@ gst_rtp_session_event_send_rtp_sink (GstPad * pad, GstObject * parent,
       break;
     }
     case GST_EVENT_EOS:{
-      GstClockTime current_time;
-
       /* push downstream FIXME, we are not supposed to leave the session just
        * because we stop sending. */
       ret = gst_pad_push_event (rtpsession->send_rtp_src, event);
-      current_time = gst_clock_get_time (rtpsession->priv->sysclock);
-
-      GST_DEBUG_OBJECT (rtpsession, "scheduling BYE message");
-      rtp_session_mark_all_bye (rtpsession->priv->session, "End Of Stream");
-      rtp_session_schedule_bye (rtpsession->priv->session, current_time);
+      gst_rtp_session_send_bye (rtpsession);
       break;
     }
     default:{
