@@ -63,7 +63,30 @@ typedef struct
 }
 GstCheckABIStruct;
 
+typedef struct _GstCheckLogFilter GstCheckLogFilter;
+
+/**
+ * GstCheckLogFilterFunc:
+ * @log_domain: the log domain of the message
+ * @log_level: the log level of the message
+ * @message: the message that has occured
+ * @user_data: user data
+ *
+ * A function that is called for messages matching the filter added by
+ * @gst_check_log_filter_add.
+ *
+ * Returns: %TRUE if message should be discarded by GstCheck.
+ */
+typedef gboolean (*GstCheckLogFilterFunc) (const gchar * log_domain,
+    GLogLevelFlags log_level, const gchar * message, gpointer user_data);
+
 void gst_check_init (int *argc, char **argv[]);
+
+GstCheckLogFilter * gst_check_log_filter_add (const gchar * log_domain,
+    GLogLevelFlags log_level, GRegex * regex, GstCheckLogFilterFunc func,
+    gpointer user_data, GDestroyNotify destroy_data);
+void gst_check_log_filter_remove (GstCheckLogFilter * filter);
+void gst_check_log_filter_clear (void);
 
 GstFlowReturn gst_check_chain_func (GstPad * pad, GstObject * parent, GstBuffer * buffer);
 
