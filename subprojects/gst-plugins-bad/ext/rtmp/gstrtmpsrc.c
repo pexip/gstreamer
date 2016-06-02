@@ -437,11 +437,15 @@ gst_rtmp_src_create (GstPushSrc * pushsrc, GstBuffer ** buffer)
   GST_BUFFER_OFFSET (buf) = src->cur_offset;
 
   src->cur_offset += size;
-  if (src->last_timestamp == GST_CLOCK_TIME_NONE)
-    src->last_timestamp = src->rtmp->m_mediaStamp * GST_MSECOND;
-  else
-    src->last_timestamp =
-        MAX (src->last_timestamp, src->rtmp->m_mediaStamp * GST_MSECOND);
+  RTMP_LOCK (src);
+  if (src->rtmp) {
+    if (src->last_timestamp == GST_CLOCK_TIME_NONE)
+      src->last_timestamp = src->rtmp->m_mediaStamp * GST_MSECOND;
+    else
+      src->last_timestamp =
+          MAX (src->last_timestamp, src->rtmp->m_mediaStamp * GST_MSECOND);
+  }
+  RTMP_UNLOCK (src);
 
   GST_LOG_OBJECT (src, "Created buffer of size %u at %" G_GINT64_FORMAT
       " with timestamp %" GST_TIME_FORMAT, size, GST_BUFFER_OFFSET (buf),
