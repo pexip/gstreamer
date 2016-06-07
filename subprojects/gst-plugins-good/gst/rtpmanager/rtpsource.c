@@ -388,7 +388,6 @@ rtp_source_create_stats (RTPSource * src)
   guint32 packet_count = 0;
   guint32 octet_count = 0;
 
-
   /* common data for all types of sources */
   s = gst_structure_new ("application/x-rtp-source-stats",
       "ssrc", G_TYPE_UINT, (guint) src->ssrc,
@@ -396,9 +395,7 @@ rtp_source_create_stats (RTPSource * src)
       "validated", G_TYPE_BOOLEAN, src->validated,
       "received-bye", G_TYPE_BOOLEAN, src->marked_bye,
       "is-csrc", G_TYPE_BOOLEAN, src->is_csrc,
-      "is-sender", G_TYPE_BOOLEAN, is_sender,
-      "seqnum-base", G_TYPE_INT, src->seqnum_offset,
-      "clock-rate", G_TYPE_INT, src->clock_rate, NULL);
+      "is-sender", G_TYPE_BOOLEAN, is_sender, NULL);
 
   /* add address and port */
   if (src->rtp_from) {
@@ -412,61 +409,85 @@ rtp_source_create_stats (RTPSource * src)
     g_free (address_str);
   }
 
-  gst_structure_set (s,
-      "octets-sent", G_TYPE_UINT64, src->stats.octets_sent,
-      "packets-sent", G_TYPE_UINT64, src->stats.packets_sent,
-      "octets-received", G_TYPE_UINT64, src->stats.octets_received,
-      "packets-received", G_TYPE_UINT64, src->stats.packets_received,
-      "bytes-received", G_TYPE_UINT64, src->stats.bytes_received,
-      "bitrate", G_TYPE_UINT64, src->bitrate,
-      "packets-lost", G_TYPE_INT,
-      (gint) rtp_stats_get_packets_lost (&src->stats), "jitter", G_TYPE_UINT,
-      (guint) (src->stats.jitter >> 4),
-      "sent-pli-count", G_TYPE_UINT, src->stats.sent_pli_count,
-      "recv-pli-count", G_TYPE_UINT, src->stats.recv_pli_count,
-      "sent-fir-count", G_TYPE_UINT, src->stats.sent_fir_count,
-      "recv-fir-count", G_TYPE_UINT, src->stats.recv_fir_count,
-      "sent-nack-count", G_TYPE_UINT, src->stats.sent_nack_count,
-      "recv-nack-count", G_TYPE_UINT, src->stats.recv_nack_count,
-      "recv-packet-rate", G_TYPE_UINT,
-      gst_rtp_packet_rate_ctx_get (&src->packet_rate_ctx), NULL);
+  /* is_sender applies to internal sources you send with, but also
+     the equivalent source on the receiver side */
+  if (is_sender) {
+    gst_structure_set (s,
+        "clock-rate", G_TYPE_INT, src->clock_rate,
+        "bitrate", G_TYPE_UINT64, src->bitrate, NULL);
+
+    if (internal) {
+      gst_structure_set (s,
+          "seqnum-base", G_TYPE_INT, src->seqnum_offset,
+          "octets-sent", G_TYPE_UINT64, src->stats.octets_sent,
+          "packets-sent", G_TYPE_UINT64, src->stats.packets_sent,
+          "recv-pli-count", G_TYPE_UINT, src->stats.recv_pli_count,
+          "recv-fir-count", G_TYPE_UINT, src->stats.recv_fir_count,
+          "recv-nack-count", G_TYPE_UINT, src->stats.recv_nack_count, NULL);
+    } else {
+      gst_structure_set (s,
+          "octets-received", G_TYPE_UINT64, src->stats.octets_received,
+          "packets-received", G_TYPE_UINT64, src->stats.packets_received,
+          "bytes-received", G_TYPE_UINT64, src->stats.bytes_received,
+          "packets-lost", G_TYPE_INT,
+          (gint) rtp_stats_get_packets_lost (&src->stats),
+          "jitter", G_TYPE_UINT,
+          (guint) (src->stats.jitter >> 4),
+          "sent-pli-count", G_TYPE_UINT, src->stats.sent_pli_count,
+          "sent-fir-count", G_TYPE_UINT, src->stats.sent_fir_count,
+          "sent-nack-count", G_TYPE_UINT, src->stats.sent_nack_count,
+          "recv-packet-rate", G_TYPE_UINT,
+          gst_rtp_packet_rate_ctx_get (&src->packet_rate_ctx), NULL);
+    }
+  }
 
   /* get the last SR. */
   have_sr = rtp_source_get_last_sr (src, &time, &ntptime, &rtptime,
       &packet_count, &octet_count);
-  gst_structure_set (s,
-      "have-sr", G_TYPE_BOOLEAN, have_sr,
-      "sr-ntptime", G_TYPE_UINT64, ntptime,
-      "sr-rtptime", G_TYPE_UINT, (guint) rtptime,
-      "sr-octet-count", G_TYPE_UINT, (guint) octet_count,
-      "sr-packet-count", G_TYPE_UINT, (guint) packet_count, NULL);
+  gst_structure_set (s, "have-sr", G_TYPE_BOOLEAN, have_sr, NULL);
+  if (have_sr) {
+    gst_structure_set (s,
+        "have-sr", G_TYPE_BOOLEAN, have_sr,
+        "sr-ntptime", G_TYPE_UINT64, ntptime,
+        "sr-rtptime", G_TYPE_UINT, (guint) rtptime,
+        "sr-octet-count", G_TYPE_UINT, (guint) octet_count,
+        "sr-packet-count", G_TYPE_UINT, (guint) packet_count, NULL);
+  }
 
   if (!internal) {
     /* get the last RB we sent */
     gst_structure_set (s,
-        "sent-rb", G_TYPE_BOOLEAN, src->last_rr.is_valid,
-        "sent-rb-fractionlost", G_TYPE_UINT, (guint) src->last_rr.fractionlost,
-        "sent-rb-packetslost", G_TYPE_INT, (gint) src->last_rr.packetslost,
-        "sent-rb-exthighestseq", G_TYPE_UINT,
-        (guint) src->last_rr.exthighestseq, "sent-rb-jitter", G_TYPE_UINT,
-        (guint) src->last_rr.jitter, "sent-rb-lsr", G_TYPE_UINT,
-        (guint) src->last_rr.lsr, "sent-rb-dlsr", G_TYPE_UINT,
-        (guint) src->last_rr.dlsr, NULL);
-
+        "sent-rb", G_TYPE_BOOLEAN, src->last_rr.is_valid, NULL);
+    if (src->last_rr.is_valid) {
+      gst_structure_set (s,
+          "sent-rb-fractionlost", G_TYPE_UINT,
+          (guint) src->last_rr.fractionlost,
+          "sent-rb-packetslost", G_TYPE_INT,
+          (gint) src->last_rr.packetslost,
+          "sent-rb-exthighestseq", G_TYPE_UINT,
+          (guint) src->last_rr.exthighestseq,
+          "sent-rb-jitter", G_TYPE_UINT,
+          (guint) src->last_rr.jitter,
+          "sent-rb-lsr", G_TYPE_UINT,
+          (guint) src->last_rr.lsr,
+          "sent-rb-dlsr", G_TYPE_UINT, (guint) src->last_rr.dlsr, NULL);
+    }
+  } else {
     /* get the last RB */
     have_rb = rtp_source_get_last_rb (src, &ssrc, &fractionlost,
         &packetslost, &exthighestseq, &jitter, &lsr, &dlsr, &round_trip);
-
-    gst_structure_set (s,
-        "have-rb", G_TYPE_BOOLEAN, have_rb,
-        "rb-ssrc", G_TYPE_UINT, ssrc,
-        "rb-fractionlost", G_TYPE_UINT, (guint) fractionlost,
-        "rb-packetslost", G_TYPE_INT, (gint) packetslost,
-        "rb-exthighestseq", G_TYPE_UINT, (guint) exthighestseq,
-        "rb-jitter", G_TYPE_UINT, (guint) jitter,
-        "rb-lsr", G_TYPE_UINT, (guint) lsr,
-        "rb-dlsr", G_TYPE_UINT, (guint) dlsr,
-        "rb-round-trip", G_TYPE_UINT, (guint) round_trip, NULL);
+    gst_structure_set (s, "have-rb", G_TYPE_BOOLEAN, have_rb, NULL);
+    if (have_rb) {
+      gst_structure_set (s,
+          "rb-ssrc", G_TYPE_UINT, ssrc,
+          "rb-fractionlost", G_TYPE_UINT, (guint) fractionlost,
+          "rb-packetslost", G_TYPE_INT, (gint) packetslost,
+          "rb-exthighestseq", G_TYPE_UINT, (guint) exthighestseq,
+          "rb-jitter", G_TYPE_UINT, (guint) jitter,
+          "rb-lsr", G_TYPE_UINT, (guint) lsr,
+          "rb-dlsr", G_TYPE_UINT, (guint) dlsr,
+          "rb-round-trip", G_TYPE_UINT, (guint) round_trip, NULL);
+    }
   }
 
   return s;
