@@ -707,9 +707,11 @@ invalid_payload:
 create_failed:
   {
     gst_buffer_unref (buf);
-    GST_WARNING_OBJECT (demux,
-        "Dropping buffer SSRC %08x. "
-        "Max streams number reached (%u)", ssrc, demux->max_streams);
+    if ((demux->err_num & 0xff) == 0)
+      GST_WARNING_OBJECT (demux,
+          "Dropping buffer SSRC %08x. "
+          "Max streams number reached (%u)", ssrc, demux->max_streams);
+    ++demux->err_num;
     return GST_FLOW_OK;
   }
 }
