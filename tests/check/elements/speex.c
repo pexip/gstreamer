@@ -194,6 +194,47 @@ GST_START_TEST (test_headers_from_flv)
 }
 GST_END_TEST
 
+GST_START_TEST (test_new_segment_before_first_output_buffer)
+{
+  GstHarness *h = gst_harness_new ("speexenc");
+  GstBuffer *buf;
+  GstSegment segment;
+
+  /* 10 ms buffers */
+  gst_harness_add_src_parse (h, "audiotestsrc is-live=1 samplesperbuffer=160 ! "
+      "capsfilter caps=\"audio/x-raw,format=S16LE,rate=16000\"", TRUE);
+
+  /* push 10 ms of audio-data */
+  gst_harness_push_from_src (h);
+
+  /* send a second segment event */
+  gst_segment_init (&segment, GST_FORMAT_TIME);
+  fail_unless (gst_harness_push_event (h, gst_event_new_segment (&segment)));
+
+  /* push 10 ms of audio-data */
+  gst_harness_push_from_src (h);
+
+  /* pull 20 ms of encoded audio-data with headers */
+  buf = gst_harness_pull (h);
+  fail_unless_equals_uint64 (0, GST_BUFFER_PTS (buf));
+  fail_unless_equals_uint64 (0, GST_BUFFER_DURATION (buf));
+  gst_buffer_unref (buf);
+
+  buf = gst_harness_pull (h);
+  fail_unless_equals_uint64 (0, GST_BUFFER_PTS (buf));
+  fail_unless_equals_uint64 (0, GST_BUFFER_DURATION (buf));
+  gst_buffer_unref (buf);
+
+  buf = gst_harness_pull (h);
+  fail_unless_equals_uint64 (0, GST_BUFFER_PTS (buf));
+  fail_unless_equals_uint64 (20 * GST_MSECOND, GST_BUFFER_DURATION (buf));
+  gst_buffer_unref (buf);
+
+  gst_harness_teardown (h);
+}
+GST_END_TEST;
+
+
 static Suite *
 speex_suite (void)
 {
@@ -209,6 +250,10 @@ speex_suite (void)
   tcase_add_test (tc_chain, test_headers_in_buffers);
   tcase_add_test (tc_chain, test_headers_not_in_buffers);
   tcase_add_test (tc_chain, test_headers_from_flv);
+
+  suite_add_tcase (s, (tc_chain = tcase_create ("events")));
+  tcase_add_test (tc_chain, test_new_segment_before_first_output_buffer);
+
 
   return s;
 }
