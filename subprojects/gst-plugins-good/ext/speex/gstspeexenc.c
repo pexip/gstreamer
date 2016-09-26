@@ -559,7 +559,8 @@ gst_speex_enc_encode (GstSpeexEnc * enc, GstBuffer * buf)
       segment = &GST_AUDIO_ENCODER_OUTPUT_SEGMENT (enc);
       GST_DEBUG_OBJECT (enc, "existing output segment %" GST_SEGMENT_FORMAT,
           segment);
-      if (!GST_CLOCK_TIME_IS_VALID (segment->stop)) {
+      if (!GST_CLOCK_TIME_IS_VALID (segment->stop) &&
+        gst_pad_has_current_caps (GST_AUDIO_ENCODER_SRC_PAD (enc))) {
         int input_samples = bsize / (enc->channels * 2);
         GST_DEBUG_OBJECT (enc,
             "No stop time and partial frame, updating segment");
