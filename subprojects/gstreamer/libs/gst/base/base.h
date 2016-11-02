@@ -37,6 +37,7 @@
 #include <gst/base/gstcollectpads.h>
 #include <gst/base/gstdataqueue.h>
 #include <gst/base/gstflowcombiner.h>
+#include <gst/base/gstpriqueue.h>
 #include <gst/base/gstpushsrc.h>
 #include <gst/base/gstqueuearray.h>
 #include <gst/base/gsttypefindhelper.h>

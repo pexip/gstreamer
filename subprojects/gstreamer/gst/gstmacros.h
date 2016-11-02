@@ -52,6 +52,9 @@ G_BEGIN_DECLS
 #  endif
 #endif
 
+#define GST_CONTAINER_OF(addr, type, member) \
+  ((type * const) ((guint8 *) (addr) - G_STRUCT_OFFSET (type, member)))
+
 #if defined(G_DISABLE_CHECKS)
 #define GST_UNUSED_CHECKS G_GNUC_UNUSED
 #else
