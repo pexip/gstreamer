@@ -877,6 +877,34 @@ gst_queue_array_pop_head_struct
 gst_queue_array_drop_struct
 </SECTION>
 
+<SECTION>
+<FILE>gstpriqueue</FILE>
+<TITLE>GstPriQueue</TITLE>
+<INCLUDE>gst/base/gstpriqueue.h</INCLUDE>
+GstPriQueue
+GstPriQueueElem
+GstPriQueueIter
+GstPriQueueCompareFunc
+gst_pri_queue_create
+gst_pri_queue_destroy
+gst_pri_queue_size
+gst_pri_queue_insert
+gst_pri_queue_remove
+gst_pri_queue_update
+gst_pri_queue_get_min
+gst_pri_queue_pop_min
+gst_pri_queue_meld
+<SUBSECTION>
+gst_pri_queue_iter_init
+gst_pri_queue_iter_next
+<SUBSECTION>
+gst_pri_queue_is_valid
+gst_pri_queue_write_dot_file
+GstPriQueueWriteElem
+<SUBSECTION Private>
+GstPriQueueNode
+</SECTION>
+
 # net
 
 <SECTION>

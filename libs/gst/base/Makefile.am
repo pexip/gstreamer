@@ -14,6 +14,7 @@ libgstbase_@GST_API_VERSION@_la_SOURCES = \
 	gstcollectpads.c	\
 	gstdataqueue.c		\
 	gstflowcombiner.c	\
+	gstpriqueue.c		\
 	gstpushsrc.c		\
 	gstqueuearray.c		\
 	gsttypefindhelper.c
@@ -38,6 +39,7 @@ libgstbase_@GST_API_VERSION@include_HEADERS =	\
 	gstcollectpads.h	\
 	gstdataqueue.h		\
 	gstflowcombiner.h	\
+	gstpriqueue.h		\
 	gstpushsrc.h		\
 	gstqueuearray.h		\
 	gsttypefindhelper.h

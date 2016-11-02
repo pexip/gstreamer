@@ -161,6 +161,7 @@ check_PROGRAMS =				\
 	libs/gstharness				\
 	libs/gstnetclientclock			\
 	libs/gstnettimeprovider			\
+	libs/gstpriqueue			\
 	libs/gsttestclock			\
 	libs/transform1				\
 	libs/transform2				\
