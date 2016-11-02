@@ -52,6 +52,9 @@ G_BEGIN_DECLS
 #  endif
 #endif
 
+#define GST_CONTAINER_OF(addr, type, member) \
+  ((type * const) ((guint8 *) (addr) - G_STRUCT_OFFSET (type, member)))
+
 G_END_DECLS
 
 #endif /* __GST_MACROS_H__ */
