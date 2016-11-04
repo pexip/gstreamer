@@ -74,6 +74,7 @@ struct _GstVPXDec
   gint deblocking_level;
   gint noise_level;
   gint threads;
+  gboolean direct_rendering;
 
   GstVideoCodecState *input_state;
   GstVideoCodecState *output_state;
