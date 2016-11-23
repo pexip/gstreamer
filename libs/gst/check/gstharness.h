@@ -166,6 +166,8 @@ guint          gst_harness_buffers_in_queue (GstHarness * h);
 
 void           gst_harness_set_drop_buffers (GstHarness * h, gboolean drop_buffers);
 
+gpointer       gst_harness_take_data (GstHarness * h, gsize * size);
+
 void           gst_harness_dump_to_file (GstHarness * h, const gchar * filename);
 
 GstClockTime   gst_harness_get_last_pushed_timestamp (GstHarness * h);
