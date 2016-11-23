@@ -44,7 +44,7 @@ gst_check = shared_library('gstcheck-@0@'.format(apiversion),
   install : true,
   include_directories : [configinc, libsinc],
   link_with : [libcheck],
-  dependencies : [gobject_dep, glib_dep, gst_dep],
+  dependencies : [gobject_dep, glib_dep, gst_dep, gst_base_dep],
 )
 
 gst_check_gen_sources = []
