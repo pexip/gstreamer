@@ -204,6 +204,9 @@ GST_EXPORT
 void           gst_harness_set_drop_buffers (GstHarness * h, gboolean drop_buffers);
 
 GST_EXPORT
+gpointer       gst_harness_take_data (GstHarness * h, gsize * size);
+
+GST_EXPORT
 void           gst_harness_dump_to_file (GstHarness * h, const gchar * filename);
 
 GST_EXPORT
