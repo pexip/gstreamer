@@ -4,6 +4,7 @@ SYMBOLS_FILE = exports.sym
 
 libgstcheck_@GST_API_VERSION@_la_DEPENDENCIES = \
 	$(top_builddir)/gst/libgstreamer-@GST_API_VERSION@.la \
+	$(top_builddir)/libs/gst/base/libgstbase-@GST_API_VERSION@.la \
 	$(SYMBOLS_FILE)
 libgstcheck_@GST_API_VERSION@_la_SOURCES =	\
 	gstbufferstraw.c			\
@@ -19,6 +20,7 @@ libgstcheck_@GST_API_VERSION@_la_CFLAGS = $(GST_OBJ_CFLAGS) \
 	-I$(top_builddir)/libs/gst/check/libcheck
 libgstcheck_@GST_API_VERSION@_la_LIBADD = $(GST_OBJ_LIBS) \
 	$(top_builddir)/libs/gst/check/libcheck/libcheckinternal.la \
+	$(top_builddir)/libs/gst/base/libgstbase-@GST_API_VERSION@.la \
 	$(LIBM)
 libgstcheck_@GST_API_VERSION@_la_LDFLAGS = \
 	-export-symbols $(SYMBOLS_FILE) $(GST_ALL_LDFLAGS) $(GST_LT_LDFLAGS)
@@ -170,6 +172,7 @@ LIBGSTCHECK_EXPORTED_FUNCS = \
 	gst_harness_stress_statechange_start_full \
 	gst_harness_stress_thread_stop \
 	gst_harness_teardown \
+	gst_harness_take_data \
 	gst_harness_try_pull \
 	gst_harness_try_pull_event \
 	gst_harness_try_pull_upstream_event \

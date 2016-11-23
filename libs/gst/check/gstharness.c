@@ -130,6 +130,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <math.h>
+#include <gst/base/gstadapter.h>
 
 static void gst_harness_stress_free (GstHarnessThread * t);
 
@@ -1799,6 +1800,47 @@ gst_harness_set_drop_buffers (GstHarness * h, gboolean drop_buffers)
 }
 
 /**
+ * gst_harness_take_data:
+ * @h: a #GstHarness
+ * @size: (out): the size of the data
+ *
+ * Pulls out all the data in the #GstHarness sinkpad #GAsyncQueue,
+ * and gives you a copy of it.
+ *
+ * Caller owns returned value. g_free after usage.
+ *
+ * Free-function: g_free
+ *
+ * MT safe.
+ *
+ * Returns: (transfer full) (array length=size) (element-type guint8) (nullable):
+ *     the received data in the harness, or %NULL if no data is available
+ *
+ * Since: 1.10
+ */
+gpointer
+gst_harness_take_data (GstHarness * h, gsize * size)
+{
+  GstHarnessPrivate *priv = h->priv;
+  GstAdapter * adapter = gst_adapter_new ();
+  GstBuffer * buf;
+  gpointer data;
+  gsize _size;
+
+  while ((buf = g_async_queue_try_pop (priv->buffer_queue))) {
+    gst_adapter_push (adapter, buf);
+  }
+  _size = gst_adapter_available (adapter);
+  data = gst_adapter_take (adapter, _size);
+
+  if (size)
+    *size = _size;
+
+  gst_object_unref (adapter);
+  return data;
+}
+
+/**
  * gst_harness_dump_to_file:
  * @h: a #GstHarness
  * @filename: a #gchar with a the name of a file
@@ -1813,22 +1855,16 @@ gst_harness_set_drop_buffers (GstHarness * h, gboolean drop_buffers)
 void
 gst_harness_dump_to_file (GstHarness * h, const gchar * filename)
 {
-  GstHarnessPrivate *priv = h->priv;
   FILE *fd;
-  GstBuffer *buf;
+  gpointer data;
+  gsize size;
+
   fd = fopen (filename, "wb");
   g_assert (fd);
 
-  while ((buf = g_async_queue_try_pop (priv->buffer_queue))) {
-    GstMapInfo info;
-    if (gst_buffer_map (buf, &info, GST_MAP_READ)) {
-      fwrite (info.data, 1, info.size, fd);
-      gst_buffer_unmap (buf, &info);
-    } else {
-      GST_ERROR ("failed to map buffer %p", buf);
-    }
-    gst_buffer_unref (buf);
-  }
+  data = gst_harness_take_data (h, &size);
+  fwrite (data, 1, size, fd);
+  g_free (data);
 
   fflush (fd);
   fclose (fd);
