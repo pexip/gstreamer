@@ -2083,15 +2083,8 @@ gst_debug_set_threshold_from_string (const gchar * list, gboolean reset)
         const gchar *category;
 
         if (parse_debug_category (values[0], &category)
-            && parse_debug_level (values[1], &level)) {
+            && parse_debug_level (values[1], &level))
           gst_debug_set_threshold_for_name (category, level);
-
-          /* bump min-level anyway to allow the category to be registered in the
-           * future still */
-          if (level > _gst_debug_min) {
-            _gst_debug_min = level;
-          }
-        }
       }
 
       g_strfreev (values);
