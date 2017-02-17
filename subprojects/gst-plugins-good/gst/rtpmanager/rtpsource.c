@@ -152,6 +152,8 @@ rtp_source_class_init (RTPSourceClass * klass)
    * * "is-sender"    G_TYPE_BOOLEAN  this source is a sender
    * * "seqnum-base"  G_TYPE_INT      first seqnum if known
    * * "clock-rate"   G_TYPE_INT      the clock rate of the media
+   * * "first-rtp-activity" G_TYPE_UINT64 time of first rtp activity
+   * * "last-rtp-activity"  G_TYPE_UINT64 time of latest rtp activity
    *
    * The following fields are only present when known.
    *
@@ -271,6 +273,8 @@ rtp_source_reset (RTPSource * src)
   g_queue_foreach (src->retained_feedback, (GFunc) gst_buffer_unref, NULL);
   g_queue_clear (src->retained_feedback);
   src->last_rtptime = -1;
+  src->first_rtp_activity = GST_CLOCK_TIME_NONE;
+  src->last_rtp_activity = GST_CLOCK_TIME_NONE;
 
   src->stats.cycles = -1;
   src->stats.jitter = 0;
@@ -395,7 +399,9 @@ rtp_source_create_stats (RTPSource * src)
       "validated", G_TYPE_BOOLEAN, src->validated,
       "received-bye", G_TYPE_BOOLEAN, src->marked_bye,
       "is-csrc", G_TYPE_BOOLEAN, src->is_csrc,
-      "is-sender", G_TYPE_BOOLEAN, is_sender, NULL);
+      "is-sender", G_TYPE_BOOLEAN, is_sender,
+      "first-rtp-activity", G_TYPE_UINT64, src->first_rtp_activity,
+      "last-rtp-activity", G_TYPE_UINT64, src->last_rtp_activity, NULL);
 
   /* add address and port */
   if (src->rtp_from) {
