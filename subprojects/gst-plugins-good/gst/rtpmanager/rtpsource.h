@@ -165,6 +165,7 @@ struct _RTPSource {
   GstClockTime  bye_time;
   GstClockTime  last_activity;
   GstClockTime  last_rtp_activity;
+  GstClockTime  first_rtp_activity;
 
   GstClockTime  last_rtime;
   GstClockTime  last_rtptime;
