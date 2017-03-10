@@ -287,6 +287,7 @@ enum
   SIGNAL_REQUEST_PT_MAP,
   SIGNAL_PAYLOAD_TYPE_CHANGE,
   SIGNAL_CLEAR_PT_MAP,
+  SIGNAL_CLEAR_PT_MAP_FOR_SESSION_ID,
   SIGNAL_RESET_SYNC,
   SIGNAL_GET_SESSION,
   SIGNAL_GET_INTERNAL_SESSION,
@@ -1034,36 +1035,58 @@ gst_rtp_bin_reset_sync (GstRtpBin * rtpbin)
 }
 
 static void
+gst_rtp_bin_clear_pt_map_for_session (GstRtpBin * bin,
+    GstRtpBinSession * session)
+{
+  GSList *streams;
+
+  GST_DEBUG_OBJECT (bin, "clearing session %p", session);
+  g_signal_emit_by_name (session->session, "clear-pt-map", NULL);
+
+  GST_RTP_SESSION_LOCK (session);
+  g_hash_table_foreach_remove (session->ptmap, return_true, NULL);
+
+  for (streams = session->streams; streams; streams = g_slist_next (streams)) {
+    GstRtpBinStream *stream = (GstRtpBinStream *) streams->data;
+
+    GST_DEBUG_OBJECT (bin, "clearing stream %p", stream);
+    if (g_signal_lookup ("clear-pt-map", G_OBJECT_TYPE (stream->buffer)) != 0)
+      g_signal_emit_by_name (stream->buffer, "clear-pt-map", NULL);
+    if (stream->demux)
+      g_signal_emit_by_name (stream->demux, "clear-pt-map", NULL);
+  }
+  GST_RTP_SESSION_UNLOCK (session);
+}
+
+static void
 gst_rtp_bin_clear_pt_map (GstRtpBin * bin)
 {
-  GSList *sessions, *streams;
+  GSList *sessions;
 
   GST_RTP_BIN_LOCK (bin);
   GST_DEBUG_OBJECT (bin, "clearing pt map");
   for (sessions = bin->sessions; sessions; sessions = g_slist_next (sessions)) {
     GstRtpBinSession *session = (GstRtpBinSession *) sessions->data;
-
-    GST_DEBUG_OBJECT (bin, "clearing session %p", session);
-    g_signal_emit_by_name (session->session, "clear-pt-map", NULL);
-
-    GST_RTP_SESSION_LOCK (session);
-    g_hash_table_foreach_remove (session->ptmap, return_true, NULL);
-
-    for (streams = session->streams; streams; streams = g_slist_next (streams)) {
-      GstRtpBinStream *stream = (GstRtpBinStream *) streams->data;
-
-      GST_DEBUG_OBJECT (bin, "clearing stream %p", stream);
-      if (g_signal_lookup ("clear-pt-map", G_OBJECT_TYPE (stream->buffer)) != 0)
-        g_signal_emit_by_name (stream->buffer, "clear-pt-map", NULL);
-      if (stream->demux)
-        g_signal_emit_by_name (stream->demux, "clear-pt-map", NULL);
-    }
-    GST_RTP_SESSION_UNLOCK (session);
+    gst_rtp_bin_clear_pt_map_for_session (bin, session);
   }
   GST_RTP_BIN_UNLOCK (bin);
 
   /* reset sync too */
   gst_rtp_bin_reset_sync (bin);
+}
+
+static void
+gst_rtp_bin_clear_pt_map_for_session_id (GstRtpBin * bin, guint session_id)
+{
+  GstRtpBinSession *session;
+
+  GST_RTP_BIN_LOCK (bin);
+  GST_DEBUG_OBJECT (bin, "retrieving GstRtpSession, index: %u", session_id);
+  session = find_session_by_id (bin, (gint) session_id);
+  if (session) {
+    gst_rtp_bin_clear_pt_map_for_session (bin, session);
+  }
+  GST_RTP_BIN_UNLOCK (bin);
 }
 
 static GstElement *
@@ -2103,6 +2126,20 @@ gst_rtp_bin_class_init (GstRtpBinClass * klass)
           clear_pt_map), NULL, NULL, NULL, G_TYPE_NONE, 0, G_TYPE_NONE);
 
   /**
+   * GstRtpBin::clear-pt-map-for-session-id:
+   * @rtpbin: the object which received the signal
+   * @id: the session id
+   *
+   * Clear all previously cached pt-mapping obtained with
+   * #GstRtpBin::request-pt-map for session @id.
+   */
+  gst_rtp_bin_signals[SIGNAL_CLEAR_PT_MAP_FOR_SESSION_ID] =
+    g_signal_new ("clear-pt-map-for-session-id", G_TYPE_FROM_CLASS (klass),
+        G_SIGNAL_RUN_LAST | G_SIGNAL_ACTION, G_STRUCT_OFFSET (GstRtpBinClass,
+            clear_pt_map_for_session_id), NULL, NULL,
+        g_cclosure_marshal_generic, G_TYPE_NONE, 1, G_TYPE_UINT);
+
+  /**
    * GstRtpBin::reset-sync:
    * @rtpbin: the object which received the signal
    *
@@ -2801,6 +2838,8 @@ gst_rtp_bin_class_init (GstRtpBinClass * klass)
   gstbin_class->handle_message = GST_DEBUG_FUNCPTR (gst_rtp_bin_handle_message);
 
   klass->clear_pt_map = GST_DEBUG_FUNCPTR (gst_rtp_bin_clear_pt_map);
+  klass->clear_pt_map_for_session_id =
+      GST_DEBUG_FUNCPTR (gst_rtp_bin_clear_pt_map_for_session_id);
   klass->reset_sync = GST_DEBUG_FUNCPTR (gst_rtp_bin_reset_sync);
   klass->get_session = GST_DEBUG_FUNCPTR (gst_rtp_bin_get_session);
   klass->get_internal_session =
