@@ -112,6 +112,7 @@ struct _GstRtpBinClass {
 
   /* action signals */
   void        (*clear_pt_map)         (GstRtpBin *rtpbin);
+  void        (*clear_pt_map_for_session_id) (GstRtpBin *rtpbin, guint session);
   void        (*reset_sync)           (GstRtpBin *rtpbin);
   GstElement* (*get_session)          (GstRtpBin *rtpbin, guint session);
   RTPSession* (*get_internal_session) (GstRtpBin *rtpbin, guint session);
