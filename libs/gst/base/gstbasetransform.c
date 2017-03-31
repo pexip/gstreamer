@@ -1493,13 +1493,21 @@ gst_base_transform_default_query (GstBaseTransform * trans,
   GstPad *pad, *otherpad;
   GstBaseTransformClass *klass;
   GstBaseTransformPrivate *priv = trans->priv;
+  GstElement *el = GST_ELEMENT_CAST (trans);
 
+  GST_OBJECT_LOCK (el);
   if (direction == GST_PAD_SRC) {
-    pad = trans->srcpad;
-    otherpad = trans->sinkpad;
+    pad = el->srcpads ? gst_object_ref (el->srcpads->data) : NULL;
+    otherpad = el->sinkpads ? gst_object_ref (el->sinkpads->data) : NULL;
   } else {
-    pad = trans->sinkpad;
-    otherpad = trans->srcpad;
+    pad = el->sinkpads ? gst_object_ref (el->sinkpads->data) : NULL;
+    otherpad = el->srcpads ? gst_object_ref (el->srcpads->data) : NULL;
+  }
+  GST_OBJECT_UNLOCK (el);
+
+  if (!pad || !otherpad) {
+    GST_WARNING_OBJECT (trans, "Our pads are missing!");
+    goto done;
   }
 
   klass = GST_BASE_TRANSFORM_GET_CLASS (trans);
@@ -1608,6 +1616,10 @@ gst_base_transform_default_query (GstBaseTransform * trans,
   }
 
 done:
+  if (pad)
+    gst_object_unref (pad);
+  if (otherpad)
+    gst_object_unref (otherpad);
   return ret;
 }
 
