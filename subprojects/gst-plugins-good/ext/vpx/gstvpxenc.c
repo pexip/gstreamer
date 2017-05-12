@@ -82,6 +82,8 @@ GST_DEBUG_CATEGORY_STATIC (gst_vpxenc_debug);
 #define DEFAULT_LAG_IN_FRAMES 0
 
 #define DEFAULT_THREADS 0
+#define DEFAULT_TILE_COLUMNS 6
+#define DEFAULT_TILE_ROWS 0
 
 #define DEFAULT_H_SCALING_MODE VP8E_NORMAL
 #define DEFAULT_V_SCALING_MODE VP8E_NORMAL
@@ -139,6 +141,8 @@ enum
   PROP_ERROR_RESILIENT,
   PROP_LAG_IN_FRAMES,
   PROP_THREADS,
+  PROP_TILE_COLUMNS,
+  PROP_TILE_ROWS,
   PROP_DEADLINE,
   PROP_H_SCALING_MODE,
   PROP_V_SCALING_MODE,
@@ -641,6 +645,20 @@ gst_vpx_enc_class_init (GstVPXEncClass * klass)
           (GParamFlags) (G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
               GST_PARAM_DOC_SHOW_DEFAULT)));
 
+#ifdef HAVE_VPX_1_3
+  g_object_class_install_property (gobject_class, PROP_TILE_COLUMNS,
+      g_param_spec_int ("tile-columns", "Tile Columns",
+          "Number of tile columns, log2",
+          0, 6, DEFAULT_TILE_COLUMNS,
+          (GParamFlags) (G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS)));
+
+  g_object_class_install_property (gobject_class, PROP_TILE_ROWS,
+      g_param_spec_int ("tile-rows", "Tile Rows",
+          "Number of tile rows, log2",
+          0, 2, DEFAULT_TILE_ROWS,
+          (GParamFlags) (G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS)));
+#endif
+
   g_object_class_install_property (gobject_class, PROP_DEADLINE,
       g_param_spec_int64 ("deadline", "Deadline",
           "Deadline per frame (usec, 0=best, 1=realtime)",
@@ -816,6 +834,8 @@ gst_vpx_enc_init (GstVPXEnc * gst_vpx_enc)
   gst_vpx_enc->cfg.g_error_resilient = DEFAULT_ERROR_RESILIENT;
   gst_vpx_enc->cfg.g_lag_in_frames = DEFAULT_LAG_IN_FRAMES;
   gst_vpx_enc->cfg.g_threads = DEFAULT_THREADS;
+  gst_vpx_enc->tile_columns = DEFAULT_TILE_COLUMNS;
+  gst_vpx_enc->tile_rows = DEFAULT_TILE_ROWS;
   gst_vpx_enc->deadline = DEFAULT_DEADLINE;
   gst_vpx_enc->h_scaling_mode = DEFAULT_H_SCALING_MODE;
   gst_vpx_enc->v_scaling_mode = DEFAULT_V_SCALING_MODE;
@@ -914,12 +934,15 @@ gst_vpx_enc_set_property (GObject * object, guint prop_id,
   GstVPXEnc *gst_vpx_enc;
   gboolean global = FALSE;
   vpx_codec_err_t status;
+  GstVPXEncClass *gst_vpx_enc_class;
 
   g_return_if_fail (GST_IS_VPX_ENC (object));
   gst_vpx_enc = GST_VPX_ENC (object);
+  gst_vpx_enc_class = GST_VPX_ENC_GET_CLASS (gst_vpx_enc);
 
   GST_DEBUG_OBJECT (object, "gst_vpx_enc_set_property");
   g_mutex_lock (&gst_vpx_enc->encoder_lock);
+
   switch (prop_id) {
     case PROP_RC_END_USAGE:
       gst_vpx_enc->cfg.rc_end_usage = g_value_get_enum (value);
@@ -1130,6 +1153,34 @@ gst_vpx_enc_set_property (GObject * object, guint prop_id,
       gst_vpx_enc->cfg.g_threads = g_value_get_int (value);
       global = TRUE;
       break;
+#ifdef HAVE_VPX_1_3
+    case PROP_TILE_COLUMNS:
+      gst_vpx_enc->tile_columns = g_value_get_int (value);
+      if (gst_vpx_enc_class->enable_tiles (gst_vpx_enc) && gst_vpx_enc->inited) {
+        status =
+          vpx_codec_control (&gst_vpx_enc->encoder, VP9E_SET_TILE_COLUMNS,
+              gst_vpx_enc->tile_columns);
+        if (status != VPX_CODEC_OK) {
+          GST_WARNING_OBJECT (gst_vpx_enc,
+              "Failed to set VP9E_SET_TILE_COLUMNS: %s",
+              gst_vpx_error_name (status));
+        }
+      }
+      break;
+    case PROP_TILE_ROWS:
+      gst_vpx_enc->tile_rows = g_value_get_int (value);
+      if (gst_vpx_enc_class->enable_tiles (gst_vpx_enc) && gst_vpx_enc->inited) {
+        status =
+          vpx_codec_control (&gst_vpx_enc->encoder, VP9E_SET_TILE_ROWS,
+              gst_vpx_enc->tile_rows);
+        if (status != VPX_CODEC_OK) {
+          GST_WARNING_OBJECT (gst_vpx_enc,
+              "Failed to set VP9E_SET_TILE_ROWS: %s",
+              gst_vpx_error_name (status));
+        }
+      }
+      break;
+#endif
     case PROP_DEADLINE:
       gst_vpx_enc->deadline = g_value_get_int64 (value);
       break;
@@ -1519,6 +1570,14 @@ gst_vpx_enc_get_property (GObject * object, guint prop_id, GValue * value,
     case PROP_THREADS:
       g_value_set_int (value, gst_vpx_enc->cfg.g_threads);
       break;
+#ifdef HAVE_VPX_1_3
+    case PROP_TILE_COLUMNS:
+      g_value_set_int (value, gst_vpx_enc->tile_columns);
+      break;
+    case PROP_TILE_ROWS:
+      g_value_set_int (value, gst_vpx_enc->tile_rows);
+      break;
+#endif
     case PROP_DEADLINE:
       g_value_set_int64 (value, gst_vpx_enc->deadline);
       break;
@@ -1840,6 +1899,26 @@ gst_vpx_enc_set_format (GstVideoEncoder * video_encoder,
           gst_vpx_error_name (status));
     }
   }
+
+#ifdef HAVE_VPX_1_3
+  if (vpx_enc_class->enable_tiles (encoder)) {
+    status =
+      vpx_codec_control (&encoder->encoder, VP9E_SET_TILE_COLUMNS,
+          encoder->tile_columns);
+    if (status != VPX_CODEC_OK) {
+      GST_WARNING_OBJECT (encoder, "Failed to set VP9E_SET_TILE_COLUMNS: %s",
+          gst_vpx_error_name (status));
+    }
+
+    status =
+      vpx_codec_control (&encoder->encoder, VP9E_SET_TILE_ROWS,
+          encoder->tile_rows);
+    if (status != VPX_CODEC_OK) {
+      GST_WARNING_OBJECT (encoder, "Failed to set VP9E_SET_TILE_ROWS: %s",
+          gst_vpx_error_name (status));
+    }
+  }
+#endif
 
   status =
       vpx_codec_control (&encoder->encoder, VP8E_SET_CPUUSED,
