@@ -21,7 +21,7 @@ vpx_option = get_option('vpx')
 vpx_dep = dependency('vpx-avx', version : '>=1.5.0', required : vpx_option)
 
 if vpx_dep.found()
-  vpx_args = []
+  vpx_args = ['-DHAVE_VPX_1_3']
   foreach f : vpx_features
     header = f.get(0)
     codec_iface = f.get(1)
