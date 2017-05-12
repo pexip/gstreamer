@@ -86,6 +86,8 @@ struct _GstVPXEnc
   gint64 deadline;
 
   /* Controls */
+  unsigned int tile_columns;
+  unsigned int tile_rows;
   VPX_SCALING_MODE h_scaling_mode;
   VPX_SCALING_MODE v_scaling_mode;
   int cpu_used;
@@ -128,6 +130,8 @@ struct _GstVPXEncClass
   gboolean (*enable_scaling) (GstVPXEnc *enc);
   /*called from set_format with lock taken*/
   gboolean (*configure_encoder) (GstVPXEnc *enc, GstVideoCodecState *state);
+  /*enabled tiles*/
+  gboolean (*enable_tiles) (GstVPXEnc *enc);
   /*set image format info*/
   void (*set_image_format) (GstVPXEnc *enc, vpx_image_t *image);
   /*get new simple caps*/

@@ -111,6 +111,7 @@ GST_ELEMENT_REGISTER_DEFINE_WITH_CODE (vp9enc, "vp9enc", GST_RANK_PRIMARY,
 
 static vpx_codec_iface_t *gst_vp9_enc_get_algo (GstVPXEnc * enc);
 static gboolean gst_vp9_enc_enable_scaling (GstVPXEnc * enc);
+static gboolean gst_vp9_enc_enable_tiles (GstVPXEnc * enc);
 static void gst_vp9_enc_set_image_format (GstVPXEnc * enc, vpx_image_t * image);
 static GstCaps *gst_vp9_enc_get_new_simple_caps (GstVPXEnc * enc);
 static void gst_vp9_enc_set_stream_info (GstVPXEnc * enc, GstCaps * caps,
@@ -224,6 +225,7 @@ gst_vp9_enc_class_init (GstVP9EncClass * klass)
 
   vpx_encoder_class->get_algo = gst_vp9_enc_get_algo;
   vpx_encoder_class->enable_scaling = gst_vp9_enc_enable_scaling;
+  vpx_encoder_class->enable_tiles = gst_vp9_enc_enable_tiles;
   vpx_encoder_class->set_image_format = gst_vp9_enc_set_image_format;
   vpx_encoder_class->get_new_vpx_caps = gst_vp9_enc_get_new_simple_caps;
   vpx_encoder_class->set_stream_info = gst_vp9_enc_set_stream_info;
@@ -518,6 +520,12 @@ static gboolean
 gst_vp9_enc_enable_scaling (GstVPXEnc * enc)
 {
   return FALSE;
+}
+
+static gboolean
+gst_vp9_enc_enable_tiles (GstVPXEnc * enc)
+{
+  return TRUE;
 }
 
 static void
