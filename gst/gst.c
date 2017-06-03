@@ -492,6 +492,12 @@ gst_is_initialized (void)
   return gst_initialized;
 }
 
+void
+gst_init_tracer (void)
+{
+  _priv_gst_tracing_init ();
+}
+
 #ifndef GST_DISABLE_OPTION_PARSING
 #  ifndef GST_DISABLE_REGISTRY
 static void

@@ -113,6 +113,9 @@ GST_EXPORT
 void		gst_deinit			(void);
 
 GST_EXPORT
+void        gst_init_tracer (void);
+
+GST_EXPORT
 void		gst_version			(guint *major, guint *minor,
 						 guint *micro, guint *nano);
 GST_EXPORT
