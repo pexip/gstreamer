@@ -417,6 +417,12 @@ gst_is_initialized (void)
   return gst_initialized;
 }
 
+void
+gst_init_tracer (void)
+{
+  _priv_gst_tracing_init ();
+}
+
 #ifndef GST_DISABLE_REGISTRY
 static void
 add_path_func (gpointer data, gpointer user_data)

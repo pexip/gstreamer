@@ -77,7 +77,8 @@ _priv_gst_tracing_init (void)
    * user did not activate it through the env variable
    * so that external tools can use it anyway */
   GST_DEBUG ("Initializing GstTracer");
-  _priv_tracers = g_hash_table_new (NULL, NULL);
+  if (_priv_tracers == NULL)
+    _priv_tracers = g_hash_table_new (NULL, NULL);
 
   if (G_N_ELEMENTS (_quark_strings) != GST_TRACER_QUARK_MAX)
     g_warning ("the quark table is not consistent! %d != %d",
