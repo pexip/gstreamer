@@ -103,6 +103,8 @@ gboolean        gst_is_initialized              (void);
 GOptionGroup *	gst_init_get_option_group	(void);
 void		gst_deinit			(void);
 
+void        gst_init_tracer (void);
+
 void		gst_version			(guint *major, guint *minor,
 						 guint *micro, guint *nano);
 gchar *		gst_version_string		(void);
