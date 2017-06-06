@@ -157,6 +157,14 @@ srunner_run_end (SRunner * sr, enum print_output CK_ATTRIBUTE_UNUSED print_mode)
   set_fork_status (CK_FORK);
 }
 
+static int
+check_nofork_failure (SRunner * sr)
+{
+  return (srunner_fork_status (sr) == CK_NOFORK &&
+      (sr->stats->n_errors + sr->stats->n_failed) > 0);
+}
+
+
 static void
 srunner_iterate_suites (SRunner * sr,
     const char *sname, const char *tcname,
@@ -205,6 +213,8 @@ srunner_iterate_suites (SRunner * sr,
       }
 
       srunner_run_tcase (sr, tc);
+      if (check_nofork_failure (sr))
+        break;
     }
 
     log_suite_end (sr, s);
@@ -252,8 +262,12 @@ srunner_iterate_tcase_tfuns (SRunner * sr, TCase * tc)
       if (NULL != tr) {
         srunner_add_failure (sr, tr);
         log_test_end (sr, tr);
+        if (check_nofork_failure (sr))
+          break;
       }
     }
+    if (check_nofork_failure (sr))
+      break;
   }
 }
 
