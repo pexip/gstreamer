@@ -2282,20 +2282,23 @@ gst_pad_link_check_compatible_unlocked (GstPad * src, GstPad * sink,
   /* if we have caps on both pads we can check the intersection. If one
    * of the caps is %NULL, we return %TRUE. */
   if (G_UNLIKELY (srccaps == NULL || sinkcaps == NULL)) {
-    if (srccaps)
-      gst_caps_unref (srccaps);
-    if (sinkcaps)
-      gst_caps_unref (sinkcaps);
     goto done;
   }
 
   compatible = gst_caps_can_intersect (srccaps, sinkcaps);
-  gst_caps_unref (srccaps);
-  gst_caps_unref (sinkcaps);
 
 done:
   GST_CAT_DEBUG (GST_CAT_CAPS, "caps are %scompatible",
       (compatible ? "" : "not "));
+  if (!compatible) {
+    GST_CAT_WARNING (GST_CAT_CAPS, "caps are not compatible: %" GST_PTR_FORMAT
+        " and %" GST_PTR_FORMAT, srccaps, sinkcaps);
+  }
+
+  if (srccaps)
+    gst_caps_unref (srccaps);
+  if (sinkcaps)
+    gst_caps_unref (sinkcaps);
 
   return compatible;
 }
