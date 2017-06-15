@@ -39,55 +39,6 @@ G_BEGIN_DECLS
 typedef struct _GstPcapParse      GstPcapParse;
 typedef struct _GstPcapParseClass GstPcapParseClass;
 
-typedef enum
-{
-  PCAP_PARSE_STATE_CREATED,
-  PCAP_PARSE_STATE_PARSING,
-} GstPcapParseState;
-
-typedef enum
-{
-  LINKTYPE_ETHER  = 1,
-  LINKTYPE_RAW = 101,
-  LINKTYPE_SLL = 113
-} GstPcapParseLinktype;
-
-/**
- * GstPcapParse:
- *
- * GstPcapParse element.
- */
-
-struct _GstPcapParse
-{
-  GstElement element;
-
-  /*< private >*/
-  GstPad * sink_pad;
-  GstPad * src_pad;
-
-  /* properties */
-  gint64 src_ip;
-  gint64 dst_ip;
-  gint32 src_port;
-  gint32 dst_port;
-  GstCaps *caps;
-  gint64 offset;
-
-  /* state */
-  GstAdapter * adapter;
-  gboolean initialized;
-  gboolean swap_endian;
-  gboolean nanosecond_timestamp;
-  gint64 cur_packet_size;
-  GstClockTime cur_ts;
-  GstClockTime base_ts;
-  GstPcapParseLinktype linktype;
-
-  gboolean newsegment_sent;
-  gboolean first_packet;
-};
-
 struct _GstPcapParseClass
 {
   GstElementClass parent_class;
