@@ -227,10 +227,91 @@ gst_pcap_parse_get_stats (GstPcapParse * self)
   return ret;
 }
 
+/* from gstrtpbuffer.c */
+typedef struct _GstRTPHeader
+{
+#if G_BYTE_ORDER == G_LITTLE_ENDIAN
+  unsigned int csrc_count:4;    /* CSRC count */
+  unsigned int extension:1;     /* header extension flag */
+  unsigned int padding:1;       /* padding flag */
+  unsigned int version:2;       /* protocol version */
+  unsigned int payload_type:7;  /* payload type */
+  unsigned int marker:1;        /* marker bit */
+#elif G_BYTE_ORDER == G_BIG_ENDIAN
+  unsigned int version:2;       /* protocol version */
+  unsigned int padding:1;       /* padding flag */
+  unsigned int extension:1;     /* header extension flag */
+  unsigned int csrc_count:4;    /* CSRC count */
+  unsigned int marker:1;        /* marker bit */
+  unsigned int payload_type:7;  /* payload type */
+#else
+#error "G_BYTE_ORDER should be big or little endian."
+#endif
+  unsigned int seq:16;          /* sequence number */
+  unsigned int timestamp:32;    /* timestamp */
+  unsigned int ssrc:32;         /* synchronization source */
+  guint8 csrclist[4];           /* optional CSRC list, 32 bits each */
+} GstRTPHeader;
+
+static void
+_check_rtp_rtcp (const guint8 * payload, gint payload_size,
+    gboolean * is_rtp, gboolean * is_rtcp, gint * payload_type, guint32 * ssrc)
+{
+  GstRTPHeader *rtp;
+  *is_rtp = FALSE;
+  *is_rtcp = FALSE;
+
+  /* minimum rtp-header length */
+  if (payload_size < 12)
+    return;
+
+  rtp = (GstRTPHeader *) payload;
+  /* check version (common for both RTP & RTCP) */
+  if (rtp->version != 2)
+    return;
+
+  /* for payload_type range 66-95 we assume RTCP, not RTP */
+  if (rtp->payload_type >= 66 && rtp->payload_type <= 95) {
+    *is_rtcp = TRUE;
+    *ssrc = rtp->timestamp;     /* Hackish, but true */
+  } else {
+    *payload_type = rtp->payload_type;
+    *ssrc = rtp->ssrc;
+    *is_rtp = TRUE;
+  }
+}
+
+static void
+_add_rtp_stats (GstStructure * s, const guint8 * payload, gint payload_size)
+{
+  gboolean is_rtp;
+  gboolean is_rtcp;
+  gint payload_type;
+  guint32 ssrc;
+
+  _check_rtp_rtcp (payload, payload_size, &is_rtp, &is_rtcp, &payload_type,
+      &ssrc);
+
+  if (is_rtcp) {
+    gst_structure_set (s, "has-rtcp", G_TYPE_BOOLEAN, TRUE, NULL);
+
+    gst_structure_set (s, "ssrc", G_TYPE_UINT, ssrc, NULL);
+
+  } else if (is_rtp) {
+    gst_structure_set (s, "has-rtp", G_TYPE_BOOLEAN, TRUE, NULL);
+
+    /* FIXME: support multiple pt/ssrc */
+    gst_structure_set (s,
+        "payload-type", G_TYPE_INT, payload_type,
+        "ssrc", G_TYPE_UINT, ssrc, NULL);
+  }
+}
+
 static void
 gst_pcap_parse_add_stats (GstPcapParse * self,
+    const guint8 * payload, gint payload_size,
     const gchar * src_ip, guint16 src_port,
-    const gchar * dst_ip, guint16 dst_port, gint payload_size)
+    const gchar * dst_ip, guint16 dst_port)
 {
   GstStructure *s;
   gint packets;
@@ -261,6 +342,8 @@ gst_pcap_parse_add_stats (GstPcapParse * self,
 
   gst_structure_set (s,
       "packets", G_TYPE_INT, packets, "bytes", G_TYPE_INT, bytes, NULL);
+
+  _add_rtp_stats (s, payload, payload_size);
 }
 
 static gboolean
@@ -388,8 +471,8 @@ gst_pcap_parse_scan_frame (GstPcapParse * self,
   src_ip = get_ip_address_as_string (ip_src_addr);
   dst_ip = get_ip_address_as_string (ip_dst_addr);
 
-  gst_pcap_parse_add_stats (self, src_ip, src_port, dst_ip, dst_port,
-      *payload_size);
+  gst_pcap_parse_add_stats (self, *payload, *payload_size,
+      src_ip, src_port, dst_ip, dst_port);
 
   /* but still filter as configured */
   if (self->src_ip && !g_str_equal (src_ip, self->src_ip)) {
