@@ -2290,12 +2290,16 @@ gst_audio_decoder_handle_gap (GstAudioDecoder * dec, GstEvent * event)
     GstAudioDecoderClass *klass = GST_AUDIO_DECODER_GET_CLASS (dec);
     GstBuffer *buf;
 
-    /* hand subclass empty frame with duration that needs covering */
-    buf = gst_buffer_new ();
-    GST_BUFFER_PTS (buf) = timestamp;
-    GST_BUFFER_DURATION (buf) = duration;
-    /* best effort, not much error handling */
-    gst_audio_decoder_handle_frame (dec, klass, buf);
+    /* asking to conceal 0 duration does not make sense, specially since
+       _finish_frame is picky about the buffer there actually having a size */
+    if (duration > 0) {
+      /* hand subclass empty frame with duration that needs covering */
+      buf = gst_buffer_new ();
+      GST_BUFFER_PTS (buf) = timestamp;
+      GST_BUFFER_DURATION (buf) = duration;
+      /* best effort, not much error handling */
+      gst_audio_decoder_handle_frame (dec, klass, buf);
+    }
     ret = TRUE;
     dec->priv->expecting_discont_buf = TRUE;
     gst_event_unref (event);
