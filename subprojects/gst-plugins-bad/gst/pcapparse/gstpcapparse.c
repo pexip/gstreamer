@@ -76,7 +76,8 @@ enum
   PROP_DST_PORT,
   PROP_CAPS,
   PROP_TS_OFFSET,
-  PROP_STATS
+  PROP_STATS,
+  PROP_START_TIME,
 };
 
 typedef enum
@@ -107,6 +108,7 @@ struct _GstPcapParse
   gint dst_port;
   GstCaps *caps;
   gint64 offset;
+  GstClockTime start_ts;
 
   /* state */
   GstAdapter * adapter;
@@ -116,7 +118,6 @@ struct _GstPcapParse
   gboolean nanosecond_timestamp;
   gint64 cur_packet_size;
   GstClockTime cur_ts;
-  GstClockTime base_ts;
   GstPcapParseLinktype linktype;
 
   gboolean newsegment_sent;
@@ -166,7 +167,7 @@ gst_pcap_parse_reset (GstPcapParse * self)
   self->nanosecond_timestamp = FALSE;
   self->cur_packet_size = -1;
   self->cur_ts = GST_CLOCK_TIME_NONE;
-  self->base_ts = GST_CLOCK_TIME_NONE;
+  self->start_ts = GST_CLOCK_TIME_NONE;
   self->newsegment_sent = FALSE;
   self->first_packet = TRUE;
 
@@ -567,10 +568,10 @@ gst_pcap_parse_chain (GstPad * pad, GstObject * parent, GstBuffer * buffer)
                 self->cur_packet_size - offset - payload_size);
 
             if (GST_CLOCK_TIME_IS_VALID (self->cur_ts)) {
-              if (!GST_CLOCK_TIME_IS_VALID (self->base_ts)) {
-                self->base_ts = self->cur_ts;
-                GST_DEBUG_OBJECT (self, "Setting base_ts to %" GST_TIME_FORMAT,
-                    GST_TIME_ARGS (self->base_ts));
+              if (!GST_CLOCK_TIME_IS_VALID (self->start_ts)) {
+                self->start_ts = self->cur_ts;
+                GST_DEBUG_OBJECT (self, "Setting start_ts to %" GST_TIME_FORMAT,
+                    GST_TIME_ARGS (self->start_ts));
               }
               if (self->offset >= 0) {
                 self->cur_ts += self->offset;
@@ -675,13 +676,13 @@ gst_pcap_parse_chain (GstPad * pad, GstObject * parent, GstBuffer * buffer)
   }
 
   if (list) {
-    if (!self->newsegment_sent && GST_CLOCK_TIME_IS_VALID (self->base_ts)) {
+    if (!self->newsegment_sent && GST_CLOCK_TIME_IS_VALID (self->start_ts)) {
       GstSegment segment;
 
       if (self->caps)
         gst_pad_set_caps (self->src_pad, self->caps);
       gst_segment_init (&segment, GST_FORMAT_TIME);
-      gst_segment_set_running_time (&segment, GST_FORMAT_TIME, self->base_ts);
+      gst_segment_set_running_time (&segment, GST_FORMAT_TIME, self->start_ts);
       gst_pad_push_event (self->src_pad, gst_event_new_segment (&segment));
       self->newsegment_sent = TRUE;
     }
@@ -727,6 +728,10 @@ gst_pcap_parse_get_property (GObject * object, guint prop_id,
 
     case PROP_TS_OFFSET:
       g_value_set_int64 (value, self->offset);
+      break;
+
+    case PROP_START_TIME:
+      g_value_set_int64 (value, self->start_ts);
       break;
 
     case PROP_STATS:
@@ -787,6 +792,10 @@ gst_pcap_parse_set_property (GObject * object, guint prop_id,
 
     case PROP_TS_OFFSET:
       self->offset = g_value_get_int64 (value);
+      break;
+
+    case PROP_START_TIME:
+      self->start_ts = g_value_get_int64 (value);
       break;
 
     default:
@@ -895,6 +904,11 @@ gst_pcap_parse_class_init (GstPcapParseClass * klass)
   g_object_class_install_property (gobject_class, PROP_TS_OFFSET,
       g_param_spec_int64 ("ts-offset", "Timestamp Offset",
           "Relative timestamp offset (ns) to apply (-1 = use absolute packet time)",
+          -1, G_MAXINT64, -1, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+
+  g_object_class_install_property (gobject_class, PROP_START_TIME,
+      g_param_spec_int64 ("start-time", "Start Time",
+          "The start-time (ns) in the segment (-1 = use first timestamp)",
           -1, G_MAXINT64, -1, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 
   g_object_class_install_property (gobject_class, PROP_STATS,
