@@ -2032,7 +2032,7 @@ obtain_internal_source (RTPSession * sess, guint32 ssrc, gboolean * created,
     /* make new internal Source and insert */
     source = rtp_source_new (ssrc);
 
-    GST_DEBUG ("creating new internal source %08x %p", ssrc, source);
+    GST_INFO ("creating new internal source %08x %p", ssrc, source);
 
     source->validated = TRUE;
     source->internal = TRUE;
@@ -4331,14 +4331,14 @@ session_cleanup (const gchar * key, RTPSource * source, ReportData * data)
      * time. */
     if (data->current_time > source->bye_time &&
         data->current_time - source->bye_time > sess->stats.bye_timeout) {
-      GST_DEBUG ("removing BYE source %08x", source->ssrc);
+      GST_INFO ("removing BYE source %08x", source->ssrc);
       remove = TRUE;
       byetimeout = TRUE;
     }
   }
 
   if (source->internal && source->sent_bye) {
-    GST_DEBUG ("removing internal source that has sent BYE %08x", source->ssrc);
+    GST_INFO ("removing internal source that has sent BYE %08x", source->ssrc);
     remove = TRUE;
   }
 
@@ -4349,8 +4349,6 @@ session_cleanup (const gchar * key, RTPSource * source, ReportData * data)
   if (data->current_time > btime) {
     interval = MAX (binterval * 5, 5 * GST_SECOND);
     if (data->current_time - btime > interval) {
-      GST_DEBUG ("removing timeout source %08x, last %" GST_TIME_FORMAT,
-          source->ssrc, GST_TIME_ARGS (btime));
       if (source->internal) {
         /* this is an internal source that is not using our suggested ssrc.
          * since there must be another source using this ssrc, we can remove
@@ -4362,6 +4360,8 @@ session_cleanup (const gchar * key, RTPSource * source, ReportData * data)
            * processing and scheduling bye will interfere with SR/RR sending */
         }
       } else {
+        GST_INFO ("removing timeout source %08x, last %" GST_TIME_FORMAT,
+            source->ssrc, GST_TIME_ARGS (btime));
         remove = TRUE;
       }
     }
@@ -4623,8 +4623,13 @@ static gboolean
 remove_closing_sources (const gchar * key, RTPSource * source,
     ReportData * data)
 {
-  if (source->closing)
+  if (source->closing) {
+    GST_INFO ("Removing source %08x %p, "
+        "internal=%u, marked_bye=%u, sent_bye=%u, bye_reason=%s",
+        source->ssrc, source, source->internal, source->marked_bye,
+        source->sent_bye, source->bye_reason);
     return TRUE;
+  }
 
   if (source->send_fir)
     data->have_fir = TRUE;
