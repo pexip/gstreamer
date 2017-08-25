@@ -4439,7 +4439,6 @@ is_rtcp_time (RTPSession * sess, GstClockTime current_time, ReportData * data)
     /* If this is the first RTCP packet, we can reconsider anything based
      * on the last RTCP send time because there was none.
      */
-    g_warn_if_fail (!data->is_early);
     data->is_early = FALSE;
     new_send_time = current_time;
   }
@@ -4877,7 +4876,7 @@ gboolean
 rtp_session_request_early_rtcp (RTPSession * sess, GstClockTime current_time,
     GstClockTime max_delay)
 {
-  GstClockTime T_dither_max, T_rr, offset = 0;
+  GstClockTime T_dither_max = 0, T_rr, offset = 0;
   gboolean ret;
   gboolean allow_early;
 
@@ -4888,6 +4887,14 @@ rtp_session_request_early_rtcp (RTPSession * sess, GstClockTime current_time,
   /* We assume a feedback profile if something is requesting RTCP
    * to be sent */
   sess->rtp_profile = GST_RTP_PROFILE_AVPF;
+
+  /* special case, a max_delay of 0 means a RTCP-packet should be forced out
+     instantly, effectively ignoring RFC 4585 section 3.5. Usecases includes
+     some non-standard ways of using RTCP, like towards Microsoft Lync */
+  if (max_delay == 0) {
+    sess->next_rtcp_check_time = current_time;
+    goto send_early;
+  }
 
   /* Check if already requested */
   /*  RFC 4585 section 3.5.2 step 2 */
@@ -4936,9 +4943,7 @@ rtp_session_request_early_rtcp (RTPSession * sess, GstClockTime current_time,
   /* When there is one auxiliary stream the session can still do point
    * to point.
    */
-  if (sess->is_doing_ptp) {
-    T_dither_max = 0;
-  } else {
+  if (!sess->is_doing_ptp) {
     /* Divide by 2 because l = 0.5 */
     T_dither_max = T_rr;
     T_dither_max /= 2;
@@ -5000,6 +5005,8 @@ rtp_session_request_early_rtcp (RTPSession * sess, GstClockTime current_time,
     }
     goto end;
   }
+
+send_early:
 
   /*  RFC 4585 section 3.5.2 step 4b */
   if (T_dither_max) {
