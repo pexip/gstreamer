@@ -435,7 +435,7 @@ subdir('plugins')
 subdir('tools')
 subdir('pkgconfig')
 subdir('tests')
-subdir('po')
+#subdir('po')
 subdir('data')
 
 configure_file(output : 'config.h', configuration : cdata)
