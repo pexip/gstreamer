@@ -86,6 +86,14 @@ gst_util_dump_mem (const guchar * mem, guint size)
   g_string_free (chars, TRUE);
 }
 
+void
+gst_util_dump_buffer (GstBuffer * buf)
+{
+  GstMapInfo map;
+  gst_buffer_map (buf, &map, GST_MAP_READ);
+  gst_util_dump_mem (map.data, map.size);
+  gst_buffer_unmap (buf, &map);
+}
 
 /**
  * gst_util_set_value_from_string:
