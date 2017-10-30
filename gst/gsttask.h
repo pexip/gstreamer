@@ -211,6 +211,7 @@ gboolean        gst_task_pause          (GstTask *task);
 GST_EXPORT
 gboolean        gst_task_join           (GstTask *task);
 
+GST_EXPORT
 void            gst_task_class_set_default_task_pool_type (GType type);
 
 #ifdef G_DEFINE_AUTOPTR_CLEANUP_FUNC
