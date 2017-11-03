@@ -41,8 +41,9 @@ gst_rtp_packet_rate_ctx_update (RTPPacketRateCtx * ctx, guint16 seqnum,
   gint diff_seqnum;
   gint32 new_packet_rate;
   gint32 base;
+  gint32 clock_rate = ctx->clock_rate;
 
-  if (ctx->clock_rate <= 0) {
+  if (clock_rate <= 0) {
     return ctx->avg_packet_rate;
   }
 
@@ -68,7 +69,7 @@ gst_rtp_packet_rate_ctx_update (RTPPacketRateCtx * ctx, guint16 seqnum,
     goto done;
 
   diff_ts = new_ts - ctx->last_ts;
-  diff_ts = gst_util_uint64_scale_int (diff_ts, GST_SECOND, ctx->clock_rate);
+  diff_ts = gst_util_uint64_scale_int (diff_ts, GST_SECOND, clock_rate);
   new_packet_rate = gst_util_uint64_scale (diff_seqnum, GST_SECOND, diff_ts);
 
   /* The goal is that higher packet rates "win".
