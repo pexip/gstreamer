@@ -60,6 +60,12 @@
 #include <process.h>            /* getpid */
 #endif /* _MSC_VER */
 
+/* for ssize_t */
+#if defined(_MSC_VER)
+#include <BaseTsd.h>
+typedef SSIZE_T ssize_t;
+#endif
+
 /* defines size_t */
 #include <sys/types.h>
 

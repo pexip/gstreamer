@@ -19,7 +19,6 @@
  * Free Software Foundation, Inc., 51 Franklin St, Fifth Floor,
  * Boston, MA 02110-1301, USA.
  */
-
 #ifdef HAVE_CONFIG_H
 #  include "config.h"
 #endif
@@ -28,7 +27,14 @@
 #include <glib/gstdio.h>
 #include <gst/check/gstcheck.h>
 
-#include <unistd.h>
+#if HAVE_UNISTD_H
+#  include <unistd.h>
+#else
+#  define R_OK    4       /* Test for read permission.  */
+#  define W_OK    2       /* Test for write permission.  */
+#  define X_OK    1       /* Unsupported on Windows.  */
+#  define F_OK    0       /* Test for existence.  */
+#endif
 
 static GType gst_preset_test_get_type (void);
 

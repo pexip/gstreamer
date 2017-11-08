@@ -24,7 +24,9 @@
 #  include "config.h"
 #endif
 
-#include <unistd.h>
+#if HAVE_UNISTD_H
+#  include <unistd.h>
+#endif
 
 #include <gst/check/gstcheck.h>
 

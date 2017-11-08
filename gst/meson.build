@@ -210,7 +210,6 @@ subdir('printf')
 
 libgst_c_args = gst_c_args + [
   '-D_GNU_SOURCE',
-  '-DGST_EXPORTS',
   '-DG_LOG_DOMAIN=g_log_domain_gstreamer',
   '-DGST_DISABLE_DEPRECATED',
 ]
