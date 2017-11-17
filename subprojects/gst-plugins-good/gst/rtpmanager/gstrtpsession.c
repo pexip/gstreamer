@@ -287,6 +287,8 @@ struct _GstRtpSessionPrivate
    * pushed a buffer list.
    */
   GstBufferList *processed_list;
+
+  guint key_unit_requests_count;
 };
 
 /* callbacks to handle actions from the session manager */
@@ -915,6 +917,7 @@ gst_rtp_session_init (GstRtpSession * rtpsession)
 
   rtpsession->priv->recv_rtx_req_count = 0;
   rtpsession->priv->sent_rtx_req_count = 0;
+  rtpsession->priv->key_unit_requests_count = 0;
 
   rtpsession->priv->ntp_time_source = DEFAULT_NTP_TIME_SOURCE;
 }
@@ -1083,10 +1086,12 @@ gst_rtp_session_create_stats (GstRtpSession * rtpsession)
   GstStructure *s;
 
   g_object_get (rtpsession->priv->session, "stats", &s, NULL);
-  gst_structure_set (s, "rtx-count", G_TYPE_UINT,
-      rtpsession->priv->recv_rtx_req_count, "recv-rtx-req-count", G_TYPE_UINT,
-      rtpsession->priv->recv_rtx_req_count, "sent-rtx-req-count", G_TYPE_UINT,
-      rtpsession->priv->sent_rtx_req_count, NULL);
+  gst_structure_set (s,
+      "rtx-count", G_TYPE_UINT, rtpsession->priv->recv_rtx_req_count,
+      "recv-rtx-req-count", G_TYPE_UINT, rtpsession->priv->recv_rtx_req_count,
+      "sent-rtx-req-count", G_TYPE_UINT, rtpsession->priv->sent_rtx_req_count,
+      "key-unit-requests-count", G_TYPE_UINT,
+      rtpsession->priv->key_unit_requests_count, NULL);
 
   return s;
 }
@@ -1890,6 +1895,10 @@ gst_rtp_session_event_recv_rtp_src (GstPad * pad, GstObject * parent,
         if (gst_rtp_session_request_remote_key_unit (rtpsession, ssrc, pt,
                 all_headers, count))
           forward = FALSE;
+
+        GST_RTP_SESSION_LOCK (rtpsession);
+        rtpsession->priv->key_unit_requests_count++;
+        GST_RTP_SESSION_UNLOCK (rtpsession);
       } else if (gst_structure_has_name (s, "GstRTPRetransmissionRequest")) {
         guint seqnum, delay, deadline, max_delay, avg_rtt;
 
