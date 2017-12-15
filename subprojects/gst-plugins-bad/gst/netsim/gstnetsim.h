@@ -88,6 +88,7 @@ struct _GstNetSim
   gint max_kbps;
   gint max_bucket_size;
   gboolean allow_reordering;
+  gboolean replace_droppped_with_empty;
 };
 
 struct _GstNetSimClass
