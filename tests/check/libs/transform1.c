@@ -936,7 +936,7 @@ GST_START_TEST (basetransform_stress_pt_ip)
 
   g_usleep (G_USEC_PER_SEC/10);
 
-  for (gint i = 0; i < G_N_ELEMENTS(h); i++) {
+  for (i = 0; i < G_N_ELEMENTS(h); i++) {
     gst_harness_stress_thread_stop (pt[i]);
     gst_harness_stress_thread_stop (push[i]);
     gst_harness_teardown (h[i]);
