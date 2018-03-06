@@ -1285,6 +1285,13 @@ update_receiver_stats (RTPSource * src, RTPPacketInfo * pinfo,
     }
   }
 
+  /* due to jitter, we might not get the first packet in the stream first.
+     update the base_seq in that case */
+  if (stats->cycles == 0 && seqnr < src->stats.base_seq) {
+    GST_INFO ("Updating seqnr-base from %u to %u", src->stats.base_seq, seqnr);
+    src->stats.base_seq = seqnr;
+  }
+
   rtptime = pinfo->rtptime;
   running_time = pinfo->running_time;
   current_time = pinfo->current_time;
