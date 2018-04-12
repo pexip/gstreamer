@@ -10656,7 +10656,7 @@ qtdemux_parse_trak (GstQTDemux * qtdemux, GNode * trak)
   GNode *stbl;
   GNode *stsd;
   GNode *mp4a;
-  GNode *mp4v;
+  GNode *mp4v = NULL;
   GNode *esds;
   GNode *tref;
   GNode *udta;
