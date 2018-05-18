@@ -412,6 +412,11 @@ struct _GstRtpJitterBufferPrivate
   GstClockTime last_dts;
   GstClockTime last_pts;
   guint64 last_rtptime;
+  guint64 jitter_count;
+  GstClockTime max_jitter;
+  GstClockTime min_jitter;
+  guint64 jitter_sum;
+  GstClockTime total_avg_jitter;
   GstClockTime avg_jitter;
 
   /* for dropped packet messages */
@@ -1587,6 +1592,7 @@ gst_rtp_jitter_buffer_flush_stop (GstRtpJitterBuffer * jitterbuffer)
   priv->last_elapsed = 0;
   priv->ext_timestamp = -1;
   priv->avg_jitter = 0;
+  priv->min_jitter = G_MAXINT64;
   priv->last_dts = -1;
   priv->last_rtptime = -1;
   priv->last_in_pts = 0;
@@ -2623,6 +2629,7 @@ calculate_jitter (GstRtpJitterBuffer * jitterbuffer, GstClockTime dts,
 {
   gint32 rtpdiff;
   GstClockTimeDiff dtsdiff, rtpdiffns, diff;
+  gint factor;
   GstRtpJitterBufferPrivate *priv;
 
   priv = jitterbuffer->priv;
@@ -2630,15 +2637,12 @@ calculate_jitter (GstRtpJitterBuffer * jitterbuffer, GstClockTime dts,
   if (G_UNLIKELY (dts == GST_CLOCK_TIME_NONE) || priv->clock_rate <= 0)
     goto no_time;
 
-  if (priv->last_dts != -1)
-    dtsdiff = dts - priv->last_dts;
-  else
-    dtsdiff = 0;
+  /* we need at least two measurements to calculate jitter */
+  if (priv->last_dts == -1 && priv->last_rtptime == -1)
+    goto done;
 
-  if (priv->last_rtptime != -1)
-    rtpdiff = rtptime - (guint32) priv->last_rtptime;
-  else
-    rtpdiff = 0;
+  dtsdiff = dts - priv->last_dts;
+  rtpdiff = rtptime - (guint32) priv->last_rtptime;
 
   /* Guess whether stream currently uses equidistant packet spacing. If we
    * often see identical timestamps it means the packets are not
@@ -2649,9 +2653,6 @@ calculate_jitter (GstRtpJitterBuffer * jitterbuffer, GstClockTime dts,
     priv->equidistant += 1;
   priv->equidistant = CLAMP (priv->equidistant, -7, 7);
 
-  priv->last_dts = dts;
-  priv->last_rtptime = rtptime;
-
   if (rtpdiff > 0)
     rtpdiffns =
         gst_util_uint64_scale_int (rtpdiff, GST_SECOND, priv->clock_rate);
@@ -2661,14 +2662,25 @@ calculate_jitter (GstRtpJitterBuffer * jitterbuffer, GstClockTime dts,
 
   diff = ABS (dtsdiff - rtpdiffns);
 
+  priv->jitter_count++;
+  priv->jitter_sum += diff;
+  priv->total_avg_jitter = priv->jitter_sum / priv->jitter_count;
+  priv->max_jitter = MAX (priv->max_jitter, diff);
+  priv->min_jitter = MIN (priv->min_jitter, diff);
+
   /* jitter is stored in nanoseconds */
-  priv->avg_jitter = (diff + (15 * priv->avg_jitter)) >> 4;
+  factor = MIN (priv->jitter_count, 128);
+  priv->avg_jitter = (diff + ((factor - 1) * priv->avg_jitter)) / factor;
 
   GST_LOG_OBJECT (jitterbuffer,
       "dtsdiff %" GST_STIME_FORMAT " rtptime %" GST_STIME_FORMAT
       ", clock-rate %d, diff %" GST_STIME_FORMAT ", jitter: %" GST_TIME_FORMAT,
       GST_STIME_ARGS (dtsdiff), GST_STIME_ARGS (rtpdiffns), priv->clock_rate,
       GST_STIME_ARGS (diff), GST_TIME_ARGS (priv->avg_jitter));
+
+done:
+  priv->last_dts = dts;
+  priv->last_rtptime = rtptime;
 
   return;
 
@@ -4914,6 +4926,10 @@ gst_rtp_jitter_buffer_create_stats (GstRtpJitterBuffer * jbuf)
       "num-late", G_TYPE_UINT64, priv->num_late,
       "num-duplicates", G_TYPE_UINT64, priv->num_duplicates,
       "avg-jitter", G_TYPE_UINT64, priv->avg_jitter,
+      "total-avg-jitter", G_TYPE_UINT64, priv->total_avg_jitter,
+      "min-jitter", G_TYPE_UINT64, priv->min_jitter,
+      "max-jitter", G_TYPE_UINT64, priv->max_jitter,
+      "latency-ms", G_TYPE_UINT, priv->latency_ms,
       "rtx-count", G_TYPE_UINT64, priv->num_rtx_requests,
       "rtx-success-count", G_TYPE_UINT64, priv->num_rtx_success,
       "rtx-per-packet", G_TYPE_DOUBLE, priv->avg_rtx_num,
