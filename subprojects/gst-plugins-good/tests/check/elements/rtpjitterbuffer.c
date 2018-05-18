@@ -1802,7 +1802,7 @@ GST_START_TEST (test_rtx_original_buffer_does_not_update_rtx_stats)
      an rtx-request for 7 */
   next_seqnum++;
   verify_rtx_event (h, next_seqnum,
-      next_seqnum * TEST_BUF_DURATION, 60, TEST_BUF_DURATION);
+      next_seqnum * TEST_BUF_DURATION, 26, TEST_BUF_DURATION);
 
   /* The original buffer does not count in the RTX stats. */
   fail_unless (verify_jb_stats (h->element,
