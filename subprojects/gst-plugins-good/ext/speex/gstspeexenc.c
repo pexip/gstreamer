@@ -540,8 +540,8 @@ gst_speex_enc_encode (GstSpeexEnc * enc, GstBuffer * buf)
   gsize bsize, size;
   GstBuffer *outbuf;
   GstFlowReturn ret = GST_FLOW_OK;
-  GstSegment *segment;
-  GstClockTime duration;
+  //GstSegment *segment;
+  //GstClockTime duration;
 
   if (G_LIKELY (buf)) {
     gst_buffer_map (buf, &map, GST_MAP_READ);
@@ -551,6 +551,7 @@ gst_speex_enc_encode (GstSpeexEnc * enc, GstBuffer * buf)
     if (G_UNLIKELY (bsize % bytes)) {
       GST_DEBUG_OBJECT (enc, "draining; adding silence samples");
 
+#if 0
       /* If encoding part of a frame, and we have no set stop time on
        * the output segment, we update the segment stop time to reflect
        * the last sample. This will let oggmux set the last page's
@@ -573,6 +574,7 @@ gst_speex_enc_encode (GstSpeexEnc * enc, GstBuffer * buf)
         gst_pad_push_event (GST_AUDIO_ENCODER_SRC_PAD (enc),
             gst_event_new_segment (segment));
       }
+#endif
 
       size = ((bsize / bytes) + 1) * bytes;
       data0 = data = g_malloc0 (size);
