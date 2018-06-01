@@ -32,6 +32,7 @@
 #include "gstedgedetect.h"
 #include "gstfaceblur.h"
 #include "gstfacedetect.h"
+#include "gsthomography.h"
 #include "gstmotioncells.h"
 #include "gsttemplatematch.h"
 #include "gsttextoverlay.h"
@@ -61,6 +62,7 @@ plugin_init (GstPlugin * plugin)
   ret |= GST_ELEMENT_REGISTER (edgedetect, plugin);
   ret |= GST_ELEMENT_REGISTER (faceblur, plugin);
   ret |= GST_ELEMENT_REGISTER (facedetect, plugin);
+  ret |= GST_ELEMENT_REGISTER (homography, plugin);
   ret |= GST_ELEMENT_REGISTER (motioncells, plugin);
   ret |= GST_ELEMENT_REGISTER (templatematch, plugin);
   ret |= GST_ELEMENT_REGISTER (opencvtextoverlay, plugin);
