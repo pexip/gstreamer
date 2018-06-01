@@ -12,6 +12,7 @@ gstopencv_sources = [
   'gstfacedetect.cpp',
   'gstgrabcut.cpp',
   'gsthanddetect.cpp',
+  'gsthomography.cpp',
   'gstmotioncells.cpp',
   'gstopencv.cpp',
   'gstretinex.cpp',
