@@ -316,6 +316,12 @@ struct _RTPSession {
 
   gboolean timestamp_sender_reports;
 
+  /* nack probe */
+  guint32 nack_probe_ssrc;
+  guint nack_probe_pct;
+  GstClockTime nack_probe_duration;
+  GstClockTime nack_probe_deadline;
+
   /* RFC6051 64-bit NTP header extension */
   guint8 send_ntp64_ext_id;
 
@@ -343,6 +349,7 @@ struct _RTPSessionClass {
   GstStructure* (*get_twcc_windowed_stats) (RTPSession *sess,
       GstClockTime stats_window_size, GstClockTime stats_window_delay);
   RTPSource* (*get_source_by_ssrc) (RTPSession *sess, guint32 ssrc);
+  void (*nack_probe)  (RTPSession *sess, guint ssrc, guint pct, GstClockTime duration);
 
   /* signals */
   void (*on_new_ssrc)       (RTPSession *sess, RTPSource *source);
