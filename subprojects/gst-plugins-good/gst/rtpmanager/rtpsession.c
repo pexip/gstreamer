@@ -58,6 +58,7 @@ enum
   SIGNAL_ON_NEW_SENDER_SSRC,
   SIGNAL_ON_SENDER_SSRC_ACTIVE,
   SIGNAL_ON_SENDING_NACKS,
+  SIGNAL_NACK_PROBE,
   LAST_SIGNAL
 };
 
@@ -134,6 +135,8 @@ static gboolean rtp_session_send_rtcp (RTPSession * sess,
     GstClockTime max_delay);
 static gboolean rtp_session_send_rtcp_with_deadline (RTPSession * sess,
     GstClockTime deadline);
+static void rtp_session_nack_probe (RTPSession * sess,
+    guint ssrc, guint pct, GstClockTime duration);
 
 static guint rtp_session_signals[LAST_SIGNAL] = { 0 };
 
@@ -487,6 +490,23 @@ rtp_session_class_init (RTPSessionClass * klass)
       G_TYPE_UINT, 4, G_TYPE_UINT, G_TYPE_UINT, G_TYPE_ARRAY,
       GST_TYPE_BUFFER | G_SIGNAL_TYPE_STATIC_SCOPE);
 
+  /**
+   * RTPSession::nack-probe:
+   * @session: the object which received the signal
+   * @pct: The percentage of the received packets to send NACK for
+   * @duration: the duration to send NACK for
+   * @ssrc: the SSRC to send NACK for.
+   *
+   * Requests that the #RTPSession sends NACK on a certain percent of the
+   * received RTP packets.
+   */
+  rtp_session_signals[SIGNAL_NACK_PROBE] =
+      g_signal_new ("nack-probe", G_TYPE_FROM_CLASS (klass),
+      G_SIGNAL_RUN_LAST | G_SIGNAL_ACTION,
+      G_STRUCT_OFFSET (RTPSessionClass, nack_probe), NULL, NULL,
+      g_cclosure_marshal_generic,
+      G_TYPE_NONE, 3, G_TYPE_UINT, G_TYPE_UINT, G_TYPE_UINT64);
+
   g_object_class_install_property (gobject_class, PROP_INTERNAL_SSRC,
       g_param_spec_uint ("internal-ssrc", "Internal SSRC",
           "The internal SSRC used for the session (deprecated)",
@@ -702,6 +722,7 @@ rtp_session_class_init (RTPSessionClass * klass)
   klass->get_source_by_ssrc =
       GST_DEBUG_FUNCPTR (rtp_session_get_source_by_ssrc);
   klass->send_rtcp = GST_DEBUG_FUNCPTR (rtp_session_send_rtcp);
+  klass->nack_probe = GST_DEBUG_FUNCPTR (rtp_session_nack_probe);
 
   GST_DEBUG_CATEGORY_INIT (rtp_session_debug, "rtpsession", 0, "RTP Session");
 }
@@ -2328,6 +2349,34 @@ source_update_sender (RTPSession * sess, RTPSource * source,
   return TRUE;
 }
 
+static void
+rtp_session_process_nack_probe (RTPSession * sess, RTPSource * source,
+    guint16 seqnum, GstClockTime current_time)
+{
+  if (source->ssrc != sess->nack_probe_ssrc)
+    return;
+
+  /* we have a valid duration, set the deadline */
+  if (GST_CLOCK_TIME_IS_VALID (sess->nack_probe_duration) &&
+      !GST_CLOCK_TIME_IS_VALID (sess->nack_probe_deadline)) {
+    sess->nack_probe_deadline = current_time + sess->nack_probe_duration;
+    sess->nack_probe_duration = GST_CLOCK_TIME_NONE;
+  }
+
+  /* we have a valid deadline, send NACK or timeout */
+  if (GST_CLOCK_TIME_IS_VALID (sess->nack_probe_deadline)) {
+    if (current_time <= sess->nack_probe_deadline) {
+      guint pct = (guint) (g_random_double () * 100.0);
+      if ((pct + sess->nack_probe_pct) > 100) {
+        GST_DEBUG ("Register nack for ssrc: %u #%u", source->ssrc, seqnum);
+        rtp_source_register_nack (source, seqnum, sess->nack_probe_deadline);
+      }
+    } else {
+      sess->nack_probe_deadline = GST_CLOCK_TIME_NONE;
+    }
+  }
+}
+
 /**
  * rtp_session_process_rtp:
  * @sess: and #RTPSession
@@ -2382,6 +2431,8 @@ rtp_session_process_rtp (RTPSession * sess, GstBuffer * buffer,
   /* let source process the packet */
   result = rtp_source_process_rtp (source, &pinfo);
   process_twcc_packet (sess, &pinfo);
+
+  rtp_session_process_nack_probe (sess, source, pinfo.seqnum, current_time);
 
   /* source became active */
   if (source_update_active (sess, source, prevactive))
@@ -4935,6 +4986,16 @@ rtp_session_send_rtcp (RTPSession * sess, GstClockTime max_delay)
   now = sess->callbacks.request_time (sess, sess->request_time_user_data);
 
   return rtp_session_send_rtcp_internal (sess, now, max_delay);
+}
+
+static void
+rtp_session_nack_probe (RTPSession * sess,
+    guint ssrc, guint pct, GstClockTime duration)
+{
+  sess->nack_probe_ssrc = ssrc;
+  sess->nack_probe_pct = pct;
+  sess->nack_probe_duration = duration;
+  sess->nack_probe_deadline = GST_CLOCK_TIME_NONE;
 }
 
 gboolean
