@@ -68,6 +68,58 @@ static void rtp_source_set_property (GObject * object, guint prop_id,
 static void rtp_source_get_property (GObject * object, guint prop_id,
     GValue * value, GParamSpec * pspec);
 
+static GQuark quark_application_x_rtp_source_stats;
+static GQuark quark_avg_frame_transmission_duration;
+static GQuark quark_bitrate;
+static GQuark quark_bytes_received;
+static GQuark quark_clock_rate;
+static GQuark quark_first_rtp_activity;
+static GQuark quark_have_rb;
+static GQuark quark_have_sr;
+static GQuark quark_internal;
+static GQuark quark_is_csrc;
+static GQuark quark_is_sender;
+static GQuark quark_jitter;
+static GQuark quark_last_rtp_activity;
+static GQuark quark_max_frame_transmission_duration;
+static GQuark quark_octets_received;
+static GQuark quark_octets_sent;
+static GQuark quark_packets_lost;
+static GQuark quark_packets_received;
+static GQuark quark_packets_sent;
+static GQuark quark_rb_dlsr;
+static GQuark quark_rb_exthighestseq;
+static GQuark quark_rb_fractionlost;
+static GQuark quark_rb_jitter;
+static GQuark quark_rb_lsr;
+static GQuark quark_rb_packetslost;
+static GQuark quark_rb_round_trip;
+static GQuark quark_rb_ssrc;
+static GQuark quark_received_bye;
+static GQuark quark_recv_fir_count;
+static GQuark quark_recv_nack_count;
+static GQuark quark_recv_packet_rate;
+static GQuark quark_recv_pli_count;
+static GQuark quark_rtcp_from;
+static GQuark quark_rtp_from;
+static GQuark quark_sent_fir_count;
+static GQuark quark_sent_nack_count;
+static GQuark quark_sent_pli_count;
+static GQuark quark_sent_rb;
+static GQuark quark_sent_rb_dlsr;
+static GQuark quark_sent_rb_exthighestseq;
+static GQuark quark_sent_rb_fractionlost;
+static GQuark quark_sent_rb_jitter;
+static GQuark quark_sent_rb_lsr;
+static GQuark quark_sent_rb_packetslost;
+static GQuark quark_seqnum_base;
+static GQuark quark_sr_ntptime;
+static GQuark quark_sr_octet_count;
+static GQuark quark_sr_packet_count;
+static GQuark quark_sr_rtptime;
+static GQuark quark_ssrc;
+static GQuark quark_validated;
+
 /* static guint rtp_source_signals[LAST_SIGNAL] = { 0 }; */
 
 G_DEFINE_TYPE (RTPSource, rtp_source, G_TYPE_OBJECT);
@@ -76,6 +128,64 @@ static void
 rtp_source_class_init (RTPSourceClass * klass)
 {
   GObjectClass *gobject_class;
+
+  quark_application_x_rtp_source_stats =
+      g_quark_from_static_string ("application/x-rtp-source-stats");
+  quark_avg_frame_transmission_duration =
+      g_quark_from_static_string ("avg-frame-transmission-duration");
+  quark_bitrate = g_quark_from_static_string ("bitrate");
+  quark_bytes_received = g_quark_from_static_string ("bytes-received");
+  quark_clock_rate = g_quark_from_static_string ("clock-rate");
+  quark_first_rtp_activity = g_quark_from_static_string ("first-rtp-activity");
+  quark_have_rb = g_quark_from_static_string ("have-rb");
+  quark_have_sr = g_quark_from_static_string ("have-sr");
+  quark_internal = g_quark_from_static_string ("internal");
+  quark_is_csrc = g_quark_from_static_string ("is-csrc");
+  quark_is_sender = g_quark_from_static_string ("is-sender");
+  quark_jitter = g_quark_from_static_string ("jitter");
+  quark_last_rtp_activity = g_quark_from_static_string ("last-rtp-activity");
+  quark_max_frame_transmission_duration =
+      g_quark_from_static_string ("max-frame-transmission-duration");
+  quark_octets_received = g_quark_from_static_string ("octets-received");
+  quark_octets_sent = g_quark_from_static_string ("octets-sent");
+  quark_packets_lost = g_quark_from_static_string ("packets-lost");
+  quark_packets_received = g_quark_from_static_string ("packets-received");
+  quark_packets_sent = g_quark_from_static_string ("packets-sent");
+  quark_rb_dlsr = g_quark_from_static_string ("rb-dlsr");
+  quark_rb_exthighestseq = g_quark_from_static_string ("rb-exthighestseq");
+  quark_rb_fractionlost = g_quark_from_static_string ("rb-fractionlost");
+  quark_rb_jitter = g_quark_from_static_string ("rb-jitter");
+  quark_rb_lsr = g_quark_from_static_string ("rb-lsr");
+  quark_rb_packetslost = g_quark_from_static_string ("rb-packetslost");
+  quark_rb_round_trip = g_quark_from_static_string ("rb-round-trip");
+  quark_rb_ssrc = g_quark_from_static_string ("rb-ssrc");
+  quark_received_bye = g_quark_from_static_string ("received-bye");
+  quark_recv_fir_count = g_quark_from_static_string ("recv-fir-count");
+  quark_recv_nack_count = g_quark_from_static_string ("recv-nack-count");
+  quark_recv_packet_rate = g_quark_from_static_string ("recv-packet-rate");
+  quark_recv_pli_count = g_quark_from_static_string ("recv-pli-count");
+  quark_rtcp_from = g_quark_from_static_string ("rtcp-from");
+  quark_rtp_from = g_quark_from_static_string ("rtp-from");
+  quark_sent_fir_count = g_quark_from_static_string ("sent-fir-count");
+  quark_sent_nack_count = g_quark_from_static_string ("sent-nack-count");
+  quark_sent_pli_count = g_quark_from_static_string ("sent-pli-count");
+  quark_sent_rb = g_quark_from_static_string ("sent-rb");
+  quark_sent_rb_dlsr = g_quark_from_static_string ("sent-rb-dlsr");
+  quark_sent_rb_exthighestseq =
+      g_quark_from_static_string ("sent-rb-exthighestseq");
+  quark_sent_rb_fractionlost =
+      g_quark_from_static_string ("sent-rb-fractionlost");
+  quark_sent_rb_jitter = g_quark_from_static_string ("sent-rb-jitter");
+  quark_sent_rb_lsr = g_quark_from_static_string ("sent-rb-lsr");
+  quark_sent_rb_packetslost =
+      g_quark_from_static_string ("sent-rb-packetslost");
+  quark_seqnum_base = g_quark_from_static_string ("seqnum-base");
+  quark_sr_ntptime = g_quark_from_static_string ("sr-ntptime");
+  quark_sr_octet_count = g_quark_from_static_string ("sr-octet-count");
+  quark_sr_packet_count = g_quark_from_static_string ("sr-packet-count");
+  quark_sr_rtptime = g_quark_from_static_string ("sr-rtptime");
+  quark_ssrc = g_quark_from_static_string ("ssrc");
+  quark_validated = g_quark_from_static_string ("validated");
 
   gobject_class = (GObjectClass *) klass;
 
@@ -399,59 +509,60 @@ rtp_source_create_stats (RTPSource * src)
   guint32 octet_count = 0;
 
   /* common data for all types of sources */
-  s = gst_structure_new ("application/x-rtp-source-stats",
-      "ssrc", G_TYPE_UINT, (guint) src->ssrc,
-      "internal", G_TYPE_BOOLEAN, internal,
-      "validated", G_TYPE_BOOLEAN, src->validated,
-      "received-bye", G_TYPE_BOOLEAN, src->marked_bye,
-      "is-csrc", G_TYPE_BOOLEAN, src->is_csrc,
-      "is-sender", G_TYPE_BOOLEAN, is_sender,
-      "first-rtp-activity", G_TYPE_UINT64, src->first_rtp_activity,
-      "last-rtp-activity", G_TYPE_UINT64, src->last_rtp_activity,
-      "avg-frame-transmission-duration", G_TYPE_UINT64, src->stats.avg_frame_transmission_duration,
-      "max-frame-transmission-duration", G_TYPE_UINT64, src->stats.max_frame_transmission_duration,
-      NULL);
+  s = gst_structure_new_id (quark_application_x_rtp_source_stats,
+      quark_ssrc, G_TYPE_UINT, (guint) src->ssrc,
+      quark_internal, G_TYPE_BOOLEAN, internal,
+      quark_validated, G_TYPE_BOOLEAN, src->validated,
+      quark_received_bye, G_TYPE_BOOLEAN, src->marked_bye,
+      quark_is_csrc, G_TYPE_BOOLEAN, src->is_csrc,
+      quark_is_sender, G_TYPE_BOOLEAN, is_sender,
+      quark_first_rtp_activity, G_TYPE_UINT64, src->first_rtp_activity,
+      quark_last_rtp_activity, G_TYPE_UINT64, src->last_rtp_activity,
+      quark_avg_frame_transmission_duration, G_TYPE_UINT64,
+      src->stats.avg_frame_transmission_duration,
+      quark_max_frame_transmission_duration, G_TYPE_UINT64,
+      src->stats.max_frame_transmission_duration, NULL);
 
   /* add address and port */
   if (src->rtp_from) {
     address_str = __g_socket_address_to_string (src->rtp_from);
-    gst_structure_set (s, "rtp-from", G_TYPE_STRING, address_str, NULL);
+    gst_structure_id_set (s, quark_rtp_from, G_TYPE_STRING, address_str, NULL);
     g_free (address_str);
   }
   if (src->rtcp_from) {
     address_str = __g_socket_address_to_string (src->rtcp_from);
-    gst_structure_set (s, "rtcp-from", G_TYPE_STRING, address_str, NULL);
+    gst_structure_id_set (s, quark_rtcp_from, G_TYPE_STRING, address_str, NULL);
     g_free (address_str);
   }
 
   /* is_sender applies to internal sources you send with, but also
      the equivalent source on the receiver side */
   if (is_sender) {
-    gst_structure_set (s,
-        "clock-rate", G_TYPE_INT, src->clock_rate,
-        "bitrate", G_TYPE_UINT64, src->bitrate, NULL);
+    gst_structure_id_set (s,
+        quark_clock_rate, G_TYPE_INT, src->clock_rate,
+        quark_bitrate, G_TYPE_UINT64, src->bitrate, NULL);
 
     if (internal) {
-      gst_structure_set (s,
-          "seqnum-base", G_TYPE_INT, src->seqnum_offset,
-          "octets-sent", G_TYPE_UINT64, src->stats.octets_sent,
-          "packets-sent", G_TYPE_UINT64, src->stats.packets_sent,
-          "recv-pli-count", G_TYPE_UINT, src->stats.recv_pli_count,
-          "recv-fir-count", G_TYPE_UINT, src->stats.recv_fir_count,
-          "recv-nack-count", G_TYPE_UINT, src->stats.recv_nack_count, NULL);
+      gst_structure_id_set (s,
+          quark_seqnum_base, G_TYPE_INT, src->seqnum_offset,
+          quark_octets_sent, G_TYPE_UINT64, src->stats.octets_sent,
+          quark_packets_sent, G_TYPE_UINT64, src->stats.packets_sent,
+          quark_recv_pli_count, G_TYPE_UINT, src->stats.recv_pli_count,
+          quark_recv_fir_count, G_TYPE_UINT, src->stats.recv_fir_count,
+          quark_recv_nack_count, G_TYPE_UINT, src->stats.recv_nack_count, NULL);
     } else {
-      gst_structure_set (s,
-          "octets-received", G_TYPE_UINT64, src->stats.octets_received,
-          "packets-received", G_TYPE_UINT64, src->stats.packets_received,
-          "bytes-received", G_TYPE_UINT64, src->stats.bytes_received,
-          "packets-lost", G_TYPE_INT,
+      gst_structure_id_set (s,
+          quark_octets_received, G_TYPE_UINT64, src->stats.octets_received,
+          quark_packets_received, G_TYPE_UINT64, src->stats.packets_received,
+          quark_bytes_received, G_TYPE_UINT64, src->stats.bytes_received,
+          quark_packets_lost, G_TYPE_INT,
           (gint) rtp_stats_get_packets_lost (&src->stats),
-          "jitter", G_TYPE_UINT,
+          quark_jitter, G_TYPE_UINT,
           (guint) (src->stats.jitter >> 4),
-          "sent-pli-count", G_TYPE_UINT, src->stats.sent_pli_count,
-          "sent-fir-count", G_TYPE_UINT, src->stats.sent_fir_count,
-          "sent-nack-count", G_TYPE_UINT, src->stats.sent_nack_count,
-          "recv-packet-rate", G_TYPE_UINT,
+          quark_sent_pli_count, G_TYPE_UINT, src->stats.sent_pli_count,
+          quark_sent_fir_count, G_TYPE_UINT, src->stats.sent_fir_count,
+          quark_sent_nack_count, G_TYPE_UINT, src->stats.sent_nack_count,
+          quark_recv_packet_rate, G_TYPE_UINT,
           gst_rtp_packet_rate_ctx_get (&src->packet_rate_ctx), NULL);
     }
   }
@@ -459,49 +570,48 @@ rtp_source_create_stats (RTPSource * src)
   /* get the last SR. */
   have_sr = rtp_source_get_last_sr (src, &time, &ntptime, &rtptime,
       &packet_count, &octet_count);
-  gst_structure_set (s, "have-sr", G_TYPE_BOOLEAN, have_sr, NULL);
+  gst_structure_id_set (s, quark_have_sr, G_TYPE_BOOLEAN, have_sr, NULL);
   if (have_sr) {
-    gst_structure_set (s,
-        "have-sr", G_TYPE_BOOLEAN, have_sr,
-        "sr-ntptime", G_TYPE_UINT64, ntptime,
-        "sr-rtptime", G_TYPE_UINT, (guint) rtptime,
-        "sr-octet-count", G_TYPE_UINT, (guint) octet_count,
-        "sr-packet-count", G_TYPE_UINT, (guint) packet_count, NULL);
+    gst_structure_id_set (s,
+        quark_sr_ntptime, G_TYPE_UINT64, ntptime,
+        quark_sr_rtptime, G_TYPE_UINT, (guint) rtptime,
+        quark_sr_octet_count, G_TYPE_UINT, (guint) octet_count,
+        quark_sr_packet_count, G_TYPE_UINT, (guint) packet_count, NULL);
   }
 
   if (!internal) {
     /* get the last RB we sent */
-    gst_structure_set (s,
-        "sent-rb", G_TYPE_BOOLEAN, src->last_rr.is_valid, NULL);
+    gst_structure_id_set (s,
+        quark_sent_rb, G_TYPE_BOOLEAN, src->last_rr.is_valid, NULL);
     if (src->last_rr.is_valid) {
-      gst_structure_set (s,
-          "sent-rb-fractionlost", G_TYPE_UINT,
+      gst_structure_id_set (s,
+          quark_sent_rb_fractionlost, G_TYPE_UINT,
           (guint) src->last_rr.fractionlost,
-          "sent-rb-packetslost", G_TYPE_INT,
+          quark_sent_rb_packetslost, G_TYPE_INT,
           (gint) src->last_rr.packetslost,
-          "sent-rb-exthighestseq", G_TYPE_UINT,
+          quark_sent_rb_exthighestseq, G_TYPE_UINT,
           (guint) src->last_rr.exthighestseq,
-          "sent-rb-jitter", G_TYPE_UINT,
+          quark_sent_rb_jitter, G_TYPE_UINT,
           (guint) src->last_rr.jitter,
-          "sent-rb-lsr", G_TYPE_UINT,
+          quark_sent_rb_lsr, G_TYPE_UINT,
           (guint) src->last_rr.lsr,
-          "sent-rb-dlsr", G_TYPE_UINT, (guint) src->last_rr.dlsr, NULL);
+          quark_sent_rb_dlsr, G_TYPE_UINT, (guint) src->last_rr.dlsr, NULL);
     }
   } else {
     /* get the last RB */
     have_rb = rtp_source_get_last_rb (src, &ssrc, &fractionlost,
         &packetslost, &exthighestseq, &jitter, &lsr, &dlsr, &round_trip);
-    gst_structure_set (s, "have-rb", G_TYPE_BOOLEAN, have_rb, NULL);
+    gst_structure_id_set (s, quark_have_rb, G_TYPE_BOOLEAN, have_rb, NULL);
     if (have_rb) {
-      gst_structure_set (s,
-          "rb-ssrc", G_TYPE_UINT, ssrc,
-          "rb-fractionlost", G_TYPE_UINT, (guint) fractionlost,
-          "rb-packetslost", G_TYPE_INT, (gint) packetslost,
-          "rb-exthighestseq", G_TYPE_UINT, (guint) exthighestseq,
-          "rb-jitter", G_TYPE_UINT, (guint) jitter,
-          "rb-lsr", G_TYPE_UINT, (guint) lsr,
-          "rb-dlsr", G_TYPE_UINT, (guint) dlsr,
-          "rb-round-trip", G_TYPE_UINT, (guint) round_trip, NULL);
+      gst_structure_id_set (s,
+          quark_rb_ssrc, G_TYPE_UINT, ssrc,
+          quark_rb_fractionlost, G_TYPE_UINT, (guint) fractionlost,
+          quark_rb_packetslost, G_TYPE_INT, (gint) packetslost,
+          quark_rb_exthighestseq, G_TYPE_UINT, (guint) exthighestseq,
+          quark_rb_jitter, G_TYPE_UINT, (guint) jitter,
+          quark_rb_lsr, G_TYPE_UINT, (guint) lsr,
+          quark_rb_dlsr, G_TYPE_UINT, (guint) dlsr,
+          quark_rb_round_trip, G_TYPE_UINT, (guint) round_trip, NULL);
     }
   }
 
