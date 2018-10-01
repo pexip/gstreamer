@@ -536,6 +536,21 @@ static void update_rtx_stats (GstRtpJitterBuffer * jitterbuffer,
 static GstClockTime get_current_running_time (GstRtpJitterBuffer *
     jitterbuffer);
 
+static GQuark quark_application_x_rtp_jitterbuffer_stats;
+static GQuark quark_num_pushed;
+static GQuark quark_num_lost;
+static GQuark quark_num_late;
+static GQuark quark_num_duplicates;
+static GQuark quark_avg_jitter;
+static GQuark quark_total_avg_jitter;
+static GQuark quark_min_jitter;
+static GQuark quark_max_jitter;
+static GQuark quark_latency_ms;
+static GQuark quark_rtx_count;
+static GQuark quark_rtx_success_count;
+static GQuark quark_rtx_per_packet;
+static GQuark quark_rtx_rtt;
+
 static void
 gst_rtp_jitter_buffer_class_init (GstRtpJitterBufferClass * klass)
 {
@@ -544,6 +559,22 @@ gst_rtp_jitter_buffer_class_init (GstRtpJitterBufferClass * klass)
 
   gobject_class = (GObjectClass *) klass;
   gstelement_class = (GstElementClass *) klass;
+
+  quark_application_x_rtp_jitterbuffer_stats =
+      g_quark_from_static_string ("application/x-rtp-jitterbuffer-stats");
+  quark_num_pushed = g_quark_from_static_string ("num-pushed");
+  quark_num_lost = g_quark_from_static_string ("num-lost");
+  quark_num_late = g_quark_from_static_string ("num-late");
+  quark_num_duplicates = g_quark_from_static_string ("num-duplicates");
+  quark_avg_jitter = g_quark_from_static_string ("avg-jitter");
+  quark_total_avg_jitter = g_quark_from_static_string ("total-avg-jitter");
+  quark_min_jitter = g_quark_from_static_string ("min-jitter");
+  quark_max_jitter = g_quark_from_static_string ("max-jitter");
+  quark_latency_ms = g_quark_from_static_string ("latency-ms");
+  quark_rtx_count = g_quark_from_static_string ("rtx-count");
+  quark_rtx_success_count = g_quark_from_static_string ("rtx-success-count");
+  quark_rtx_per_packet = g_quark_from_static_string ("rtx-per-packet");
+  quark_rtx_rtt = g_quark_from_static_string ("rtx-rtt");
 
   gobject_class->finalize = gst_rtp_jitter_buffer_finalize;
 
@@ -4920,20 +4951,20 @@ gst_rtp_jitter_buffer_create_stats (GstRtpJitterBuffer * jbuf)
   GstStructure *s;
 
   JBUF_LOCK (priv);
-  s = gst_structure_new ("application/x-rtp-jitterbuffer-stats",
-      "num-pushed", G_TYPE_UINT64, priv->num_pushed,
-      "num-lost", G_TYPE_UINT64, priv->num_lost,
-      "num-late", G_TYPE_UINT64, priv->num_late,
-      "num-duplicates", G_TYPE_UINT64, priv->num_duplicates,
-      "avg-jitter", G_TYPE_UINT64, priv->avg_jitter,
-      "total-avg-jitter", G_TYPE_UINT64, priv->total_avg_jitter,
-      "min-jitter", G_TYPE_UINT64, priv->min_jitter,
-      "max-jitter", G_TYPE_UINT64, priv->max_jitter,
-      "latency-ms", G_TYPE_UINT, priv->latency_ms,
-      "rtx-count", G_TYPE_UINT64, priv->num_rtx_requests,
-      "rtx-success-count", G_TYPE_UINT64, priv->num_rtx_success,
-      "rtx-per-packet", G_TYPE_DOUBLE, priv->avg_rtx_num,
-      "rtx-rtt", G_TYPE_UINT64, priv->avg_rtx_rtt, NULL);
+  s = gst_structure_new_id (quark_application_x_rtp_jitterbuffer_stats,
+      quark_num_pushed, G_TYPE_UINT64, priv->num_pushed,
+      quark_num_lost, G_TYPE_UINT64, priv->num_lost,
+      quark_num_late, G_TYPE_UINT64, priv->num_late,
+      quark_num_duplicates, G_TYPE_UINT64, priv->num_duplicates,
+      quark_avg_jitter, G_TYPE_UINT64, priv->avg_jitter,
+      quark_total_avg_jitter, G_TYPE_UINT64, priv->total_avg_jitter,
+      quark_min_jitter, G_TYPE_UINT64, priv->min_jitter,
+      quark_max_jitter, G_TYPE_UINT64, priv->max_jitter,
+      quark_latency_ms, G_TYPE_UINT, priv->latency_ms,
+      quark_rtx_count, G_TYPE_UINT64, priv->num_rtx_requests,
+      quark_rtx_success_count, G_TYPE_UINT64, priv->num_rtx_success,
+      quark_rtx_per_packet, G_TYPE_DOUBLE, priv->avg_rtx_num,
+      quark_rtx_rtt, G_TYPE_UINT64, priv->avg_rtx_rtt, NULL);
   JBUF_UNLOCK (priv);
 
   return s;
