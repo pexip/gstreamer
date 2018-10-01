@@ -140,6 +140,13 @@ static void rtp_session_nack_probe (RTPSession * sess,
 
 static guint rtp_session_signals[LAST_SIGNAL] = { 0 };
 
+static GQuark quark_application_x_rtp_session_stats;
+static GQuark quark_recv_nack_count;
+static GQuark quark_rtx_drop_count;
+static GQuark quark_sent_nack_count;
+static GQuark quark_source_stats;
+
+
 G_DEFINE_TYPE (RTPSession, rtp_session, G_TYPE_OBJECT);
 
 static guint32 rtp_session_create_new_ssrc (RTPSession * sess);
@@ -166,6 +173,13 @@ static void
 rtp_session_class_init (RTPSessionClass * klass)
 {
   GObjectClass *gobject_class;
+
+  quark_application_x_rtp_session_stats =
+      g_quark_from_static_string ("application/x-rtp-session-stats");
+  quark_recv_nack_count = g_quark_from_static_string ("recv-nack-count");
+  quark_rtx_drop_count = g_quark_from_static_string ("rtx-drop-count");
+  quark_sent_nack_count = g_quark_from_static_string ("sent-nack-count");
+  quark_source_stats = g_quark_from_static_string ("source-stats");
 
   gobject_class = (GObjectClass *) klass;
 
@@ -892,10 +906,10 @@ rtp_session_create_stats (RTPSession * sess)
   guint size;
 
   RTP_SESSION_LOCK (sess);
-  s = gst_structure_new ("application/x-rtp-session-stats",
-      "rtx-drop-count", G_TYPE_UINT, sess->stats.nacks_dropped,
-      "sent-nack-count", G_TYPE_UINT, sess->stats.nacks_sent,
-      "recv-nack-count", G_TYPE_UINT, sess->stats.nacks_received, NULL);
+  s = gst_structure_new_id (quark_application_x_rtp_session_stats,
+      quark_rtx_drop_count, G_TYPE_UINT, sess->stats.nacks_dropped,
+      quark_sent_nack_count, G_TYPE_UINT, sess->stats.nacks_sent,
+      quark_recv_nack_count, G_TYPE_UINT, sess->stats.nacks_received, NULL);
 
   size = g_hash_table_size (sess->ssrcs[sess->mask_idx]);
   source_stats = g_value_array_new (size);
@@ -905,7 +919,7 @@ rtp_session_create_stats (RTPSession * sess)
 
   g_value_init (&source_stats_v, G_TYPE_VALUE_ARRAY);
   g_value_take_boxed (&source_stats_v, source_stats);
-  gst_structure_take_value (s, "source-stats", &source_stats_v);
+  gst_structure_id_take_value (s, quark_source_stats, &source_stats_v);
 
   return s;
 }
