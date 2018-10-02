@@ -681,14 +681,14 @@ gst_multiudpsink_send_messages (GstMultiUDPSink * sink, GSocket * socket,
       skip = 1;
       if (msg_size > UDP_MAX_SIZE) {
         if (!sent_max_size_warning) {
-          GST_ELEMENT_WARNING (sink, RESOURCE, WRITE,
+          GST_ELEMENT_INFO (sink, RESOURCE, WRITE,
               ("Attempting to send a UDP packets larger than maximum size "
                   "(%u > %d)", msg_size, UDP_MAX_SIZE),
               ("Reason: %s", err ? err->message : "unknown reason"));
           sent_max_size_warning = FALSE;
         }
       } else {
-        GST_ELEMENT_WARNING (sink, RESOURCE, WRITE,
+        GST_ELEMENT_INFO (sink, RESOURCE, WRITE,
             ("Error sending UDP packets"), ("client %s, reason: %s",
                 gst_udp_address_get_string (msg->address, astr, sizeof (astr)),
                 (err != NULL) ? err->message : "unknown reason"));
