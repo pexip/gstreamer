@@ -53,6 +53,7 @@
 
 static GHashTable *metainfo = NULL;
 static GRWLock lock;
+static GQuark quark_tags;
 
 GQuark _gst_meta_transform_copy;
 GQuark _gst_meta_tag_memory;
@@ -62,6 +63,7 @@ _priv_gst_meta_initialize (void)
 {
   g_rw_lock_init (&lock);
   metainfo = g_hash_table_new (g_str_hash, g_str_equal);
+  quark_tags = g_quark_from_static_string ("tags");
 
   _gst_meta_transform_copy = g_quark_from_static_string ("gst-copy");
   _gst_meta_tag_memory = g_quark_from_static_string ("memory");
@@ -98,8 +100,7 @@ gst_meta_api_type_register (const gchar * api, const gchar ** tags)
     }
   }
 
-  g_type_set_qdata (type, g_quark_from_string ("tags"),
-      g_strdupv ((gchar **) tags));
+  g_type_set_qdata (type, quark_tags, g_strdupv ((gchar **) tags));
 
   return type;
 }
@@ -136,7 +137,7 @@ gst_meta_api_type_get_tags (GType api)
   const gchar **tags;
   g_return_val_if_fail (api != 0, FALSE);
 
-  tags = g_type_get_qdata (api, g_quark_from_string ("tags"));
+  tags = g_type_get_qdata (api, quark_tags);
 
   if (!tags[0])
     return NULL;
