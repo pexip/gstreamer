@@ -22,6 +22,8 @@
 #ifdef HAVE_CONFIG_H
 #include "config.h"
 #endif
+#include <gst/check/gstcheck.h>
+#include <gst/check/gstharness.h>
 
 #ifdef HAVE_UNISTD_H
 #include <unistd.h>
@@ -31,7 +33,9 @@
 #include <fcntl.h>
 #include <errno.h>
 
-#include <gst/check/gstcheck.h>
+#ifdef G_OS_WIN32
+#include <winsock2.h>
+#endif
 
 static gboolean have_eos = FALSE;
 
@@ -76,9 +80,11 @@ cleanup_fdsrc (GstElement * fdsrc)
 
 GST_START_TEST (test_num_buffers)
 {
-  GstElement *src;
+  GstHarness *h;
   gint pipe_fd[2];
   gchar data[4096];
+  GstEvent *event;
+  guint i;
 
 #ifndef G_OS_WIN32
   fail_if (pipe (pipe_fd) < 0);
@@ -86,39 +92,39 @@ GST_START_TEST (test_num_buffers)
   fail_if (_pipe (pipe_fd, 2048, _O_BINARY) < 0);
 #endif
 
-  src = setup_fdsrc ();
-  g_object_set (G_OBJECT (src), "num-buffers", 3, NULL);
-  g_object_set (G_OBJECT (src), "fd", pipe_fd[0], NULL);
-  fail_unless (gst_element_set_state (src,
-          GST_STATE_PLAYING) == GST_STATE_CHANGE_SUCCESS,
-      "could not set to playing");
+  h = gst_harness_new ("fdsrc");
+  g_object_set (G_OBJECT (h->element), "num-buffers", 3, NULL);
+  g_object_set (G_OBJECT (h->element), "fd", pipe_fd[0], NULL);
+  gst_harness_play (h);
 
 #if defined (G_OS_UNIX) && defined (O_NONBLOCK)
   {
     int flags;
-
     flags = fcntl (pipe_fd[1], F_GETFL, 0);
     fcntl (pipe_fd[1], F_SETFL, flags | O_NONBLOCK);
   }
 #endif
 
   memset (data, 0, 4096);
-  while (!have_eos) {
-    int ret = write (pipe_fd[1], data, 4096);
+  for (i = 0; i < 3; i++) {
+    int ret = _write (pipe_fd[1], data, 4096);
     fail_if (ret < 0 && errno != EAGAIN);
-    g_usleep (100);
+
+    gst_buffer_unref (gst_harness_pull (h));
   }
 
-  fail_unless (g_list_length (buffers) == 3);
-  fail_unless (gst_element_set_state (src,
-          GST_STATE_NULL) == GST_STATE_CHANGE_SUCCESS, "could not set to null");
+  /* stream-start and segment */
+  for (i = 0; i < 2; i++) {
+    gst_event_unref (gst_harness_pull_event (h));
+  }
 
-  /* cleanup */
-  cleanup_fdsrc (src);
+  /* check we got EOS after 3 buffers */
+  event = gst_harness_pull_event (h);
+  fail_unless_equals_int (GST_EVENT_EOS, GST_EVENT_TYPE (event));
+
+  gst_harness_teardown (h);
   close (pipe_fd[0]);
   close (pipe_fd[1]);
-  g_list_foreach (buffers, (GFunc) gst_mini_object_unref, NULL);
-  g_list_free (buffers);
 }
 
 GST_END_TEST;
