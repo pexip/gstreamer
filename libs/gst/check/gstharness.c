@@ -990,15 +990,13 @@ gst_harness_add_parse (GstHarness * h, const gchar * launchline)
 
   g_return_if_fail (launchline != NULL);
 
-  desc = g_strdup_printf ("bin.( %s )", launchline);
   bin =
-      (GstBin *) gst_parse_launch_full (desc, NULL, GST_PARSE_FLAG_FATAL_ERRORS,
-      &error);
+    (GstBin *) gst_parse_launch_full (launchline, NULL,
+    GST_PARSE_FLAG_FATAL_ERRORS | GST_PARSE_FLAG_PLACE_IN_BIN, &error);
 
   if (G_UNLIKELY (error != NULL)) {
     g_error ("Unable to create pipeline '%s': %s", desc, error->message);
   }
-  g_free (desc);
 
   /* find pads and ghost them if necessary */
   if ((pad = gst_bin_find_unlinked_pad (bin, GST_PAD_SRC)) != NULL) {

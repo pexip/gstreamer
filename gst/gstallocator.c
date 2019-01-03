@@ -414,6 +414,7 @@ _sysmem_new_block (GstMemoryFlags flags,
   if (mem == NULL)
     return NULL;
 
+  // memset (mem, 255, slice_size);
   data = (guint8 *) mem + sizeof (GstMemorySystem);
 
   /* do alignment */
