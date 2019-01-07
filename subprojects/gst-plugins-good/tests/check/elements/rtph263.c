@@ -134,7 +134,7 @@ GST_START_TEST (test_h263pay_mode_b_snow)
     return;
 
   h = gst_harness_new_parse
-      ("avenc_h263 rtp-payload-size=1 ! rtph263pay mtu=1350 ");
+      ("avenc_h263 ps=1 ! rtph263pay mtu=1350 ");
   gst_harness_add_src_parse (h,
       "videotestsrc pattern=snow is-live=1 ! "
       "capsfilter caps=\"video/x-raw,format=I420,width=176,height=144\"", TRUE);
