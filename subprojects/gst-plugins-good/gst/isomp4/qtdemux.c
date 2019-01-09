@@ -13607,6 +13607,7 @@ qtdemux_parse_trak (GstQTDemux * qtdemux, GNode * trak)
             goto corrupt_file;
           }
 
+          gst_caps_unref (entry->caps);
           entry->caps = gst_codec_utils_opus_create_caps (rate, n_channels,
               channel_mapping_family, stream_count, coupled_count,
               channel_mapping);
