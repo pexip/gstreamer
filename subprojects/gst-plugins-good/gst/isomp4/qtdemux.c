@@ -12817,6 +12817,7 @@ qtdemux_parse_trak (GstQTDemux * qtdemux, GNode * trak)
               channel_mapping[i] = GST_READ_UINT8 (dops_data + i + 22);
           }
 
+          gst_caps_unref (entry->caps);
           entry->caps = gst_codec_utils_opus_create_caps (rate, channels,
               channel_mapping_family, stream_count, coupled_count,
               channel_mapping);
