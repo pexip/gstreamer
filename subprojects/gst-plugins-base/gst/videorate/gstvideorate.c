@@ -608,6 +608,16 @@ gst_video_rate_setcaps (GstBaseTransform * trans, GstCaps * in_caps,
   else
     videorate->wanted_diff = 0;
 
+  /* PEXHACK
+   * drop-only needed due to:
+   * https://github.com/pexip/mcu/commit/f819d921773ab222ee0fb950e9808c48b3794156
+   */
+  {
+    gint in_fps = (videorate->from_rate_numerator * 1000) / videorate->from_rate_denominator;
+    gint out_fps = (videorate->to_rate_numerator * 1000) / videorate->to_rate_denominator;
+    if (in_fps >= out_fps)
+      videorate->drop_only = TRUE;
+  }
 done:
   if (ret) {
     gst_caps_replace (&videorate->in_caps, in_caps);
