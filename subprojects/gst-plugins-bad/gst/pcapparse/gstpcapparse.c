@@ -122,6 +122,7 @@ struct _GstPcapParse
 
   gboolean newsegment_sent;
   gboolean first_packet;
+  gboolean discont;
 };
 
 
@@ -170,6 +171,7 @@ gst_pcap_parse_reset (GstPcapParse * self)
   self->start_ts = GST_CLOCK_TIME_NONE;
   self->newsegment_sent = FALSE;
   self->first_packet = TRUE;
+  self->discont = TRUE;
 
   gst_adapter_clear (self->adapter);
   g_hash_table_remove_all (self->stats_map);
@@ -582,6 +584,15 @@ gst_pcap_parse_chain (GstPad * pad, GstObject * parent, GstBuffer * buffer)
 
             if (list == NULL)
               list = gst_buffer_list_new ();
+
+            /* Take control of the discont flag in order to not have one
+             * discont buffer be split into multiple  */
+            if (self->discont)
+              GST_BUFFER_FLAG_SET (out_buf, GST_BUFFER_FLAG_DISCONT);
+            else
+              GST_BUFFER_FLAG_UNSET (out_buf, GST_BUFFER_FLAG_DISCONT);
+            self->discont = FALSE;
+
             gst_buffer_list_add (list, out_buf);
           } else {
             gst_adapter_unmap (self->adapter);
