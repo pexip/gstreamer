@@ -3188,11 +3188,13 @@ rtp_session_process_rtcp (RTPSession * sess, GstBuffer * buffer,
          * a proper process function. */
         GST_DEBUG ("got RTCP XR packet, but ignored");
         break;
+      case GST_RTCP_TYPE_INVALID:
       default:
-        GST_WARNING ("got unknown RTCP packet type: %d", type);
+        GST_WARNING ("got unknown/invalid RTCP packet type: %d", type);
+        more = FALSE;
         break;
     }
-    more = gst_rtcp_packet_move_to_next (&packet);
+    more = more && gst_rtcp_packet_move_to_next (&packet);
   }
 
   gst_rtcp_buffer_unmap (&rtcp);
