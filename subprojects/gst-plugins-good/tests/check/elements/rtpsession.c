@@ -1710,6 +1710,37 @@ GST_START_TEST (test_illegal_rtcp_fb_packet)
 
 GST_END_TEST;
 
+GST_START_TEST (test_illegal_rtcp_type_packet)
+{
+  SessionHarness *h = session_harness_new ();
+  GstBuffer *buf;
+  const guint8 rtcp_invalid_type_pkt[] = {
+    /* Initial SR vaid packet */
+    0x81, 0xc8, 0x00, 0x0c, 0x3f, 0x33, 0xa4, 0xed,
+    0xdf, 0xfe, 0x6d, 0x48, 0xad, 0xad, 0xf4, 0x28,
+    0x04, 0xce, 0x6d, 0x92, 0x00, 0x00, 0x02, 0x08,
+    0x00, 0x05, 0x7b, 0x69, 0x1c, 0x71, 0x28, 0x33,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x03, 0x3b, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00,
+    /* Invalid RTCP packet type (ignore it) */
+    0x80, 0x00, 0x00, 0x00
+  };
+  g_object_set (h->internal_session, "internal-ssrc", 0xDEADBEEF, NULL);
+
+  buf = gst_buffer_new_and_alloc (sizeof (rtcp_invalid_type_pkt));
+  gst_buffer_fill (buf, 0, rtcp_invalid_type_pkt,
+      sizeof (rtcp_invalid_type_pkt));
+  GST_BUFFER_DTS (buf) = GST_BUFFER_PTS (buf) = G_GUINT64_CONSTANT (0);
+
+  /* Push the packet */
+  fail_unless_equals_int (GST_FLOW_OK, session_harness_recv_rtcp (h, buf));
+
+  session_harness_free (h);
+}
+
+GST_END_TEST;
+
 typedef struct
 {
   GCond *cond;
@@ -4629,6 +4660,7 @@ rtpsession_suite (void)
   tcase_add_test (tc_chain, test_request_nack_surplus);
   tcase_add_test (tc_chain, test_request_nack_packing);
   tcase_add_test (tc_chain, test_illegal_rtcp_fb_packet);
+  tcase_add_test (tc_chain, test_illegal_rtcp_type_packet);
   tcase_add_test (tc_chain, test_feedback_rtcp_race);
   tcase_add_test (tc_chain, test_receive_regular_pli);
   tcase_add_test (tc_chain, test_receive_pli_no_sender_ssrc);
