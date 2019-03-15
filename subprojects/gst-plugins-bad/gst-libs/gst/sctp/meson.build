@@ -29,8 +29,26 @@ pkgconfig.generate(libgstsctp,
   description : 'SCTP helper functions',
 )
 
+sctp_gen_sources = []
+if build_gir
+  sctp_gir = gnome.generate_gir(libgstsctp,
+    sources : sctp_sources + sctp_headers,
+    namespace : 'GstSctp',
+    nsversion : api_version,
+    identifier_prefix : 'Gst',
+    symbol_prefix : 'gst',
+    export_packages : 'gstreamer-sctp-1.0',
+    includes : ['Gst-1.0'],
+    install : true,
+    extra_args : gir_init_section + ['-DGST_USE_UNSTABLE_API'],
+    dependencies : [gstbase_dep]
+  )
+  sctp_gen_sources += sctp_gir
+endif
+
 gstsctp_dep = declare_dependency(link_with : libgstsctp,
   include_directories : [libsinc],
+  sources : sctp_gen_sources,
   dependencies : [gstbase_dep])
 
 meson.override_dependency('gstreamer-sctp-1.0', gstsctp_dep)
