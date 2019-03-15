@@ -49,8 +49,8 @@ const GstMetaInfo *gst_sctp_receive_meta_get_info (void);
 GST_SCTP_API
 GstSctpReceiveMeta *gst_sctp_buffer_add_receive_meta (GstBuffer * buffer,
     guint32 ppid);
-
-#define gst_sctp_buffer_get_receive_meta(b) ((GstSctpReceiveMeta *)gst_buffer_get_meta((b), GST_SCTP_RECEIVE_META_API_TYPE))
+GST_SCTP_API
+GstSctpReceiveMeta *gst_sctp_buffer_get_receive_meta (GstBuffer * buffer);
 
 G_END_DECLS
 
