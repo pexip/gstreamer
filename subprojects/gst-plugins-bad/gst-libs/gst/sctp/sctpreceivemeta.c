@@ -79,6 +79,15 @@ gst_sctp_receive_meta_transform (GstBuffer * transbuf, GstMeta * meta,
   return TRUE;
 }
 
+/**
+ * gst_sctp_buffer_add_receive_meta:
+ * @buffer: a #GstBuffer
+ * @ppid: sctp ppid
+ *
+ * Attaches @ppid as metadata in a #GstSctpReceiveMeta to @buffer.
+ *
+ * Returns: (transfer none): a #GstSctpReceiveMeta connected to @buffer
+ */
 GstSctpReceiveMeta *
 gst_sctp_buffer_add_receive_meta (GstBuffer * buffer, guint32 ppid)
 {
@@ -90,4 +99,20 @@ gst_sctp_buffer_add_receive_meta (GstBuffer * buffer, guint32 ppid)
       GST_SCTP_RECEIVE_META_INFO, NULL);
   gst_sctp_receive_meta->ppid = ppid;
   return gst_sctp_receive_meta;
+}
+
+/**
+ * gst_sctp_buffer_get_receive_meta:
+ * @buffer: a #GstBuffer
+ *
+ * Find the #GstSctpReceiveMeta on @buffer.
+ *
+ * Returns: (transfer none): the #GstSctpReceiveMeta or %NULL when there
+ * is no such metadata on @buffer.
+ */
+GstSctpReceiveMeta *
+gst_sctp_buffer_get_receive_meta (GstBuffer * buffer)
+{
+  return (GstSctpReceiveMeta *)
+      gst_buffer_get_meta(buffer, GST_SCTP_RECEIVE_META_API_TYPE);
 }
