@@ -84,6 +84,18 @@ gst_sctp_send_meta_transform (GstBuffer * transbuf, GstMeta * meta,
   return TRUE;
 }
 
+/**
+ * gst_sctp_buffer_add_send_meta:
+ * @buffer: a #GstBuffer
+ * @ppid: sctp ppid
+ * @ordered: whether buffer should be sent ordered
+ * @pr: partial reliability mode
+ * @pr_param: partial reliability parameter
+ *
+ * Attaches metadata in a #GstSctpSendMeta to @buffer.
+ *
+ * Returns: (transfer none): a #GstSctpSendMeta connected to @buffer
+ */
 GstSctpSendMeta *
 gst_sctp_buffer_add_send_meta (GstBuffer * buffer, guint32 ppid,
     gboolean ordered, GstSctpSendMetaPartiallyReliability pr, guint32 pr_param)
@@ -99,4 +111,20 @@ gst_sctp_buffer_add_send_meta (GstBuffer * buffer, guint32 ppid,
   gst_sctp_send_meta->pr = pr;
   gst_sctp_send_meta->pr_param = pr_param;
   return gst_sctp_send_meta;
+}
+
+/**
+ * gst_sctp_buffer_get_send_meta:
+ * @buffer: a #GstBuffer
+ *
+ * Find the #GstSctpSendMeta on @buffer.
+ *
+ * Returns: (transfer none): the #GstSctpSendMeta or %NULL when there
+ * is no such metadata on @buffer.
+ */
+GstSctpSendMeta *
+gst_sctp_buffer_get_send_meta (GstBuffer * buffer)
+{
+  return (GstSctpSendMeta *)
+      gst_buffer_get_meta(buffer, GST_SCTP_SEND_META_API_TYPE);
 }
