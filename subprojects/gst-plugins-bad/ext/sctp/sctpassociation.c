@@ -93,7 +93,7 @@ static guint signals[LAST_SIGNAL] = { 0 };
 
 static GParamSpec *properties[NUM_PROPERTIES];
 
-#define DEFAULT_NUMBER_OF_SCTP_STREAMS 1024
+#define DEFAULT_NUMBER_OF_SCTP_STREAMS 65535
 #define DEFAULT_LOCAL_SCTP_PORT 0
 #define DEFAULT_REMOTE_SCTP_PORT 0
 
