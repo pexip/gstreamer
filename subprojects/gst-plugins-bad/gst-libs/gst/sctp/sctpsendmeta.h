@@ -61,8 +61,8 @@ GST_SCTP_API
 GstSctpSendMeta *gst_sctp_buffer_add_send_meta (GstBuffer * buffer,
     guint32 ppid, gboolean ordered, GstSctpSendMetaPartiallyReliability pr,
     guint32 pr_param);
-
-#define gst_sctp_buffer_get_send_meta(b) ((GstSctpSendMeta *)gst_buffer_get_meta((b), GST_SCTP_SEND_META_API_TYPE))
+GST_SCTP_API
+GstSctpSendMeta *gst_sctp_buffer_get_send_meta (GstBuffer * buffer);
 
 G_END_DECLS
 
