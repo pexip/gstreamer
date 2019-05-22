@@ -415,6 +415,8 @@ gst_vpx_dec_prepare_image (GstVPXDec * dec, const vpx_image_t * img)
   GstVideoInfo *info = &dec->output_state->info;
 
   buffer = gst_buffer_ref (frame->buffer);
+  gst_buffer_unmap (buffer, &frame->info);
+  gst_buffer_map (buffer, &frame->info, GST_MAP_READ);
 
   /* FIXME: an atomic remap would be preferable, for now we simply
    * remap the buffer from RW to RO when using a sysmem allocator,
