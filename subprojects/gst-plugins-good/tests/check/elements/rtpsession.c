@@ -4440,6 +4440,99 @@ GST_START_TEST (test_send_bye_signal)
 
 GST_END_TEST;
 
+GST_START_TEST (test_stats_rtcp_with_multiple_rb)
+{
+  SessionHarness *h = session_harness_new ();
+  guint j, k;
+  GstFlowReturn res;
+  GstRTCPPacket packet;
+  gint internal_stats_entries;
+  GstBuffer *buf = NULL;
+  GstStructure *stats = NULL;
+  GValueArray *source_stats = NULL;
+  GstRTCPBuffer rtcp = GST_RTCP_BUFFER_INIT;
+
+  /* Push RTP from our send SSRCs */
+  for (j = 0; j < 5; j++) {     /* packets per ssrc */
+    for (k = 0; k < 2; k++) {   /* number of ssrcs */
+      buf = generate_test_buffer (j, 10000 + k);
+      res = session_harness_send_rtp (h, buf);
+      fail_unless_equals_int (GST_FLOW_OK, res);
+    }
+  }
+
+  /* Push RTCP RR with 2 RBs corresponding to our send SSRCs */
+  buf = gst_rtcp_buffer_new (1000);
+  fail_unless (gst_rtcp_buffer_map (buf, GST_MAP_READWRITE, &rtcp));
+  fail_unless (gst_rtcp_buffer_add_packet (&rtcp, GST_RTCP_TYPE_RR, &packet));
+  gst_rtcp_packet_rr_set_ssrc (&packet, 20000);
+  for (k = 0; k < 2; k++) {
+    guint32 ssrc = 10000 + k;
+    guint32 jitter = (ssrc % 2) + 10;
+    gst_rtcp_packet_add_rb (&packet, 10000 + k, /* ssrc */
+        0,                      /* fractionlost */
+        0,                      /* packetslost */
+        4,                      /* exthighestseq */
+        jitter,                 /* jitter */
+        0,                      /* lsr */
+        0);                     /* dlsr */
+  }
+  gst_rtcp_buffer_unmap (&rtcp);
+  fail_unless_equals_int (GST_FLOW_OK, session_harness_recv_rtcp (h, buf));
+
+  /* Check that the stats reflect the data we received in RTCP */
+  internal_stats_entries = 0;
+  g_object_get (h->session, "stats", &stats, NULL);
+  fail_unless (stats != NULL);
+  source_stats =
+      g_value_get_boxed (gst_structure_get_value (stats, "source-stats"));
+  fail_unless (source_stats != NULL);
+  for (j = 0; j < source_stats->n_values; j++) {
+    guint32 ssrc;
+    gboolean internal;
+    GstStructure *s =
+        g_value_get_boxed (g_value_array_get_nth (source_stats, j));
+    fail_unless (gst_structure_get (s, "internal", G_TYPE_BOOLEAN, &internal,
+            "ssrc", G_TYPE_UINT, &ssrc, NULL));
+    if (internal) {
+      gboolean have_rb;
+      guint rb_fractionlost;
+      gint rb_packetslost;
+      guint rb_exthighestseq;
+      guint rb_jitter;
+      guint rb_lsr;
+      guint rb_dlsr;
+
+      fail_unless_equals_int (ssrc, 10000 + internal_stats_entries);
+
+      fail_unless (gst_structure_get (s,
+              "have-rb", G_TYPE_BOOLEAN, &have_rb,
+              "rb-fractionlost", G_TYPE_UINT, &rb_fractionlost,
+              "rb-packetslost", G_TYPE_INT, &rb_packetslost,
+              "rb-exthighestseq", G_TYPE_UINT, &rb_exthighestseq,
+              "rb-jitter", G_TYPE_UINT, &rb_jitter,
+              "rb-lsr", G_TYPE_UINT, &rb_lsr,
+              "rb-dlsr", G_TYPE_UINT, &rb_dlsr, NULL));
+      fail_unless (have_rb);
+      fail_unless_equals_int (rb_fractionlost, 0);
+      fail_unless_equals_int (rb_packetslost, 0);
+      fail_unless_equals_int (rb_exthighestseq, 4);
+      fail_unless_equals_int (rb_jitter, (ssrc % 2) + 10);
+      fail_unless_equals_int (rb_lsr, 0);
+      fail_unless_equals_int (rb_dlsr, 0);
+      internal_stats_entries++;
+    } else {
+      fail_unless_equals_int (ssrc, 20000);
+    }
+  }
+  fail_unless_equals_int (internal_stats_entries, 2);
+
+  gst_structure_free (stats);
+  session_harness_free (h);
+}
+
+GST_END_TEST;
+
 
 static Suite *
 rtpsession_suite (void)
@@ -4523,6 +4616,7 @@ rtpsession_suite (void)
 
   tcase_add_test (tc_chain, test_send_rtcp_instantly);
   tcase_add_test (tc_chain, test_send_bye_signal);
+  tcase_skip_broken_test (tc_chain, test_stats_rtcp_with_multiple_rb);
   return s;
 }
 
