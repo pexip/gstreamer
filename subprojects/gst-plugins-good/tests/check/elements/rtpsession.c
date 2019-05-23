@@ -2655,6 +2655,76 @@ GST_START_TEST (test_stepped_packet_rate)
 GST_END_TEST;
 
 
+static const guint8 pse_data[] = {
+  0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77
+};
+
+static void
+_creating_srrr (G_GNUC_UNUSED GObject * session, G_GNUC_UNUSED GObject * src,
+    GstRTCPPacket * packet)
+{
+  fail_unless_equals_int (GST_RTCP_TYPE_RR, gst_rtcp_packet_get_type (packet));
+  gst_rtcp_packet_add_profile_specific_ext (packet, pse_data,
+      sizeof (pse_data));
+}
+
+static void
+_ssrc_pse (G_GNUC_UNUSED GObject * session, GObject * src, guint type,
+    GstBuffer * pse, G_GNUC_UNUSED guint rb_count, gpointer userdata)
+{
+  g_object_get (src, "ssrc", userdata, NULL);
+
+  fail_unless_equals_int (GST_RTCP_TYPE_RR, type);
+  fail_unless_equals_int (0,
+      gst_buffer_memcmp (pse, 0, pse_data, sizeof (pse_data)));
+}
+
+GST_START_TEST (test_creating_srrr)
+{
+  SessionHarness *h = session_harness_new ();
+  guint i;
+  GstFlowReturn res;
+  GstBuffer *buf;
+  GstRTCPBuffer rtcp = GST_RTCP_BUFFER_INIT;
+  GstRTCPPacket packet;
+  guint pse_ssrc = 0;
+
+  /* Connect to on-creating-sr-rr which will append 8 bytes of
+   * profile-specific extension data */
+  g_object_set (h->internal_session, "internal-ssrc", 0xDEADBEEF, NULL);
+  g_signal_connect (h->internal_session, "on-creating-sr-rr",
+      G_CALLBACK (_creating_srrr), NULL);
+
+  /* receive some buffers */
+  for (i = 0; i < 2; i++) {
+    buf = generate_test_buffer (i, 0x01BADBAD);
+    res = session_harness_recv_rtp (h, buf);
+    fail_unless_equals_int (GST_FLOW_OK, res);
+  }
+
+  session_harness_produce_rtcp (h, 1);
+  buf = session_harness_pull_rtcp (h);
+  fail_unless (gst_rtcp_buffer_validate (buf));
+  gst_rtcp_buffer_map (buf, GST_MAP_READ, &rtcp);
+  fail_unless (gst_rtcp_buffer_get_first_packet (&rtcp, &packet));
+  fail_unless_equals_int (GST_RTCP_TYPE_RR, gst_rtcp_packet_get_type (&packet));
+  fail_unless_equals_int (2,    /* 2x 32bit words */
+      gst_rtcp_packet_get_profile_specific_ext_length (&packet));
+  gst_rtcp_buffer_unmap (&rtcp);
+
+  /* now "receive" the same RTCP buffer into the session to test
+   * on-ssrc-profile-specific-ext signal */
+  g_signal_connect (h->internal_session, "on-ssrc-profile-specific-ext",
+      G_CALLBACK (_ssrc_pse), &pse_ssrc);
+  fail_unless_equals_int (0, pse_ssrc);
+  fail_unless_equals_int (GST_FLOW_OK, session_harness_recv_rtcp (h, buf));
+  fail_unless_equals_int (0xDEADBEEF, pse_ssrc);
+
+  session_harness_free (h);
+}
+
+GST_END_TEST;
+
 /********************* TWCC-tests *********************/
 
 static GstRTCPFBType
@@ -4332,6 +4402,7 @@ rtpsession_suite (void)
   tcase_add_test (tc_chain, test_clear_pt_map_stress);
   tcase_add_test (tc_chain, test_packet_rate);
   tcase_add_test (tc_chain, test_stepped_packet_rate);
+  tcase_add_test (tc_chain, test_creating_srrr);
 
   /* twcc */
   tcase_add_loop_test (tc_chain, test_twcc_header_and_run_length,
