@@ -163,6 +163,10 @@ typedef struct {
   GstClockTime last_rtptime;
   GstClockTime last_rtcptime;
 
+  /* how long it takes to transmit a frame */
+  GstClockTime avg_frame_transmission_duration;
+  GstClockTime max_frame_transmission_duration;
+
   /* sender and receiver reports */
   gint              curr_rr;
   RTPReceiverReport rr[2];
