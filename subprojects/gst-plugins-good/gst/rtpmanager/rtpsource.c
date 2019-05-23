@@ -159,6 +159,8 @@ rtp_source_class_init (RTPSourceClass * klass)
    * * "clock-rate"   G_TYPE_INT      the clock rate of the media
    * * "first-rtp-activity" G_TYPE_UINT64 time of first rtp activity
    * * "last-rtp-activity"  G_TYPE_UINT64 time of latest rtp activity
+   * * "avg-frame-transmission-duration" G_TYPE_UINT64 weighted average of time it takes to transmit a frame
+   * * "max-frame-transmission-duration" G_TYPE_UINT64 max time measured it takes to transmit a frame
    *
    * The following fields are only present when known.
    *
@@ -306,6 +308,8 @@ rtp_source_reset (RTPSource * src)
   src->last_rtime = -1;
   src->first_rtp_activity = GST_CLOCK_TIME_NONE;
   src->last_rtp_activity = GST_CLOCK_TIME_NONE;
+  src->last_ctime = GST_CLOCK_TIME_NONE;
+  src->frame_ctime = GST_CLOCK_TIME_NONE;
 
   src->stats.cycles = -1;
   src->stats.jitter = 0;
@@ -318,6 +322,8 @@ rtp_source_reset (RTPSource * src)
   src->stats.prev_rtcptime = GST_CLOCK_TIME_NONE;
   src->stats.last_rtptime = GST_CLOCK_TIME_NONE;
   src->stats.last_rtcptime = GST_CLOCK_TIME_NONE;
+  src->stats.avg_frame_transmission_duration = GST_CLOCK_TIME_NONE;
+  src->stats.max_frame_transmission_duration = 0;
   g_array_set_size (src->nacks, 0);
 
   src->stats.sent_pli_count = 0;
@@ -491,7 +497,10 @@ rtp_source_create_stats (RTPSource * src)
       "is-csrc", G_TYPE_BOOLEAN, src->is_csrc,
       "is-sender", G_TYPE_BOOLEAN, is_sender,
       "first-rtp-activity", G_TYPE_UINT64, src->first_rtp_activity,
-      "last-rtp-activity", G_TYPE_UINT64, src->last_rtp_activity, NULL);
+      "last-rtp-activity", G_TYPE_UINT64, src->last_rtp_activity,
+      "avg-frame-transmission-duration", G_TYPE_UINT64, src->stats.avg_frame_transmission_duration,
+      "max-frame-transmission-duration", G_TYPE_UINT64, src->stats.max_frame_transmission_duration,
+      NULL);
 
   /* add address and port */
   if (src->rtp_from) {
@@ -1242,6 +1251,40 @@ do_bitrate_estimation (RTPSource * src, GstClockTime running_time,
   }
 }
 
+
+/* Transmission duration is the time it takes to transmit all packets for a
+ * given rtptime. If two packets with the same rtptime is sent/received with
+ * 10 ms apart, the transmission duration is 10ms. If there's only one packet
+ * with the given rtptime, the transmission duration is 0. */
+static void
+calculate_transmission_duration (RTPSource * src, GstClockTime first,
+    GstClockTime last)
+{
+  RTPSourceStats *stats;
+  GstClockTimeDiff duration;
+  GstClockTime avg;
+  gint weight;
+
+  stats = &src->stats;
+
+  duration = GST_CLOCK_DIFF (first, last);
+  stats->max_frame_transmission_duration = MAX (duration,
+      stats->max_frame_transmission_duration);
+
+  /* Average is calculated by modified moving average with adaptive weight.
+   * The weight is adaptive because we want to quickly react to an increase in
+   * duration and at the same time avoid a very fluctuating result. */
+  avg = stats->avg_frame_transmission_duration;
+  if (!GST_CLOCK_TIME_IS_VALID (avg))
+    weight = 1;
+  else if (duration > avg)
+    weight = 2;
+  else
+    weight = 1024;
+  avg = (duration + (weight - 1) * avg) / weight;
+  stats->avg_frame_transmission_duration = avg;
+}
+
 static gboolean
 update_receiver_stats (RTPSource * src, RTPPacketInfo * pinfo,
     gboolean is_receive)
@@ -1250,6 +1293,9 @@ update_receiver_stats (RTPSource * src, RTPPacketInfo * pinfo,
   RTPSourceStats *stats;
   gint16 delta;
   gint32 packet_rate, max_dropout, max_misorder;
+  guint32 rtptime;
+  guint64 ext_rtptime;
+  GstClockTime running_time, current_time;
 
   stats = &src->stats;
 
@@ -1275,10 +1321,10 @@ update_receiver_stats (RTPSource * src, RTPPacketInfo * pinfo,
     src->curr_probation = src->probation;
   }
 
-  if (is_receive) {
-    expected = src->stats.max_seq + 1;
-    delta = gst_rtp_buffer_compare_seqnum (expected, seqnr);
+  expected = src->stats.max_seq + 1;
+  delta = gst_rtp_buffer_compare_seqnum (expected, seqnr);
 
+  if (is_receive) {
     /* if we are still on probation, check seqnum */
     if (src->curr_probation) {
       /* when in probation, we require consecutive seqnums */
@@ -1380,6 +1426,39 @@ update_receiver_stats (RTPSource * src, RTPPacketInfo * pinfo,
     } else {                    /* delta < 0 && delta >= -max_misorder */
       stats->bad_seq = RTP_SEQ_MOD + 1; /* so seq == bad_seq is false */
     }
+  }
+
+  rtptime = pinfo->rtptime;
+  running_time = pinfo->running_time;
+  current_time = pinfo->current_time;
+
+  ext_rtptime = src->last_rtptime;
+  ext_rtptime = gst_rtp_buffer_ext_timestamp (&ext_rtptime, rtptime);
+
+  GST_LOG ("SSRC %08x, RTP %" G_GUINT64_FORMAT ", running_time %"
+      GST_TIME_FORMAT ", current_time %" GST_TIME_FORMAT,
+      src->ssrc, ext_rtptime, GST_TIME_ARGS (running_time),
+      GST_TIME_ARGS (current_time));
+
+  if (delta >= 0) {
+    if (ext_rtptime != src->last_rtptime) {
+      /* New frame */
+      if (G_LIKELY (GST_CLOCK_TIME_IS_VALID (src->frame_ctime))) {
+        calculate_transmission_duration (src, src->frame_ctime,
+            src->last_ctime);
+      }
+      src->frame_ctime = current_time;
+    }
+    src->last_ctime = current_time;
+  } else {
+    /* Ignore reordered packets for simplicity */
+  }
+
+  if (GST_CLOCK_TIME_IS_VALID (running_time)) {
+    /* we keep track of the last received RTP timestamp and the corresponding
+     * buffer running_time so that we can use this info when constructing SR reports */
+    src->last_rtime = running_time;
+    src->last_rtptime = ext_rtptime;
   }
 
   if (pinfo->is_list ||
@@ -1556,6 +1635,8 @@ rtp_source_send_rtp (RTPSource * src, RTPPacketInfo * pinfo)
      * buffer running_time so that we can use this info when constructing SR reports */
     src->last_rtime = running_time;
     src->last_rtptime = ext_rtptime;
+
+    do_bitrate_estimation (src, running_time, &src->bytes_sent);
   }
 
   /* push packet */
