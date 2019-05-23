@@ -4,6 +4,7 @@
  *
  * Copyright (C) <2009> Wim Taymans <wim.taymans@gmail.com>
  * Copyright (C) 2013 Collabora Ltd.
+ * Copyright (C) <2018> Havard Graff <havard@pexip.com>
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Library General Public
@@ -4533,6 +4534,70 @@ GST_START_TEST (test_stats_rtcp_with_multiple_rb)
 
 GST_END_TEST;
 
+static void
+count_report_stats (G_GNUC_UNUSED GObject * object,
+    G_GNUC_UNUSED GParamSpec * spec, gint * counter)
+{
+  *counter += 1;
+}
+
+static void
+on_sending_rtcp_add_new_if_empty (G_GNUC_UNUSED GObject * rtpsession,
+    GstBuffer * rtcp_buffer, G_GNUC_UNUSED gboolean is_early,
+    G_GNUC_UNUSED gpointer user_data)
+{
+  if (gst_buffer_get_size (rtcp_buffer) == 0) {
+    GstRTCPPacket packet;
+    GstRTCPBuffer rtcp = GST_RTCP_BUFFER_INIT;
+
+    gst_rtcp_buffer_map (rtcp_buffer, GST_MAP_READWRITE, &rtcp);
+
+    gst_rtcp_buffer_add_packet (&rtcp, GST_RTCP_TYPE_APP, &packet);
+    gst_rtcp_packet_app_set_subtype (&packet, 1);
+    gst_rtcp_packet_app_set_ssrc (&packet, 0x12345678);
+    gst_rtcp_packet_app_set_name (&packet, "foo");
+
+    gst_rtcp_buffer_unmap (&rtcp);
+  }
+}
+
+GST_START_TEST (test_report_stats_only_on_regular_rtcp)
+{
+  SessionHarness *h = session_harness_new ();
+  gint stats_callback_count = 0;
+  gint i;
+
+  g_object_set (h->internal_session, "probation", 1, "rtcp-reduced-size", TRUE,
+      "stats-notify-min-interval", 3000, NULL);
+  g_signal_connect (h->session, "notify::stats",
+      G_CALLBACK (count_report_stats), &stats_callback_count);
+
+  /* Not allowed to send empty packets, so need to add feedback */
+  g_signal_connect (h->internal_session, "on-sending-rtcp",
+      G_CALLBACK (on_sending_rtcp_add_new_if_empty), NULL);
+
+  fail_unless_equals_int (GST_FLOW_OK,
+      session_harness_recv_rtp (h, generate_test_buffer (0, 0x12345678)));
+
+  session_harness_produce_rtcp (h, 1);
+  gst_buffer_unref (session_harness_pull_rtcp (h));
+  fail_unless_equals_int (stats_callback_count, 1);
+
+  /* send 10 rtcp-packets that should *not* generate stats */
+  for (i = 0; i < 10; i++) {
+    gboolean ret;
+    g_signal_emit_by_name (h->internal_session, "send-rtcp-full", 0, &ret);
+    session_harness_advance_and_crank (h, 10 * GST_MSECOND);
+  }
+
+  /* verify we have generated less than 3 stats for all these packets */
+  fail_unless (stats_callback_count < 3);
+
+  session_harness_free (h);
+}
+
+GST_END_TEST;
+
 
 static Suite *
 rtpsession_suite (void)
@@ -4617,6 +4682,7 @@ rtpsession_suite (void)
   tcase_add_test (tc_chain, test_send_rtcp_instantly);
   tcase_add_test (tc_chain, test_send_bye_signal);
   tcase_skip_broken_test (tc_chain, test_stats_rtcp_with_multiple_rb);
+  tcase_add_test (tc_chain, test_report_stats_only_on_regular_rtcp);
   return s;
 }
 
