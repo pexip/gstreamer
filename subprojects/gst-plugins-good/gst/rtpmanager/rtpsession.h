@@ -298,6 +298,8 @@ struct _RTPSession {
 
   RTPSessionStats stats;
   RTPSessionStats bye_stats;
+  GstClockTime    last_stats_notify_time;
+  guint           stats_notify_min_interval_ms;
 
   gboolean      favor_new;
   GstClockTime  rtcp_feedback_retention_window;
