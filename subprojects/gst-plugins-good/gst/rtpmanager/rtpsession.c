@@ -43,10 +43,12 @@ enum
   SIGNAL_ON_SSRC_VALIDATED,
   SIGNAL_ON_SSRC_ACTIVE,
   SIGNAL_ON_SSRC_SDES,
+  SIGNAL_ON_SSRC_PROFILE_SPECIFIC_EXT,
   SIGNAL_ON_BYE_SSRC,
   SIGNAL_ON_BYE_TIMEOUT,
   SIGNAL_ON_TIMEOUT,
   SIGNAL_ON_SENDER_TIMEOUT,
+  SIGNAL_ON_CREATING_SR_RR,
   SIGNAL_ON_SENDING_RTCP,
   SIGNAL_ON_APP_RTCP,
   SIGNAL_ON_FEEDBACK_RTCP,
@@ -233,6 +235,24 @@ rtp_session_class_init (RTPSessionClass * klass)
       G_SIGNAL_RUN_LAST, G_STRUCT_OFFSET (RTPSessionClass, on_ssrc_sdes),
       NULL, NULL, NULL, G_TYPE_NONE, 1, RTP_TYPE_SOURCE);
   /**
+   * RTPSession::on-ssrc-profile-specific-ext:
+   * @session: the object which received the signal
+   * @src: the RTPSource
+   * @type: Type of RTCP packet, will be %GST_RTCP_TYPE_SR or
+   *  %GST_RTCP_TYPE_RR
+   * @pse: a #GstBuffer with the profile-specific extensions data from the
+   * SR or RR packet
+   * @rb_count: report block count
+   *
+   * Notify that a RTCP profile-specific extension section has been received
+   */
+  rtp_session_signals[SIGNAL_ON_SSRC_PROFILE_SPECIFIC_EXT] =
+      g_signal_new ("on-ssrc-profile-specific-ext", G_TYPE_FROM_CLASS (klass),
+      G_SIGNAL_RUN_LAST, G_STRUCT_OFFSET (RTPSessionClass, on_ssrc_pse),
+      NULL, NULL, g_cclosure_marshal_generic,
+      G_TYPE_NONE, 4, RTP_TYPE_SOURCE, G_TYPE_UINT, GST_TYPE_BUFFER,
+      G_TYPE_UINT);
+  /**
    * RTPSession::on-bye-ssrc:
    * @session: the object which received the signal
    * @src: the RTPSource that went away
@@ -276,6 +296,21 @@ rtp_session_class_init (RTPSessionClass * klass)
       g_signal_new ("on-sender-timeout", G_TYPE_FROM_CLASS (klass),
       G_SIGNAL_RUN_LAST, G_STRUCT_OFFSET (RTPSessionClass, on_sender_timeout),
       NULL, NULL, NULL, G_TYPE_NONE, 1, RTP_TYPE_SOURCE);
+
+  /**
+   * RTPSession::on-creating-sr-rr
+   * @session: the object which received the signal
+   * @src: the RTPSource
+   * @packet: the #GstRTCPPacket which was just created.
+   *
+   * This signal is emitted while creating RTCP SR or RR packet, but before
+   * sending it. It can be used to add profile-specific extension.
+   */
+  rtp_session_signals[SIGNAL_ON_CREATING_SR_RR] =
+      g_signal_new ("on-creating-sr-rr", G_TYPE_FROM_CLASS (klass),
+      G_SIGNAL_RUN_LAST, G_STRUCT_OFFSET (RTPSessionClass, on_creating_sr_rr),
+      NULL, NULL, g_cclosure_marshal_generic, G_TYPE_NONE, 2,
+      RTP_TYPE_SOURCE, G_TYPE_POINTER);
 
   /**
    * RTPSession::on-sending-rtcp
@@ -2401,6 +2436,41 @@ rtp_session_process_rb (RTPSession * sess, RTPSource * source,
   on_ssrc_active (sess, source);
 }
 
+static void
+rtp_session_process_pse (RTPSession * sess, RTPSource * source,
+    GstRTCPPacket * packet, RTPPacketInfo * pinfo)
+{
+  guint pse_length, type, rb_count;
+  guint8 *pse_data;
+  GstBuffer *pse_buffer;
+
+  if (!gst_rtcp_packet_get_profile_specific_ext (packet, &pse_data,
+          &pse_length))
+    return;
+
+  if (!g_signal_has_handler_pending (sess,
+          rtp_session_signals[SIGNAL_ON_SSRC_PROFILE_SPECIFIC_EXT], 0, TRUE))
+    return;
+
+  GST_DEBUG ("got SR/RR packet with PSE: SSRC %08x, PSE length %u",
+      source->ssrc, pse_length);
+
+  pse_buffer = gst_buffer_copy_region (packet->rtcp->buffer,
+      GST_BUFFER_COPY_MEMORY, pse_data - packet->rtcp->map.data, pse_length);
+  GST_BUFFER_TIMESTAMP (pse_buffer) = pinfo->running_time;
+  type = gst_rtcp_packet_get_type (packet);
+  rb_count = gst_rtcp_packet_get_rb_count (packet);
+
+  g_object_ref (source);
+  RTP_SESSION_UNLOCK (sess);
+  g_signal_emit (sess, rtp_session_signals[SIGNAL_ON_SSRC_PROFILE_SPECIFIC_EXT],
+      0, source, type, pse_buffer, rb_count);
+  RTP_SESSION_LOCK (sess);
+  g_object_unref (source);
+
+  gst_buffer_unref (pse_buffer);
+}
+
 /* A Sender report contains statistics about how the sender is doing. This
  * includes timing informataion such as the relation between RTP and NTP
  * timestamps and the number of packets/bytes it sent to us.
@@ -2451,6 +2521,7 @@ rtp_session_process_sr (RTPSession * sess, GstRTCPPacket * packet,
     on_new_ssrc (sess, source);
 
   rtp_session_process_rb (sess, source, packet, pinfo);
+  rtp_session_process_pse (sess, source, packet, pinfo);
 
 out:
   g_object_unref (source);
@@ -2486,6 +2557,7 @@ rtp_session_process_rr (RTPSession * sess, GstRTCPPacket * packet,
     on_new_ssrc (sess, source);
 
   rtp_session_process_rb (sess, source, packet, pinfo);
+  rtp_session_process_pse (sess, source, packet, pinfo);
 
 out:
   g_object_unref (source);
@@ -3560,7 +3632,7 @@ typedef struct
   guint nacked_seqnums;
 } ReportData;
 
-static void
+static gboolean
 session_start_rtcp (RTPSession * sess, ReportData * data)
 {
   GstRTCPPacket *packet = &data->packet;
@@ -3573,7 +3645,7 @@ session_start_rtcp (RTPSession * sess, ReportData * data)
   gst_rtcp_buffer_map (data->rtcp, GST_MAP_READWRITE, rtcp);
 
   if (data->is_early && sess->reduced_size_rtcp)
-    return;
+    return FALSE;
 
   if (RTP_SOURCE_IS_SENDER (own)) {
     guint64 ntptime;
@@ -3602,6 +3674,8 @@ session_start_rtcp (RTPSession * sess, ReportData * data)
     gst_rtcp_buffer_add_packet (rtcp, GST_RTCP_TYPE_RR, packet);
     gst_rtcp_packet_rr_set_ssrc (packet, own->ssrc);
   }
+
+  return TRUE;
 }
 
 /* construct a Sender or Receiver Report */
@@ -4262,6 +4336,7 @@ generate_rtcp (const gchar * key, RTPSource * source, ReportData * data)
   RTPSession *sess = data->sess;
   gboolean is_bye = FALSE;
   ReportOutput *output;
+  gboolean is_sr_rr = FALSE;
 
   /* only generate RTCP for active internal sources */
   if (!source->internal || source->sent_bye)
@@ -4280,17 +4355,22 @@ generate_rtcp (const gchar * key, RTPSource * source, ReportData * data)
   data->source = source;
 
   /* open packet */
-  session_start_rtcp (sess, data);
+  is_sr_rr = session_start_rtcp (sess, data);
 
   if (source->marked_bye) {
     /* send BYE */
     make_source_bye (sess, source, data);
     is_bye = TRUE;
-  } else if (!data->is_early) {
-    /* loop over all known sources and add report blocks. If we are early, we
-     * just make a minimal RTCP packet and skip this step */
-    g_hash_table_foreach (sess->ssrcs[sess->mask_idx],
-        (GHFunc) session_report_blocks, data);
+  } else if (is_sr_rr) {
+    if (!data->is_early) {
+      /* loop over all known sources and add report blocks. If we are early, we
+       * just make a minimal RTCP packet and skip this step */
+      g_hash_table_foreach (sess->ssrcs[sess->mask_idx],
+          (GHFunc) session_report_blocks, data);
+    }
+    /* Optionally add profile-specific extension */
+    g_signal_emit (sess, rtp_session_signals[SIGNAL_ON_CREATING_SR_RR], 0,
+        source, &data->packet);
   }
   if (!data->has_sdes && (!data->is_early || !sess->reduced_size_rtcp))
     session_sdes (sess, data);
