@@ -20,7 +20,9 @@
  * Free Software Foundation, Inc., 51 Franklin St, Fifth Floor,
  * Boston, MA 02110-1301, USA.
  */
-#define GLIB_DISABLE_DEPRECATION_WARNINGS
+#ifndef GLIB_DISABLE_DEPRECATION_WARNINGS
+#  define GLIB_DISABLE_DEPRECATION_WARNINGS
+#endif
 
 #include <gst/check/gstharness.h>
 #include <gst/check/gstcheck.h>
@@ -139,7 +141,8 @@ typedef struct
 } SessionHarness;
 
 static GstCaps *
-_pt_map_requested (GstElement * element, guint pt, gpointer data)
+_pt_map_requested (G_GNUC_UNUSED GstElement * element, G_GNUC_UNUSED guint pt,
+    gpointer data)
 {
   SessionHarness *h = data;
   return gst_caps_copy (h->caps);
@@ -284,7 +287,7 @@ session_harness_advance_and_crank (SessionHarness * h, GstClockTime delta)
 }
 
 static void
-session_harness_produce_rtcp (SessionHarness * h, gint num_rtcp_packets)
+session_harness_produce_rtcp (SessionHarness * h, guint num_rtcp_packets)
 {
   /* due to randomness in rescheduling of RTCP timeout, we need to
      keep cranking until we have the desired amount of packets */
@@ -367,7 +370,7 @@ GST_START_TEST (test_multiple_ssrc_rr)
   GstBuffer *in_buf, *out_buf;
   GstRTCPBuffer rtcp = GST_RTCP_BUFFER_INIT;
   GstRTCPPacket rtcp_packet;
-  gint i, j;
+  guint i, j;
   guint ssrc_match;
 
   guint ssrcs[] = {
@@ -429,7 +432,7 @@ GST_START_TEST (test_multiple_senders_roundrobin_rbs)
   GstBuffer *buf;
   GstRTCPBuffer rtcp = GST_RTCP_BUFFER_INIT;
   GstRTCPPacket rtcp_packet;
-  gint i, j, k;
+  guint i, j, k;
   guint32 ssrc;
   GHashTable *rb_ssrcs, *tmp_set;
 
@@ -769,7 +772,7 @@ typedef struct
 } RTCPAppResult;
 
 static void
-on_app_rtcp_cb (GObject * session, guint subtype, guint ssrc,
+on_app_rtcp_cb (G_GNUC_UNUSED GObject * session, guint subtype, guint ssrc,
     const gchar * name, GstBuffer * data, RTCPAppResult * result)
 {
   result->subtype = subtype;
@@ -836,10 +839,12 @@ GST_START_TEST (test_receive_rtcp_app_packet)
 GST_END_TEST;
 
 static void
-stats_test_cb (GObject * object, GParamSpec * spec, gpointer data)
+stats_test_cb (G_GNUC_UNUSED GObject * object, G_GNUC_UNUSED GParamSpec * spec,
+    gpointer data)
 {
   guint num_sources = 0;
   gboolean *cb_called = data;
+
   g_assert (*cb_called == FALSE);
 
   /* We should be able to get a rtpsession property
@@ -873,7 +878,8 @@ GST_START_TEST (test_dont_lock_on_stats)
 GST_END_TEST;
 
 static void
-suspicious_bye_cb (GObject * object, GParamSpec * spec, gpointer data)
+suspicious_bye_cb (GObject * object, G_GNUC_UNUSED GParamSpec * spec,
+    gpointer data)
 {
   GValueArray *stats_arr;
   GstStructure *stats, *internal_stats;
@@ -1064,7 +1070,8 @@ add_rtcp_sdes_packet (GstBuffer * gstbuf, guint32 ssrc, const char *cname)
 
 
 static void
-on_ssrc_collision_cb (GstElement * rtpsession, guint ssrc, gpointer user_data)
+on_ssrc_collision_cb (G_GNUC_UNUSED GstElement * rtpsession,
+    G_GNUC_UNUSED guint ssrc, gpointer user_data)
 {
   gboolean *had_collision = user_data;
 
@@ -1710,9 +1717,10 @@ typedef struct
 } FeedbackRTCPCallbackData;
 
 static void
-feedback_rtcp_cb (GstElement * element, guint fbtype, guint fmt,
-    guint sender_ssrc, guint media_ssrc, GstBuffer * fci,
-    FeedbackRTCPCallbackData * cb_data)
+feedback_rtcp_cb (G_GNUC_UNUSED GstElement * element,
+    G_GNUC_UNUSED guint fbtype, G_GNUC_UNUSED guint fmt,
+    G_GNUC_UNUSED guint sender_ssrc, G_GNUC_UNUSED guint media_ssrc,
+    G_GNUC_UNUSED GstBuffer * fci, FeedbackRTCPCallbackData * cb_data)
 {
   g_mutex_lock (cb_data->mutex);
   cb_data->fired = TRUE;
@@ -2009,7 +2017,8 @@ typedef struct
 } BlockingProbeData;
 
 static GstPadProbeReturn
-on_rtcp_pad_blocked (GstPad * pad, GstPadProbeInfo * info, gpointer user_data)
+on_rtcp_pad_blocked (G_GNUC_UNUSED GstPad * pad,
+    G_GNUC_UNUSED GstPadProbeInfo * info, gpointer user_data)
 {
   BlockingProbeData *probe = user_data;
 
@@ -2043,7 +2052,8 @@ session_harness_block_rtcp (SessionHarness * h, BlockingProbeData * probe)
 }
 
 static void
-session_harness_unblock_rtcp (SessionHarness * h, BlockingProbeData * probe)
+session_harness_unblock_rtcp (G_GNUC_UNUSED SessionHarness * h,
+    BlockingProbeData * probe)
 {
   gst_pad_remove_probe (probe->pad, probe->id);
   gst_object_unref (probe->pad);
@@ -2295,8 +2305,9 @@ GST_START_TEST (test_disable_sr_timestamp)
 GST_END_TEST;
 
 static guint
-on_sending_nacks (GObject * internal_session, guint sender_ssrc,
-    guint media_ssrc, GArray * nacks, GstBuffer * buffer)
+on_sending_nacks (G_GNUC_UNUSED GObject * internal_session,
+    G_GNUC_UNUSED guint sender_ssrc, guint media_ssrc, GArray * nacks,
+    GstBuffer * buffer)
 {
   GstRTCPBuffer rtcp = GST_RTCP_BUFFER_INIT;
   GstRTCPPacket packet;
@@ -2425,7 +2436,8 @@ GST_START_TEST (test_on_sending_nacks)
 GST_END_TEST;
 
 static void
-disable_probation_on_new_ssrc (GObject * session, GObject * source)
+disable_probation_on_new_ssrc (G_GNUC_UNUSED GObject * session,
+    GObject * source)
 {
   g_object_set (source, "probation", 0, NULL);
 }
@@ -2588,7 +2600,7 @@ test_packet_rate_impl (gboolean stepped)
   SessionHarness *h = session_harness_new ();
   GstBuffer *buf;
   guint i;
-  const int PROBATION_CNT = 5;
+  const guint PROBATION_CNT = 5;
   GstStructure *stats;
   GObject *source;
   guint pktrate;
