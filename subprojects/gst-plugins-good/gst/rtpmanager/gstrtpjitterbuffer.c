@@ -4650,6 +4650,10 @@ gst_rtp_jitter_buffer_set_property (GObject * object,
 
         gst_element_post_message (GST_ELEMENT_CAST (jitterbuffer),
             gst_message_new_latency (GST_OBJECT_CAST (jitterbuffer)));
+
+        JBUF_LOCK (priv);
+        queue_event (jitterbuffer, gst_event_new_latency_changed ());
+        JBUF_UNLOCK (priv);
       }
       break;
     }
