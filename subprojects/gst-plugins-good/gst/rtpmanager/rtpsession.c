@@ -5082,7 +5082,7 @@ rtp_session_request_nack (RTPSession * sess, guint32 ssrc, guint16 seqnum,
   rtp_source_register_nack (source, seqnum, now + max_delay);
   RTP_SESSION_UNLOCK (sess);
 
-  if (!rtp_session_send_rtcp_internal (sess, now, max_delay)) {
+  if (!rtp_session_send_rtcp_internal (sess, now, 0)) {
     GST_DEBUG ("NACK not sent early, sending with next regular RTCP");
   }
 
