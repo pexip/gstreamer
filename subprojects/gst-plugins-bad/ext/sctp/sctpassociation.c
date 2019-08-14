@@ -917,8 +917,20 @@ handle_association_changed (GstSctpAssociation * self,
       break;
     case SCTP_COMM_LOST:
       GST_WARNING_OBJECT (self, "SCTP event SCTP_COMM_LOST received");
-      change_state = TRUE;
-      new_state = GST_SCTP_ASSOCIATION_STATE_ERROR;
+      /* TODO: Tear down association */
+      g_mutex_lock (&self->association_mutex);
+      if (self->state == GST_SCTP_ASSOCIATION_STATE_CONNECTED) {
+        g_mutex_unlock (&self->association_mutex);
+        gst_sctp_association_change_state (self,
+            GST_SCTP_ASSOCIATION_STATE_DISCONNECTING, TRUE);
+        g_mutex_lock (&self->association_mutex);
+      }
+      if (self->state == GST_SCTP_ASSOCIATION_STATE_DISCONNECTING) {
+        change_state = TRUE;
+        new_state = GST_SCTP_ASSOCIATION_STATE_DISCONNECTED;
+        GST_INFO_OBJECT (self, "SCTP association disconnected!");
+      }
+      g_mutex_unlock (&self->association_mutex);
       break;
     case SCTP_RESTART:
       GST_DEBUG_OBJECT (self, "SCTP event SCTP_RESTART received");
