@@ -28,8 +28,6 @@
 
 #include <glib-object.h>
 #include <gst/gst.h>
-#define INET
-#define INET6
 #include <usrsctp.h>
 
 G_BEGIN_DECLS
