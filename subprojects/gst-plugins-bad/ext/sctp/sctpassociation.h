@@ -75,6 +75,7 @@ struct _GstSctpAssociation
   guint16 local_port;
   guint16 remote_port;
   gboolean use_sock_stream;
+  gboolean aggressive_heartbeat;
   struct socket *sctp_ass_sock;
 
   GMutex association_mutex;
