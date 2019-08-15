@@ -586,6 +586,8 @@ gst_sctp_association_force_close (GstSctpAssociation * self)
     usrsctp_close (s);
   }
 
+  self->sctp_assoc_id = 0;
+
   gst_sctp_association_change_state (self,
       GST_SCTP_ASSOCIATION_STATE_DISCONNECTED, TRUE);
 }
@@ -905,6 +907,7 @@ handle_association_changed (GstSctpAssociation * self,
       GST_DEBUG_OBJECT (self, "SCTP_COMM_UP");
       g_mutex_lock (&self->association_mutex);
       if (self->state == GST_SCTP_ASSOCIATION_STATE_CONNECTING) {
+        self->sctp_assoc_id = sac->sac_assoc_id;
         change_state = TRUE;
         new_state = GST_SCTP_ASSOCIATION_STATE_CONNECTED;
         GST_DEBUG_OBJECT (self, "SCTP association connected!");
