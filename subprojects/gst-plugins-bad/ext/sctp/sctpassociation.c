@@ -936,9 +936,21 @@ handle_association_changed (GstSctpAssociation * self,
       GST_DEBUG_OBJECT (self, "SCTP event SCTP_RESTART received");
       break;
     case SCTP_SHUTDOWN_COMP:
-      GST_DEBUG_OBJECT (self, "SCTP event SCTP_SHUTDOWN_COMP received");
-      change_state = TRUE;
-      new_state = GST_SCTP_ASSOCIATION_STATE_DISCONNECTED;
+      /* Occurs if in TCP mode when the far end sends SHUTDOWN */
+      GST_INFO_OBJECT (self, "SCTP event SCTP_SHUTDOWN_COMP received");
+      g_mutex_lock (&self->association_mutex);
+      if (self->state == GST_SCTP_ASSOCIATION_STATE_CONNECTED) {
+        g_mutex_unlock (&self->association_mutex);
+        gst_sctp_association_change_state (self,
+            GST_SCTP_ASSOCIATION_STATE_DISCONNECTING, TRUE);
+        g_mutex_lock (&self->association_mutex);
+      }
+      if (self->state == GST_SCTP_ASSOCIATION_STATE_DISCONNECTING) {
+        change_state = TRUE;
+        new_state = GST_SCTP_ASSOCIATION_STATE_DISCONNECTED;
+        GST_INFO_OBJECT (self, "SCTP association disconnected!");
+      }
+      g_mutex_unlock (&self->association_mutex);
       break;
     case SCTP_CANT_STR_ASSOC:
       GST_WARNING_OBJECT (self, "SCTP event SCTP_CANT_STR_ASSOC received");
