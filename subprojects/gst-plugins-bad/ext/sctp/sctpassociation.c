@@ -566,13 +566,15 @@ gst_sctp_association_reset_stream (GstSctpAssociation * self, guint16 stream_id)
 
   length = (socklen_t) (sizeof (struct sctp_reset_streams) + sizeof (guint16));
   srs = (struct sctp_reset_streams *) g_malloc0 (length);
-  srs->srs_assoc_id = SCTP_ALL_ASSOC;
   srs->srs_flags = SCTP_STREAM_RESET_OUTGOING;
   srs->srs_number_streams = 1;
   srs->srs_stream_list[0] = stream_id;
 
-  usrsctp_setsockopt (self->sctp_ass_sock, IPPROTO_SCTP, SCTP_RESET_STREAMS,
-      srs, length);
+  srs->srs_assoc_id = self->sctp_assoc_id;
+  if (usrsctp_setsockopt (self->sctp_ass_sock, IPPROTO_SCTP,
+      SCTP_RESET_STREAMS, srs, length) < 0) {
+    GST_INFO_OBJECT (self, "Resetting stream id=%u failed", stream_id);
+  }
 
   g_free (srs);
 }
