@@ -894,52 +894,67 @@ handle_notification (GstSctpAssociation * self,
 }
 
 static void
+handle_sctp_comm_lost_or_shutdown (GstSctpAssociation * self,
+    const struct sctp_assoc_change * sac)
+{
+  GST_INFO_OBJECT (self, "SCTP event %s received",
+      sac->sac_state == SCTP_COMM_LOST ?
+      "SCTP_COMM_LOST" : "SCTP_SHUTDOWN_COMP");
+
+  g_mutex_lock (&self->association_mutex);
+
+  if (self->state == GST_SCTP_ASSOCIATION_STATE_CONNECTED) {
+    gst_sctp_association_change_state_unlocked (self,
+        GST_SCTP_ASSOCIATION_STATE_DISCONNECTING);
+  }
+
+  /* Fall through to ensure the transition to disconnected occurs */
+
+  if (self->state == GST_SCTP_ASSOCIATION_STATE_DISCONNECTING) {
+    gst_sctp_association_change_state_unlocked (self,
+        GST_SCTP_ASSOCIATION_STATE_DISCONNECTED);
+    GST_INFO_OBJECT (self, "SCTP association disconnected!");
+  }
+
+  g_mutex_unlock (&self->association_mutex);
+}
+
+static void
+handle_sctp_comm_up (GstSctpAssociation * self,
+    const struct sctp_assoc_change * sac)
+{
+  GST_INFO_OBJECT (self, "SCTP_COMM_UP");
+  g_mutex_lock (&self->association_mutex);
+    if (self->state == GST_SCTP_ASSOCIATION_STATE_CONNECTING) {
+      self->sctp_assoc_id = sac->sac_assoc_id;
+      gst_sctp_association_change_state_unlocked (self,
+          GST_SCTP_ASSOCIATION_STATE_CONNECTED);
+      GST_INFO_OBJECT (self, "SCTP association connected!");
+    } else if (self->state == GST_SCTP_ASSOCIATION_STATE_CONNECTED) {
+      GST_INFO_OBJECT (self, "SCTP association already open");
+    } else {
+      GST_WARNING_OBJECT (self, "SCTP association in unexpected state");
+    }
+  g_mutex_unlock (&self->association_mutex);
+}
+
+static void
 handle_association_changed (GstSctpAssociation * self,
     const struct sctp_assoc_change *sac)
 {
   switch (sac->sac_state) {
     case SCTP_COMM_UP:
-      GST_DEBUG_OBJECT (self, "SCTP_COMM_UP");
-      g_mutex_lock (&self->association_mutex);
-      if (self->state == GST_SCTP_ASSOCIATION_STATE_CONNECTING) {
-        self->sctp_assoc_id = sac->sac_assoc_id;
-        gst_sctp_association_change_state_unlocked (self, GST_SCTP_ASSOCIATION_STATE_CONNECTED);
-        GST_DEBUG_OBJECT (self, "SCTP association connected!");
-      } else if (self->state == GST_SCTP_ASSOCIATION_STATE_CONNECTED) {
-        GST_FIXME_OBJECT (self, "SCTP association already open");
-      } else {
-        GST_WARNING_OBJECT (self, "SCTP association in unexpected state");
-      }
-      g_mutex_unlock (&self->association_mutex);
+      handle_sctp_comm_up (self, sac);
       break;
     case SCTP_COMM_LOST:
-      GST_WARNING_OBJECT (self, "SCTP event SCTP_COMM_LOST received");
-      /* TODO: Tear down association */
-      g_mutex_lock (&self->association_mutex);
-      if (self->state == GST_SCTP_ASSOCIATION_STATE_CONNECTED) {
-        gst_sctp_association_change_state_unlocked (self, GST_SCTP_ASSOCIATION_STATE_DISCONNECTING);
-      }
-      if (self->state == GST_SCTP_ASSOCIATION_STATE_DISCONNECTING) {
-        gst_sctp_association_change_state_unlocked (self, GST_SCTP_ASSOCIATION_STATE_DISCONNECTED);
-        GST_INFO_OBJECT (self, "SCTP association disconnected!");
-      }
-      g_mutex_unlock (&self->association_mutex);
+      handle_sctp_comm_lost_or_shutdown (self, sac);
       break;
     case SCTP_RESTART:
       GST_DEBUG_OBJECT (self, "SCTP event SCTP_RESTART received");
       break;
     case SCTP_SHUTDOWN_COMP:
       /* Occurs if in TCP mode when the far end sends SHUTDOWN */
-      GST_INFO_OBJECT (self, "SCTP event SCTP_SHUTDOWN_COMP received");
-      g_mutex_lock (&self->association_mutex);
-      if (self->state == GST_SCTP_ASSOCIATION_STATE_CONNECTED) {
-        gst_sctp_association_change_state_unlocked (self, GST_SCTP_ASSOCIATION_STATE_DISCONNECTING);
-      }
-      if (self->state == GST_SCTP_ASSOCIATION_STATE_DISCONNECTING) {
-        gst_sctp_association_change_state_unlocked (self, GST_SCTP_ASSOCIATION_STATE_DISCONNECTED);
-        GST_INFO_OBJECT (self, "SCTP association disconnected!");
-      }
-      g_mutex_unlock (&self->association_mutex);
+      handle_sctp_comm_lost_or_shutdown (self, sac);
       break;
     case SCTP_CANT_STR_ASSOC:
       GST_WARNING_OBJECT (self, "SCTP event SCTP_CANT_STR_ASSOC received");
