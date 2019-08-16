@@ -404,7 +404,8 @@ gst_sctp_association_get (guint32 association_id)
 gboolean
 gst_sctp_association_start (GstSctpAssociation * self)
 {
-  if (self->state != GST_SCTP_ASSOCIATION_STATE_READY) {
+  if (self->state != GST_SCTP_ASSOCIATION_STATE_READY &&
+      self->state != GST_SCTP_ASSOCIATION_STATE_DISCONNECTED) {
     GST_WARNING_OBJECT (self,
         "SCTP association is in wrong state and cannot be started");
     goto configure_required;
