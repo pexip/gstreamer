@@ -99,6 +99,7 @@ struct _GstSctpAssociationClass
 
   void (*on_sctp_stream_reset) (GstSctpAssociation * sctp_association,
       guint16 stream_id);
+  void (*on_sctp_association_restart) (GstSctpAssociation * sctp_association);
 };
 
 GType gst_sctp_association_get_type (void);
