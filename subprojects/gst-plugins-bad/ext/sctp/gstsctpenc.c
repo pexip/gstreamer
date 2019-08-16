@@ -51,6 +51,7 @@ enum
 {
   SIGNAL_SCTP_ASSOCIATION_ESTABLISHED,
   SIGNAL_GET_STREAM_BYTES_SENT,
+  SIGNAL_RECONNECT,
   NUM_SIGNALS
 };
 
@@ -164,6 +165,7 @@ static void get_config_from_caps (const GstCaps * caps, gboolean * ordered,
     GstSctpAssociationPartialReliability * reliability,
     guint32 * reliability_param, guint32 * ppid, gboolean * ppid_available);
 static guint64 on_get_stream_bytes_sent (GstSctpEnc * self, guint stream_id);
+static void reconnect (GstSctpEnc * self);
 
 static void
 gst_sctp_enc_class_init (GstSctpEncClass * klass)
@@ -233,8 +235,14 @@ gst_sctp_enc_class_init (GstSctpEncClass * klass)
       G_STRUCT_OFFSET (GstSctpEncClass, on_get_stream_bytes_sent), NULL, NULL,
       NULL, G_TYPE_UINT64, 1, G_TYPE_UINT);
 
+  signals[SIGNAL_RECONNECT] = g_signal_new ("reconnect",
+      G_TYPE_FROM_CLASS (gobject_class), G_SIGNAL_RUN_LAST | G_SIGNAL_ACTION,
+      G_STRUCT_OFFSET (GstSctpEncClass, reconnect), NULL, NULL,
+      g_cclosure_marshal_generic, G_TYPE_NONE, 0);
+
   klass->on_get_stream_bytes_sent =
       GST_DEBUG_FUNCPTR (on_get_stream_bytes_sent);
+  klass->reconnect = GST_DEBUG_FUNCPTR (reconnect);
 
   gst_element_class_set_static_metadata (element_class,
       "SCTP Encoder",
@@ -817,6 +825,20 @@ gst_sctp_enc_src_event (GstPad * pad, GstObject * parent, GstEvent * event)
       break;
   }
   return ret;
+}
+
+static void
+reconnect (GstSctpEnc * self)
+{
+  gint state;
+
+  g_object_get (self->sctp_association, "state", &state, NULL);
+  if (state != GST_SCTP_ASSOCIATION_STATE_DISCONNECTED) {
+    GST_WARNING_OBJECT (self, "Cannot reconnect in non-DISCONNECTED state.");
+    return;
+  }
+
+  gst_sctp_association_start (self->sctp_association);
 }
 
 static gboolean
