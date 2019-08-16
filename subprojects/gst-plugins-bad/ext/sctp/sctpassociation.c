@@ -72,6 +72,7 @@ G_DEFINE_TYPE (GstSctpAssociation, gst_sctp_association, G_TYPE_OBJECT);
 enum
 {
   SIGNAL_STREAM_RESET,
+  SIGNAL_ASSOC_RESTART,
   LAST_SIGNAL
 };
 
@@ -150,6 +151,12 @@ gst_sctp_association_class_init (GstSctpAssociationClass * klass)
       g_signal_new ("stream-reset", G_OBJECT_CLASS_TYPE (klass),
       G_SIGNAL_RUN_FIRST, G_STRUCT_OFFSET (GstSctpAssociationClass,
           on_sctp_stream_reset), NULL, NULL, NULL, G_TYPE_NONE, 1, G_TYPE_UINT);
+
+  signals[SIGNAL_ASSOC_RESTART] =
+      g_signal_new ("association-restart", G_OBJECT_CLASS_TYPE (klass),
+      G_SIGNAL_RUN_FIRST, G_STRUCT_OFFSET (GstSctpAssociationClass,
+          on_sctp_association_restart), NULL, NULL, g_cclosure_marshal_generic,
+      G_TYPE_NONE, 0);
 
   properties[PROP_ASSOCIATION_ID] = g_param_spec_uint ("association-id",
       "The SCTP association-id", "The SCTP association-id.", 0, G_MAXUSHORT,
@@ -961,7 +968,8 @@ handle_association_changed (GstSctpAssociation * self,
       handle_sctp_comm_lost_or_shutdown (self, sac);
       break;
     case SCTP_RESTART:
-      GST_DEBUG_OBJECT (self, "SCTP event SCTP_RESTART received");
+      GST_INFO_OBJECT (self, "SCTP event SCTP_RESTART received");
+      g_signal_emit (self, signals[SIGNAL_ASSOC_RESTART], 0);
       break;
     case SCTP_SHUTDOWN_COMP:
       /* Occurs if in TCP mode when the far end sends SHUTDOWN */
