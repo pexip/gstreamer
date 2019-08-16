@@ -69,7 +69,7 @@ struct _GstSctpEncClass
       gboolean established);
     guint64 (*on_get_stream_bytes_sent) (GstSctpEnc * sctp_enc,
       guint stream_id);
-
+  void (*reconnect) (GstSctpEnc * sctp_enc);
 };
 
 GType gst_sctp_enc_get_type (void);
