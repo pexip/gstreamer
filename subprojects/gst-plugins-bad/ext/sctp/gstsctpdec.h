@@ -53,6 +53,7 @@ struct _GstSctpDec
 
   GstSctpAssociation *sctp_association;
   gulong signal_handler_stream_reset;
+  gulong signal_handler_association_restart;
 };
 
 struct _GstSctpDecClass
@@ -60,6 +61,7 @@ struct _GstSctpDecClass
   GstElementClass parent_class;
 
   void (*on_reset_stream) (GstSctpDec * sctp_dec, guint stream_id);
+  void (*on_association_restart) (GstSctpDec * sctp_dec);
 };
 
 GType gst_sctp_dec_get_type (void);
