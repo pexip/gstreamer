@@ -184,8 +184,8 @@ gst_sctp_association_class_init (GstSctpAssociationClass * klass)
 
   properties[PROP_AGGRESSIVE_HEARTBEAT] =
       g_param_spec_boolean ("aggressive-heartbeat", "Aggressive heartbeat",
-      "When set to TRUE, set the heartbeat interval to 1000ms and the assoc "
-      "rtx max to 2.",
+      "When set to TRUE, set the heartbeat interval to 10ms and the assoc "
+      "rtx max to 1.",
       FALSE, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS);
 
   g_object_class_install_properties (gobject_class, NUM_PROPERTIES, properties);
@@ -309,13 +309,6 @@ gst_sctp_association_set_property (GObject * object, guint prop_id,
       break;
     case PROP_AGGRESSIVE_HEARTBEAT:
       self->aggressive_heartbeat = g_value_get_boolean (value);
-      if (self->aggressive_heartbeat) {
-        usrsctp_sysctl_set_sctp_heartbeat_interval_default (1000);
-        usrsctp_sysctl_set_sctp_assoc_rtx_max_default (2);
-      } else {
-        usrsctp_sysctl_set_sctp_heartbeat_interval_default (30000);
-        usrsctp_sysctl_set_sctp_assoc_rtx_max_default (10);
-      }
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (self, prop_id, pspec);
@@ -938,6 +931,35 @@ handle_sctp_comm_lost_or_shutdown (GstSctpAssociation * self,
 }
 
 static void
+_apply_aggressive_heartbeat_unlocked (GstSctpAssociation * self)
+{
+  struct sctp_assocparams assoc_params;
+  struct sctp_paddrparams peer_addr_params;
+  struct sockaddr_conn addr;
+
+  if (!self->aggressive_heartbeat)
+    return;
+
+  memset (&assoc_params, 0, sizeof (assoc_params));
+  assoc_params.sasoc_assoc_id = self->sctp_assoc_id;
+  assoc_params.sasoc_asocmaxrxt = 1;
+  if (usrsctp_setsockopt (self->sctp_ass_sock, IPPROTO_SCTP,
+      SCTP_ASSOCINFO, &assoc_params, sizeof (assoc_params))) {
+    GST_WARNING_OBJECT (self, "Could not set SCTP_ASSOCINFO");
+  }
+
+  addr = get_sctp_socket_address (self, self->remote_port);
+  memset (&peer_addr_params, 0, sizeof (peer_addr_params));
+  memcpy (&peer_addr_params.spp_address, &addr, sizeof (addr));
+  peer_addr_params.spp_flags = SPP_HB_ENABLE;
+  peer_addr_params.spp_hbinterval = 10;
+  if (usrsctp_setsockopt (self->sctp_ass_sock, IPPROTO_SCTP,
+      SCTP_PEER_ADDR_PARAMS, &peer_addr_params, sizeof (peer_addr_params))) {
+    GST_WARNING_OBJECT (self, "Could not set SCTP_PEER_ADDR_PARAMS");
+  }
+}
+
+static void
 handle_sctp_comm_up (GstSctpAssociation * self,
     const struct sctp_assoc_change * sac)
 {
@@ -945,6 +967,7 @@ handle_sctp_comm_up (GstSctpAssociation * self,
   g_mutex_lock (&self->association_mutex);
     if (self->state == GST_SCTP_ASSOCIATION_STATE_CONNECTING) {
       self->sctp_assoc_id = sac->sac_assoc_id;
+      _apply_aggressive_heartbeat_unlocked (self);
       gst_sctp_association_change_state_unlocked (self,
           GST_SCTP_ASSOCIATION_STATE_CONNECTED);
       GST_INFO_OBJECT (self, "SCTP association connected!");
