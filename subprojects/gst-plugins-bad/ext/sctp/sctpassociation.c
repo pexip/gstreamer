@@ -600,6 +600,32 @@ force_close (GstSctpAssociation * self, gboolean change_state)
   }
 }
 
+static void
+gst_sctp_association_disconnect_unlocked (GstSctpAssociation * self)
+{
+  if (self->state == GST_SCTP_ASSOCIATION_STATE_CONNECTED) {
+    gst_sctp_association_change_state_unlocked (self,
+        GST_SCTP_ASSOCIATION_STATE_DISCONNECTING);
+  }
+
+  /* Fall through to ensure the transition to disconnected occurs */
+
+  if (self->state == GST_SCTP_ASSOCIATION_STATE_DISCONNECTING) {
+    force_close(self, FALSE);
+    gst_sctp_association_change_state_unlocked (self,
+        GST_SCTP_ASSOCIATION_STATE_DISCONNECTED);
+    GST_INFO_OBJECT (self, "SCTP association disconnected!");
+  }
+}
+
+void
+gst_sctp_association_disconnect (GstSctpAssociation * self)
+{
+  g_mutex_lock (&self->association_mutex);
+  gst_sctp_association_disconnect_unlocked (self);
+  g_mutex_unlock (&self->association_mutex);
+}
+
 static struct socket *
 create_sctp_socket (GstSctpAssociation * self)
 {
@@ -912,21 +938,7 @@ handle_sctp_comm_lost_or_shutdown (GstSctpAssociation * self,
       "SCTP_COMM_LOST" : "SCTP_SHUTDOWN_COMP");
 
   g_mutex_lock (&self->association_mutex);
-
-  if (self->state == GST_SCTP_ASSOCIATION_STATE_CONNECTED) {
-    gst_sctp_association_change_state_unlocked (self,
-        GST_SCTP_ASSOCIATION_STATE_DISCONNECTING);
-  }
-
-  /* Fall through to ensure the transition to disconnected occurs */
-
-  if (self->state == GST_SCTP_ASSOCIATION_STATE_DISCONNECTING) {
-    force_close(self, FALSE);
-    gst_sctp_association_change_state_unlocked (self,
-        GST_SCTP_ASSOCIATION_STATE_DISCONNECTED);
-    GST_INFO_OBJECT (self, "SCTP association disconnected!");
-  }
-
+  gst_sctp_association_disconnect_unlocked (self);
   g_mutex_unlock (&self->association_mutex);
 }
 
