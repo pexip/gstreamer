@@ -930,19 +930,6 @@ handle_notification (GstSctpAssociation * self,
 }
 
 static void
-handle_sctp_comm_lost_or_shutdown (GstSctpAssociation * self,
-    const struct sctp_assoc_change * sac)
-{
-  GST_INFO_OBJECT (self, "SCTP event %s received",
-      sac->sac_state == SCTP_COMM_LOST ?
-      "SCTP_COMM_LOST" : "SCTP_SHUTDOWN_COMP");
-
-  g_mutex_lock (&self->association_mutex);
-  gst_sctp_association_disconnect_unlocked (self);
-  g_mutex_unlock (&self->association_mutex);
-}
-
-static void
 _apply_aggressive_heartbeat_unlocked (GstSctpAssociation * self)
 {
   struct sctp_assocparams assoc_params;
@@ -988,6 +975,19 @@ handle_sctp_comm_up (GstSctpAssociation * self,
     } else {
       GST_WARNING_OBJECT (self, "SCTP association in unexpected state");
     }
+  g_mutex_unlock (&self->association_mutex);
+}
+
+static void
+handle_sctp_comm_lost_or_shutdown (GstSctpAssociation * self,
+    const struct sctp_assoc_change * sac)
+{
+  GST_INFO_OBJECT (self, "SCTP event %s received",
+      sac->sac_state == SCTP_COMM_LOST ?
+      "SCTP_COMM_LOST" : "SCTP_SHUTDOWN_COMP");
+
+  g_mutex_lock (&self->association_mutex);
+  gst_sctp_association_disconnect_unlocked (self);
   g_mutex_unlock (&self->association_mutex);
 }
 
