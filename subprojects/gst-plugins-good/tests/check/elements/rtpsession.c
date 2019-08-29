@@ -1414,37 +1414,58 @@ GST_START_TEST (test_ssrc_collision_never_send_on_non_internal_source)
 
 GST_END_TEST;
 
+static guint32
+_get_ssrc_from_event (GstEvent * event)
+{
+  guint ret = 0;
+  const GstStructure *s = gst_event_get_structure (event);
+  gst_structure_get_uint (s, "ssrc", &ret);
+  return ret;
+}
+
 GST_START_TEST (test_request_fir)
 {
-  SessionHarness *h = session_harness_new ();
+  SessionHarness *send_h = session_harness_new ();
+  SessionHarness *recv_h = session_harness_new ();
   GstBuffer *buf;
   GstRTCPBuffer rtcp = GST_RTCP_BUFFER_INIT;
   GstRTCPPacket rtcp_packet;
   guint8 *fci_data;
+  guint32 ssrc0 = 0x12345678;
+  guint32 ssrc1 = 0x87654321;
+  GstEvent *ev;
 
   /* add FIR-capabilites to our caps */
-  gst_caps_set_simple (h->caps, "rtcp-fb-ccm-fir", G_TYPE_BOOLEAN, TRUE, NULL);
+  gst_caps_set_simple (recv_h->caps, "rtcp-fb-ccm-fir", G_TYPE_BOOLEAN, TRUE,
+      NULL);
   /* clear pt-map to removed the cached caps without fir */
-  g_signal_emit_by_name (h->session, "clear-pt-map");
+  g_signal_emit_by_name (recv_h->session, "clear-pt-map");
 
-  g_object_set (h->internal_session, "internal-ssrc", 0xDEADBEEF, NULL);
+  g_object_set (recv_h->internal_session, "internal-ssrc", 0xDEADBEEF, NULL);
 
-  /* Receive a RTP buffer from the wire from 2 different ssrcs */
+  /* "send" 2 different SSRCs from from the sender */
   fail_unless_equals_int (GST_FLOW_OK,
-      session_harness_recv_rtp (h, generate_test_buffer (0, 0x12345678)));
+      session_harness_send_rtp (send_h, generate_test_buffer (0, ssrc0)));
   fail_unless_equals_int (GST_FLOW_OK,
-      session_harness_recv_rtp (h, generate_test_buffer (0, 0x87654321)));
+      session_harness_send_rtp (send_h, generate_test_buffer (0, ssrc1)));
+
+  /* pull them from the sender and push them on to the receiver */
+  fail_unless_equals_int (GST_FLOW_OK,
+      session_harness_recv_rtp (recv_h,
+          session_harness_pull_send_rtp (send_h)));
+  fail_unless_equals_int (GST_FLOW_OK, session_harness_recv_rtp (recv_h,
+          session_harness_pull_send_rtp (send_h)));
 
   /* fix to make the test deterministic: We need to wait for the RTCP-thread
      to have settled to ensure the key-unit will considered once released */
-  gst_test_clock_wait_for_next_pending_id (h->testclock, NULL);
+  gst_test_clock_wait_for_next_pending_id (recv_h->testclock, NULL);
 
   /* request FIR for both SSRCs */
-  session_harness_force_key_unit (h, 0, 0x12345678, TEST_BUF_PT, NULL, NULL);
-  session_harness_force_key_unit (h, 0, 0x87654321, TEST_BUF_PT, NULL, NULL);
+  session_harness_force_key_unit (recv_h, 0, ssrc0, TEST_BUF_PT, NULL, NULL);
+  session_harness_force_key_unit (recv_h, 0, ssrc1, TEST_BUF_PT, NULL, NULL);
 
-  session_harness_produce_rtcp (h, 1);
-  buf = session_harness_pull_rtcp (h);
+  session_harness_produce_rtcp (recv_h, 1);
+  buf = session_harness_pull_rtcp (recv_h);
 
   fail_unless (gst_rtcp_buffer_validate (buf));
   gst_rtcp_buffer_map (buf, GST_MAP_READ, &rtcp);
@@ -1478,22 +1499,47 @@ GST_START_TEST (test_request_fir)
       gst_rtcp_packet_fb_get_fci_length (&rtcp_packet) * sizeof (guint32));
 
   /* verify the FIR contains both SSRCs */
-  fail_unless_equals_int (0x87654321, GST_READ_UINT32_BE (fci_data));
+  fail_unless_equals_int (ssrc1, GST_READ_UINT32_BE (fci_data));
   fail_unless_equals_int (1, fci_data[4]);
   fail_unless_equals_int (0, fci_data[5]);
   fail_unless_equals_int (0, fci_data[6]);
   fail_unless_equals_int (0, fci_data[7]);
   fci_data += 8;
 
-  fail_unless_equals_int (0x12345678, GST_READ_UINT32_BE (fci_data));
+  fail_unless_equals_int (ssrc0, GST_READ_UINT32_BE (fci_data));
   fail_unless_equals_int (1, fci_data[4]);
   fail_unless_equals_int (0, fci_data[5]);
   fail_unless_equals_int (0, fci_data[6]);
   fail_unless_equals_int (0, fci_data[7]);
 
   gst_rtcp_buffer_unmap (&rtcp);
-  gst_buffer_unref (buf);
-  session_harness_free (h);
+
+  /* now "send" the produced RTCP FIR back to the sender */
+  session_harness_recv_rtcp (send_h, buf);
+
+  /* Remove the first 2 reconfigure events */
+  ev = gst_harness_pull_upstream_event (send_h->send_rtp_h);
+  fail_unless_equals_int (GST_EVENT_RECONFIGURE, GST_EVENT_TYPE (ev));
+  gst_event_unref (ev);
+  ev = gst_harness_pull_upstream_event (send_h->send_rtp_h);
+  fail_unless_equals_int (GST_EVENT_RECONFIGURE, GST_EVENT_TYPE (ev));
+  gst_event_unref (ev);
+
+  /* Then pull and check the force key-unit events, for the right SSRCs */
+  ev = gst_harness_pull_upstream_event (send_h->send_rtp_h);
+  fail_unless_equals_int (GST_EVENT_CUSTOM_UPSTREAM, GST_EVENT_TYPE (ev));
+  fail_unless (gst_video_event_is_force_key_unit (ev));
+  fail_unless_equals_int (ssrc1, _get_ssrc_from_event (ev));
+  gst_event_unref (ev);
+
+  ev = gst_harness_pull_upstream_event (send_h->send_rtp_h);
+  fail_unless_equals_int (GST_EVENT_CUSTOM_UPSTREAM, GST_EVENT_TYPE (ev));
+  fail_unless (gst_video_event_is_force_key_unit (ev));
+  fail_unless_equals_int (ssrc0, _get_ssrc_from_event (ev));
+  gst_event_unref (ev);
+
+  session_harness_free (send_h);
+  session_harness_free (recv_h);
 }
 
 GST_END_TEST;
