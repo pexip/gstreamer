@@ -2962,9 +2962,7 @@ rtp_session_process_fir (RTPSession * sess, guint32 sender_ssrc,
     GstClockTime current_time)
 {
   RTPSource *src;
-  guint32 ssrc;
   guint position = 0;
-  gboolean our_request = FALSE;
 
   if (!sess->callbacks.request_key_unit)
     return;
@@ -2994,24 +2992,12 @@ rtp_session_process_fir (RTPSession * sess, guint32 sender_ssrc,
 
   for (position = 0; position < fci_length; position += 8) {
     guint8 *data = fci_data + position;
-    RTPSource *own;
-
-    ssrc = GST_READ_UINT32_BE (data);
-
-    own = find_source (sess, ssrc);
-    if (own == NULL)
-      continue;
-
-    if (own->internal) {
-      our_request = TRUE;
-      break;
+    guint32 ssrc = GST_READ_UINT32_BE (data);
+    RTPSource *own = find_source (sess, ssrc);
+    if (own && own->internal) {
+      rtp_session_request_local_key_unit (sess, src, ssrc, TRUE, current_time);
     }
   }
-  if (!our_request)
-    return;
-
-  rtp_session_request_local_key_unit (sess, src, media_ssrc, TRUE,
-      current_time);
 }
 
 static void
