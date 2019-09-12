@@ -42,6 +42,7 @@ G_BEGIN_DECLS
   (G_TYPE_CHECK_INSTANCE_TYPE((obj),GST_TYPE_NET_SIM))
 #define GST_IS_NET_SIM_CLASS(obj) \
   (G_TYPE_CHECK_CLASS_TYPE((klass),GST_TYPE_NET_SIM))
+#define GST_NET_SIM_CAST(obj) ((GstNetSim *)obj)
 
 typedef struct _GstNetSim GstNetSim;
 typedef struct _GstNetSimClass GstNetSimClass;
@@ -67,15 +68,20 @@ struct _GstNetSim
   GstPad *sinkpad;
   GstPad *srcpad;
 
-  GMutex loop_mutex;
-  GCond start_cond;
-  GMainLoop *main_loop;
-  gboolean running;
   GRand *rand_seed;
-  gsize bucket_size;
-  GstClockTime prev_time;
+  guint bucket_size;
   NormalDistributionState delay_state;
-  gint64 last_ready_time;
+  GstClockTime prev_time;
+
+  GstClock *clock;
+  GstClockID clock_id;
+  GMutex mutex;
+  GCond cond;
+  gboolean running;
+  GQueue *bqueue;
+  guint seqnum;
+  GCompareDataFunc compare_func;
+  guint bits_in_queue;
 
   /* properties */
   gint min_delay;
@@ -87,6 +93,8 @@ struct _GstNetSim
   guint drop_packets;
   gint max_kbps;
   gint max_bucket_size;
+  gint queue_size;
+  gint max_queue_delay;
   gboolean allow_reordering;
   gboolean replace_droppped_with_empty;
 };
