@@ -126,9 +126,9 @@ if ['darwin', 'ios'].contains(host_system)
   endif
 
   objc = meson.get_compiler('objc')
-  if not objc.has_argument('-fobjc-arc')
-    error('ARC is required for building')
-  endif
+#  if not objc.has_argument('-fobjc-arc')
+#    error('ARC is required for building')
+#  endif
 
   gl_objc_args += ['-fobjc-arc']
 endif
