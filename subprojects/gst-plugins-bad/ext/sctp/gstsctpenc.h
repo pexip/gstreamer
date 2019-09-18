@@ -52,7 +52,6 @@ struct _GstSctpEnc
   guint16 remote_sctp_port;
   gboolean use_sock_stream;
   gboolean aggressive_heartbeat;
-  gboolean reconnect_pending;
 
   GstSctpAssociation *sctp_association;
   GstDataQueue *outbound_sctp_packet_queue;
