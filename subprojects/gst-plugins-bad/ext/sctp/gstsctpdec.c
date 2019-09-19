@@ -383,8 +383,9 @@ gst_sctp_dec_packet_event (GstPad * pad, GstSctpDec * self, GstEvent * event)
   switch (GST_EVENT_TYPE (event)) {
     case GST_EVENT_STREAM_START:
     case GST_EVENT_CAPS:
-      /* We create our own stream-start events and the caps event does not
-       * make sense */
+    case GST_EVENT_SEGMENT:
+      /* We create our own stream-start and segment events and the
+       * caps event does not make sense */
       gst_event_unref (event);
       return TRUE;
     case GST_EVENT_EOS:
@@ -535,16 +536,29 @@ gst_sctp_dec_src_event (GstPad * pad, GstSctpDec * self, GstEvent * event)
   }
 }
 
-static gboolean
-copy_sticky_events (GstPad * pad, GstEvent ** event, gpointer user_data)
+static void
+send_sticky_events (GstSctpDec * self, GstPad * pad, guint16 stream_id)
 {
-  GstPad *new_pad = user_data;
+  GstSegment segment;
+  gchar *pad_stream_id;
+  gboolean ret;
 
-  if (GST_EVENT_TYPE (*event) != GST_EVENT_CAPS
-      && GST_EVENT_TYPE (*event) != GST_EVENT_STREAM_START)
-    gst_pad_store_sticky_event (new_pad, *event);
+  pad_stream_id =
+      gst_pad_create_stream_id_printf (pad, GST_ELEMENT (self), "%hu",
+      stream_id);
+  ret = gst_pad_push_event (pad, gst_event_new_stream_start (pad_stream_id));
+  g_free (pad_stream_id);
+  if (ret == FALSE) {
+    GST_ERROR_OBJECT (self,
+        "Pushing stream-start event failed on pad %" GST_PTR_FORMAT, pad);
+  }
 
-  return TRUE;
+  gst_segment_init (&segment, GST_FORMAT_TIME);
+  ret = gst_pad_push_event (pad, gst_event_new_segment (&segment));
+  if (ret == FALSE) {
+    GST_ERROR_OBJECT (self,
+        "Pushing segment event failed on pad %" GST_PTR_FORMAT, pad);
+  }
 }
 
 static GstPad *
@@ -552,7 +566,7 @@ get_pad_for_stream_id (GstSctpDec * self, guint16 stream_id)
 {
   GstPad *new_pad = NULL;
   gint state;
-  gchar *pad_name, *pad_stream_id;
+  gchar *pad_name;
   GstPadTemplate *template;
 
   pad_name = g_strdup_printf ("src_%hu", stream_id);
@@ -587,12 +601,7 @@ get_pad_for_stream_id (GstSctpDec * self, guint16 stream_id)
   if (!gst_pad_set_active (new_pad, TRUE))
     goto error_cleanup;
 
-  pad_stream_id =
-      gst_pad_create_stream_id_printf (new_pad, GST_ELEMENT (self), "%hu",
-      stream_id);
-  gst_pad_push_event (new_pad, gst_event_new_stream_start (pad_stream_id));
-  g_free (pad_stream_id);
-  gst_pad_sticky_events_foreach (self->sink_pad, copy_sticky_events, new_pad);
+  send_sticky_events (self, new_pad, stream_id);
 
   if (!gst_element_add_pad (GST_ELEMENT (self), new_pad))
     goto error_add;
