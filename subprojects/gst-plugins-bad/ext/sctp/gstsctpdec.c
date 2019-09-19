@@ -344,8 +344,10 @@ gst_sctp_dec_packet_chain (GstPad * pad, GstSctpDec * self, GstBuffer * buf)
     return GST_FLOW_ERROR;
   }
 
-  gst_sctp_association_incoming_packet (self->sctp_association,
-      (const guint8 *) map.data, (guint32) map.size);
+  if (self->sctp_association != NULL) {
+    gst_sctp_association_incoming_packet (self->sctp_association,
+        (const guint8 *) map.data, (guint32) map.size);
+  }
   gst_buffer_unmap (buf, &map);
   gst_buffer_unref (buf);
 
