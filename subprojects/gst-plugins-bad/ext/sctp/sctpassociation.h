@@ -121,6 +121,7 @@ GstFlowReturn gst_sctp_association_send_data (GstSctpAssociation * self,
 void gst_sctp_association_reset_stream (GstSctpAssociation * self,
     guint16 stream_id);
 void gst_sctp_association_force_close (GstSctpAssociation * self);
+void gst_sctp_association_disconnect (GstSctpAssociation * self);
 
 G_END_DECLS
 
