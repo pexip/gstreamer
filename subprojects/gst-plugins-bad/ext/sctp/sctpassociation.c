@@ -99,8 +99,9 @@ static GParamSpec *properties[NUM_PROPERTIES];
 #define DEFAULT_LOCAL_SCTP_PORT 0
 #define DEFAULT_REMOTE_SCTP_PORT 0
 
-static GHashTable *associations = NULL;
 G_LOCK_DEFINE_STATIC (associations_lock);
+static GHashTable *associations_by_id = NULL;
+static GHashTable *ids_by_association = NULL;
 static guint32 number_of_associations = 0;
 
 /* Interface implementations */
@@ -263,7 +264,8 @@ gst_sctp_association_finalize (GObject * object)
 
   G_LOCK (associations_lock);
 
-  g_hash_table_remove (associations, GUINT_TO_POINTER (self->association_id));
+  g_hash_table_remove (associations_by_id, GUINT_TO_POINTER (self->association_id));
+  g_hash_table_remove (ids_by_association, self);
 
   usrsctp_deregister_address ((void *) self);
   number_of_associations--;
@@ -381,19 +383,24 @@ gst_sctp_association_get (guint32 association_id)
   GST_DEBUG_CATEGORY_INIT (gst_sctp_debug_category,
       "sctplib", 0, "debug category for messages from usrsctp");
 
-  if (!associations) {
-    associations =
+  if (!associations_by_id) {
+    associations_by_id =
+        g_hash_table_new_full (g_direct_hash, g_direct_equal, NULL, NULL);
+    ids_by_association =
         g_hash_table_new_full (g_direct_hash, g_direct_equal, NULL, NULL);
   }
 
   association =
-      g_hash_table_lookup (associations, GUINT_TO_POINTER (association_id));
+      g_hash_table_lookup (associations_by_id,
+          GUINT_TO_POINTER (association_id));
   if (!association) {
     association =
         g_object_new (GST_SCTP_TYPE_ASSOCIATION, "association-id",
         association_id, NULL);
-    g_hash_table_insert (associations, GUINT_TO_POINTER (association_id),
+    g_hash_table_insert (associations_by_id, GUINT_TO_POINTER (association_id),
         association);
+    g_hash_table_insert (ids_by_association, association,
+        GUINT_TO_POINTER (association_id));
   } else {
     g_object_ref (association);
   }
@@ -841,6 +848,20 @@ error:
   return FALSE;
 }
 
+static gboolean
+association_is_valid (GstSctpAssociation * self)
+{
+  gboolean valid = FALSE;
+
+  G_LOCK (associations_lock);
+
+  valid = g_hash_table_contains (ids_by_association, self);
+
+  G_UNLOCK (associations_lock);
+
+  return valid;
+}
+
 static int
 sctp_packet_out (void *addr, void *buffer, size_t length, guint8 tos,
     guint8 set_df)
@@ -848,7 +869,7 @@ sctp_packet_out (void *addr, void *buffer, size_t length, guint8 tos,
   GstSctpAssociation *self = GST_SCTP_ASSOCIATION (addr);
 
   g_mutex_lock (&self->association_mutex);
-  if (self->packet_out_cb) {
+  if (association_is_valid (self) && self->packet_out_cb) {
     self->packet_out_cb (self, buffer, length, self->packet_out_user_data);
   }
   g_mutex_unlock (&self->association_mutex);
@@ -861,6 +882,10 @@ receive_cb (struct socket *sock, union sctp_sockstore addr, void *data,
     size_t datalen, struct sctp_rcvinfo rcv_info, gint flags, void *ulp_info)
 {
   GstSctpAssociation *self = GST_SCTP_ASSOCIATION (ulp_info);
+
+  if (!association_is_valid (self)) {
+    return 1;
+  }
 
   if (!data) {
     /* This is a notification that socket shutdown is complete */
