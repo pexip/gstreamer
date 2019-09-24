@@ -142,6 +142,7 @@ gst_sctp_dec_pad_init (GstSctpDecPad * self)
       data_queue_full_cb, data_queue_empty_cb, NULL);
 }
 
+static void gst_sctp_dec_dispose (GObject * object);
 static void gst_sctp_dec_set_property (GObject * object, guint prop_id,
     const GValue * value, GParamSpec * pspec);
 static void gst_sctp_dec_get_property (GObject * object, guint prop_id,
@@ -187,6 +188,7 @@ gst_sctp_dec_class_init (GstSctpDecClass * klass)
   gst_element_class_add_pad_template (element_class,
       gst_static_pad_template_get (&sink_template));
 
+  gobject_class->dispose = gst_sctp_dec_dispose;
   gobject_class->set_property = gst_sctp_dec_set_property;
   gobject_class->get_property = gst_sctp_dec_get_property;
   gobject_class->finalize = gst_sctp_dec_finalize;
@@ -245,6 +247,17 @@ gst_sctp_dec_init (GstSctpDec * self)
       GST_DEBUG_FUNCPTR ((GstPadEventFunction) gst_sctp_dec_packet_event));
 
   gst_element_add_pad (GST_ELEMENT (self), self->sink_pad);
+}
+
+static void
+gst_sctp_dec_dispose (GObject * object)
+{
+  GstSctpDec *self = GST_SCTP_DEC (object);
+
+  g_object_unref (self->sctp_association);
+  self->sctp_association = NULL;
+
+  G_OBJECT_CLASS (gst_sctp_dec_parent_class)->dispose (object);
 }
 
 static void
@@ -752,8 +765,6 @@ sctpdec_cleanup (GstSctpDec * self)
     g_signal_handler_disconnect (self->sctp_association,
         self->signal_handler_stream_reset);
     gst_sctp_association_force_close (self->sctp_association);
-    g_object_unref (self->sctp_association);
-    self->sctp_association = NULL;
   }
 }
 

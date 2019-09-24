@@ -137,6 +137,7 @@ gst_sctp_enc_pad_init (GstSctpEncPad * self)
   self->flushing = FALSE;
 }
 
+static void gst_sctp_enc_dispose (GObject * object);
 static void gst_sctp_enc_finalize (GObject * object);
 static void gst_sctp_enc_set_property (GObject * object, guint prop_id,
     const GValue * value, GParamSpec * pspec);
@@ -186,6 +187,7 @@ gst_sctp_enc_class_init (GstSctpEncClass * klass)
   gst_element_class_add_pad_template (GST_ELEMENT_CLASS (klass),
       gst_static_pad_template_get (&sink_template));
 
+  gobject_class->dispose = GST_DEBUG_FUNCPTR (gst_sctp_enc_dispose);
   gobject_class->finalize = GST_DEBUG_FUNCPTR (gst_sctp_enc_finalize);
   gobject_class->set_property = GST_DEBUG_FUNCPTR (gst_sctp_enc_set_property);
   gobject_class->get_property = GST_DEBUG_FUNCPTR (gst_sctp_enc_get_property);
@@ -295,6 +297,19 @@ gst_sctp_enc_init (GstSctpEnc * self)
 
   g_queue_init (&self->pending_pads);
   self->src_ret = GST_FLOW_FLUSHING;
+}
+
+static void
+gst_sctp_enc_dispose (GObject * object)
+{
+  GstSctpEnc *self = GST_SCTP_ENC (object);
+
+  if (self->sctp_association) {
+    g_object_unref (self->sctp_association);
+    self->sctp_association = NULL;
+  }
+
+  G_OBJECT_CLASS (parent_class)->dispose (object);
 }
 
 static void
@@ -1010,15 +1025,14 @@ sctpenc_cleanup (GstSctpEnc * self)
 {
   GstIterator *it;
 
-  gst_sctp_association_set_on_packet_out (self->sctp_association, NULL, NULL,
-      NULL);
-
-  g_signal_handler_disconnect (self->sctp_association,
-      self->signal_handler_state_changed);
-  stop_srcpad_task (self->src_pad, self);
-  gst_sctp_association_force_close (self->sctp_association);
-  g_object_unref (self->sctp_association);
-  self->sctp_association = NULL;
+  if (self->sctp_association) {
+    gst_sctp_association_set_on_packet_out (self->sctp_association, NULL, NULL,
+        NULL);
+    g_signal_handler_disconnect (self->sctp_association,
+        self->signal_handler_state_changed);
+    stop_srcpad_task (self->src_pad, self);
+    gst_sctp_association_force_close (self->sctp_association);
+  }
 
   it = gst_element_iterate_sink_pads (GST_ELEMENT (self));
   while (gst_iterator_foreach (it, remove_sinkpad, self) == GST_ITERATOR_RESYNC)
