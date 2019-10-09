@@ -259,6 +259,10 @@ struct _GstQTDemux {
    * fields. */
   gboolean received_seek;
   gboolean first_moof_already_parsed;
+
+  /** Maximum number of audio samples per buffer when demuxing raw audio.
+   * Used to determine max buffer size for raw audio streams. */
+  guint max_audio_samples;
 };
 
 struct _GstQTDemuxClass {
