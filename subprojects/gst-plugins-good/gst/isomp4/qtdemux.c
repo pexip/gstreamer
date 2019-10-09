@@ -114,6 +114,12 @@ GST_DEBUG_CATEGORY (qtdemux_debug);
 typedef struct _QtDemuxCencSampleSetInfo QtDemuxCencSampleSetInfo;
 typedef struct _QtDemuxAavdEncryptionInfo QtDemuxAavdEncryptionInfo;
 
+enum
+{
+  PROP_0,
+  PROP_MAX_AUDIO_SAMPLES
+};
+
 /* Macros for converting to/from timescale */
 #define QTSTREAMTIME_TO_GSTTIME(stream, value) (gst_util_uint64_scale((value), GST_SECOND, (stream)->timescale))
 #define GSTTIME_TO_QTSTREAMTIME(stream, value) (gst_util_uint64_scale((value), (stream)->timescale, GST_SECOND))
@@ -384,6 +390,42 @@ static void qtdemux_gst_structure_free (GstStructure * gststructure);
 static void gst_qtdemux_reset (GstQTDemux * qtdemux, gboolean hard);
 
 static void
+gst_qtdemux_set_property (GObject * object, guint prop_id,
+    const GValue * value, GParamSpec * pspec)
+{
+  GstQTDemux *qtdemux = GST_QTDEMUX (object);
+
+  GST_OBJECT_LOCK (qtdemux);
+  switch (prop_id) {
+    case PROP_MAX_AUDIO_SAMPLES:
+      qtdemux->max_audio_samples = g_value_get_uint (value);
+      break;
+    default:
+      G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
+      break;
+  }
+  GST_OBJECT_UNLOCK (qtdemux);
+}
+
+static void
+gst_qtdemux_get_property (GObject * object,
+    guint prop_id, GValue * value, GParamSpec * pspec)
+{
+  GstQTDemux *qtdemux = GST_QTDEMUX (object);
+
+  GST_OBJECT_LOCK (qtdemux);
+  switch (prop_id) {
+    case PROP_MAX_AUDIO_SAMPLES:
+      g_value_set_uint (value, qtdemux->max_audio_samples);
+      break;
+    default:
+      G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
+      break;
+  }
+  GST_OBJECT_UNLOCK (qtdemux);
+}
+
+static void
 gst_qtdemux_class_init (GstQTDemuxClass * klass)
 {
   GObjectClass *gobject_class;
@@ -396,6 +438,9 @@ gst_qtdemux_class_init (GstQTDemuxClass * klass)
 
   gobject_class->dispose = gst_qtdemux_dispose;
   gobject_class->finalize = gst_qtdemux_finalize;
+
+  gobject_class->get_property = gst_qtdemux_get_property;
+  gobject_class->set_property = gst_qtdemux_set_property;
 
   gstelement_class->change_state = GST_DEBUG_FUNCPTR (gst_qtdemux_change_state);
 #if 0
@@ -418,6 +463,11 @@ gst_qtdemux_class_init (GstQTDemuxClass * klass)
       "Codec/Demuxer",
       "Demultiplex a QuickTime file into audio and video streams",
       "David Schleef <ds@schleef.org>, Wim Taymans <wim@fluendo.com>");
+
+  g_object_class_install_property (gobject_class, PROP_MAX_AUDIO_SAMPLES,
+      g_param_spec_uint ("max-audio-samples", "Max audio samples",
+          "Maximum raw audio samples per buffer", 1, G_MAXUINT, 4096,
+          G_PARAM_CONSTRUCT | G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 
   GST_DEBUG_CATEGORY_INIT (qtdemux_debug, "qtdemux", 0, "qtdemux plugin");
   gst_riff_init ();
@@ -14934,7 +14984,8 @@ qtdemux_audio_caps (GstQTDemux * qtdemux, QtDemuxStream * stream,
   if (g_str_has_prefix (name, "audio/x-raw")) {
     stream->need_clip = TRUE;
     stream->min_buffer_size = 1024 * entry->bytes_per_frame;
-    stream->max_buffer_size = 4096 * entry->bytes_per_frame;
+    stream->max_buffer_size =
+        qtdemux->max_audio_samples * entry->bytes_per_frame;
     GST_DEBUG ("setting min/max buffer sizes to %d/%d", stream->min_buffer_size,
         stream->max_buffer_size);
   }
