@@ -154,7 +154,8 @@ typedef struct _QtDemuxAavdEncryptionInfo QtDemuxAavdEncryptionInfo;
 enum
 {
   PROP_0,
-  PROP_MAX_ATOM_SIZE
+  PROP_MAX_ATOM_SIZE,
+  PROP_MAX_AUDIO_SAMPLES
 };
 
 /*
@@ -436,6 +437,11 @@ gst_qtdemux_set_property (GObject * object, guint prop_id, const GValue * value,
       self->max_atom_size = g_value_get_uint64 (value);
       GST_OBJECT_UNLOCK (self);
       break;
+    case PROP_MAX_AUDIO_SAMPLES:
+      GST_OBJECT_LOCK (self);
+      self->max_audio_samples = g_value_get_uint (value);
+      GST_OBJECT_UNLOCK (self);
+      break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
       break;
@@ -452,6 +458,11 @@ gst_qtdemux_get_property (GObject * object, guint prop_id, GValue * value,
     case PROP_MAX_ATOM_SIZE:
       GST_OBJECT_LOCK (self);
       g_value_set_uint64 (value, self->max_atom_size);
+      GST_OBJECT_UNLOCK (self);
+      break;
+    case PROP_MAX_AUDIO_SAMPLES:
+      GST_OBJECT_LOCK (self);
+      g_value_set_uint (value, self->max_audio_samples);
       GST_OBJECT_UNLOCK (self);
       break;
     default:
@@ -514,6 +525,11 @@ gst_qtdemux_class_init (GstQTDemuxClass * klass)
           0, G_MAXUINT64, DEFAULT_PROP_MAX_ATOM_SIZE,
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
           GST_PARAM_MUTABLE_PLAYING));
+
+  g_object_class_install_property (gobject_class, PROP_MAX_AUDIO_SAMPLES,
+      g_param_spec_uint ("max-audio-samples", "Max audio samples",
+          "Maximum raw audio samples per buffer", 1, G_MAXUINT, 4096,
+          G_PARAM_CONSTRUCT | G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 
   GST_DEBUG_CATEGORY_INIT (qtdemux_debug, "qtdemux", 0, "qtdemux plugin");
   gst_riff_init ();
@@ -20484,7 +20500,8 @@ qtdemux_audio_caps (GstQTDemux * qtdemux, QtDemuxStream * stream,
     stream->need_clip = TRUE;
     stream->need_reorder = TRUE;
     stream->min_buffer_size = 1024 * entry->bytes_per_frame;
-    stream->max_buffer_size = entry->rate * entry->bytes_per_frame;
+    stream->max_buffer_size =
+        qtdemux->max_audio_samples * entry->bytes_per_frame;
     GST_DEBUG ("setting min/max buffer sizes to %d/%d", stream->min_buffer_size,
         stream->max_buffer_size);
   }
