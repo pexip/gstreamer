@@ -1332,18 +1332,12 @@ gst_rtp_buffer_ext_timestamp (guint64 * exttimestamp, guint32 timestamp)
     } else {
       guint64 diff = result - ext;
 
-      if (diff > G_MAXINT32) {
-        if (result < (G_GUINT64_CONSTANT (1) << 32)) {
-          GST_WARNING
-              ("Cannot unwrap, any wrapping took place yet. Returning 0 without updating extended timestamp.");
-          return 0;
-        } else {
-          /* timestamp went forwards more than allowed, we unwrap around and get
-           * updated extended timestamp. */
-          result -= (G_GUINT64_CONSTANT (1) << 32);
-          /* We don't want the extended timestamp storage to go back, ever */
-          return result;
-        }
+      if (diff > G_MAXINT32 && result >= (G_GUINT64_CONSTANT (1) << 32)) {
+        /* timestamp went forwards more than allowed, we unwrap around and get
+         * updated extended timestamp. */
+        result -= (G_GUINT64_CONSTANT (1) << 32);
+        /* We don't want the extended timestamp storage to go back, ever */
+        return result;
       }
     }
   }
