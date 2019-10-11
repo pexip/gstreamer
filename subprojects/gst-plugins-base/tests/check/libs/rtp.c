@@ -1972,19 +1972,40 @@ GST_START_TEST (test_ext_timestamp_wraparound_disordered)
 
 GST_END_TEST;
 
-GST_START_TEST (test_ext_timestamp_wraparound_disordered_cannot_unwrap)
+GST_START_TEST (test_ext_timestamp_no_backward_wraparound)
 {
-  guint64 ext_ts = -1;
+  guint64 expected_exttimestamp, exttimestamp, expected_ret, ret;
 
-  fail_unless (gst_rtp_buffer_ext_timestamp (&ext_ts, 90000)
-      == 90000);
+  // For the sake of illustration looking at an example when backward
+  // wraping can take place
+  // When wraping already happened going from timestamp 0x1 to 0xffffff00
+  // should be considered as timestamp going backward.
 
-  /* Cannot unwrapping around */
-  fail_unless (gst_rtp_buffer_ext_timestamp (&ext_ts,
-          G_MAXUINT32 - 90000 + G_GUINT64_CONSTANT (1)) == 0);
+  // Previous timestamp=0x1 & wrap counter=2
+  exttimestamp = (G_GUINT64_CONSTANT (2) << 32) + 1;
+  ret = gst_rtp_buffer_ext_timestamp (&exttimestamp, 0xffffff00);
 
-  fail_unless (gst_rtp_buffer_ext_timestamp (&ext_ts, 90000)
-      == 90000);
+  // Extended timestamp should never go backwards, so it stays the same
+  // Returned value should have decremented wrap counter = 1
+  expected_exttimestamp = exttimestamp;
+  expected_ret = (G_GUINT64_CONSTANT (1) << 32) + 0xffffff00;
+  fail_unless_equals_uint64 (exttimestamp, expected_exttimestamp);
+  fail_unless_equals_uint64 (ret, expected_ret);
+
+  // When wrapping have not happened yet going from 0x1 to 0xffffff00
+  // should be considered as timestamp going forward. What else it could
+  // be if wrappring never took place?
+
+  // Previous timestamp=0x1 & wrap counter=0
+  exttimestamp = 0x1;
+  ret = gst_rtp_buffer_ext_timestamp (&exttimestamp, 0xffffff00);
+
+  // Extended & return result are the same
+  // Extended timestamp = 0xffffff00
+  expected_exttimestamp = 0xffffff00;
+  expected_ret = 0xffffff00;
+  fail_unless_equals_uint64 (exttimestamp, expected_exttimestamp);
+  fail_unless_equals_uint64 (ret, expected_ret);
 }
 
 GST_END_TEST;
@@ -2284,8 +2305,7 @@ rtp_suite (void)
   tcase_add_test (tc_chain, test_ext_timestamp_basic);
   tcase_add_test (tc_chain, test_ext_timestamp_wraparound);
   tcase_add_test (tc_chain, test_ext_timestamp_wraparound_disordered);
-  tcase_add_test (tc_chain,
-      test_ext_timestamp_wraparound_disordered_cannot_unwrap);
+  tcase_add_test (tc_chain, test_ext_timestamp_no_backward_wraparound);
 
   tcase_add_test (tc_chain, test_rtcp_compound_padding);
   tcase_add_test (tc_chain, test_rtp_buffer_extlen_wraparound);
