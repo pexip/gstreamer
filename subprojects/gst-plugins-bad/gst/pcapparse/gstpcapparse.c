@@ -155,9 +155,11 @@ GST_ELEMENT_REGISTER_DEFINE (pcapparse, "pcapparse", GST_RANK_NONE,
 static gchar *
 get_ip_address_as_string (guint32 ip_addr)
 {
+  char ip_str[INET_ADDRSTRLEN];
   struct in_addr addr;
   addr.s_addr = ip_addr;
-  return g_strdup (inet_ntoa (addr));
+  inet_ntop (AF_INET, &addr, ip_str, INET_ADDRSTRLEN);
+  return g_strdup (ip_str);
 }
 
 static void
