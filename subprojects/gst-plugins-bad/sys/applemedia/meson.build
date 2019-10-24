@@ -84,9 +84,15 @@ if not ['darwin', 'ios'].contains(host_system) or applemedia_option.disabled()
   subdir_done()
 endif
 
-objc = meson.get_compiler('objc')
-if not objc.has_argument('-fobjc-arc')
-  error('ARC is required for building')
+if ['darwin', 'ios'].contains(host_system)
+  objc = meson.get_compiler('objc')
+#  if not objc.has_argument('-fobjc-arc')
+#    error('ARC is required for building')
+#  endif
+
+  applemedia_objc_args += ['-fobjc-arc']
+
+  objcpp = meson.get_compiler('objcpp')
 endif
 
 applemedia_objc_args += ['-fobjc-arc']
