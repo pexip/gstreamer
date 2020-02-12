@@ -40,7 +40,7 @@ static GstStaticPadTemplate srctemplate = GST_STATIC_PAD_TEMPLATE ("src",
 typedef void (*check_cb) (GstPad * pad, int i);
 
 static gboolean
-query_func (GstPad * pad, GstObject * noparent, GstQuery * query)
+query_func (GstPad * pad, G_GNUC_UNUSED GstObject * noparent, GstQuery * query)
 {
   switch (GST_QUERY_TYPE (query)) {
     case GST_QUERY_CAPS:
@@ -71,7 +71,7 @@ remove_ssrc_from_caps (GstCaps * caps)
 }
 
 static gboolean
-event_func (GstPad * pad, GstObject * noparent, GstEvent * event)
+event_func (GstPad * pad, G_GNUC_UNUSED GstObject * noparent, GstEvent * event)
 {
   switch (GST_EVENT_TYPE (event)) {
     case GST_EVENT_CAPS:
@@ -208,8 +208,7 @@ test_basic (const gchar * elem_name, const gchar * sink2, int count,
     fail_unless (gst_pad_push (src1, inbuf) == GST_FLOW_OK);
 
     if (buffers)
-      fail_unless (GST_BUFFER_PTS (buffers->data) == i * 1000, "%lld",
-          GST_BUFFER_PTS (buffers->data));
+      fail_unless_equals_uint64 (GST_BUFFER_PTS (buffers->data), i * 1000);
 
     cb (src2, i);
 
@@ -241,7 +240,7 @@ test_basic (const gchar * elem_name, const gchar * sink2, int count,
 }
 
 static void
-basic_check_cb (GstPad * pad, int i)
+basic_check_cb (G_GNUC_UNUSED GstPad * pad, int i)
 {
   GstRTPBuffer rtpbuffer = GST_RTP_BUFFER_INIT;
   fail_unless (buffers && g_list_length (buffers) == 1);
