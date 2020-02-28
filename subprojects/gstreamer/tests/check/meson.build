@@ -71,6 +71,7 @@ core_tests = [
   [ 'libs/gstnetclientclock.c' ],
   [ 'libs/gstnettimeprovider.c' ],
   [ 'libs/gsttestclock.c' ],
+  [ 'libs/gsttxfeedback.c' ],
   [ 'libs/libsabi.c' ],
   [ 'libs/sparsefile.c' ],
   [ 'libs/transform1.c' ],
