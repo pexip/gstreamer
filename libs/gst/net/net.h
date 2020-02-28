@@ -32,5 +32,6 @@
 #include <gst/net/gstnettimeprovider.h>
 #include <gst/net/gstnetutils.h>
 #include <gst/net/gstptpclock.h>
+#include <gst/net/gsttxfeedback.h>
 
 #endif /* __GST_NET__H__ */
