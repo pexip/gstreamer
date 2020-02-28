@@ -7,6 +7,7 @@ gst_net_sources = [
   'gstptpclock.c',
   'gstntppacket.c',
   'gstnetutils.c',
+  'gsttxfeedback.c',
 ]
 
 gst_net_headers = [
@@ -18,6 +19,7 @@ gst_net_headers = [
  'gstnettimeprovider.h',
  'gstnetutils.h',
  'gstptpclock.h',
+ 'gsttxfeedback.h',
  'net-prelude.h',
  'net.h',
 ]
