@@ -3972,7 +3972,7 @@ session_nack (const gchar * key, RTPSource * source, ReportData * data)
   }
 
   if (i) {
-    GST_WARNING ("Removing %u expired NACKS", i);
+    GST_INFO ("Removing %u expired NACKS", i);
     rtp_source_clear_nacks (source, i);
     n_nacks -= i;
     if (n_nacks == 0)
