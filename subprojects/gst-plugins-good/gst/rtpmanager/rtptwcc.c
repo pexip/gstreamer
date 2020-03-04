@@ -21,6 +21,7 @@
 #include <gst/rtp/gstrtcpbuffer.h>
 #include <gst/base/gstbitreader.h>
 #include <gst/base/gstbitwriter.h>
+#include <gst/net/gsttxfeedback.h>
 
 GST_DEBUG_CATEGORY_EXTERN (rtp_session_debug);
 #define GST_CAT_DEFAULT rtp_session_debug
@@ -103,7 +104,19 @@ struct _RTPTWCCManager
   GstClockTime feedback_interval;
 };
 
-G_DEFINE_TYPE (RTPTWCCManager, rtp_twcc_manager, G_TYPE_OBJECT);
+
+static void rtp_twcc_manager_tx_feedback (GstTxFeedback * parent,
+    guint64 buffer_id, GstClockTime ts);
+
+static void
+_tx_feedback_init (gpointer g_iface, G_GNUC_UNUSED gpointer iface_data)
+{
+  GstTxFeedbackInterface *iface = g_iface;
+  iface->tx_feedback = rtp_twcc_manager_tx_feedback;
+}
+
+G_DEFINE_TYPE_WITH_CODE (RTPTWCCManager, rtp_twcc_manager, G_TYPE_OBJECT,
+    G_IMPLEMENT_INTERFACE (GST_TYPE_TX_FEEDBACK, _tx_feedback_init));
 
 static void
 rtp_twcc_manager_init (RTPTWCCManager * twcc)
@@ -890,10 +903,37 @@ rtp_twcc_manager_send_packet (RTPTWCCManager * twcc, RTPPacketInfo * pinfo)
   sent_packet_init (&packet, seqnum, pinfo);
   g_array_append_val (twcc->sent_packets, packet);
 
+  gst_buffer_add_tx_feedback_meta (pinfo->data, seqnum, GST_TX_FEEDBACK (twcc));
 
   GST_LOG ("Send: twcc-seqnum: %u, pt: %u, marker: %d, ts: %"
       GST_TIME_FORMAT, seqnum, pinfo->pt, pinfo->marker,
       GST_TIME_ARGS (pinfo->current_time));
+}
+
+static void
+rtp_twcc_manager_tx_feedback (GstTxFeedback * parent, guint64 buffer_id,
+    GstClockTime ts)
+{
+  RTPTWCCManager *twcc = RTP_TWCC_MANAGER_CAST (parent);
+  guint16 seqnum = (guint16) buffer_id;
+  SentPacket *first = NULL;
+  SentPacket *pkt = NULL;
+  guint idx;
+
+  first = &g_array_index (twcc->sent_packets, SentPacket, 0);
+  if (first == NULL)
+    return;
+
+  idx = seqnum - first->seqnum;
+
+  if (idx < twcc->sent_packets->len) {
+    pkt = &g_array_index (twcc->sent_packets, SentPacket, idx);
+    if (pkt && pkt->seqnum == seqnum) {
+      pkt->socket_ts = ts;
+      GST_LOG ("packet #%u, setting socket-ts %"GST_TIME_FORMAT,
+          seqnum, GST_TIME_ARGS (ts));
+    }
+  }
 }
 
 static void
