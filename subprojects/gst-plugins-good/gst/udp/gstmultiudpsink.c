@@ -714,6 +714,28 @@ gst_multiudpsink_send_messages (GstMultiUDPSink * sink, GSocket * socket,
   return GST_FLOW_OK;
 }
 
+static void
+_set_time_on_buffers (GstMultiUDPSink * sink, GstBuffer ** buffers,
+    guint num_buffers)
+{
+  GstClock *clock = GST_ELEMENT_CLOCK (sink);
+  GstClockTime base_time = GST_ELEMENT_CAST (sink)->base_time;
+  GstClockTime now;
+  guint i;
+
+  if (clock == NULL)
+    return;
+
+  now = gst_clock_get_time (clock) - base_time;
+
+  for (i = 0; i < num_buffers; i++) {
+    GstTxFeedbackMeta *meta = gst_buffer_get_tx_feedback_meta (buffers[i]);
+    if (meta) {
+      gst_tx_feedback_meta_set_tx_time (meta, now);
+    }
+  }
+}
+
 static GstFlowReturn
 gst_multiudpsink_render_buffers (GstMultiUDPSink * sink, GstBuffer ** buffers,
     guint num_buffers, guint8 * mem_nums, guint total_mem_num)
@@ -832,6 +854,9 @@ gst_multiudpsink_render_buffers (GstMultiUDPSink * sink, GstBuffer ** buffers,
   if (flow_ret != GST_FLOW_OK)
     goto cancelled;
 
+
+  _set_time_on_buffers (sink, buffers, num_buffers);
+
   /* now update stats */
   g_mutex_lock (&sink->client_lock);
 
@@ -842,6 +867,7 @@ gst_multiudpsink_render_buffers (GstMultiUDPSink * sink, GstBuffer ** buffers,
       gsize bytes_sent;
 
       bytes_sent = msgs[i * num_buffers + j].bytes_sent;
+
 
       client->bytes_sent += bytes_sent;
       client->packets_sent++;
