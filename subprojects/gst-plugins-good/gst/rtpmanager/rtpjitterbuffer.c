@@ -987,6 +987,7 @@ done:
  * @item: an #RTPJitterBufferItem to insert
  * @head: TRUE when the head element changed.
  * @percent: the buffering percent after insertion
+ * @prepend: if possible, prepend instead of append the item
  *
  * Inserts @item into the packet queue of @jbuf. The sequence number of the
  * packet will be used to sort the packets. This function takes ownerhip of
@@ -1000,7 +1001,7 @@ done:
  */
 static gboolean
 rtp_jitter_buffer_insert (RTPJitterBuffer * jbuf, RTPJitterBufferItem * item,
-    gboolean * head, gint * percent)
+    gboolean * head, gint * percent, gboolean prepend)
 {
   GList *list, *event = NULL;
   guint16 seqnum;
@@ -1010,9 +1011,12 @@ rtp_jitter_buffer_insert (RTPJitterBuffer * jbuf, RTPJitterBufferItem * item,
 
   list = jbuf->packets.tail;
 
-  /* no seqnum, simply append then */
-  if (item->seqnum == -1)
-    goto append;
+  /* no seqnum, prepend if asked to, else append  */
+  if (item->seqnum == -1) {
+    if (prepend)
+      list = NULL;
+    goto insert;
+  }
 
   seqnum = item->seqnum;
 
@@ -1054,7 +1058,7 @@ rtp_jitter_buffer_insert (RTPJitterBuffer * jbuf, RTPJitterBufferItem * item,
   if (event)
     list = event;
 
-append:
+insert:
   queue_do_insert (jbuf, list, (GList *) item);
 
   /* buffering mode, update buffer stats */
@@ -1140,8 +1144,22 @@ rtp_jitter_buffer_append_event (RTPJitterBuffer * jbuf, GstEvent * event)
 {
   RTPJitterBufferItem *item = alloc_event_item (event);
   gboolean head;
-  rtp_jitter_buffer_insert (jbuf, item, &head, NULL);
+  rtp_jitter_buffer_insert (jbuf, item, &head, NULL, FALSE);
   return head;
+}
+
+/**
+ * rtp_jitter_buffer_prepend_event:
+ * @jbuf: an #RTPJitterBuffer
+ * @event: an #GstEvent to insert
+
+ * Inserts @event into the front of the packet queue of @jbuf.
+ */
+void
+rtp_jitter_buffer_prepend_event (RTPJitterBuffer * jbuf, GstEvent * event)
+{
+  RTPJitterBufferItem *item = alloc_event_item (event);
+  rtp_jitter_buffer_insert (jbuf, item, NULL, NULL, TRUE);
 }
 
 /**
@@ -1160,7 +1178,7 @@ rtp_jitter_buffer_append_query (RTPJitterBuffer * jbuf, GstQuery * query)
       rtp_jitter_buffer_alloc_item (query, ITEM_TYPE_QUERY, -1, -1, -1, 0, -1,
       NULL);
   gboolean head;
-  rtp_jitter_buffer_insert (jbuf, item, &head, NULL);
+  rtp_jitter_buffer_insert (jbuf, item, &head, NULL, FALSE);
   return head;
 }
 
@@ -1184,7 +1202,7 @@ rtp_jitter_buffer_append_lost_event (RTPJitterBuffer * jbuf, GstEvent * event,
       (GDestroyNotify) gst_mini_object_unref);
   gboolean head;
 
-  if (!rtp_jitter_buffer_insert (jbuf, item, &head, NULL)) {
+  if (!rtp_jitter_buffer_insert (jbuf, item, &head, NULL, FALSE)) {
     /* Duplicate */
     rtp_jitter_buffer_free_item (item);
     head = FALSE;
@@ -1216,7 +1234,7 @@ rtp_jitter_buffer_append_buffer (RTPJitterBuffer * jbuf, GstBuffer * buf,
   gboolean head;
   gboolean inserted;
 
-  inserted = rtp_jitter_buffer_insert (jbuf, item, &head, percent);
+  inserted = rtp_jitter_buffer_insert (jbuf, item, &head, percent, FALSE);
   if (!inserted)
     rtp_jitter_buffer_free_item (item);
 
