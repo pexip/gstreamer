@@ -180,6 +180,8 @@ void                  rtp_jitter_buffer_set_rfc7273_sync (RTPJitterBuffer *jbuf,
 
 void                  rtp_jitter_buffer_reset_skew       (RTPJitterBuffer *jbuf);
 
+
+void                  rtp_jitter_buffer_prepend_event     (RTPJitterBuffer * jbuf, GstEvent * event);
 gboolean              rtp_jitter_buffer_append_event      (RTPJitterBuffer * jbuf, GstEvent * event);
 gboolean              rtp_jitter_buffer_append_query      (RTPJitterBuffer * jbuf, GstQuery * query);
 gboolean              rtp_jitter_buffer_append_lost_event (RTPJitterBuffer * jbuf, GstEvent * event,
