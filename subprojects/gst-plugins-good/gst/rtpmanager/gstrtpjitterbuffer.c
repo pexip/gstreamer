@@ -2865,6 +2865,9 @@ gst_rtp_jitter_buffer_reset (GstRtpJitterBuffer * jitterbuffer,
     priv->next_seqnum = seqnum;
   }
 
+  GST_DEBUG_OBJECT (jitterbuffer, "setting next_seqnum to #%u",
+      priv->next_seqnum);
+
   priv->last_in_pts = -1;
   priv->next_in_seqnum = -1;
 
