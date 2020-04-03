@@ -3139,21 +3139,6 @@ gst_rtp_jitter_buffer_chain (GstPad * pad, GstObject * parent,
     GST_DEBUG_OBJECT (jitterbuffer, "expected #%d, got #%d, gap of %d",
         expected, seqnum, gap);
 
-    if (G_UNLIKELY (gap > 0 &&
-            rtp_timer_queue_length (priv->timers) >= max_dropout)) {
-      /* If we have timers for more than RTP_MAX_DROPOUT packets
-       * pending this means that we have a huge gap overall. We can
-       * reset the jitterbuffer at this point because there's
-       * just too much data missing to be able to do anything
-       * sensible with the past data. Just try again from the
-       * next packet */
-      GST_WARNING_OBJECT (jitterbuffer, "%d pending timers > %d - resetting",
-          rtp_timer_queue_length (priv->timers), max_dropout);
-      g_queue_insert_sorted (&priv->gap_packets, buffer,
-          (GCompareDataFunc) compare_buffer_seqnum, NULL);
-      return gst_rtp_jitter_buffer_reset (jitterbuffer, pad, parent, seqnum);
-    }
-
     /* Special handling of large gaps */
     if (!is_rtx && ((gap != -1 && gap < -max_misorder) || (gap >= max_dropout))) {
       gboolean reset = handle_big_gap_buffer (jitterbuffer, buffer, pt, seqnum,
