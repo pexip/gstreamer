@@ -34,7 +34,7 @@ rtp_enums = gnome.mkenums_simple('gstrtp-enumtypes',
 gstrtp_enum_c = rtp_enums[0]
 gstrtp_enum_h = rtp_enums[1]
 
-gstrtp_deps = [audio_dep, gst_base_dep]
+gstrtp_deps = [audio_dep, video_dep, gst_base_dep]
 gst_rtp = library('gstrtp-@0@'.format(api_version),
   rtp_sources, gstrtp_enum_c, gstrtp_enum_h,
   c_args : gst_plugins_base_args + ['-DBUILDING_GST_RTP', '-DG_LOG_DOMAIN="GStreamer-RTP"'],

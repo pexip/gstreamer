@@ -239,6 +239,16 @@ gboolean gst_rtp_buffer_get_extension_onebyte_header_from_bytes (GBytes * bytes,
                                                                  gpointer * data,
                                                                  guint * size);
 
+GST_RTP_API
+gboolean gst_rtp_buffer_video_roi_meta_to_one_byte_ext (GstRTPBuffer * rtp,
+                                                        GstBuffer * buf,
+                                                        guint8 id);
+
+GST_RTP_API
+gboolean gst_rtp_buffer_video_roi_meta_from_one_byte_ext (GstRTPBuffer * rtp,
+                                                          GstBuffer * buffer,
+                                                          guint8 id);
+
 /**
  * GstRTPBufferFlags:
  * @GST_RTP_BUFFER_FLAG_RETRANSMISSION: The #GstBuffer was once wrapped
