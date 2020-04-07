@@ -34,6 +34,7 @@
 #endif
 
 #include "gstrtpbuffer.h"
+#include <gst/video/gstvideometa.h>
 
 #include <stdlib.h>
 #include <string.h>
@@ -1748,4 +1749,89 @@ gst_rtp_buffer_add_extension_twobytes_header (GstRTPBuffer * rtp,
     memset (pdata + 2 + size, 0, 4 - (extlen % 4));
 
   return TRUE;
+}
+
+/**
+ * gst_rtp_buffer_video_roi_meta_to_one_byte_ext:
+ * @rtp: a #GstRTPBuffer to write a ROI header extension to.
+ * @buffer: a #GstBuffer to extract #GstVideoRegionOfInterestMeta from.
+ * @id: The ID of the header extension to be added (between 1 and 14).
+ *
+ * Tries to read #GstVideoRegionOfInterestMeta from to the @buffer, and
+ * add this as ROI information in @rtp using the one byte
+ * extension header.
+ *
+ * Returns: %TRUE if any extension-headers was added, %FALSE otherwise.
+ *
+ * Since: 1.18
+ */
+gboolean
+gst_rtp_buffer_video_roi_meta_to_one_byte_ext (GstRTPBuffer * rtp,
+    GstBuffer * buffer, guint8 id)
+{
+  GstVideoRegionOfInterestMeta *meta;
+  gpointer state = NULL;
+  gboolean ret = FALSE;
+
+  g_return_val_if_fail (buffer != NULL, NULL);
+  g_return_val_if_fail (rtp != NULL, NULL);
+  g_return_val_if_fail (id > 0, FALSE);
+  g_return_val_if_fail (id <= 14, FALSE);
+
+  while ((meta = (GstVideoRegionOfInterestMeta *)
+          gst_buffer_iterate_meta_filtered (buffer, &state,
+              GST_VIDEO_REGION_OF_INTEREST_META_API_TYPE))) {
+    guint8 data[9];
+    GST_WRITE_UINT16_BE (&data[0], meta->x);
+    GST_WRITE_UINT16_BE (&data[2], meta->y);
+    GST_WRITE_UINT16_BE (&data[4], meta->w);
+    GST_WRITE_UINT16_BE (&data[6], meta->h);
+    GST_WRITE_UINT8 (&data[8], meta->roi_type);
+    gst_rtp_buffer_add_extension_onebyte_header (rtp, id, &data, 9);
+    ret = TRUE;
+  }
+
+  return ret;
+}
+
+/**
+ * gst_rtp_buffer_video_roi_meta_from_one_byte_ext:
+ * @rtp: a #GstRTPBuffer to read a ROI header extension to.
+ * @buffer: a #GstBuffer to write #GstVideoRegionOfInterestMeta to.
+ * @id: The ID of the header extension to be read (between 1 and 14).
+ *
+ * Tries to extract ROI information from the RTP packet
+ * and adds this as #GstVideoRegionOfInterestMeta on to the @buffer.
+ *
+ * Returns: %TRUE if any meta was extracted, %FALSE otherwise.
+ *
+ * Since: 1.18
+ */
+gboolean
+gst_rtp_buffer_video_roi_meta_from_one_byte_ext (GstRTPBuffer * rtp,
+    GstBuffer * buffer, guint8 id)
+{
+  gpointer data;
+  guint nth = 0;
+
+  g_return_val_if_fail (buffer != NULL, NULL);
+  g_return_val_if_fail (rtp != NULL, NULL);
+  g_return_val_if_fail (id > 0, NULL);
+  g_return_val_if_fail (id <= 14, NULL);
+
+  while (gst_rtp_buffer_get_extension_onebyte_header (rtp, id, nth, &data,
+          NULL)) {
+    const guint8 *bytes = (const guint8 *) data;
+    guint16 x = GST_READ_UINT16_BE (&bytes[0]);
+    guint16 y = GST_READ_UINT16_BE (&bytes[2]);
+    guint16 w = GST_READ_UINT16_BE (&bytes[4]);
+    guint16 h = GST_READ_UINT16_BE (&bytes[6]);
+    guint16 roi_type = GST_READ_UINT8 (&bytes[8]);
+
+    gst_buffer_add_video_region_of_interest_meta_id (buffer, roi_type, x, y, w,
+        h);
+    nth++;
+  }
+
+  return nth > 0;
 }
