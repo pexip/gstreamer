@@ -27,6 +27,7 @@
 #include <gst/rtp/gstrtpbuffer.h>
 #include <gst/rtp/gstrtphdrext.h>
 #include <gst/rtp/gstrtcpbuffer.h>
+#include <gst/video/gstvideometa.h>
 #include <string.h>
 
 #define RTP_HEADER_LEN 12
@@ -2342,6 +2343,106 @@ GST_START_TEST (test_rtp_buffer_remove_extension_data)
 
 GST_END_TEST;
 
+typedef struct
+{
+  const gchar *name;
+  guint x;
+  guint y;
+  guint w;
+  guint h;
+} ROI;
+
+static void
+_add_roi (GstBuffer * buf, ROI * roi)
+{
+  gst_buffer_add_video_region_of_interest_meta (buf,
+      roi->name, roi->x, roi->y, roi->w, roi->h);
+}
+
+static void
+_meta_to_roi (GstVideoRegionOfInterestMeta * meta, ROI * roi)
+{
+  roi->x = meta->x;
+  roi->y = meta->y;
+  roi->w = meta->w;
+  roi->h = meta->h;
+}
+
+static gboolean
+_foreach_meta_func (G_GNUC_UNUSED GstBuffer * buf, GstMeta ** meta,
+    gpointer user_data)
+{
+  GArray *array = user_data;
+  const GstMetaInfo *info = (*meta)->info;
+
+  if (info->api == GST_VIDEO_REGION_OF_INTEREST_META_API_TYPE) {
+    ROI roi;
+    _meta_to_roi ((GstVideoRegionOfInterestMeta *) * meta, &roi);
+    g_array_append_val (array, roi);
+  }
+
+  return TRUE;
+}
+
+static GArray *
+_get_rois (GstBuffer * buf)
+{
+  GArray *array = g_array_new (FALSE, FALSE, sizeof (ROI));
+  gst_buffer_foreach_meta (buf, _foreach_meta_func, array);
+  return array;
+}
+
+GST_START_TEST (test_rtp_buffer_roi_meta_as_ext_hdr)
+{
+  GstBuffer *buf0 = gst_buffer_new ();
+  GstBuffer *buf1 = gst_buffer_new ();
+  GstBuffer *rtpbuf = gst_rtp_buffer_new_allocate (10, 0, 0);
+  GstRTPBuffer rtp = GST_RTP_BUFFER_INIT;
+  GArray *result_rois;
+  guint i;
+  ROI expected_rois[] = {
+    {"test0", 10, 10, 10, 10}
+    ,
+    {"test1", 20, 20, 20, 20}
+    ,
+    {"test2", 30, 30, 30, 30}
+    ,
+  };
+
+  /* add ROI meta to buf0 */
+  for (i = 0; i < G_N_ELEMENTS (expected_rois); i++)
+    _add_roi (buf0, &expected_rois[i]);
+
+  /* ROI meta -> RTP header extension */
+  gst_rtp_buffer_map (rtpbuf, GST_MAP_READWRITE, &rtp);
+  gst_rtp_buffer_video_roi_meta_to_one_byte_ext (&rtp, buf0, 10);
+  gst_rtp_buffer_unmap (&rtp);
+
+  /* RTP header extension -> ROI meta */
+  gst_rtp_buffer_map (rtpbuf, GST_MAP_READWRITE, &rtp);
+  gst_rtp_buffer_video_roi_meta_from_one_byte_ext (&rtp, buf1, 10);
+  gst_rtp_buffer_unmap (&rtp);
+
+  /* verify the meta survived the conversion */
+  result_rois = _get_rois (buf1);
+  fail_unless_equals_int (result_rois->len, G_N_ELEMENTS (expected_rois));
+  for (i = 0; i < G_N_ELEMENTS (expected_rois); i++) {
+    ROI *exp = &expected_rois[i];
+    ROI *act = &g_array_index (result_rois, ROI, i);
+    fail_unless_equals_int (exp->x, act->x);
+    fail_unless_equals_int (exp->y, act->y);
+    fail_unless_equals_int (exp->w, act->w);
+    fail_unless_equals_int (exp->h, act->h);
+  }
+  g_array_unref (result_rois);
+
+  gst_buffer_unref (rtpbuf);
+  gst_buffer_unref (buf0);
+  gst_buffer_unref (buf1);
+}
+
+GST_END_TEST;
+
 static Suite *
 rtp_suite (void)
 {
@@ -2398,6 +2499,8 @@ rtp_suite (void)
   tcase_add_test (tc_chain, test_rtp_buffer_extlen_wraparound);
   tcase_add_test (tc_chain, test_rtp_buffer_remove_extension_data);
   tcase_add_test (tc_chain, test_rtp_buffer_set_extension_data_shrink_data);
+
+  tcase_add_test (tc_chain, test_rtp_buffer_roi_meta_as_ext_hdr);
 
   return s;
 }
