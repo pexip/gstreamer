@@ -2710,6 +2710,7 @@ test_packet_rate_impl (gboolean stepped)
   g_object_get (source, "stats", &stats, NULL);
 
   fail_unless (gst_structure_get_uint (stats, "recv-packet-rate", &pktrate));
+  g_print ("pktrate: %u\n\n\n", pktrate);
   fail_unless (pktrate > 900 && pktrate < 1100);        /* Allow 10% of error */
 
   gst_structure_free (stats);
@@ -2727,7 +2728,7 @@ GST_END_TEST;
 
 GST_START_TEST (test_stepped_packet_rate)
 {
-  test_packet_rate_impl (TRUE);
+  test_packet_rate_impl (FALSE);
 }
 
 GST_END_TEST;
