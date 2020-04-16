@@ -2639,26 +2639,43 @@ GST_START_TEST (test_deadline_ts_offset)
 
 GST_END_TEST;
 
+typedef struct
+{
+  GstClockTime delta_dts;
+  guint delta_seqnum;
+  guint delta_rtptime;
+} BigGapCtx;
+
+/* TEST_RTP_TS_DURATION = 160 */
+static BigGapCtx big_gap_testdata[] = {
+  {0, 20000, 20000 * 160},
+  {0, 10000, 10000 * 160},
+  {0, 10000, 0 * 160},
+  {0, 3000, 3000 * 160},
+};
+
 GST_START_TEST (test_big_gap_seqnum)
 {
   GstHarness *h = gst_harness_new ("rtpjitterbuffer");
   const gint num_consecutive = 5;
-  const guint gap = 20000;
   gint i;
   guint seqnum_org;
   GstClockTime dts_base;
   guint seqnum_base;
   guint32 rtpts_base;
   GstClockTime expected_ts;
+  BigGapCtx *ctx = &big_gap_testdata[__i__];
 
   g_object_set (h->element, "do-lost", TRUE, "do-retransmission", TRUE, NULL);
   seqnum_org = construct_deterministic_initial_state (h, 100);
 
-  /* a sudden jump in sequence-numbers (and rtptime), but packets keep arriving
-     at the same pace */
   dts_base = seqnum_org * TEST_BUF_DURATION;
-  seqnum_base = seqnum_org + gap;
-  rtpts_base = seqnum_base * TEST_RTP_TS_DURATION;
+  seqnum_base = seqnum_org;
+  rtpts_base = seqnum_org * TEST_RTP_TS_DURATION;
+
+  dts_base += ctx->delta_dts;
+  seqnum_base += ctx->delta_seqnum;
+  rtpts_base += ctx->delta_rtptime;
 
   for (i = 0; i < num_consecutive; i++) {
     fail_unless_equals_int (GST_FLOW_OK, gst_harness_push (h,
@@ -3471,7 +3488,8 @@ rtpjitterbuffer_suite (void)
   tcase_add_test (tc_chain, test_dont_drop_packet_based_on_skew);
 
   tcase_add_test (tc_chain, test_deadline_ts_offset);
-  tcase_add_test (tc_chain, test_big_gap_seqnum);
+  tcase_add_loop_test (tc_chain, test_big_gap_seqnum, 0,
+      G_N_ELEMENTS (big_gap_testdata));
   tcase_add_test (tc_chain, test_big_gap_arrival_time);
   tcase_add_test (tc_chain, test_fill_queue);
 
