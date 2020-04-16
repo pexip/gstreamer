@@ -56,10 +56,10 @@ gst_rtp_packet_rate_ctx_update (RTPPacketRateCtx * ctx, guint16 seqnum,
   }
 
   diff_seqnum = gst_rtp_buffer_compare_seqnum (ctx->last_seqnum, seqnum);
-  /* Ignore seqnums that are over 15,000 away from the latest one, it's close
-   * to 2^14 but far enough to avoid any risk of computing error.
+  /* Ignore seqnums that are not strictly sequential from the last one.
+     That way we don't taint our estimate with "bad" packets
    */
-  if (diff_seqnum > 15000)
+  if (diff_seqnum > 1)
     goto done_but_save;
 
   /* Ignore any packet that is in the past, we're only interested in newer
