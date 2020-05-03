@@ -2049,7 +2049,7 @@ gst_aggregator_query_latency_unlocked (GstAggregator * self, GstQuery * query)
   SRC_LOCK (self);
 
   if (!query_ret) {
-    GST_WARNING_OBJECT (self, "Latency query failed");
+    GST_INFO_OBJECT (self, "Latency query failed");
     return FALSE;
   }
 
