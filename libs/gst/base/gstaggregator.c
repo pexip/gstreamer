@@ -1905,7 +1905,7 @@ gst_aggregator_query_latency_unlocked (GstAggregator * self, GstQuery * query)
   query_ret = gst_pad_query_default (self->srcpad, GST_OBJECT (self), query);
 
   if (!query_ret) {
-    GST_WARNING_OBJECT (self, "Latency query failed");
+    GST_INFO_OBJECT (self, "Latency query failed");
     return FALSE;
   }
 
