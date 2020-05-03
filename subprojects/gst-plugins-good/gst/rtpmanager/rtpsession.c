@@ -4759,7 +4759,7 @@ done:
   }
 
   if (all_empty)
-    GST_ERROR ("generated empty RTCP messages for all the sources");
+    GST_INFO ("generated empty RTCP messages for all the sources");
 
   /* schedule remaining nacks */
   RTP_SESSION_LOCK (sess);
