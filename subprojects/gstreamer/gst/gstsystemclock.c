@@ -47,6 +47,10 @@
 
 #include <errno.h>
 
+#ifdef HAVE_PTHREAD_H
+#include <pthread.h>
+#endif
+
 #ifdef G_OS_WIN32
 #  define WIN32_LEAN_AND_MEAN   /* prevents from including too many things */
 #  include <windows.h>          /* QueryPerformance* stuff */
