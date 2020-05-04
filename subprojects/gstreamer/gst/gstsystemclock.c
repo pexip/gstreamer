@@ -60,6 +60,10 @@
 #include <mach/mach_time.h>
 #endif
 
+#ifdef HAVE_PTHREAD_H
+#include <pthread.h>
+#endif
+
 /* Define this to get some extra debug about jitter from each clock_wait */
 #undef WAIT_DEBUGGING
 
