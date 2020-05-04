@@ -190,6 +190,7 @@ check_headers = [
   'inttypes.h',
   'memory.h',
   'poll.h',
+  'pthread.h',
   'stdint.h',
   'stdio_ext.h',
   'strings.h',
