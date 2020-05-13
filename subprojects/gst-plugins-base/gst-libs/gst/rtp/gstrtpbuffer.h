@@ -270,6 +270,8 @@ gboolean gst_rtp_buffer_video_roi_meta_from_one_byte_ext (GstRTPBuffer * rtp,
 typedef enum {
   GST_RTP_BUFFER_FLAG_RETRANSMISSION = (GST_BUFFER_FLAG_LAST << 0),
   GST_RTP_BUFFER_FLAG_REDUNDANT      = (GST_BUFFER_FLAG_LAST << 1),
+  GST_RTP_BUFFER_FLAG_MEDIA_AUDIO    = (GST_BUFFER_FLAG_LAST << 2),
+  GST_RTP_BUFFER_FLAG_MEDIA_VIDEO    = (GST_BUFFER_FLAG_LAST << 3),
   GST_RTP_BUFFER_FLAG_LAST           = (GST_BUFFER_FLAG_LAST << 8)
 } GstRTPBufferFlags;
 
