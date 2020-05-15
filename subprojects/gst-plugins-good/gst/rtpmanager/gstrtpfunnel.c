@@ -86,6 +86,7 @@ struct _GstRtpFunnelPad
   GstPad pad;
   guint32 ssrc;
   gboolean has_twcc;
+  GstRTPBufferFlags buffer_flag;
 };
 
 G_DEFINE_TYPE (GstRtpFunnelPad, gst_rtp_funnel_pad, GST_TYPE_PAD);
@@ -100,6 +101,24 @@ gst_rtp_funnel_pad_class_init (G_GNUC_UNUSED GstRtpFunnelPadClass * klass)
 static void
 gst_rtp_funnel_pad_init (G_GNUC_UNUSED GstRtpFunnelPad * pad)
 {
+}
+
+static void
+gst_rtp_funnel_pad_set_buffer_flag (GstRtpFunnelPad * pad, GstBuffer * buf)
+{
+  if (pad->buffer_flag)
+    GST_BUFFER_FLAG_SET (buf, pad->buffer_flag);
+}
+
+static void
+gst_rtp_funnel_pad_set_media_type (GstRtpFunnelPad * pad,
+    const GstStructure * s)
+{
+  const gchar *media_type = gst_structure_get_string (s, "media");
+  if (g_strcmp0 (media_type, "audio") == 0)
+    pad->buffer_flag = GST_RTP_BUFFER_FLAG_MEDIA_AUDIO;
+  else if (g_strcmp0 (media_type, "video") == 0)
+    pad->buffer_flag = GST_RTP_BUFFER_FLAG_MEDIA_VIDEO;
 }
 
 /**************** GstRTPFunnel ****************/
@@ -262,6 +281,7 @@ static GstFlowReturn
 gst_rtp_funnel_sink_chain_object (GstPad * pad, GstRtpFunnel * funnel,
     gboolean is_list, GstMiniObject * obj)
 {
+  GstRtpFunnelPad *fpad = GST_RTP_FUNNEL_PAD_CAST (pad);
   GstFlowReturn res;
 
   GST_DEBUG_OBJECT (pad, "received %" GST_PTR_FORMAT, obj);
@@ -276,6 +296,7 @@ gst_rtp_funnel_sink_chain_object (GstPad * pad, GstRtpFunnel * funnel,
   } else {
     GstBuffer *buf = GST_BUFFER_CAST (obj);
     gst_rtp_funnel_set_twcc_seqnum (funnel, pad, &buf);
+    gst_rtp_funnel_pad_set_buffer_flag (fpad, buf);
     res = gst_pad_push (funnel->srcpad, buf);
   }
   GST_PAD_STREAM_UNLOCK (funnel->srcpad);
@@ -401,6 +422,7 @@ gst_rtp_funnel_sink_event (GstPad * pad, GstObject * parent, GstEvent * event)
         funnel->twcc_pads++;
         gst_rtp_funnel_set_twcc_ext_id (funnel, ext_id);
       }
+      gst_rtp_funnel_pad_set_media_type (fpad, s);
       GST_OBJECT_UNLOCK (funnel);
 
       forward = FALSE;

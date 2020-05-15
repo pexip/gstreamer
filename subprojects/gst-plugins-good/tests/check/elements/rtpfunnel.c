@@ -488,6 +488,40 @@ GST_START_TEST (rtpfunnel_twcc_passthrough_then_mux)
 
 GST_END_TEST;
 
+GST_START_TEST (rtpfunnel_mark_media_buffer_flags)
+{
+  GstHarness *h, *h0, *h1;
+  GstBuffer *buf;
+
+  h = gst_harness_new_with_padnames ("rtpfunnel", NULL, "src");
+  h0 = gst_harness_new_with_element (h->element, "sink_0", NULL);
+  h1 = gst_harness_new_with_element (h->element, "sink_1", NULL);
+  gst_harness_set_src_caps_str (h0, "application/x-rtp, "
+      "ssrc=(uint)123, media=(string)audio");
+  gst_harness_set_src_caps_str (h1, "application/x-rtp, "
+      "ssrc=(uint)123, media=(string)video");
+
+  fail_unless_equals_int (GST_FLOW_OK,
+      gst_harness_push (h0, generate_test_buffer (0, 123, 0)));
+  fail_unless_equals_int (GST_FLOW_OK,
+      gst_harness_push (h1, generate_test_buffer (0, 321, 0)));
+
+  buf = gst_harness_pull (h);
+  fail_unless (GST_BUFFER_FLAG_IS_SET (buf, GST_RTP_BUFFER_FLAG_MEDIA_AUDIO));
+  gst_buffer_unref (buf);
+
+  buf = gst_harness_pull (h);
+  fail_unless (GST_BUFFER_FLAG_IS_SET (buf, GST_RTP_BUFFER_FLAG_MEDIA_VIDEO));
+  gst_buffer_unref (buf);
+
+  gst_harness_teardown (h);
+  gst_harness_teardown (h0);
+  gst_harness_teardown (h1);
+}
+
+GST_END_TEST;
+
+
 static Suite *
 rtpfunnel_suite (void)
 {
@@ -507,6 +541,8 @@ rtpfunnel_suite (void)
   tcase_add_test (tc_chain, rtpfunnel_twcc_passthrough);
   tcase_add_test (tc_chain, rtpfunnel_twcc_mux);
   tcase_add_test (tc_chain, rtpfunnel_twcc_passthrough_then_mux);
+
+  tcase_add_test (tc_chain, rtpfunnel_mark_media_buffer_flags);
 
   return s;
 }
