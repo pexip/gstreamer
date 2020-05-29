@@ -178,8 +178,13 @@ gst_device_provider_dispose (GObject * object)
   gst_object_replace ((GstObject **) & provider->priv->bus, NULL);
 
   GST_OBJECT_LOCK (provider);
+
   g_list_free_full (provider->devices, (GDestroyNotify) gst_object_unparent);
   provider->devices = NULL;
+
+  g_list_free_full (provider->priv->hidden_providers, (GDestroyNotify) g_free);
+  provider->priv->hidden_providers = NULL;
+
   GST_OBJECT_UNLOCK (provider);
 
   G_OBJECT_CLASS (gst_device_provider_parent_class)->dispose (object);
