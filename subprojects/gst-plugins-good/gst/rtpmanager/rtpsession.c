@@ -1803,7 +1803,7 @@ check_collision (RTPSession * sess, RTPSource * source,
       from = source->rtcp_from;
     }
 
-    if (from) {
+    if (from && sess->ssrc_collision_detection) {
       if (__g_socket_address_equal (from, pinfo->address)) {
         /* Address is the same */
         return FALSE;
@@ -1852,10 +1852,12 @@ check_collision (RTPSession * sess, RTPSource * source,
       }
     } else {
       /* We don't already have a from address for RTP, just set it */
-      if (rtp)
-        rtp_source_set_rtp_from (source, pinfo->address);
-      else
-        rtp_source_set_rtcp_from (source, pinfo->address);
+      if ((from == NULL) || !__g_socket_address_equal (from, pinfo->address)) {
+        if (rtp)
+          rtp_source_set_rtp_from (source, pinfo->address);
+        else
+          rtp_source_set_rtcp_from (source, pinfo->address);
+      }
       return FALSE;
     }
 
