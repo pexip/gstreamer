@@ -161,6 +161,7 @@ struct _RTPSource {
   GstCaps      *caps;
   gint          clock_rate;
   gint32        seqnum_offset;
+  guint         no_clock_rate_count;
 
   GstClockTime  bye_time;
   GstClockTime  last_activity;
