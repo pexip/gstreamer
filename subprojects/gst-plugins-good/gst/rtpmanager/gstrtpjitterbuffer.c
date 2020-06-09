@@ -118,6 +118,8 @@
 GST_DEBUG_CATEGORY (rtpjitterbuffer_debug);
 #define GST_CAT_DEFAULT (rtpjitterbuffer_debug)
 
+#define NO_CLOCK_RATE_WARNING_THROTTLE 128
+
 /* RTPJitterBuffer signals and args */
 enum
 {
@@ -377,6 +379,7 @@ struct _GstRtpJitterBufferPrivate
   gint32 clock_rate;
   gint64 clock_base;
   gint64 ts_offset_remainder;
+  guint no_clock_rate_count;
 
   /* when we are shutting down */
   GstFlowReturn srcresult;
@@ -1032,6 +1035,7 @@ gst_rtp_jitter_buffer_init (GstRtpJitterBuffer * jitterbuffer)
   priv->max_misorder_time = DEFAULT_MAX_MISORDER_TIME;
   priv->faststart_min_packets = DEFAULT_FASTSTART_MIN_PACKETS;
 
+  priv->no_clock_rate_count = 0;
   priv->ts_offset_remainder = 0;
   priv->last_dts = -1;
   priv->last_pts = -1;
@@ -3002,8 +3006,12 @@ gst_rtp_jitter_buffer_chain (GstPad * pad, GstObject * parent,
             pt) == GST_FLOW_FLUSHING)
       goto out_flushing;
 
-    if (G_UNLIKELY (priv->clock_rate == -1))
+    if (G_UNLIKELY (priv->clock_rate == -1)) {
+      priv->no_clock_rate_count++;
       goto no_clock_rate;
+    } else {
+      priv->no_clock_rate_count = 0;
+    }
 
     gst_rtp_packet_rate_ctx_reset (&priv->packet_rate_ctx, priv->clock_rate);
   }
@@ -3313,8 +3321,11 @@ invalid_buffer:
   }
 no_clock_rate:
   {
-    GST_WARNING_OBJECT (jitterbuffer,
-        "No clock-rate in caps!, dropping buffer");
+    if (((priv->no_clock_rate_count) % NO_CLOCK_RATE_WARNING_THROTTLE) == 1) {
+      GST_WARNING_OBJECT (jitterbuffer,
+          "No clock-rate in caps!, dropping buffer (count=%d)",
+          priv->no_clock_rate_count);
+    }
     gst_buffer_unref (buffer);
     goto finished;
   }
