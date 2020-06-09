@@ -28,6 +28,7 @@
 GST_DEBUG_CATEGORY_STATIC (rtp_source_debug);
 #define GST_CAT_DEFAULT rtp_source_debug
 
+#define NO_CLOCK_RATE_WARNING_THROTTLE 128
 #define RTP_MAX_PROBATION_LEN  32
 
 /* signals and args */
@@ -430,6 +431,7 @@ rtp_source_init (RTPSource * src)
   src->clock_rate = -1;
   src->packets = g_queue_new ();
   src->seqnum_offset = -1;
+  src->no_clock_rate_count = 0;
 
   src->retained_feedback = g_queue_new ();
   src->nacks = g_array_new (FALSE, FALSE, sizeof (guint16));
@@ -1115,8 +1117,12 @@ calculate_jitter (RTPSource * src, RTPPacketInfo * pinfo)
   GST_LOG ("SSRC %08x got payload %d", src->ssrc, pinfo->pt);
 
   /* check if clock-rate is valid */
-  if (src->clock_rate == -1)
+  if (src->clock_rate == -1) {
+    src->no_clock_rate_count++;
     goto no_clock_rate;
+  } else {
+    src->no_clock_rate_count = 0;
+  }
 
   rtptime = pinfo->rtptime;
 
@@ -1158,7 +1164,10 @@ no_time:
   }
 no_clock_rate:
   {
-    GST_WARNING ("cannot get clock-rate for pt %d", pinfo->pt);
+    if (((src->no_clock_rate_count) % NO_CLOCK_RATE_WARNING_THROTTLE) == 1) {
+      GST_WARNING ("cannot get clock-rate for pt %d (count=%d)", pinfo->pt,
+          src->no_clock_rate_count);
+    }
     return;
   }
 }
