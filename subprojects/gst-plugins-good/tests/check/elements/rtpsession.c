@@ -1302,6 +1302,100 @@ GST_START_TEST (test_ssrc_collision_third_party)
 
 GST_END_TEST;
 
+GST_START_TEST (test_ssrc_collision_third_party_disable)
+{
+  SessionHarness *h = session_harness_new ();
+  GstBuffer *buf;
+  GSocketAddress *saddr;
+  gboolean had_collision = FALSE;
+  guint i;
+  GObject *source;
+  GstStructure *stats;
+
+  g_object_set (h->internal_session,
+      "ssrc-collision-detection", FALSE,
+      "favor-new", TRUE, NULL);
+  g_signal_connect (h->internal_session, "on-ssrc-collision",
+      G_CALLBACK (on_ssrc_collision_cb), &had_collision);
+
+  for (i = 0; i < 4; i++) {
+    /* Receive 4 buffers SSRC=0x12345678 from 127.0.0.1 to pass probation */
+    buf = generate_test_buffer (i, 0x12345678);
+    saddr = g_inet_socket_address_new_from_string ("127.0.0.1", 8080);
+    gst_buffer_add_net_address_meta (buf, saddr);
+    g_object_unref (saddr);
+    fail_unless_equals_int (GST_FLOW_OK, session_harness_recv_rtp (h, buf));
+  }
+
+  /* Check that we received the first 4 buffer */
+  for (i = 0; i < 4; i++) {
+    buf = gst_harness_pull (h->recv_rtp_h);
+    fail_unless (buf);
+    gst_buffer_unref (buf);
+  }
+  fail_unless (had_collision == FALSE);
+
+  /* Check the source address reported by the source  */
+  g_signal_emit_by_name (h->internal_session, "get-source-by-ssrc", 0x12345678,
+      &source);
+  g_object_get (source, "stats", &stats, NULL);
+
+  fail_unless_equals_string (gst_structure_get_string (stats, "rtp-from"), "127.0.0.1:8080");
+
+  gst_structure_free (stats);
+  g_object_unref (source);
+
+  /* Receive buffer SSRC=0x12345678 from 127.0.0.2 */
+  buf = generate_test_buffer (0, 0x12345678);
+  saddr = g_inet_socket_address_new_from_string ("127.0.0.2", 8080);
+  gst_buffer_add_net_address_meta (buf, saddr);
+  g_object_unref (saddr);
+  fail_unless_equals_int (GST_FLOW_OK, session_harness_recv_rtp (h, buf));
+
+  /* Check that we received the other buffer */
+  buf = gst_harness_pull (h->recv_rtp_h);
+  fail_unless (buf);
+  gst_buffer_unref (buf);
+  fail_unless (had_collision == FALSE);
+
+  /* Check the source address reported by the source has changed */
+  g_signal_emit_by_name (h->internal_session, "get-source-by-ssrc", 0x12345678,
+      &source);
+  g_object_get (source, "stats", &stats, NULL);
+
+  fail_unless_equals_string (gst_structure_get_string (stats, "rtp-from"), "127.0.0.2:8080");
+
+  gst_structure_free (stats);
+  g_object_unref (source);
+
+  /* Receive another buffer SSRC=0x12345678 from 127.0.0.1 */
+  buf = generate_test_buffer (0, 0x12345678);
+  saddr = g_inet_socket_address_new_from_string ("127.0.0.1", 8080);
+  gst_buffer_add_net_address_meta (buf, saddr);
+  g_object_unref (saddr);
+  fail_unless_equals_int (GST_FLOW_OK, session_harness_recv_rtp (h, buf));
+
+
+  /* Check that we received the other buffer */
+  buf = gst_harness_pull (h->recv_rtp_h);
+  fail_unless (buf);
+  gst_buffer_unref (buf);
+  fail_unless (had_collision == FALSE);
+
+  /* Check the source address reported by the source has reverted back to the original */
+  g_signal_emit_by_name (h->internal_session, "get-source-by-ssrc", 0x12345678,
+      &source);
+  g_object_get (source, "stats", &stats, NULL);
+
+  fail_unless_equals_string (gst_structure_get_string (stats, "rtp-from"), "127.0.0.1:8080");
+
+  gst_structure_free (stats);
+  g_object_unref (source);
+
+  session_harness_free (h);
+}
+
+GST_END_TEST;
 
 GST_START_TEST (test_ssrc_collision_third_party_favor_new)
 {
@@ -4696,6 +4790,7 @@ rtpsession_suite (void)
   tcase_add_test (tc_chain, test_ssrc_collision_when_sending_loopback);
   tcase_add_test (tc_chain, test_ssrc_collision_when_receiving);
   tcase_add_test (tc_chain, test_ssrc_collision_third_party);
+  tcase_add_test (tc_chain, test_ssrc_collision_third_party_disable);
   tcase_add_test (tc_chain, test_ssrc_collision_third_party_favor_new);
   tcase_add_test (tc_chain,
       test_ssrc_collision_never_send_on_non_internal_source);
