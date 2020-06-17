@@ -150,6 +150,8 @@ struct _GstPadPrivate
    * by a single thread at a time. Protected by the object lock */
   GCond activation_cond;
   gboolean in_activation;
+
+  gboolean warned_unlinked;
 };
 
 typedef struct
@@ -222,6 +224,18 @@ static GstFlowQuarks flow_quarks[] = {
   {GST_FLOW_NOT_SUPPORTED, "not-supported", 0},
   {GST_FLOW_CUSTOM_ERROR, "custom-error", 0}
 };
+
+static void
+gst_pad_warn_if_unlinked (GstPad *pad, GstFlowReturn res) {
+  if (G_UNLIKELY (GST_PAD_PEER (pad) == NULL && res == GST_FLOW_NOT_LINKED)) {
+    if (!pad->priv->warned_unlinked) {
+      pad->priv->warned_unlinked = TRUE;
+      GST_WARNING_OBJECT (pad, "%p:%p returning not-linked", GST_PAD_PARENT(pad), pad);
+    }
+  } else {
+    pad->priv->warned_unlinked = FALSE;
+  }
+}
 
 /**
  * gst_flow_get_name:
@@ -419,6 +433,7 @@ gst_pad_init (GstPad * pad)
   pad->priv->events = g_array_sized_new (FALSE, TRUE, sizeof (PadEvent), 16);
   pad->priv->events_cookie = 0;
   pad->priv->last_cookie = -1;
+  pad->priv->warned_unlinked = FALSE;
   g_cond_init (&pad->priv->activation_cond);
 
   pad->ABI.abi.last_flowret = GST_FLOW_FLUSHING;
@@ -4832,6 +4847,7 @@ gst_pad_push (GstPad * pad, GstBuffer * buffer)
   GST_TRACER_PAD_PUSH_PRE (pad, buffer);
   res = gst_pad_push_data (pad,
       GST_PAD_PROBE_TYPE_BUFFER | GST_PAD_PROBE_TYPE_PUSH, buffer);
+  gst_pad_warn_if_unlinked (pad, res);
   GST_TRACER_PAD_PUSH_POST (pad, res);
   return res;
 }
@@ -4872,6 +4888,7 @@ gst_pad_push_list (GstPad * pad, GstBufferList * list)
   GST_TRACER_PAD_PUSH_LIST_PRE (pad, list);
   res = gst_pad_push_data (pad,
       GST_PAD_PROBE_TYPE_BUFFER_LIST | GST_PAD_PROBE_TYPE_PUSH, list);
+  gst_pad_warn_if_unlinked (pad, res);
   GST_TRACER_PAD_PUSH_LIST_POST (pad, res);
   return res;
 }
@@ -5268,6 +5285,7 @@ probe_stopped_unref:
   }
 done:
   GST_TRACER_PAD_PULL_RANGE_POST (pad, NULL, ret);
+  gst_pad_warn_if_unlinked (pad, ret);
   return ret;
 }
 
