@@ -4776,6 +4776,9 @@ gst_pad_push (GstPad * pad, GstBuffer * buffer)
   GST_TRACER_PAD_PUSH_PRE (pad, buffer);
   res = gst_pad_push_data (pad,
       GST_PAD_PROBE_TYPE_BUFFER | GST_PAD_PROBE_TYPE_PUSH, buffer);
+  if (G_UNLIKELY (res == GST_FLOW_NOT_LINKED)) {
+    GST_WARNING_OBJECT (pad, "%p:%p returning not-linked", GST_PAD_PARENT(pad), pad);
+  }
   GST_TRACER_PAD_PUSH_POST (pad, res);
   return res;
 }
@@ -4816,6 +4819,9 @@ gst_pad_push_list (GstPad * pad, GstBufferList * list)
   GST_TRACER_PAD_PUSH_LIST_PRE (pad, list);
   res = gst_pad_push_data (pad,
       GST_PAD_PROBE_TYPE_BUFFER_LIST | GST_PAD_PROBE_TYPE_PUSH, list);
+  if (G_UNLIKELY (res == GST_FLOW_NOT_LINKED)) {
+    GST_WARNING_OBJECT (pad, "%p:%p returning not-linked", GST_PAD_PARENT(pad), pad);
+  }
   GST_TRACER_PAD_PUSH_LIST_POST (pad, res);
   return res;
 }
@@ -5212,6 +5218,9 @@ probe_stopped_unref:
   }
 done:
   GST_TRACER_PAD_PULL_RANGE_POST (pad, NULL, ret);
+  if (G_UNLIKELY (ret == GST_FLOW_NOT_LINKED)) {
+    GST_WARNING_OBJECT (pad, "%p:%p returning not-linked", GST_PAD_PARENT(pad), pad);
+  }
   return ret;
 }
 
