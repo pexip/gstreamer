@@ -59,8 +59,12 @@
 #define GST_PROXY_PAD_ACQUIRE_INTERNAL(pad, internal, retval)           \
   internal =                                                            \
       GST_PAD_CAST (gst_proxy_pad_get_internal (GST_PROXY_PAD_CAST (pad))); \
-  if (internal == NULL)                                                 \
-    return retval;
+  if (internal == NULL) {\
+    if (retval == GST_FLOW_NOT_LINKED) {\
+      GST_WARNING_OBJECT ((pad), "%p:%p returning not-linked", GST_PAD_PARENT(pad), (pad));\
+    }\
+    return retval;\
+  }
 
 #define GST_PROXY_PAD_RELEASE_INTERNAL(internal) gst_object_unref (internal);
 
