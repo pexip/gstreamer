@@ -62,6 +62,7 @@ enum
 {
   PROP_0,
   PROP_MONITOR,
+  PROP_WINDOW,
   PROP_SHOW_CURSOR,
   PROP_X_POS,
   PROP_Y_POS,
@@ -121,6 +122,11 @@ gst_gdiscreencapsrc_class_init (GstGDIScreenCapSrcClass * klass)
           "Monitor", "Which monitor to use (0 = 1st monitor and default)",
           0, G_MAXINT, 0, G_PARAM_READWRITE));
 
+  g_object_class_install_property (go_class, PROP_WINDOW,
+      g_param_spec_int ("window", "Window",
+          "The window handle (HWND) to capture.", 0, G_MAXINT, 0,
+          G_PARAM_READWRITE));
+
   g_object_class_install_property (go_class, PROP_SHOW_CURSOR,
       g_param_spec_boolean ("cursor", "Show mouse cursor",
           "Whether to show mouse cursor (default off)",
@@ -166,6 +172,7 @@ gst_gdiscreencapsrc_init (GstGDIScreenCapSrc * src)
   src->capture_h = 0;
 
   src->monitor = 0;
+  src->window = 0;
   src->show_cursor = FALSE;
 
   gst_base_src_set_format (GST_BASE_SRC (src), GST_FORMAT_TIME);
@@ -204,6 +211,9 @@ gst_gdiscreencapsrc_set_property (GObject * object, guint prop_id,
       }
       src->monitor = g_value_get_int (value);
       break;
+    case PROP_WINDOW:
+      src->window = g_value_get_int (value);
+      break;
     case PROP_SHOW_CURSOR:
       src->show_cursor = g_value_get_boolean (value);
       break;
@@ -234,6 +244,9 @@ gst_gdiscreencapsrc_get_property (GObject * object, guint prop_id,
   switch (prop_id) {
     case PROP_MONITOR:
       g_value_set_int (value, src->monitor);
+      break;
+    case PROP_WINDOW:
+      g_value_set_int (value, src->window);
       break;
     case PROP_SHOW_CURSOR:
       g_value_set_boolean (value, src->show_cursor);
@@ -319,7 +332,7 @@ gst_gdiscreencapsrc_set_caps (GstBaseSrc * bsrc, GstCaps * caps)
     DeleteDC (src->memDC);
 
   /* Allocate */
-  capture = GetDesktopWindow ();
+  capture = src->window > 0 ? (HWND) src->window : GetDesktopWindow ();
   device = GetDC (capture);
   src->hBitmap = CreateDIBSection (device, &(src->info), DIB_RGB_COLORS,
       (void **) &(src->dibMem), 0, 0);
@@ -335,6 +348,17 @@ gst_gdiscreencapsrc_set_caps (GstBaseSrc * bsrc, GstCaps * caps)
   return TRUE;
 }
 
+static RECT
+gst_win32_get_window_rect (HWND wnd)
+{
+  RECT rect;
+
+  if (!GetClientRect (wnd, &rect))
+    ZeroMemory (&rect, sizeof (RECT));
+
+  return rect;
+}
+
 static GstCaps *
 gst_gdiscreencapsrc_get_caps (GstBaseSrc * bsrc, GstCaps * filter)
 {
@@ -342,7 +366,10 @@ gst_gdiscreencapsrc_get_caps (GstBaseSrc * bsrc, GstCaps * filter)
   RECT rect_dst;
   GstCaps *caps;
 
-  src->screen_rect = rect_dst = gst_win32_get_monitor_rect (src->monitor);
+  if (src->window > 0)
+    src->screen_rect = rect_dst = gst_win32_get_window_rect (src->window);
+  else
+    src->screen_rect = rect_dst = gst_win32_get_monitor_rect (src->monitor);
 
   if (src->capture_w && src->capture_h &&
       src->capture_x + src->capture_w < rect_dst.right - rect_dst.left &&
@@ -528,7 +555,7 @@ gst_gdiscreencapsrc_screen_capture (GstGDIScreenCapSrc * src, GstBuffer * buf)
   height = -src->info.bmiHeader.biHeight;
 
   /* Capture screen */
-  capture = GetDesktopWindow ();
+  capture = src->window > 0 ? (HWND) src->window : GetDesktopWindow ();
   winDC = GetWindowDC (capture);
 
   BitBlt (src->memDC, 0, 0, width, height,
