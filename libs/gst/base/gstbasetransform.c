@@ -2351,7 +2351,9 @@ gst_base_transform_chain (GstPad * pad, GstObject * parent, GstBuffer * buffer)
   }
 
   /* Takes ownership of input buffer */
+  PRIV_UNLOCK (trans);
   ret = klass->submit_input_buffer (trans, priv->discont, buffer);
+  PRIV_LOCK (trans);
   if (ret != GST_FLOW_OK)
     goto done;
 
