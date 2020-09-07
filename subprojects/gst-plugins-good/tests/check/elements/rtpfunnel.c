@@ -521,6 +521,49 @@ GST_START_TEST (rtpfunnel_mark_media_buffer_flags)
 
 GST_END_TEST;
 
+GST_START_TEST (rtpfunnel_terminate_latency)
+{
+  GstHarness *h, *h0, *h1;
+  GstBuffer *buf;
+  GstClockTime latency;
+
+  h = gst_harness_new_with_padnames ("rtpfunnel", NULL, "src");
+  h0 = gst_harness_new_with_element (h->element, "sink_0", NULL);
+  h1 = gst_harness_new_with_element (h->element, "sink_1", NULL);
+  gst_harness_set_src_caps_str (h0, "application/x-rtp, "
+      "ssrc=(uint)123, media=(string)audio");
+  gst_harness_set_src_caps_str (h1, "application/x-rtp, "
+      "ssrc=(uint)321, media=(string)video");
+
+  gst_harness_set_upstream_latency (h0, 11 * GST_MSECOND);
+  gst_harness_set_upstream_latency (h1, 12 * GST_MSECOND);
+
+  /* ask funnel about its latency */
+  latency = gst_harness_query_latency (h);
+  /* verify it reports 0 */
+  fail_unless_equals_uint64 (latency, 0);
+
+  /* push buffers with PTS = 0 into the funnel */
+  fail_unless_equals_int (GST_FLOW_OK,
+      gst_harness_push (h0, generate_test_buffer (0, 123, 0)));
+  fail_unless_equals_int (GST_FLOW_OK,
+      gst_harness_push (h1, generate_test_buffer (0, 321, 0)));
+
+  /* and verify the upstream latency is now reflected as PTS on those
+     buffers */
+  buf = gst_harness_pull (h);
+  fail_unless_equals_uint64 (GST_BUFFER_PTS (buf), 11 * GST_MSECOND);
+  gst_buffer_unref (buf);
+  buf = gst_harness_pull (h);
+  fail_unless_equals_uint64 (GST_BUFFER_PTS (buf), 12 * GST_MSECOND);
+  gst_buffer_unref (buf);
+
+  gst_harness_teardown (h);
+  gst_harness_teardown (h0);
+  gst_harness_teardown (h1);
+}
+
+GST_END_TEST;
 
 static Suite *
 rtpfunnel_suite (void)
@@ -543,6 +586,7 @@ rtpfunnel_suite (void)
   tcase_add_test (tc_chain, rtpfunnel_twcc_passthrough_then_mux);
 
   tcase_add_test (tc_chain, rtpfunnel_mark_media_buffer_flags);
+  tcase_add_test (tc_chain, rtpfunnel_terminate_latency);
 
   return s;
 }

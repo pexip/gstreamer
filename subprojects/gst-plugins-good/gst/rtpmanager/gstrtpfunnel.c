@@ -87,6 +87,7 @@ struct _GstRtpFunnelPad
   guint32 ssrc;
   gboolean has_twcc;
   GstRTPBufferFlags buffer_flag;
+  GstClockTime us_latency;
 };
 
 G_DEFINE_TYPE (GstRtpFunnelPad, gst_rtp_funnel_pad, GST_TYPE_PAD);
@@ -119,6 +120,35 @@ gst_rtp_funnel_pad_set_media_type (GstRtpFunnelPad * pad,
     pad->buffer_flag = GST_RTP_BUFFER_FLAG_MEDIA_AUDIO;
   else if (g_strcmp0 (media_type, "video") == 0)
     pad->buffer_flag = GST_RTP_BUFFER_FLAG_MEDIA_VIDEO;
+}
+
+static gboolean
+gst_rtp_funnel_pad_query_latency (GstRtpFunnelPad * pad,
+    gboolean * _live, GstClockTime * _max)
+{
+  GstQuery *query = gst_query_new_latency ();
+  gboolean res;
+
+  /* Ask peer for latency */
+  res = gst_pad_peer_query (GST_PAD_CAST (pad), query);
+
+  if (res) {
+    gboolean live;
+    GstClockTime min, max;
+    gst_query_parse_latency (query, &live, &min, &max);
+
+    pad->us_latency = min;
+    GST_INFO_OBJECT (pad, "us_latency: %" GST_TIME_FORMAT,
+        GST_TIME_ARGS (pad->us_latency));
+
+    if (_live)
+      *_live = live;
+    if (_max)
+      *_max = max;
+  }
+
+  gst_query_unref (query);
+  return res;
 }
 
 /**************** GstRTPFunnel ****************/
@@ -297,6 +327,7 @@ gst_rtp_funnel_sink_chain_object (GstPad * pad, GstRtpFunnel * funnel,
     GstBuffer *buf = GST_BUFFER_CAST (obj);
     gst_rtp_funnel_set_twcc_seqnum (funnel, pad, &buf);
     gst_rtp_funnel_pad_set_buffer_flag (fpad, buf);
+    GST_BUFFER_PTS (buf) += fpad->us_latency;
     res = gst_pad_push (funnel->srcpad, buf);
   }
   GST_PAD_STREAM_UNLOCK (funnel->srcpad);
@@ -372,6 +403,61 @@ _get_extmap_id_for_attribute (const GstStructure * s, const gchar * ext_name)
 }
 
 #define TWCC_EXTMAP_STR "http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01"
+
+static gboolean
+gst_rtp_funnel_query_latency (GstRtpFunnel * funnel, GstQuery * query)
+{
+  GstClockTime max = GST_CLOCK_TIME_NONE;
+  gboolean live = FALSE, done = FALSE;
+  GValue item = G_VALUE_INIT;
+  GstIterator *it = gst_element_iterate_sink_pads (GST_ELEMENT_CAST (funnel));
+
+  /* Take maximum of all latency values */
+  while (!done) {
+    GstIteratorResult ires = gst_iterator_next (it, &item);
+    switch (ires) {
+      case GST_ITERATOR_DONE:
+        done = TRUE;
+        break;
+      case GST_ITERATOR_OK:
+      {
+        GstRtpFunnelPad *pad = g_value_get_object (&item);
+        gboolean live_cur;
+        GstClockTime max_cur;
+
+        if (gst_rtp_funnel_pad_query_latency (pad, &live_cur, &max_cur)) {
+          /* max is the buffering-potential upstream, and we are only
+             ever as good as our weakest link here, so take the smallest
+             of the max values */
+          max = MIN (max_cur, max);
+          /* if one branch is live, we are live */
+          live = live || live_cur;
+        }
+        g_value_reset (&item);
+        break;
+      }
+      case GST_ITERATOR_RESYNC:
+        max = GST_CLOCK_TIME_NONE;
+        live = FALSE;
+        gst_iterator_resync (it);
+        break;
+      default:
+        done = TRUE;
+        break;
+    }
+  }
+  g_value_unset (&item);
+  gst_iterator_free (it);
+
+  /* since we terminate upstream latency, we report 0 downstream */
+  gst_query_set_latency (query, live, 0, max);
+
+  /* store the results */
+  GST_INFO_OBJECT (funnel, "Replying to latency query with: %" GST_PTR_FORMAT,
+      query);
+
+  return TRUE;
+}
 
 static gboolean
 gst_rtp_funnel_sink_event (GstPad * pad, GstObject * parent, GstEvent * event)
@@ -541,6 +627,23 @@ gst_rtp_funnel_src_event (GstPad * pad, GstObject * parent, GstEvent * event)
   return ret;
 }
 
+static gboolean
+gst_rtp_funnel_src_query (GstPad * pad, GstObject * parent, GstQuery * query)
+{
+  GstRtpFunnel *funnel = GST_RTP_FUNNEL_CAST (parent);
+  gboolean res = FALSE;
+
+  switch (GST_QUERY_TYPE (query)) {
+    case GST_QUERY_LATENCY:
+      res = gst_rtp_funnel_query_latency (funnel, query);
+      break;
+    default:
+      res = gst_pad_query_default (pad, parent, query);
+      break;
+  }
+  return res;
+}
+
 static GstPad *
 gst_rtp_funnel_request_new_pad (GstElement * element, GstPadTemplate * templ,
     const gchar * name, const GstCaps * caps)
@@ -703,6 +806,9 @@ gst_rtp_funnel_init (GstRtpFunnel * funnel)
   gst_pad_use_fixed_caps (funnel->srcpad);
   gst_pad_set_event_function (funnel->srcpad,
       GST_DEBUG_FUNCPTR (gst_rtp_funnel_src_event));
+  gst_pad_set_query_function (funnel->srcpad,
+      GST_DEBUG_FUNCPTR (gst_rtp_funnel_src_query));
+
   gst_element_add_pad (GST_ELEMENT (funnel), funnel->srcpad);
 
   funnel->send_sticky_events = TRUE;
