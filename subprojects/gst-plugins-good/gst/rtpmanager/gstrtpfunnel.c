@@ -88,6 +88,7 @@ struct _GstRtpFunnelPad
   gboolean has_twcc;
   GstRTPBufferFlags buffer_flag;
   GstClockTime us_latency;
+  gboolean has_latency;
 };
 
 G_DEFINE_TYPE (GstRtpFunnelPad, gst_rtp_funnel_pad, GST_TYPE_PAD);
@@ -146,6 +147,8 @@ gst_rtp_funnel_pad_query_latency (GstRtpFunnelPad * pad,
     if (_max)
       *_max = max;
   }
+
+  pad->has_latency = TRUE;
 
   gst_query_unref (query);
   return res;
@@ -317,6 +320,10 @@ gst_rtp_funnel_sink_chain_object (GstPad * pad, GstRtpFunnel * funnel,
   GST_DEBUG_OBJECT (pad, "received %" GST_PTR_FORMAT, obj);
 
   GST_PAD_STREAM_LOCK (funnel->srcpad);
+
+  if (!fpad->has_latency) {
+    gst_rtp_funnel_pad_query_latency (fpad, NULL, NULL);
+  }
 
   gst_rtp_funnel_send_sticky (funnel, pad);
   gst_rtp_funnel_forward_segment (funnel, pad);
