@@ -418,12 +418,19 @@ gst_rtp_funnel_sink_event (GstPad * pad, GstObject * parent, GstEvent * event)
       break;
     }
     case GST_EVENT_FLUSH_START:
+    {
       /* By resetting current_pad here the segment will be forwarded next time a
          buffer is received. */
       GST_OBJECT_LOCK (funnel);
       funnel->current_pad = NULL;
       GST_OBJECT_UNLOCK (funnel);
       break;
+    }
+    case GST_EVENT_LATENCY_CHANGED:
+    {
+      gst_rtp_funnel_pad_query_latency (fpad, NULL, NULL);
+      break;
+    }
     default:
       break;
   }
