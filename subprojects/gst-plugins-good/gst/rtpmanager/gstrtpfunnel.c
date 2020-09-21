@@ -521,6 +521,11 @@ gst_rtp_funnel_sink_event (GstPad * pad, GstObject * parent, GstEvent * event)
       forward = FALSE;
       break;
     }
+    case GST_EVENT_LATENCY_CHANGED:
+    {
+      gst_rtp_funnel_pad_query_latency (fpad, NULL, NULL);
+      break;
+    }
     default:
       break;
   }
