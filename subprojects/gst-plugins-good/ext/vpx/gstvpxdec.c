@@ -96,6 +96,10 @@ gst_vpx_dec_post_processing_flags_get_type (void)
 
 #undef C_FLAGS
 
+/* cached quark to avoid contention on the global quark table lock */
+#define META_TAG_VIDEO meta_tag_video_quark
+static GQuark meta_tag_video_quark;
+
 static void gst_vpx_dec_set_property (GObject * object, guint prop_id,
     const GValue * value, GParamSpec * pspec);
 static void gst_vpx_dec_get_property (GObject * object, guint prop_id,
@@ -111,6 +115,8 @@ gst_vpx_dec_handle_frame (GstVideoDecoder * decoder,
     GstVideoCodecFrame * frame);
 static gboolean gst_vpx_dec_decide_allocation (GstVideoDecoder * decoder,
     GstQuery * query);
+static gboolean gst_vpx_dec_transform_meta (GstVideoDecoder * decoder,
+    GstVideoCodecFrame * frame, GstMeta * meta);
 
 static void gst_vpx_dec_image_to_buffer (GstVPXDec * dec,
     const vpx_image_t * img, GstBuffer * buffer);
@@ -183,6 +189,8 @@ gst_vpx_dec_class_init (GstVPXDecClass * klass)
       GST_DEBUG_FUNCPTR (gst_vpx_dec_handle_frame);;
   base_video_decoder_class->decide_allocation =
       GST_DEBUG_FUNCPTR (gst_vpx_dec_decide_allocation);
+  base_video_decoder_class->transform_meta =
+      GST_DEBUG_FUNCPTR (gst_vpx_dec_transform_meta);
 
   klass->video_codec_tag = DEFAULT_VIDEO_CODEC_TAG;
   klass->codec_algo = DEFAULT_CODEC_ALGO;
@@ -195,6 +203,8 @@ gst_vpx_dec_class_init (GstVPXDecClass * klass)
       GST_DEBUG_FUNCPTR (gst_vpx_dec_default_frame_format);
 
   GST_DEBUG_CATEGORY_INIT (gst_vpxdec_debug, "vpxdec", 0, "VPX Decoder");
+
+  meta_tag_video_quark = g_quark_from_static_string (GST_META_TAG_VIDEO_STR);
 
   gst_type_mark_as_plugin_api (GST_VPX_DEC_TYPE_POST_PROCESSING_FLAGS, 0);
   gst_type_mark_as_plugin_api (GST_TYPE_VPX_DEC, 0);
@@ -828,6 +838,25 @@ gst_vpx_dec_decide_allocation (GstVideoDecoder * bdec, GstQuery * query)
   gst_object_unref (pool);
 
   return TRUE;
+}
+
+static gboolean
+gst_vpx_dec_transform_meta (GstVideoDecoder *
+    decoder, GstVideoCodecFrame * frame, GstMeta * meta)
+{
+  const GstMetaInfo *roi_info = GST_VIDEO_REGION_OF_INTEREST_META_INFO;
+  const GstMetaInfo *info = meta->info;
+  const gchar *const *tags;
+
+  tags = gst_meta_api_type_get_tags (info->api);
+
+  if (!tags
+      || info->api == roi_info->api
+      || (g_strv_length ((gchar **) tags) == 1
+            && gst_meta_api_type_has_tag (info->api, META_TAG_VIDEO)))
+      return TRUE;
+
+  return FALSE;
 }
 
 static void
