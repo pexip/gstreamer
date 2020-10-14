@@ -1795,7 +1795,7 @@ rtp_source_get_new_sr (RTPSource * src, guint64 ntpnstime,
       t_rtp -= gst_util_uint64_scale_int (diff, src->clock_rate, GST_SECOND);
     }
   } else {
-    GST_WARNING ("no clock-rate, cannot interpolate rtp time for SSRC %u",
+    GST_WARNING ("no clock-rate, cannot interpolate rtp time for SSRC %08x",
         src->ssrc);
   }
 
