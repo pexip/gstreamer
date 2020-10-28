@@ -153,12 +153,19 @@ start_jitterbuffer (GstElement * jitterbuffer)
   return ret;
 }
 
+/* wrapper for glib to get correct function signature */
+static void
+gst_mini_object_unref_func (gpointer data, G_GNUC_UNUSED gpointer user_data)
+{
+  gst_mini_object_unref (data);
+}
+
 static void
 cleanup_jitterbuffer (GstElement * jitterbuffer)
 {
   GST_DEBUG ("cleanup_jitterbuffer");
 
-  g_list_foreach (buffers, (GFunc) gst_mini_object_unref, NULL);
+  g_list_foreach (buffers, gst_mini_object_unref_func, NULL);
   g_list_free (buffers);
   buffers = NULL;
 
