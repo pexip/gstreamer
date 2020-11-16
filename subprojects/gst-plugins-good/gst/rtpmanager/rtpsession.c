@@ -2336,7 +2336,7 @@ process_twcc_packet (RTPSession * sess, RTPPacketInfo * pinfo)
 
     /* TODO: find a better rational for this number, and possibly tune it based
        on factors like framerate / bandwidth etc */
-    if (!rtp_session_send_rtcp (sess, 100 * GST_MSECOND)) {
+    if (!rtp_session_send_rtcp (sess, 0)) {
       GST_INFO ("Could not schedule TWCC straight away");
     }
     RTP_SESSION_LOCK (sess);
