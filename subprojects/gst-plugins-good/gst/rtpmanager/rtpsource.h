@@ -253,6 +253,8 @@ void            rtp_source_process_rb          (RTPSource *src, guint32 ssrc, gu
                                                 gint32 packetslost, guint32 exthighestseq, guint32 jitter,
                                                 guint32 lsr, guint32 dlsr);
 
+void            rtp_source_update_clock_rate   (RTPSource *src);
+
 gboolean        rtp_source_get_new_sr          (RTPSource *src, guint64 ntpnstime, GstClockTime running_time,
                                                 guint64 *ntptime, guint32 *rtptime, guint32 *packet_count,
 						guint32 *octet_count);
