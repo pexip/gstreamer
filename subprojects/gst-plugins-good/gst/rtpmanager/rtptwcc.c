@@ -295,6 +295,20 @@ rtp_twcc_manager_get_recv_twcc_seqnum (RTPTWCCManager * twcc,
   return val;
 }
 
+GstClockTime
+rtp_twcc_manager_get_next_timeout (RTPTWCCManager * twcc,
+    GstClockTime current_time)
+{
+  if (GST_CLOCK_TIME_IS_VALID (twcc->feedback_interval)) {
+    if (!GST_CLOCK_TIME_IS_VALID (twcc->next_feedback_send_time)) {
+      /* First time through: initialise feedback time */
+      twcc->next_feedback_send_time = current_time + twcc->feedback_interval;
+    }
+    return twcc->next_feedback_send_time;
+  }
+  return GST_CLOCK_TIME_NONE;
+}
+
 static gint
 _twcc_seqnum_sort (gconstpointer a, gconstpointer b)
 {
@@ -793,20 +807,9 @@ rtp_twcc_manager_recv_packet (RTPTWCCManager * twcc, RTPPacketInfo * pinfo)
   if (!pinfo->marker)
     twcc->packet_count_no_marker++;
 
-  /* are we sending on an interval, or based on marker bit */
-  if (GST_CLOCK_TIME_IS_VALID (twcc->feedback_interval)) {
-    if (!GST_CLOCK_TIME_IS_VALID (twcc->next_feedback_send_time))
-      twcc->next_feedback_send_time =
-          pinfo->running_time + twcc->feedback_interval;
-
-    if (pinfo->running_time >= twcc->next_feedback_send_time) {
-      rtp_twcc_manager_create_feedback (twcc);
-      send_feedback = TRUE;
-
-      while (pinfo->running_time >= twcc->next_feedback_send_time)
-        twcc->next_feedback_send_time += twcc->feedback_interval;
-    }
-  } else if (pinfo->marker || _many_packets_some_lost (twcc, seqnum)) {
+  /* Create feedback, if sending based on marker bit */
+  if (!GST_CLOCK_TIME_IS_VALID (twcc->feedback_interval) &&
+      (pinfo->marker || _many_packets_some_lost (twcc, seqnum))) {
     rtp_twcc_manager_create_feedback (twcc);
     send_feedback = TRUE;
 
@@ -828,9 +831,29 @@ _change_rtcp_fb_sender_ssrc (GstBuffer * buf, guint32 sender_ssrc)
 }
 
 GstBuffer *
-rtp_twcc_manager_get_feedback (RTPTWCCManager * twcc, guint sender_ssrc)
+rtp_twcc_manager_get_feedback (RTPTWCCManager * twcc, guint sender_ssrc,
+    GstClockTime current_time)
 {
   GstBuffer *buf;
+
+  GST_DEBUG ("considering twcc. now: %" GST_TIME_FORMAT
+      " twcc-time: %" GST_TIME_FORMAT " packets: %d",
+      GST_TIME_ARGS (current_time),
+      GST_TIME_ARGS (twcc->next_feedback_send_time),
+      twcc->recv_packets->len);
+
+  if (GST_CLOCK_TIME_IS_VALID (twcc->feedback_interval) &&
+      GST_CLOCK_TIME_IS_VALID (twcc->next_feedback_send_time) &&
+      twcc->next_feedback_send_time <= current_time) {
+    /* Sending on a fixed interval: compute next send time */
+    while (twcc->next_feedback_send_time <= current_time)
+      twcc->next_feedback_send_time += twcc->feedback_interval;
+
+    /* Generate feedback, if there is some to send */
+    if (twcc->recv_packets->len > 0)
+      rtp_twcc_manager_create_feedback (twcc);
+  }
+
   buf = g_queue_pop_head (twcc->rtcp_buffers);
 
   if (buf && twcc->recv_sender_ssrc != sender_ssrc) {
