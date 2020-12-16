@@ -281,6 +281,7 @@ struct _RTPSession {
   gboolean      first_rtcp;
 
   GstClockTime  next_early_rtcp_time;
+  GstClockTime  next_twcc_rtcp_time;
 
   gboolean      sr_req_pending;
   gboolean      scheduled_bye;
