@@ -4332,7 +4332,7 @@ typedef struct
 static TWCCFeedbackIntervalCtx test_twcc_feedback_interval_ctx[] = {
   {50 * GST_MSECOND, 21, 10 * GST_MSECOND, 4},
   {50 * GST_MSECOND, 16, 7 * GST_MSECOND, 2},
-  {50 * GST_MSECOND, 16, 66 * GST_MSECOND, 15},
+  {50 * GST_MSECOND, 16, 66 * GST_MSECOND, 16},
   {50 * GST_MSECOND, 15, 33 * GST_MSECOND, 9},
 };
 
@@ -4341,22 +4341,77 @@ GST_START_TEST (test_twcc_feedback_interval)
   SessionHarness *h = session_harness_new ();
   GstBuffer *buf;
   TWCCFeedbackIntervalCtx *ctx = &test_twcc_feedback_interval_ctx[__i__];
+  GstClockTime ts, next_feedback_time, last_twcc_time, inter_arrival_sum;
+  GstClockTime expected_inter_arrival_sum;
+  guint feedback_received = 0;
 
   session_harness_set_twcc_recv_ext_id (h, TEST_TWCC_EXT_ID);
   g_object_set (h->internal_session, "twcc-feedback-interval", ctx->interval,
       NULL);
 
+  ts = gst_clock_get_time (GST_CLOCK_CAST (h->testclock));
+  next_feedback_time = ts + ctx->interval;
+  last_twcc_time = GST_CLOCK_TIME_NONE;
+  inter_arrival_sum = 0;
+
   for (guint i = 0; i < ctx->num_packets; i++) {
-    GstClockTime ts = i * ctx->ts_delta;
-    gst_test_clock_set_time ((h->testclock), ts);
+    /* Advance to last TWCC interval before ts */
+    while (next_feedback_time < ts) {
+      session_harness_crank_clock (h);
+      gst_test_clock_wait_for_next_pending_id (h->testclock, NULL);
+      next_feedback_time += ctx->interval;
+    }
+
+    /* Advance time, if we haven't already gone past it */
+    if (ts > gst_clock_get_time (GST_CLOCK_CAST (h->testclock)))
+      gst_test_clock_set_time ((h->testclock), ts);
+
+    /* Push recv RTP */
     fail_unless_equals_int (GST_FLOW_OK,
         session_harness_recv_rtp (h, generate_twcc_recv_buffer (i, ts, FALSE)));
+
+    if (next_feedback_time <= ts + ctx->ts_delta) {
+      GstClockTime now;
+
+      /* We expect a feedback report */
+      buf = session_harness_produce_twcc (h);
+      gst_buffer_unref (buf);
+
+      /* Time will have advanced to the feedback send time */
+      now = gst_clock_get_time (GST_CLOCK_CAST (h->testclock));
+      if (GST_CLOCK_TIME_IS_VALID (last_twcc_time))
+        inter_arrival_sum += (now - last_twcc_time);
+      last_twcc_time = now;
+      feedback_received += 1;
+
+      /* Compute next expected feedback time */
+      next_feedback_time += ctx->interval;
+    }
+
+    ts += ctx->ts_delta;
   }
 
-  for (guint i = 0; i < ctx->num_feedback; i++) {
-    buf = session_harness_produce_twcc (h);
-    gst_buffer_unref (buf);
+  /* Compute expected inter-arrival sum for feedback reports */
+  if (ctx->ts_delta <= ctx->interval) {
+    /* Easy case: delta between packets is less than the feedback interval.
+     * In this case we expect the feedback reports to be continuous and
+     * spaced at the specified interval
+     */
+    expected_inter_arrival_sum = (ctx->num_feedback - 1) * ctx->interval;
+  } else {
+    /* Inter-packet delta is more than the feedback interval.
+     * In this case we expect gaps in the feedback stream (because we do
+     * not send empty feedback reports) and thus the sum of deltas between
+     * feedback reports must be equal to the next multiple of the feedback
+     * interval after the time at which the last packet is sent
+     */
+    expected_inter_arrival_sum = ((ctx->num_feedback - 1) * ctx->ts_delta) /
+        ctx->interval * ctx->interval;
   }
+
+  /* Ensure we got the reports we expected, spaced correctly */
+  g_assert_cmpint (feedback_received, ==, ctx->num_feedback);
+  g_assert_cmpint (inter_arrival_sum, ==, expected_inter_arrival_sum);
 
   session_harness_free (h);
 }
@@ -4714,6 +4769,41 @@ GST_START_TEST (test_stats_rtcp_with_multiple_rb)
 GST_END_TEST;
 
 static void
+set_min_rtcp_interval_on_new_sender_ssrc (GObject * session,
+    G_GNUC_UNUSED GObject * source)
+{
+  /* The value is irrelevant here: we want the side-effect of
+   * causing next_rtcp_check_time to be modified */
+  g_object_set (session, "rtcp-min-interval", 5 * GST_SECOND, NULL);
+}
+
+GST_START_TEST (test_twcc_feedback_interval_new_internal_source)
+{
+  SessionHarness *h = session_harness_new ();
+  GstBuffer *buf;
+
+  g_object_set (h->internal_session,
+      "twcc-feedback-interval", 50 * GST_MSECOND, NULL);
+
+  g_object_set (h->internal_session, "internal-ssrc", 0xDEADBEEF, NULL);
+  g_signal_connect (h->internal_session, "on-new-sender-ssrc",
+      G_CALLBACK (set_min_rtcp_interval_on_new_sender_ssrc), NULL);
+
+  /* Receive a RTP buffer from the wire */
+  fail_unless_equals_int (GST_FLOW_OK,
+      session_harness_recv_rtp (h, generate_test_buffer (0, 0x12345678)));
+
+  /* Wait for first regular RTCP to be sent */
+  session_harness_produce_rtcp (h, 1);
+  buf = session_harness_pull_rtcp (h);
+  fail_unless (gst_rtcp_buffer_validate (buf));
+  gst_buffer_unref (buf);
+
+  session_harness_free (h);
+}
+GST_END_TEST;
+
+static void
 count_report_stats (G_GNUC_UNUSED GObject * object,
     G_GNUC_UNUSED GParamSpec * spec, gint * counter)
 {
@@ -5066,6 +5156,7 @@ rtpsession_suite (void)
   tcase_add_test (tc_chain, test_twcc_multiple_payloads_below_window);
   tcase_add_loop_test (tc_chain, test_twcc_feedback_interval, 0,
       G_N_ELEMENTS (test_twcc_feedback_interval_ctx));
+  tcase_add_test (tc_chain, test_twcc_feedback_interval_new_internal_source);
   tcase_add_test (tc_chain, test_twcc_feedback_count_wrap);
   tcase_add_test (tc_chain, test_twcc_feedback_old_seqnum);
 
