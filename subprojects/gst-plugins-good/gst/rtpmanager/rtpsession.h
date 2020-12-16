@@ -280,6 +280,7 @@ struct _RTPSession {
   gboolean      allow_early;
 
   GstClockTime  next_early_rtcp_time;
+  GstClockTime  next_twcc_rtcp_time;
 
   gboolean      scheduled_bye;
 
