@@ -54,6 +54,7 @@ struct _GstRTPBaseDepayloadPrivate
   guint32 last_seqnum;
   guint32 last_rtptime;
   guint32 next_seqnum;
+  gboolean ignore_gaps;
   gint max_reorder;
   gboolean auto_hdr_ext;
 
@@ -84,6 +85,7 @@ enum
 
 static guint gst_rtp_base_depayload_signals[LAST_SIGNAL] = { 0 };
 
+#define DEFAULT_IGNORE_GAPS FALSE
 #define DEFAULT_SOURCE_INFO FALSE
 #define DEFAULT_MAX_REORDER 100
 #define DEFAULT_AUTO_HEADER_EXTENSION TRUE
@@ -93,6 +95,7 @@ enum
   PROP_0,
   PROP_STATS,
   PROP_SOURCE_INFO,
+  PROP_IGNORE_GAPS,
   PROP_MAX_REORDER,
   PROP_AUTO_HEADER_EXTENSION,
   PROP_LAST
@@ -297,6 +300,19 @@ gst_rtp_base_depayload_class_init (GstRTPBaseDepayloadClass * klass)
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 
   /**
+   * GstRTPBaseDepayload:ignore-gaps:
+   *
+   * Wether the depayoader should looks at sequence-number gaps,
+   * and set a DISCONT flag accordingly.
+   *
+   * Since: 1.20
+   **/
+  g_object_class_install_property (gobject_class, PROP_IGNORE_GAPS,
+      g_param_spec_boolean ("ignore-gaps", "Ignore Gaps",
+          "Wether the depayloader should ignore sequencenumber gaps",
+          DEFAULT_IGNORE_GAPS, G_PARAM_READWRITE));
+
+  /**
    * GstRTPBaseDepayload::request-extension:
    * @object: the #GstRTPBaseDepayload
    * @ext_id: the extension id being requested
@@ -396,6 +412,7 @@ gst_rtp_base_depayload_init (GstRTPBaseDepayload * filter,
   priv->pts = -1;
   priv->duration = -1;
   priv->source_info = DEFAULT_SOURCE_INFO;
+  priv->ignore_gaps = DEFAULT_IGNORE_GAPS;
   priv->max_reorder = DEFAULT_MAX_REORDER;
   priv->auto_hdr_ext = DEFAULT_AUTO_HEADER_EXTENSION;
 
@@ -725,7 +742,7 @@ gst_rtp_base_depayload_handle_buffer (GstRTPBaseDepayload * filter,
       gap = gst_rtp_buffer_compare_seqnum (seqnum, priv->next_seqnum);
 
       /* if we have no gap, all is fine */
-      if (G_UNLIKELY (gap != 0)) {
+      if (G_UNLIKELY (gap != 0) && !priv->ignore_gaps) {
         GST_LOG_OBJECT (filter, "got packet %u, expected %u, gap %d", seqnum,
             priv->next_seqnum, gap);
         if (gap < 0) {
@@ -1619,6 +1636,9 @@ gst_rtp_base_depayload_set_property (GObject * object, guint prop_id,
       gst_rtp_base_depayload_set_source_info_enabled (depayload,
           g_value_get_boolean (value));
       break;
+    case PROP_IGNORE_GAPS:
+      priv->ignore_gaps = g_value_get_boolean (value);
+      break;
     case PROP_MAX_REORDER:
       priv->max_reorder = g_value_get_int (value);
       break;
@@ -1649,6 +1669,9 @@ gst_rtp_base_depayload_get_property (GObject * object, guint prop_id,
     case PROP_SOURCE_INFO:
       g_value_set_boolean (value,
           gst_rtp_base_depayload_is_source_info_enabled (depayload));
+      break;
+    case PROP_IGNORE_GAPS:
+      g_value_set_boolean (value, priv->ignore_gaps);
       break;
     case PROP_MAX_REORDER:
       g_value_set_int (value, priv->max_reorder);
