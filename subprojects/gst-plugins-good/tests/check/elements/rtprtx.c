@@ -115,9 +115,9 @@ create_rtp_buffer_ex (guint32 ssrc, guint8 payload_type, guint16 seqnum,
 }
 
 static GstBuffer *
-create_rtp_buffer (guint32 ssrc, guint8 payload_type, guint16 seqnum)
+create_rtp_buffer_with_payload_size (guint32 ssrc, guint8 payload_type,
+    guint16 seqnum, guint payload_size)
 {
-  guint payload_size = 29;
   guint64 timestamp = gst_util_uint64_scale_int (seqnum, 90000, 30);
   GstRTPBuffer *rtpbuf = create_rtp_buffer_ex (ssrc, payload_type, seqnum,
       (guint32) timestamp, payload_size);
@@ -128,6 +128,23 @@ create_rtp_buffer (guint32 ssrc, guint8 payload_type, guint16 seqnum)
   gst_rtp_buffer_unmap (rtpbuf);
   g_free (rtpbuf);
   return ret;
+}
+
+static GstBuffer *
+create_rtp_buffer_with_packet_size (guint32 ssrc, guint8 payload_type,
+    guint16 seqnum, guint rtp_packet_size)
+{
+  guint header_size = 12;
+  guint payload_size = rtp_packet_size - header_size;
+
+  return create_rtp_buffer_with_payload_size (ssrc, payload_type,
+      seqnum, payload_size);
+}
+
+static GstBuffer *
+create_rtp_buffer (guint32 ssrc, guint8 payload_type, guint16 seqnum)
+{
+  return create_rtp_buffer_with_payload_size (ssrc, payload_type, seqnum, 29);
 }
 
 static GstBuffer *
@@ -893,6 +910,236 @@ GST_START_TEST (test_rtxsender_clock_rate_map)
 
 GST_END_TEST;
 
+GST_START_TEST (test_rtxsender_stuffing)
+{
+  guint master_ssrc = 1234567;
+  guint master_pt = 96;
+  guint rtx_ssrc = 7777777;
+  guint rtx_pt = 99;
+  GstStructure *pt_map, *ssrc_map;
+  GstHarness *h = gst_harness_new ("rtprtxsend");
+  gint i;
+
+  pt_map = gst_structure_new ("application/x-rtp-pt-map",
+      "96", G_TYPE_UINT, rtx_pt, NULL);
+  ssrc_map = gst_structure_new ("application/x-rtp-ssrc-map",
+      "1234567", G_TYPE_UINT, rtx_ssrc, NULL);
+  g_object_set (h->element,
+      "payload-type-map", pt_map,
+      "ssrc-map", ssrc_map,
+      "stuffing-kbps", 800, "stuffing-max-burst", -1, NULL);
+
+  gst_harness_set_src_caps_str (h, "application/x-rtp, "
+      "payload = (int)96, " "ssrc = (uint)1234567, " "clock-rate = (int)90000");
+
+  /* 800 kbps = 100 kBps. 10 ms distance between each packet means 100 packets
+   * per second and 1000 bytes per packet to hit target kbps. Also need to
+   * take into account that RTX buffers are 2 bytes larger than original. */
+  gst_harness_set_time (h, 0 * GST_MSECOND);
+  gst_harness_push (h,
+      create_rtp_buffer_with_packet_size (master_ssrc, master_pt, 0, 20));
+  pull_and_verify (h, FALSE, master_ssrc, master_pt, 0);
+
+  gst_harness_set_time (h, 10 * GST_MSECOND);
+  gst_harness_push (h,
+      create_rtp_buffer_with_packet_size (master_ssrc, master_pt, 1, 580));
+  pull_and_verify (h, FALSE, master_ssrc, master_pt, 1);
+  /* budget 1000, sent 600, no stuffing (stuff with 580 will exceed budget) */
+
+  gst_harness_set_time (h, 20 * GST_MSECOND);
+  gst_harness_push (h,
+      create_rtp_buffer_with_packet_size (master_ssrc, master_pt, 2, 600));
+  pull_and_verify (h, FALSE, master_ssrc, master_pt, 2);
+  /* budget 2000, sent 1200, stuff with 1x 602 */
+  pull_and_verify (h, TRUE, rtx_ssrc, rtx_pt, 2);
+  /* budget 2000, sent 1802, no stuffing */
+
+  gst_harness_set_time (h, 30 * GST_MSECOND);
+  gst_harness_push (h,
+      create_rtp_buffer_with_packet_size (master_ssrc, master_pt, 3, 200));
+  pull_and_verify (h, FALSE, master_ssrc, master_pt, 3);
+  /* budget 3000, sent 2000. Stuffed packets will be of (200+2+255)=457 bytes
+   * because there's room for padding to reduce number of packets */
+  for (i = 0; i < 2; i++)
+    pull_and_verify (h, TRUE, rtx_ssrc, rtx_pt, 3);
+
+  gst_harness_set_time (h, 40 * GST_MSECOND);
+  gst_harness_push (h,
+      create_rtp_buffer_with_packet_size (master_ssrc, master_pt, 4, 600));
+  pull_and_verify (h, FALSE, master_ssrc, master_pt, 4);
+  /* budget 4000, sent 3514, no stuffing because rtx packet is 602 */
+  g_usleep (G_USEC_PER_SEC / 100);
+  fail_if (gst_harness_try_pull (h));
+
+  gst_structure_free (pt_map);
+  gst_structure_free (ssrc_map);
+  gst_harness_teardown (h);
+}
+
+GST_END_TEST;
+
+GST_START_TEST (test_rtxsender_stuffing_max_burst)
+{
+  guint master_ssrc = 1234567;
+  guint master_pt = 96;
+  guint rtx_ssrc = 7777777;
+  guint rtx_pt = 99;
+  GstStructure *pt_map, *ssrc_map;
+  GstHarness *h = gst_harness_new ("rtprtxsend");
+  gint i;
+
+  pt_map = gst_structure_new ("application/x-rtp-pt-map",
+      "96", G_TYPE_UINT, rtx_pt, NULL);
+  ssrc_map = gst_structure_new ("application/x-rtp-ssrc-map",
+      "1234567", G_TYPE_UINT, rtx_ssrc, NULL);
+  g_object_set (h->element,
+      "payload-type-map", pt_map,
+      "ssrc-map", ssrc_map,
+      "stuffing-kbps", 800, "stuffing-max-burst", 40, NULL);
+
+  gst_harness_set_src_caps_str (h, "application/x-rtp, "
+      "payload = (int)96, " "ssrc = (uint)1234567, " "clock-rate = (int)90000");
+
+  /* 800 kbps = 100 kBps. 10 ms distance between each packet means 100 packets
+   * per second and 1000 bytes per packet to hit target kbps. max-burst 80
+   * kbps means we can burst up to 100 ms of data if necessary. */
+  gst_harness_set_time (h, 0 * GST_SECOND);
+  gst_harness_push (h,
+      create_rtp_buffer_with_packet_size (master_ssrc, master_pt, 0, 1000));
+  pull_and_verify (h, FALSE, master_ssrc, master_pt, 0);
+
+  /* No packets for 1 seconds. Budget is 800 kbits, but max-burst allows us to
+   * send only 80 kbits */
+  gst_harness_set_time (h, 1 * GST_SECOND);
+  gst_harness_push (h,
+      create_rtp_buffer_with_packet_size (master_ssrc, master_pt, 1, 998));
+  /* budget 100kB, sent 2kB. Could send 98kB to get 100kBps, but max-burst
+   * limits us to only send 5kB (including the original packet just sent). */
+  pull_and_verify (h, FALSE, master_ssrc, master_pt, 1);
+  for (i = 0; i < 4; i++)
+    pull_and_verify (h, TRUE, rtx_ssrc, rtx_pt, 1);
+  fail_if (gst_harness_try_pull (h));
+
+  /* Set unlimited max-burst. */
+  g_object_set (h->element, "stuffing-max-burst", -1, NULL);
+
+  /* State will be reset on next buffer. */
+  gst_harness_set_time (h, 2 * GST_SECOND);
+  gst_harness_push (h,
+      create_rtp_buffer_with_packet_size (master_ssrc, master_pt, 2, 1000));
+  pull_and_verify (h, FALSE, master_ssrc, master_pt, 2);
+
+  gst_harness_set_time (h, 3 * GST_SECOND);
+  gst_harness_push (h,
+      create_rtp_buffer_with_packet_size (master_ssrc, master_pt, 3, 998));
+  /* budget 100kB, sent 2kB. May send 98kB to get 100kBps. */
+  pull_and_verify (h, FALSE, master_ssrc, master_pt, 3);
+  for (i = 0; i < 98; i++)
+    pull_and_verify (h, TRUE, rtx_ssrc, rtx_pt, 3);
+  fail_if (gst_harness_try_pull (h));
+
+  gst_structure_free (pt_map);
+  gst_structure_free (ssrc_map);
+  gst_harness_teardown (h);
+}
+
+GST_END_TEST;
+
+GST_START_TEST (test_rtxsender_stuffing_sanity_when_input_rate_is_extreme)
+{
+  guint master_ssrc = 1234567;
+  guint master_pt = 96;
+  guint rtx_ssrc = 7777777;
+  guint rtx_pt = 99;
+  GstStructure *pt_map, *ssrc_map;
+  GstHarness *h = gst_harness_new ("rtprtxsend");
+  gint i;
+
+  pt_map = gst_structure_new ("application/x-rtp-pt-map",
+      "96", G_TYPE_UINT, rtx_pt, NULL);
+  ssrc_map = gst_structure_new ("application/x-rtp-ssrc-map",
+      "1234567", G_TYPE_UINT, rtx_ssrc, NULL);
+  g_object_set (h->element,
+      "payload-type-map", pt_map,
+      "ssrc-map", ssrc_map, "stuffing-kbps", 1, "stuffing-max-burst", -1, NULL);
+
+  gst_harness_set_src_caps_str (h, "application/x-rtp, "
+      "payload = (int)96, " "ssrc = (uint)1234567, " "clock-rate = (int)90000");
+
+  /* Produce an insane amount of data so that variables may overflow (more
+   * than G_MAXINT bits). No stuffing should be produced. */
+  for (i = 0; i < 300; i++) {
+    gst_harness_set_time (h, i * GST_NSECOND);
+    gst_harness_push (h,
+        create_rtp_buffer_with_packet_size (master_ssrc, master_pt, i,
+            1000000));
+    pull_and_verify (h, FALSE, master_ssrc, master_pt, i);
+  }
+  fail_if (gst_harness_try_pull (h));
+
+  gst_structure_free (pt_map);
+  gst_structure_free (ssrc_map);
+  gst_harness_teardown (h);
+}
+
+GST_END_TEST;
+
+GST_START_TEST (test_rtxsender_stuffing_does_not_interfer_with_rtx)
+{
+  /* Stuffing packets should be considered a part of the original data in
+   * terms of counting bits and should not interfer with rtx-kbps */
+  guint master_ssrc = 1234567;
+  guint master_pt = 96;
+  guint rtx_ssrc = 7777777;
+  guint rtx_pt = 99;
+  GstStructure *pt_map, *ssrc_map;
+  GstHarness *h = gst_harness_new ("rtprtxsend");
+  gint i;
+
+  pt_map = gst_structure_new ("application/x-rtp-pt-map",
+      "96", G_TYPE_UINT, rtx_pt, NULL);
+  ssrc_map = gst_structure_new ("application/x-rtp-ssrc-map",
+      "1234567", G_TYPE_UINT, rtx_ssrc, NULL);
+  g_object_set (h->element,
+      "payload-type-map", pt_map,
+      "ssrc-map", ssrc_map,
+      "stuffing-kbps", 800, "stuffing-max-burst", -1, "max-kbps", 400, NULL);
+
+  gst_harness_set_src_caps_str (h, "application/x-rtp, "
+      "payload = (int)96, " "ssrc = (uint)1234567, " "clock-rate = (int)90000");
+
+  gst_harness_set_time (h, 0 * GST_MSECOND);
+  gst_harness_push (h,
+      create_rtp_buffer_with_packet_size (master_ssrc, master_pt, 0, 100));
+  pull_and_verify (h, FALSE, master_ssrc, master_pt, 0);
+
+  gst_harness_set_time (h, 10 * GST_MSECOND);
+  gst_harness_push (h,
+      create_rtp_buffer_with_packet_size (master_ssrc, master_pt, 1, 500));
+  pull_and_verify (h, FALSE, master_ssrc, master_pt, 1);
+  /* budget 1000, sent 600 */
+
+  /* Request and send RTX packet. Not calculated in budget */
+  gst_harness_push_upstream_event (h,
+      create_rtx_event (master_ssrc, master_pt, 1));
+  pull_and_verify (h, TRUE, rtx_ssrc, rtx_pt, 1);
+
+  /* Send media packet. Budget should still be untouched for before.  */
+  gst_harness_set_time (h, 20 * GST_MSECOND);
+  gst_harness_push (h,
+      create_rtp_buffer_with_packet_size (master_ssrc, master_pt, 2, 400));
+  pull_and_verify (h, FALSE, master_ssrc, master_pt, 2);
+  /* budet 2000, sent 1000, send 2x 400 stuffing */
+  for (i = 0; i < 2; i++)
+    pull_and_verify (h, TRUE, rtx_ssrc, rtx_pt, 2);
+
+  gst_structure_free (pt_map);
+  gst_structure_free (ssrc_map);
+  gst_harness_teardown (h);
+}
+
+GST_END_TEST;
+
 static Suite *
 rtprtx_suite (void)
 {
@@ -917,6 +1164,12 @@ rtprtx_suite (void)
   tcase_add_test (tc_chain, test_rtxqueue_max_size_packets);
   tcase_add_test (tc_chain, test_rtxqueue_max_size_time);
   tcase_add_test (tc_chain, test_rtxsender_clock_rate_map);
+
+  tcase_add_test (tc_chain, test_rtxsender_stuffing);
+  tcase_add_test (tc_chain, test_rtxsender_stuffing_max_burst);
+  tcase_add_test (tc_chain,
+      test_rtxsender_stuffing_sanity_when_input_rate_is_extreme);
+  tcase_add_test (tc_chain, test_rtxsender_stuffing_does_not_interfer_with_rtx);
 
   return s;
 }
