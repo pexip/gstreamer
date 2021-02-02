@@ -614,27 +614,6 @@ gst_rtp_pt_demux_sink_event (GstPad * pad, GstObject * parent, GstEvent * event)
       res = TRUE;
       break;
     }
-    case GST_EVENT_CUSTOM_DOWNSTREAM:
-    {
-      const GstStructure *s;
-
-      s = gst_event_get_structure (event);
-
-      if (gst_structure_has_name (s, "GstRTPPacketLost")) {
-        GstPad *srcpad = find_pad_for_pt (rtpdemux, rtpdemux->last_pt);
-
-        if (srcpad) {
-          res = gst_pad_push_event (srcpad, event);
-          gst_object_unref (srcpad);
-        } else {
-          gst_event_unref (event);
-        }
-
-      } else {
-        res = gst_pad_event_default (pad, parent, event);
-      }
-      break;
-    }
     default:
       res = gst_pad_event_default (pad, parent, event);
       break;
