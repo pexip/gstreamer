@@ -265,7 +265,7 @@ gst_rtp_rtx_receive_reset (GstRtpRtxReceive * rtx)
 static void
 gst_rtp_rtx_receive_finalize (GObject * object)
 {
-  GstRtpRtxReceive *rtx = GST_RTP_RTX_RECEIVE (object);
+  GstRtpRtxReceive *rtx = GST_RTP_RTX_RECEIVE_CAST (object);
 
   g_hash_table_unref (rtx->ssrc2_ssrc1_map);
   if (rtx->external_ssrc_map)
@@ -335,7 +335,7 @@ static gboolean
 gst_rtp_rtx_receive_src_event (GstPad * pad, GstObject * parent,
     GstEvent * event)
 {
-  GstRtpRtxReceive *rtx = GST_RTP_RTX_RECEIVE (parent);
+  GstRtpRtxReceive *rtx = GST_RTP_RTX_RECEIVE_CAST (parent);
   gboolean res;
 
   switch (GST_EVENT_TYPE (event)) {
@@ -524,7 +524,7 @@ _gst_rtp_buffer_new_from_rtx (GstRTPBuffer * rtp, guint32 ssrc1,
 static GstFlowReturn
 gst_rtp_rtx_receive_chain (GstPad * pad, GstObject * parent, GstBuffer * buffer)
 {
-  GstRtpRtxReceive *rtx = GST_RTP_RTX_RECEIVE (parent);
+  GstRtpRtxReceive *rtx = GST_RTP_RTX_RECEIVE_CAST (parent);
   GstRTPBuffer rtp = GST_RTP_BUFFER_INIT;
   GstFlowReturn ret = GST_FLOW_OK;
   GstBuffer *new_buffer = NULL;
@@ -714,7 +714,7 @@ static void
 gst_rtp_rtx_receive_get_property (GObject * object,
     guint prop_id, GValue * value, GParamSpec * pspec)
 {
-  GstRtpRtxReceive *rtx = GST_RTP_RTX_RECEIVE (object);
+  GstRtpRtxReceive *rtx = GST_RTP_RTX_RECEIVE_CAST (object);
 
   switch (prop_id) {
     case PROP_PAYLOAD_TYPE_MAP:
@@ -764,7 +764,7 @@ static void
 gst_rtp_rtx_receive_set_property (GObject * object,
     guint prop_id, const GValue * value, GParamSpec * pspec)
 {
-  GstRtpRtxReceive *rtx = GST_RTP_RTX_RECEIVE (object);
+  GstRtpRtxReceive *rtx = GST_RTP_RTX_RECEIVE_CAST (object);
 
   switch (prop_id) {
     case PROP_SSRC_MAP:
@@ -800,7 +800,7 @@ gst_rtp_rtx_receive_change_state (GstElement * element,
   GstStateChangeReturn ret;
   GstRtpRtxReceive *rtx;
 
-  rtx = GST_RTP_RTX_RECEIVE (element);
+  rtx = GST_RTP_RTX_RECEIVE_CAST (element);
 
   switch (transition) {
     default:
