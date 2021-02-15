@@ -323,8 +323,13 @@ GST_START_TEST (rtpfunnel_twcc_caps)
   gst_caps_unref (caps);
   gst_caps_unref (expected_caps);
 
-  /* now try and set a different extmap for the same id on the other
-   * sinkpad, and verify this does not work */
+  /* check to see if we still accept any old rtp-caps */
+  caps = gst_caps_from_string ("application/x-rtp, media=(string)audio");
+  fail_unless (gst_pad_query_accept_caps (GST_PAD_PEER (h1->srcpad), caps));
+  gst_caps_unref (caps);
+
+  /* now try and set a different extmap (4) on the other sinkpad,
+     and verify this does not work */
   gst_harness_set_src_caps_str (h1, "application/x-rtp, "
       "ssrc=(uint)456, extmap-5=" BOGUS_EXTMAP_STR "");
   caps = gst_pad_get_current_caps (GST_PAD_PEER (h1->srcpad));
