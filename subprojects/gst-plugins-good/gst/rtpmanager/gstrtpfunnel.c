@@ -580,11 +580,23 @@ gst_rtp_funnel_sink_query (GstPad * pad, GstObject * parent, GstQuery * query)
       gst_query_parse_accept_caps (query, &caps);
 
       GST_OBJECT_LOCK (funnel);
-      result = gst_caps_is_subset (caps, funnel->srccaps);
+      result = gst_caps_can_intersect (caps, funnel->srccaps);
       if (!result) {
         GST_ERROR_OBJECT (pad,
             "caps: %" GST_PTR_FORMAT " were not compatible with: %"
             GST_PTR_FORMAT, caps, funnel->srccaps);
+      } else {
+        /* we don't accept another extension-ID for TWCC */
+        GstStructure *s = gst_caps_get_structure (caps, 0);
+        guint8 ext_id = _get_extmap_id_for_attribute (s, TWCC_EXTMAP_STR);
+        if (ext_id > 0 && funnel->twcc_ext
+            && ext_id != gst_rtp_header_extension_get_id (funnel->twcc_ext)) {
+          GST_ERROR_OBJECT (pad,
+              "caps: %" GST_PTR_FORMAT " tries to redefine the"
+              "TWCC extid from %u to %u", caps,
+              gst_rtp_header_extension_get_id (funnel->twcc_ext), ext_id);
+          result = FALSE;
+        }
       }
       GST_OBJECT_UNLOCK (funnel);
 
