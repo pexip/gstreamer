@@ -255,17 +255,17 @@ typedef enum
 /**
  * GST_RTCP_VALID_MASK:
  *
- * Mask for version, padding bit and packet type pair
+ * Mask for version and packet type pair
  */
-#define GST_RTCP_VALID_MASK (0xc000 | 0x2000 | 0xfe)
+#define GST_RTCP_VALID_MASK (0xc000 | 0xfe)
 
 /**
  * GST_RTCP_REDUCED_SIZE_VALID_MASK:
  *
- * Mask for version, padding bit and packet type pair allowing reduced size
+ * Mask for version and packet type pair allowing reduced size
  * packets, basically it accepts other types than RR and SR
  */
-#define GST_RTCP_REDUCED_SIZE_VALID_MASK (0xc000 | 0x2000 | 0xf8)
+#define GST_RTCP_REDUCED_SIZE_VALID_MASK (0xc000 | 0xf8)
 
 /**
  * GST_RTCP_VALID_VALUE:
@@ -545,6 +545,9 @@ void            gst_rtcp_packet_fb_set_type           (GstRTCPPacket *packet, Gs
 
 GST_RTP_API
 guint16         gst_rtcp_packet_fb_get_fci_length     (GstRTCPPacket *packet);
+
+GST_RTP_API
+guint16         gst_rtcp_packet_fb_get_fci_length_bytes (GstRTCPPacket * packet);
 
 GST_RTP_API
 gboolean        gst_rtcp_packet_fb_set_fci_length     (GstRTCPPacket *packet, guint16 wordlen);
