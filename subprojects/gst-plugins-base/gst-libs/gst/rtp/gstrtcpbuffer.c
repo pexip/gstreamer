@@ -91,12 +91,9 @@ static gboolean
 gst_rtcp_buffer_validate_data_internal (guint8 * data, guint len,
     guint16 valid_mask)
 {
-  guint16 header_mask;
-  guint header_len;
   guint8 version;
+  guint16 header_mask;
   guint data_len;
-  gboolean padding;
-  guint8 pad_bytes;
 
   g_return_val_if_fail (data != NULL, FALSE);
 
@@ -109,44 +106,49 @@ gst_rtcp_buffer_validate_data_internal (guint8 * data, guint len,
   if (G_UNLIKELY (header_mask != GST_RTCP_VALID_VALUE))
     goto wrong_mask;
 
-  /* no padding when mask succeeds */
-  padding = FALSE;
-
   /* store len */
   data_len = len;
 
   while (TRUE) {
+    guint header_len;
+    gboolean padding = FALSE;
+
     /* get packet length */
     header_len = (((data[2] << 8) | data[3]) + 1) << 2;
     if (data_len < header_len)
       goto wrong_length;
 
+    /* check padding of new packet */
+    if (data[0] & 0x20) {
+      guint8 pad_bytes;
+      padding = TRUE;
+      /* last byte of padding contains the number of padded bytes including
+       * itself */
+      pad_bytes = data[data_len - 1];
+      /* cannot be 0 and must be smaller than the size of the data */
+      if (pad_bytes == 0 || pad_bytes > (header_len - 4))
+        goto wrong_padding;
+      /* if validating a standard RTCP packet, padding must be modulo 4 */
+      if (GST_RTCP_VALID_MASK == valid_mask && (pad_bytes & 0x3))
+        goto wrong_padding;
+    }
+
     /* move to next compound packet */
     data += header_len;
     data_len -= header_len;
 
-    /* we are at the end now */
-    if (data_len < 4)
-      break;
-
     /* padding only allowed on last packet */
     if (padding)
+      break;
+
+    /* we are at the end now */
+    if (data_len < 4)
       break;
 
     /* check version of new packet */
     version = data[0] & 0xc0;
     if (version != (GST_RTCP_VERSION << 6))
       goto wrong_version;
-
-    /* check padding of new packet */
-    if (data[0] & 0x20) {
-      padding = TRUE;
-      /* last byte of padding contains the number of padded bytes including
-       * itself. must be a multiple of 4, but cannot be 0. */
-      pad_bytes = data[data_len - 1];
-      if (pad_bytes == 0 || (pad_bytes & 0x3))
-        goto wrong_padding;
-    }
   }
   if (data_len != 0) {
     /* some leftover bytes */
@@ -2323,6 +2325,36 @@ gst_rtcp_packet_fb_get_fci_length (GstRTCPPacket * packet)
   data = packet->rtcp->map.data + packet->offset + 2;
 
   return GST_READ_UINT16_BE (data) - 2;
+}
+
+/**
+ * gst_rtcp_packet_fb_get_fci_length_bytes:
+ * @packet: a valid RTPFB or PSFB #GstRTCPPacket
+ *
+ * Get the length of the Feedback Control Information attached to a
+ * RTPFB or PSFB @packet.
+ *
+ * Returns: The length of the FCI in bytes.
+ */
+guint16
+gst_rtcp_packet_fb_get_fci_length_bytes (GstRTCPPacket * packet)
+{
+  guint16 wordlen;
+  guint16 byteslen;
+
+  wordlen = gst_rtcp_packet_fb_get_fci_length (packet);
+  byteslen = wordlen * 4;
+
+  /* subtract any padding */
+  if (packet->padding) {
+    guint8 *data;
+    guint8 pad_bytes;
+    data = packet->rtcp->map.data + packet->offset;
+    pad_bytes = data[4 + packet->length * 4 - 1];
+    byteslen -= pad_bytes;
+  }
+
+  return byteslen;
 }
 
 /**
