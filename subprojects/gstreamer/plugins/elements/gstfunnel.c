@@ -364,6 +364,16 @@ gst_funnel_sink_chain (GstPad * pad, GstObject * parent, GstBuffer * buffer)
 }
 
 static gboolean
+_is_lost_event (GstEvent * event)
+{
+  const GstStructure *s;
+  s = gst_event_get_structure (event);
+  if (s)
+    return gst_structure_has_name (s, "GstRTPPacketLost");
+  return FALSE;
+}
+
+static gboolean
 gst_funnel_sink_event (GstPad * pad, GstObject * parent, GstEvent * event)
 {
   GstFunnel *funnel = GST_FUNNEL_CAST (parent);
@@ -371,6 +381,7 @@ gst_funnel_sink_event (GstPad * pad, GstObject * parent, GstEvent * event)
   gboolean forward = TRUE;
   gboolean res = TRUE;
   gboolean unlock = FALSE;
+  gboolean is_lost_event;
 
   GST_DEBUG_OBJECT (pad, "received event %" GST_PTR_FORMAT, event);
 
@@ -398,7 +409,9 @@ gst_funnel_sink_event (GstPad * pad, GstObject * parent, GstEvent * event)
     GST_OBJECT_UNLOCK (funnel);
   }
 
-  if (forward && GST_EVENT_IS_SERIALIZED (event)) {
+  /* FIXME: make something better around lost-events. rtpfunnel? */
+  is_lost_event = _is_lost_event (event);
+  if (!is_lost_event && forward && GST_EVENT_IS_SERIALIZED (event)) {
     /* If no data is coming and we receive serialized event, need to forward all sticky events.
      * Otherwise downstream has an inconsistent set of sticky events when
      * handling the new event. */
