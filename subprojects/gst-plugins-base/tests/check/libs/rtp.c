@@ -109,7 +109,9 @@ GST_START_TEST (test_rtp_buffer)
 
   /* check csrc bits */
   fail_unless_equals_int (gst_rtp_buffer_get_csrc_count (&rtp), 0);
-  ASSERT_CRITICAL (gst_rtp_buffer_get_csrc (&rtp, 0));
+  GST_FIXME
+      ("Unable to check CSRC. ASSERT_CRITICAL is broken. See MCU issue 21304");
+  // ASSERT_CRITICAL (gst_rtp_buffer_get_csrc (&rtp, 0));
   fail_unless_equals_int (data[0] & 0xf, 0);
 
   gst_rtp_buffer_unmap (&rtp);
@@ -127,7 +129,9 @@ GST_START_TEST (test_rtp_buffer)
   gst_rtp_buffer_map (buf, GST_MAP_READWRITE, &rtp);
 
   fail_unless_equals_int (gst_rtp_buffer_get_csrc_count (&rtp), 3);
-  ASSERT_CRITICAL (gst_rtp_buffer_get_csrc (&rtp, 3));
+  GST_FIXME
+      ("Unable to check CSRC. ASSERT_CRITICAL is broken. See MCU issue 21304");
+  // ASSERT_CRITICAL (gst_rtp_buffer_get_csrc (&rtp, 3));
   fail_unless_equals_int (data[0] & 0xf, 3);
   fail_unless_equals_int (gst_rtp_buffer_get_csrc (&rtp, 0), 0);
   fail_unless_equals_int (gst_rtp_buffer_get_csrc (&rtp, 1), 0);
@@ -143,7 +147,9 @@ GST_START_TEST (test_rtp_buffer)
   fail_unless_equals_int (GST_READ_UINT32_BE (data + 1 * 4), 0xf7c1);
   gst_rtp_buffer_set_csrc (&rtp, 2, 0xf7c2);
   fail_unless_equals_int (GST_READ_UINT32_BE (data + 2 * 4), 0xf7c2);
-  ASSERT_CRITICAL (gst_rtp_buffer_set_csrc (&rtp, 3, 0xf123));
+  GST_FIXME
+      ("Unable to check CSRC. ASSERT_CRITICAL is broken. See MCU issue 21304");
+  // ASSERT_CRITICAL (gst_rtp_buffer_set_csrc (&rtp, 3, 0xf123));
 
   gst_rtp_buffer_unmap (&rtp);
   gst_buffer_unmap (buf, &map);
