@@ -1555,7 +1555,76 @@ GST_START_TEST (videodecoder_playback_invalid_ts_packetized_subframes)
 
 GST_END_TEST;
 
+static void
+test_videodecoder_property_detect_reordering (gboolean detect_reordering)
+{
+  GstSegment segment;
+  GstBuffer *buffer;
+  GstClockTime last_timestamp = GST_CLOCK_TIME_NONE;
+  guint i = 0;
 
+  GstClockTime timestamps[] = {
+    1000,
+    2000,
+    1500,
+    2500,
+    3000
+  };
+
+  setup_videodecodertester (NULL, NULL);
+
+  gst_pad_set_active (mysrcpad, TRUE);
+  g_object_set (dec, "detect-reordering", detect_reordering, NULL);
+  gst_element_set_state (dec, GST_STATE_PLAYING);
+  gst_pad_set_active (mysinkpad, TRUE);
+
+  send_startup_events ();
+
+  /* push a new segment */
+  gst_segment_init (&segment, GST_FORMAT_TIME);
+  fail_unless (gst_pad_push_event (mysrcpad, gst_event_new_segment (&segment)));
+
+  /* push a number of buffers with their corresponding timestamp */
+  for (i = 0; i < G_N_ELEMENTS (timestamps); i++) {
+    buffer = create_test_buffer (i);
+    GST_BUFFER_PTS (buffer) = timestamps[i];
+    fail_unless (gst_pad_push (mysrcpad, buffer) == GST_FLOW_OK);
+  }
+
+  for (i = 0; i < g_list_length (buffers); i++) {
+    buffer = g_list_nth_data (buffers, i);
+
+    if (detect_reordering) {
+      /* when reordering we expect PTS to be continuous */
+      fail_unless (GST_CLOCK_DIFF (last_timestamp,
+              GST_BUFFER_PTS (buffer)) >= 0);
+      last_timestamp = GST_BUFFER_PTS (buffer);
+
+    } else {
+      /* we expect PTS not to be modified */
+      fail_unless_equals_int (GST_BUFFER_PTS (buffer), timestamps[i]);
+    }
+  }
+
+  g_list_free_full (buffers, (GDestroyNotify) gst_buffer_unref);
+  buffers = NULL;
+
+  cleanup_videodecodertest ();
+}
+
+GST_START_TEST (videodecoder_property_detect_reordering_enabled)
+{
+  test_videodecoder_property_detect_reordering (TRUE);
+}
+
+GST_END_TEST;
+
+GST_START_TEST (videodecoder_property_detect_reordering_disabled)
+{
+  test_videodecoder_property_detect_reordering (FALSE);
+}
+
+GST_END_TEST;
 
 static Suite *
 gst_videodecoder_suite (void)
@@ -1591,6 +1660,9 @@ gst_videodecoder_suite (void)
   tcase_add_test (tc, videodecoder_playback_packetized_subframes_metadata);
   tcase_add_test (tc, videodecoder_playback_invalid_ts_packetized);
   tcase_add_test (tc, videodecoder_playback_invalid_ts_packetized_subframes);
+
+  tcase_add_test (tc, videodecoder_property_detect_reordering_enabled);
+  tcase_add_test (tc, videodecoder_property_detect_reordering_disabled);
 
   return s;
 }
