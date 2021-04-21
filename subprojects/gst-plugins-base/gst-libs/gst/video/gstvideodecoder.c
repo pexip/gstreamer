@@ -314,6 +314,7 @@ GST_DEBUG_CATEGORY (videodecoder_debug);
  * frame numbers and can be given special meaning */
 #define REQUEST_SYNC_POINT_PENDING G_MAXUINT + 1
 #define REQUEST_SYNC_POINT_UNSET G_MAXUINT64
+#define DEFAULT_DETECT_REORDERING         TRUE
 
 enum
 {
@@ -324,6 +325,8 @@ enum
   PROP_DISCARD_CORRUPTED_FRAMES,
   PROP_AUTOMATIC_REQUEST_SYNC_POINTS,
   PROP_AUTOMATIC_REQUEST_SYNC_POINT_FLAGS,
+  PROP_DETECT_REORDERING,
+  PROP_LAST
 };
 
 struct _GstVideoDecoderPrivate
@@ -389,6 +392,7 @@ struct _GstVideoDecoderPrivate
   /* If reordered_output, counts the number of output frames which have ordered
    * pts. This is to be able to recover from temporary glitches.  */
   guint consecutive_orderered_output;
+  gboolean detect_reordering;
 
   /* FIXME: Consider using a GQueue or other better fitting data structure */
   /* reverse playback */
@@ -719,6 +723,21 @@ gst_video_decoder_class_init (GstVideoDecoderClass * klass)
           DEFAULT_AUTOMATIC_REQUEST_SYNC_POINT_FLAGS,
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 
+  /**
+   * GstVideoDecoder:detect-reordering:
+   *
+   * If set to %FALSE the decoder will not bother with reordered frames, and
+   * do any sort of PTS adjustment for them.
+   *
+   * Since: 1.20
+   */
+  g_object_class_install_property (gobject_class, PROP_DETECT_REORDERING,
+      g_param_spec_boolean ("detect-reordering",
+          "Detect frame reordering",
+          "Enables the frame pts reordering detection",
+          DEFAULT_DETECT_REORDERING,
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+
   meta_tag_video_quark = g_quark_from_static_string (GST_META_TAG_VIDEO_STR);
 }
 
@@ -773,6 +792,7 @@ gst_video_decoder_init (GstVideoDecoder * decoder, GstVideoDecoderClass * klass)
   /* properties */
   decoder->priv->do_qos = DEFAULT_QOS;
   decoder->priv->max_errors = GST_VIDEO_DECODER_MAX_ERRORS;
+  decoder->priv->detect_reordering = DEFAULT_DETECT_REORDERING;
 
   decoder->priv->min_latency = 0;
   decoder->priv->max_latency = 0;
@@ -998,6 +1018,9 @@ gst_video_decoder_get_property (GObject * object, guint property_id,
     case PROP_AUTOMATIC_REQUEST_SYNC_POINT_FLAGS:
       g_value_set_flags (value, priv->automatic_request_sync_point_flags);
       break;
+    case PROP_DETECT_REORDERING:
+      g_value_set_boolean (value, priv->detect_reordering);
+      break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, property_id, pspec);
       break;
@@ -1029,6 +1052,9 @@ gst_video_decoder_set_property (GObject * object, guint property_id,
       break;
     case PROP_AUTOMATIC_REQUEST_SYNC_POINT_FLAGS:
       priv->automatic_request_sync_point_flags = g_value_get_flags (value);
+      break;
+    case PROP_DETECT_REORDERING:
+      priv->detect_reordering = g_value_get_boolean (value);
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, property_id, pspec);
@@ -3306,14 +3332,17 @@ gst_video_decoder_prepare_finish_frame (GstVideoDecoder *
     }
   }
 
-  if (GST_CLOCK_TIME_IS_VALID (priv->last_timestamp_out) &&
-      frame->pts < priv->last_timestamp_out) {
-    GST_WARNING_OBJECT (decoder,
-        "decreasing timestamp (%" GST_TIME_FORMAT " < %" GST_TIME_FORMAT ")",
-        GST_TIME_ARGS (frame->pts), GST_TIME_ARGS (priv->last_timestamp_out));
-    priv->reordered_output = TRUE;
-    /* make it a bit less weird downstream */
-    frame->pts = priv->last_timestamp_out;
+  if (priv->detect_reordering
+      && GST_CLOCK_TIME_IS_VALID (priv->last_timestamp_out)) {
+    if (frame->pts < priv->last_timestamp_out) {
+      GST_WARNING_OBJECT (decoder,
+          "decreasing timestamp (%" GST_TIME_FORMAT " < %"
+          GST_TIME_FORMAT ")",
+          GST_TIME_ARGS (frame->pts), GST_TIME_ARGS (priv->last_timestamp_out));
+      priv->reordered_output = TRUE;
+      /* make it a bit less weird downstream */
+      frame->pts = priv->last_timestamp_out;
+    }
   }
 
   if (GST_CLOCK_TIME_IS_VALID (frame->pts))
