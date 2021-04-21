@@ -141,12 +141,14 @@ enum
 {
   PROP_0,
   PROP_LATENCY,
+  PROP_REPORTED_MIN_LATENCY,
   PROP_TOLERANCE,
   PROP_PLC,
   PROP_MAX_ERRORS
 };
 
 #define DEFAULT_LATENCY    0
+#define DEFAULT_REPORTED_MIN_LATENCY    0
 #define DEFAULT_TOLERANCE  0
 #define DEFAULT_PLC        FALSE
 #define DEFAULT_DRAINABLE  TRUE
@@ -262,6 +264,7 @@ struct _GstAudioDecoderPrivate
 
   /* properties */
   GstClockTime latency;
+  GstClockTime reported_min_latency;
   GstClockTime tolerance;
   gboolean plc;
   gboolean drainable;
@@ -404,6 +407,13 @@ gst_audio_decoder_class_init (GstAudioDecoderClass * klass)
           0, G_MAXINT64, DEFAULT_LATENCY,
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 
+  g_object_class_install_property (gobject_class, PROP_REPORTED_MIN_LATENCY,
+      g_param_spec_int64 ("reported-min-latency",
+          "The Reported Minimum Latency",
+          "The minimum latency reported to the latency query", 0, G_MAXINT64,
+          DEFAULT_REPORTED_MIN_LATENCY,
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+
   g_object_class_install_property (gobject_class, PROP_TOLERANCE,
       g_param_spec_int64 ("tolerance", "Tolerance",
           "Perfect ts while timestamp jitter/imperfection within tolerance (ns)",
@@ -494,6 +504,7 @@ gst_audio_decoder_init (GstAudioDecoder * dec, GstAudioDecoderClass * klass)
 
   /* property default */
   dec->priv->latency = DEFAULT_LATENCY;
+  dec->priv->reported_min_latency = DEFAULT_REPORTED_MIN_LATENCY;
   dec->priv->tolerance = DEFAULT_TOLERANCE;
   dec->priv->plc = DEFAULT_PLC;
   dec->priv->drainable = DEFAULT_DRAINABLE;
@@ -1063,6 +1074,11 @@ gst_audio_decoder_output (GstAudioDecoder * dec, GstBuffer * buf)
         ", duration %" GST_TIME_FORMAT, gst_buffer_get_size (buf),
         GST_TIME_ARGS (GST_BUFFER_PTS (buf)),
         GST_TIME_ARGS (GST_BUFFER_DURATION (buf)));
+  }
+
+  if (priv->ctx.min_latency != priv->reported_min_latency) {
+    gst_audio_decoder_set_latency (dec,
+        priv->reported_min_latency, priv->reported_min_latency);
   }
 
 again:
@@ -3134,6 +3150,9 @@ gst_audio_decoder_get_property (GObject * object, guint prop_id,
     case PROP_LATENCY:
       g_value_set_int64 (value, dec->priv->latency);
       break;
+    case PROP_REPORTED_MIN_LATENCY:
+      g_value_set_int64 (value, dec->priv->ctx.min_latency);
+      break;
     case PROP_TOLERANCE:
       g_value_set_int64 (value, dec->priv->tolerance);
       break;
@@ -3160,6 +3179,9 @@ gst_audio_decoder_set_property (GObject * object, guint prop_id,
   switch (prop_id) {
     case PROP_LATENCY:
       dec->priv->latency = g_value_get_int64 (value);
+      break;
+    case PROP_REPORTED_MIN_LATENCY:
+      dec->priv->reported_min_latency = g_value_get_int64 (value);
       break;
     case PROP_TOLERANCE:
       dec->priv->tolerance = g_value_get_int64 (value);
@@ -3413,6 +3435,8 @@ gst_audio_decoder_set_latency (GstAudioDecoder * dec,
   /* post latency message on the bus */
   gst_element_post_message (GST_ELEMENT (dec),
       gst_message_new_latency (GST_OBJECT (dec)));
+
+  gst_audio_decoder_push_event (dec, gst_event_new_latency_changed ());
 }
 
 /**
