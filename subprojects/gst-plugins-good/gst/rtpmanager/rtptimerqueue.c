@@ -682,6 +682,25 @@ rtp_timer_queue_set_deadline (RtpTimerQueue * queue, guint16 seqnum,
 }
 
 /**
+ * rtp_timer_queue_set_dtx:
+ * @queue: the #RtpTimerQueue
+ * @senum: the timer seqnum
+ * @timeout: the timer timeout
+ * @duration: the duration of the event related to the timer
+ * @offset: offset that can be used to convert the timeout to timestamp
+ *
+ * Specialized version of rtp_timer_queue_set_timer() that creates or updates a
+ * timer with type %RTP_TIMER_DTX.
+ */
+void
+rtp_timer_queue_set_dtx (RtpTimerQueue * queue, guint16 seqnum,
+    GstClockTime timeout, GstClockTime duration, GstClockTimeDiff offset)
+{
+  rtp_timer_queue_set_timer (queue, RTP_TIMER_DTX, seqnum, timeout, 0,
+      duration, offset);
+}
+
+/**
  * rtp_timer_queue_update_timer:
  * @queue: the #RtpTimerQueue
  * @senum: the timer seqnum
