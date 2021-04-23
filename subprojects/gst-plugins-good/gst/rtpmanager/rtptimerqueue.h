@@ -45,13 +45,16 @@ G_DECLARE_FINAL_TYPE (RtpTimerQueue, rtp_timer_queue, RTP_TIMER, QUEUE, GObject)
  * @RTP_TIMER_DEADLINE: This is used to track when the jitterbuffer should
  *                      start pushing buffers.
  * @RTP_TIMER_EOS:      This is used to track when end of stream is reached.
+ * @RTP_TIMER_DTX:      This is used to track when to push out a GAP event
+                        for decoders to do concealment.
  */
 typedef enum
 {
   RTP_TIMER_EXPECTED,
   RTP_TIMER_LOST,
   RTP_TIMER_DEADLINE,
-  RTP_TIMER_EOS
+  RTP_TIMER_EOS,
+  RTP_TIMER_DTX,
 } RtpTimerType;
 
 typedef struct
@@ -117,6 +120,9 @@ void            rtp_timer_queue_set_eos (RtpTimerQueue * queue, GstClockTime tim
                                          GstClockTimeDiff offset);
 void            rtp_timer_queue_set_deadline (RtpTimerQueue * queue, guint16 seqnum,
                                               GstClockTime timeout, GstClockTimeDiff offset);
+void            rtp_timer_queue_set_dtx (RtpTimerQueue * queue, guint16 seqnum,
+                                         GstClockTime timeout, GstClockTime duration,
+                                         GstClockTimeDiff offset);
 void            rtp_timer_queue_update_timer (RtpTimerQueue * queue, RtpTimer * timer, guint16 seqnum,
                                               GstClockTime timeout, GstClockTime delay,
                                               GstClockTimeDiff offset, gboolean reset);
