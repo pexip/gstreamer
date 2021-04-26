@@ -423,7 +423,9 @@ class GdbGValue:
             value = self.value()
             tname = self.fundamental_typename()
             gvalue_type = gdb.lookup_type("GValue")
-            if tname == "GstFraction":
+            if tname is None:
+                v = "<None>"
+            elif tname == "GstFraction":
                 v = "%d/%d" % (value[0], value[1])
             elif tname == "GstBitmask":
                 v = "0x%016x" % long(value)
@@ -450,7 +452,7 @@ class GdbGValue:
                     v += " " if v == "<" else ", "
                     v += str(GdbGValue(l))
                 v += " >"
-            elif tname in ("GEnum"):
+            elif tname == "GEnum":
                 v = "%s(%s)" % (
                     g_type_to_name(g_type_to_typenode(self.val["g_type"])),
                     value["v_int"])
@@ -527,7 +529,7 @@ class GdbGstStructure:
         else:
             _gdb_write(indent, "%s:" % (self.name()))
         for (key, value) in self.values():
-            _gdb_write(indent+1, "%s: %s" % (key, str(value)))
+            _gdb_write(indent+1, "%s: %s (type %s)" % (key, str(value), value.fundamental_typename()))
 
 
 class GdbGstSegment:
