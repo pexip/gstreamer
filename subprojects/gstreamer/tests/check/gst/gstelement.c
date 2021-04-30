@@ -907,6 +907,62 @@ GST_START_TEST (test_foreach_pad)
 
 GST_END_TEST;
 
+typedef struct
+{
+  GstPad *srcpads[1000];
+} ReleaseDisposeCtx;
+
+static void
+_release_request_pad (GstPad * pad)
+{
+  GstElement *parent;
+  if (pad == NULL)
+    return;
+  parent = GST_ELEMENT (gst_pad_get_parent (pad));
+  if (parent) {
+    gst_element_release_request_pad (parent, pad);
+    gst_object_unref (parent);
+  }
+  gst_object_unref (pad);
+}
+
+static gpointer
+_release_pad_func (gpointer user_data)
+{
+  ReleaseDisposeCtx *ctx = user_data;
+  for (guint i = 0; i < G_N_ELEMENTS (ctx->srcpads); i++)
+    _release_request_pad (ctx->srcpads[i]);
+  return NULL;
+}
+
+GST_START_TEST (test_release_pads_during_dispose)
+{
+  GstElement *pipeline = gst_pipeline_new (NULL);
+  GstTestElement3 *te3 = g_object_new (gst_test_element3_get_type (), NULL);
+  GstElement *element = GST_ELEMENT_CAST (te3);
+  ReleaseDisposeCtx ctx;
+  GThread *query_thread;
+
+  gst_bin_add (GST_BIN (pipeline), element);
+
+  /* request lots of pads */
+  for (guint i = 0; i < G_N_ELEMENTS (ctx.srcpads); i++) {
+    ctx.srcpads[i] = gst_element_get_request_pad (element, "src_%d");
+  }
+
+  /* start a thread to start releasing those pads */
+  query_thread = g_thread_new (NULL, _release_pad_func, &ctx);
+
+  /* while at the same time, shutting down the pipeline */
+  gst_element_set_state (pipeline, GST_STATE_NULL);
+  gst_object_unref (pipeline);
+
+  g_thread_join (query_thread);
+}
+
+GST_END_TEST;
+
+
 static Suite *
 gst_element_suite (void)
 {
@@ -923,6 +979,7 @@ gst_element_suite (void)
   tcase_add_test (tc_chain, test_property_notify_message);
   tcase_add_test (tc_chain, test_request_pad_templates);
   tcase_add_test (tc_chain, test_foreach_pad);
+  tcase_add_test (tc_chain, test_release_pads_during_dispose);
 
   return s;
 }
