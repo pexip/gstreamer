@@ -27,6 +27,16 @@
 #include <gst/rtp/gstrtpbuffer.h>
 #include <gst/rtp/gstrtcpbuffer.h>
 
+#ifdef HAVE_CONFIG_H
+#include "config.h"
+#endif
+
+#ifdef HAVE_VALGRIND
+# include <valgrind/valgrind.h>
+#else
+# define RUNNING_ON_VALGRIND 0
+#endif
+
 GST_START_TEST (test_pads)
 {
   GstElement *element;
@@ -133,8 +143,7 @@ init_data (CleanupData * data)
 static void
 clean_data (CleanupData * data)
 {
-  g_list_foreach (data->pads, (GFunc) gst_object_unref, NULL);
-  g_list_free (data->pads);
+  g_list_free_full (data->pads, gst_object_unref);
   g_mutex_clear (&data->lock);
   g_cond_clear (&data->cond);
   if (data->caps)
@@ -185,7 +194,8 @@ chain_rtp_packet (GstPad * pad, CleanupData * data)
 }
 
 static GstFlowReturn
-dummy_chain (GstPad * pad, GstObject * parent, GstBuffer * buffer)
+dummy_chain (G_GNUC_UNUSED GstPad * pad, G_GNUC_UNUSED GstObject * parent,
+    GstBuffer * buffer)
 {
   gst_buffer_unref (buffer);
 
@@ -214,7 +224,8 @@ make_sinkpad (CleanupData * data)
 }
 
 static void
-pad_added_cb (GstElement * rtpbin, GstPad * pad, CleanupData * data)
+pad_added_cb (G_GNUC_UNUSED GstElement * rtpbin, GstPad * pad,
+    CleanupData * data)
 {
   GstPad *sinkpad;
 
@@ -236,7 +247,8 @@ pad_added_cb (GstElement * rtpbin, GstPad * pad, CleanupData * data)
 }
 
 static void
-pad_removed_cb (GstElement * rtpbin, GstPad * pad, CleanupData * data)
+pad_removed_cb (G_GNUC_UNUSED GstElement * rtpbin, GstPad * pad,
+    CleanupData * data)
 {
   GST_DEBUG ("pad removed %s:%s\n", GST_DEBUG_PAD_NAME (pad));
 
@@ -259,10 +271,14 @@ GST_START_TEST (test_cleanup_recv)
   GstStateChangeReturn ret;
   GstFlowReturn res;
   gint count = 2;
+  GstClock *clock;
 
   init_data (&data);
 
+  clock = gst_system_clock_obtain ();
   rtpbin = gst_element_factory_make ("rtpbin", "rtpbin");
+  gst_element_set_clock (rtpbin, clock);
+  gst_object_unref (clock);
 
   g_signal_connect (rtpbin, "pad-added", (GCallback) pad_added_cb, &data);
   g_signal_connect (rtpbin, "pad-removed", (GCallback) pad_removed_cb, &data);
@@ -331,10 +347,14 @@ GST_START_TEST (test_cleanup_recv2)
   GstStateChangeReturn ret;
   GstFlowReturn res;
   gint count = 2;
+  GstClock *clock;
 
   init_data (&data);
 
+  clock = gst_system_clock_obtain ();
   rtpbin = gst_element_factory_make ("rtpbin", "rtpbin");
+  gst_element_set_clock (rtpbin, clock);
+  gst_object_unref (clock);
 
   g_signal_connect (rtpbin, "pad-added", (GCallback) pad_added_cb, &data);
   g_signal_connect (rtpbin, "pad-removed", (GCallback) pad_removed_cb, &data);
@@ -441,7 +461,7 @@ GST_START_TEST (test_request_pad_by_template_name)
 GST_END_TEST;
 
 static GstElement *
-encoder_cb (GstElement * rtpbin, guint sessid, GstElement * bin)
+encoder_cb (G_GNUC_UNUSED GstElement * rtpbin, guint sessid, GstElement * bin)
 {
   GstPad *srcpad, *sinkpad;
 
@@ -458,7 +478,7 @@ encoder_cb (GstElement * rtpbin, guint sessid, GstElement * bin)
 }
 
 static GstElement *
-encoder_cb2 (GstElement * rtpbin, guint sessid, GstElement * bin)
+encoder_cb2 (G_GNUC_UNUSED GstElement * rtpbin, guint sessid, GstElement * bin)
 {
   GstPad *srcpad, *sinkpad;
 
@@ -518,7 +538,8 @@ GST_START_TEST (test_encoder)
 GST_END_TEST;
 
 static GstElement *
-decoder_cb (GstElement * rtpbin, guint sessid, gpointer user_data)
+decoder_cb (G_GNUC_UNUSED GstElement * rtpbin, G_GNUC_UNUSED guint sessid,
+    G_GNUC_UNUSED gpointer user_data)
 {
   GstElement *bin;
   GstPad *srcpad, *sinkpad;
@@ -574,7 +595,8 @@ GST_START_TEST (test_decoder)
 GST_END_TEST;
 
 static GstElement *
-aux_sender_cb (GstElement * rtpbin, guint sessid, gpointer user_data)
+aux_sender_cb (G_GNUC_UNUSED GstElement * rtpbin, G_GNUC_UNUSED guint sessid,
+    gpointer user_data)
 {
   GstElement *bin;
   GstPad *srcpad, *sinkpad;
@@ -652,7 +674,8 @@ GST_START_TEST (test_aux_sender)
 GST_END_TEST;
 
 static GstElement *
-aux_receiver_cb (GstElement * rtpbin, guint sessid, gpointer user_data)
+aux_receiver_cb (G_GNUC_UNUSED GstElement * rtpbin, G_GNUC_UNUSED guint sessid,
+    G_GNUC_UNUSED gpointer user_data)
 {
   GstElement *bin;
   GstPad *srcpad, *sinkpad;
@@ -941,8 +964,11 @@ _pad_added (G_GNUC_UNUSED GstElement * rtpbin, GstPad * pad, GstHarness * h)
 GST_START_TEST (test_quick_shutdown)
 {
   guint r;
+  guint repeats = 1000;
+  if (RUNNING_ON_VALGRIND)
+    repeats = 2;
 
-  for (r = 0; r < 1000; r++) {
+  for (r = 0; r < repeats; r++) {
     guint i;
     GstHarness *h = gst_harness_new_with_padnames ("rtpbin",
         "recv_rtp_sink_0", NULL);
@@ -969,6 +995,81 @@ GST_START_TEST (test_quick_shutdown)
 
 GST_END_TEST;
 
+static GstBuffer *
+generate_rtcp_sr_buffer (guint ssrc)
+{
+  GstBuffer *buf;
+  GstRTCPBuffer rtcp = GST_RTCP_BUFFER_INIT;
+  GstRTCPPacket packet;
+
+  buf = gst_rtcp_buffer_new (1000);
+  fail_unless (gst_rtcp_buffer_map (buf, GST_MAP_READWRITE, &rtcp));
+  fail_unless (gst_rtcp_buffer_add_packet (&rtcp, GST_RTCP_TYPE_SR, &packet));
+  gst_rtcp_packet_sr_set_sender_info (&packet, ssrc, 0, 0, 1, 1);
+  gst_rtcp_buffer_unmap (&rtcp);
+  return buf;
+}
+
+typedef struct
+{
+  GstHarness *h_rtp;
+  GstHarness *h_rtcp;
+} PushRTCPSRCtx;
+
+static gpointer
+_push_sr_buffers (gpointer user_data)
+{
+  PushRTCPSRCtx *ctx = user_data;
+
+  gst_harness_set_src_caps (ctx->h_rtcp,
+      gst_caps_new_empty_simple ("application/x-rtcp"));
+  gst_harness_push (ctx->h_rtcp, generate_rtcp_sr_buffer (1111));
+  return NULL;
+}
+
+static gpointer
+_push_rtp_buffers (gpointer user_data)
+{
+  PushRTCPSRCtx *ctx = user_data;
+
+  g_usleep (10);
+
+  gst_harness_set_src_caps (ctx->h_rtp,
+      gst_caps_new_simple ("application/x-rtp",
+          "clock-rate", G_TYPE_INT, 8000, "payload", G_TYPE_INT, 100, NULL));
+  gst_harness_push (ctx->h_rtp, generate_rtp_buffer (0, 0, 0, 100, 1111));
+  return NULL;
+}
+
+GST_START_TEST (test_recv_rtp_and_rtcp_simultaneously)
+{
+  guint r;
+  guint repeats = 1000;
+  if (RUNNING_ON_VALGRIND)
+    repeats = 2;
+
+  for (r = 0; r < repeats; r++) {
+    PushRTCPSRCtx ctx;
+    GThread *t0;
+    GThread *t1;
+
+    ctx.h_rtcp = gst_harness_new_with_padnames ("rtpbin",
+        "recv_rtcp_sink_0", NULL);
+    ctx.h_rtp = gst_harness_new_with_element (ctx.h_rtcp->element,
+        "recv_rtp_sink_0", NULL);
+
+    t0 = g_thread_new ("push sr", _push_sr_buffers, &ctx);
+    t1 = g_thread_new ("push rtp", _push_rtp_buffers, &ctx);
+
+    g_thread_join (t0);
+    g_thread_join (t1);
+    gst_harness_teardown (ctx.h_rtp);
+    gst_harness_teardown (ctx.h_rtcp);
+  }
+}
+
+GST_END_TEST;
+
 static Suite *
 rtpbin_suite (void)
 {
@@ -987,6 +1088,7 @@ rtpbin_suite (void)
   tcase_add_test (tc_chain, test_aux_receiver);
   tcase_add_test (tc_chain, test_sender_eos);
   tcase_add_test (tc_chain, test_quick_shutdown);
+  tcase_add_test (tc_chain, test_recv_rtp_and_rtcp_simultaneously);
 
   return s;
 }
