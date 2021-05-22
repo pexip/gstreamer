@@ -453,6 +453,171 @@ GST_START_TEST (test_rtp_and_rtcp_arrives_simultaneously)
 
 GST_END_TEST;
 
+
+static gboolean running;
+
+static gpointer
+_stress_push_rtp_buffers (gpointer user_data)
+{
+  GstHarness *h = user_data;
+  static guint ssrc = 0;
+
+  gst_harness_set_src_caps_str (h, "application/x-rtp");
+  while (running) {
+    fail_unless_equals_uint64 (GST_FLOW_OK,
+        gst_harness_push (h, create_buffer (0, ssrc)));
+    g_usleep (G_USEC_PER_SEC / 100);
+    ssrc++;
+    if (ssrc > 10)
+      ssrc = 0;
+  }
+
+  return NULL;
+}
+
+static gpointer
+_stress_push_rtcp_buffers (gpointer user_data)
+{
+  GstHarness *h = user_data;
+  static guint ssrc = 0;
+
+  gst_harness_set_src_caps_str (h, "application/x-rtcp");
+  while (running) {
+    fail_unless_equals_uint64 (GST_FLOW_OK,
+        gst_harness_push (h, generate_rtcp_sr_buffer (ssrc)));
+    g_usleep (G_USEC_PER_SEC / 90);
+    ssrc++;
+    if (ssrc > 10)
+      ssrc = 0;
+  }
+
+  return NULL;
+}
+
+static gpointer
+_stress_clear_ssrc (gpointer user_data)
+{
+  GstHarness *h = user_data;
+  static guint ssrc = 0;
+
+  while (running) {
+    g_signal_emit_by_name (h->element, "clear-ssrc", ssrc, NULL);
+    g_usleep (G_USEC_PER_SEC / 60);
+    ssrc++;
+    if (ssrc > 10)
+      ssrc = 0;
+  }
+
+  return NULL;
+}
+
+G_LOCK_DEFINE_STATIC (stress_lock);
+
+typedef struct
+{
+  GstElement *rtp;
+  GstElement *rtcp;
+} Fakesinks;
+
+static void
+stress_new_ssrc_pad_found (G_GNUC_UNUSED GstElement * element, guint ssrc,
+    GstPad * pad, GHashTable * ssrc_to_element_map)
+{
+  Fakesinks *fs = g_new0 (Fakesinks, 1);
+  GstPad *sinkpad;
+  GstPad *srcpad;
+  gchar *padname;
+
+  fs->rtp = gst_element_factory_make ("fakesink", NULL);
+  fs->rtcp = gst_element_factory_make ("fakesink", NULL);
+
+  g_object_set (fs->rtp, "async", FALSE, "sync", FALSE, NULL);
+  g_object_set (fs->rtcp, "async", FALSE, "sync", FALSE, NULL);
+
+  /* link rtp pad */
+  sinkpad = gst_element_get_static_pad (fs->rtp, "sink");
+  fail_unless_equals_uint64 (GST_PAD_LINK_OK, gst_pad_link (pad, sinkpad));
+  gst_object_unref (sinkpad);
+  gst_element_set_state (fs->rtp, GST_STATE_PLAYING);
+
+  /* link rtcp pad */
+  sinkpad = gst_element_get_static_pad (fs->rtcp, "sink");
+  padname = g_strdup_printf ("rtcp_src_%u", ssrc);
+  srcpad = gst_element_get_static_pad (element, padname);
+  g_free (padname);
+  fail_unless_equals_uint64 (GST_PAD_LINK_OK, gst_pad_link (srcpad, sinkpad));
+  gst_object_unref (sinkpad);
+  gst_object_unref (srcpad);
+  gst_element_set_state (fs->rtcp, GST_STATE_PLAYING);
+
+  G_LOCK (stress_lock);
+  g_hash_table_insert (ssrc_to_element_map, GUINT_TO_POINTER (ssrc), fs);
+  G_UNLOCK (stress_lock);
+}
+
+static void
+stress_ssrc_demux_pad_removed (G_GNUC_UNUSED GstElement * element, guint ssrc,
+    G_GNUC_UNUSED GstPad * pad, GHashTable * ssrc_to_element_map)
+{
+  G_LOCK (stress_lock);
+  g_hash_table_remove (ssrc_to_element_map, GUINT_TO_POINTER (ssrc));
+  G_UNLOCK (stress_lock);
+}
+
+static void
+_stop_and_unref_fakesinks (Fakesinks * fs)
+{
+  fail_unless (fs);
+  gst_element_set_state (fs->rtp, GST_STATE_NULL);
+  gst_element_set_state (fs->rtcp, GST_STATE_NULL);
+  gst_object_unref (fs->rtp);
+  gst_object_unref (fs->rtcp);
+  g_free (fs);
+}
+
+GST_START_TEST (test_stress_rtp_clear_ssrc)
+{
+  GstHarness *h = gst_harness_new_with_padnames ("rtpssrcdemux", "sink", NULL);
+  GstHarness *h_rtcp =
+      gst_harness_new_with_element (h->element, "rtcp_sink", NULL);
+  GThread *t0;
+  GThread *t1;
+  GThread *t2;
+
+  GHashTable *ssrc_to_element_map = g_hash_table_new_full (NULL, NULL, NULL,
+      (GDestroyNotify) _stop_and_unref_fakesinks);
+
+  gulong new_ssrc_pad_id;
+  gulong removed_ssrc_pad_id;
+
+  new_ssrc_pad_id =
+      g_signal_connect (h->element, "new-ssrc-pad",
+      (GCallback) stress_new_ssrc_pad_found, ssrc_to_element_map);
+  removed_ssrc_pad_id =
+      g_signal_connect (h->element, "removed-ssrc-pad",
+      (GCallback) stress_ssrc_demux_pad_removed, ssrc_to_element_map);
+
+  running = TRUE;
+  t0 = g_thread_new ("push-rtp", _stress_push_rtp_buffers, h);
+  t1 = g_thread_new ("push-rtcp", _stress_push_rtcp_buffers, h_rtcp);
+  t2 = g_thread_new ("clear-ssrc", _stress_clear_ssrc, h);
+  g_usleep (3 * G_USEC_PER_SEC);
+  running = FALSE;
+
+  g_thread_join (t0);
+  g_thread_join (t1);
+  g_thread_join (t2);
+
+  g_signal_handler_disconnect (h->element, new_ssrc_pad_id);
+  g_signal_handler_disconnect (h->element, removed_ssrc_pad_id);
+
+  g_hash_table_destroy (ssrc_to_element_map);
+  gst_harness_teardown (h_rtcp);
+  gst_harness_teardown (h);
+}
+
+GST_END_TEST;
+
 static Suite *
 rtpssrcdemux_suite (void)
 {
@@ -467,6 +632,7 @@ rtpssrcdemux_suite (void)
   tcase_add_test (tc_chain, test_rtpssrcdemux_invalid_rtp);
   tcase_add_test (tc_chain, test_rtpssrcdemux_invalid_rtcp);
   tcase_add_test (tc_chain, test_rtp_and_rtcp_arrives_simultaneously);
+  tcase_add_test (tc_chain, test_stress_rtp_clear_ssrc);
 
   return s;
 }
