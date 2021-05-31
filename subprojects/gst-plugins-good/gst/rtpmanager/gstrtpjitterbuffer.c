@@ -277,6 +277,9 @@ enum
 #define GST_BUFFER_IS_RETRANSMISSION(buffer) \
   GST_BUFFER_FLAG_IS_SET (buffer, GST_RTP_BUFFER_FLAG_RETRANSMISSION)
 
+#define GST_BUFFER_IS_ULPFEC(buffer) \
+  GST_BUFFER_FLAG_IS_SET (buffer, GST_RTP_BUFFER_FLAG_ULPFEC)
+
 #if !GLIB_CHECK_VERSION(2, 60, 0)
 #define g_queue_clear_full queue_clear_full
 static void
@@ -3119,6 +3122,7 @@ gst_rtp_jitter_buffer_chain (GstPad * pad, GstObject * parent,
   gint32 packet_rate, max_dropout, max_misorder;
   RtpTimer *timer = NULL;
   gboolean is_rtx;
+  gboolean is_ulpfec;
 
   jitterbuffer = GST_RTP_JITTER_BUFFER_CAST (parent);
 
@@ -3133,6 +3137,7 @@ gst_rtp_jitter_buffer_chain (GstPad * pad, GstObject * parent,
   gst_rtp_buffer_unmap (&rtp);
 
   is_rtx = GST_BUFFER_IS_RETRANSMISSION (buffer);
+  is_ulpfec = GST_BUFFER_IS_ULPFEC (buffer);
   now = get_current_running_time (jitterbuffer);
 
   /* make sure we have PTS and DTS set */
@@ -3165,8 +3170,9 @@ gst_rtp_jitter_buffer_chain (GstPad * pad, GstObject * parent,
   }
 
   GST_DEBUG_OBJECT (jitterbuffer,
-      "Received packet #%d at time %" GST_TIME_FORMAT ", discont %d, rtx %d",
-      seqnum, GST_TIME_ARGS (dts), GST_BUFFER_IS_DISCONT (buffer), is_rtx);
+      "Received packet #%d at time %" GST_TIME_FORMAT
+      ", discont %d, rtx %d ulpfec %d", seqnum, GST_TIME_ARGS (dts),
+      GST_BUFFER_IS_DISCONT (buffer), is_rtx, is_ulpfec);
 
   JBUF_LOCK_CHECK (priv, out_flushing);
 
@@ -3208,7 +3214,7 @@ gst_rtp_jitter_buffer_chain (GstPad * pad, GstObject * parent,
   if (G_UNLIKELY (priv->eos))
     goto have_eos;
 
-  if (!is_rtx)
+  if (!is_rtx && !is_ulpfec)
     calculate_jitter (jitterbuffer, dts, rtptime);
 
   if (priv->seqnum_base != -1) {
@@ -3233,7 +3239,7 @@ gst_rtp_jitter_buffer_chain (GstPad * pad, GstObject * parent,
   expected = priv->next_in_seqnum;
 
   /* don't update packet-rate based on RTX, as those arrive highly unregularly */
-  if (!is_rtx) {
+  if (!is_rtx && !is_ulpfec) {
     packet_rate = gst_rtp_packet_rate_ctx_update (&priv->packet_rate_ctx,
         seqnum, rtptime);
     GST_TRACE_OBJECT (jitterbuffer, "updated packet_rate: %d", packet_rate);
@@ -3295,7 +3301,7 @@ gst_rtp_jitter_buffer_chain (GstPad * pad, GstObject * parent,
         expected, seqnum, gap);
 
     /* Special handling of large gaps */
-    if (!is_rtx && ((gap != -1 && gap < -max_misorder) || (gap >= max_dropout))) {
+    if (!is_rtx && !is_ulpfec && ((gap != -1 && gap < -max_misorder) || (gap >= max_dropout))) {
       gboolean reset = handle_big_gap_buffer (jitterbuffer, buffer, pt, seqnum,
           gap, max_dropout, max_misorder);
       if (reset) {
@@ -3317,7 +3323,7 @@ gst_rtp_jitter_buffer_chain (GstPad * pad, GstObject * parent,
     pts =
         rtp_jitter_buffer_calculate_pts (priv->jbuf, dts, estimated_dts,
         rtptime, gst_element_get_base_time (GST_ELEMENT_CAST (jitterbuffer)),
-        gap, is_rtx, &ntp_time);
+        gap, is_rtx || is_ulpfec, &ntp_time);
 
     if (G_UNLIKELY (!GST_CLOCK_TIME_IS_VALID (pts))) {
       /* A valid timestamp cannot be calculated, discard packet */
@@ -3562,8 +3568,8 @@ unsolicited_rtx:
 discard_invalid:
   {
     GST_DEBUG_OBJECT (jitterbuffer,
-        "cannot calculate a valid pts for #%d (rtx: %d), discard",
-        seqnum, is_rtx);
+        "cannot calculate a valid pts for #%d (rtx: %d ulpfec: %d), discard",
+        seqnum, is_rtx, is_ulpfec);
     gst_buffer_unref (buffer);
     goto finished;
   }
