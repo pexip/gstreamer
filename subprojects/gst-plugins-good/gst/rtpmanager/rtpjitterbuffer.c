@@ -533,7 +533,7 @@ update_buffer_level (RTPJitterBuffer * jbuf, gint * percent)
  */
 static GstClockTime
 calculate_skew (RTPJitterBuffer * jbuf, guint64 ext_rtptime,
-    GstClockTime gstrtptime, GstClockTime time, gint gap, gboolean is_rtx)
+    GstClockTime gstrtptime, GstClockTime time, gint gap, gboolean is_redundant)
 {
   guint64 send_diff, recv_diff;
   gint64 delta;
@@ -547,7 +547,7 @@ calculate_skew (RTPJitterBuffer * jbuf, guint64 ext_rtptime,
 
   /* we don't have an arrival timestamp so we can't do skew detection. we
    * should still apply a timestamp based on RTP timestamp and base_time */
-  if (time == -1 || jbuf->base_time == -1 || is_rtx)
+  if (time == -1 || jbuf->base_time == -1 || is_redundant)
     goto no_skew;
 
   /* elapsed time at receiver, includes the jitter */
@@ -703,7 +703,7 @@ queue_do_insert (RTPJitterBuffer * jbuf, GList * list, GList * item)
 GstClockTime
 rtp_jitter_buffer_calculate_pts (RTPJitterBuffer * jbuf, GstClockTime dts,
     gboolean estimated_dts, guint32 rtptime, GstClockTime base_time,
-    gint gap, gboolean is_rtx)
+    gint gap, gboolean is_redundant)
 {
   guint64 ext_rtptime;
   GstClockTime gstrtptime, pts;
@@ -724,13 +724,13 @@ rtp_jitter_buffer_calculate_pts (RTPJitterBuffer * jbuf, GstClockTime dts,
     ext_rtptime = gst_rtp_buffer_ext_timestamp (&ext_rtptime, rtptime);
     if (ext_rtptime > jbuf->last_rtptime + 3 * jbuf->clock_rate ||
         ext_rtptime + 3 * jbuf->clock_rate < jbuf->last_rtptime) {
-      if (!is_rtx) {
+      if (!is_redundant) {
         /* reset even if we don't have valid incoming time;
          * still better than producing possibly very bogus output timestamp */
         GST_WARNING ("rtp delta too big, reset skew");
         rtp_jitter_buffer_reset_skew (jbuf);
       } else {
-        GST_WARNING ("rtp delta too big: ignore rtx packet");
+        GST_WARNING ("rtp delta too big: ignore redundant packet");
         media_clock = NULL;
         pipeline_clock = NULL;
         pts = GST_CLOCK_TIME_NONE;
@@ -761,14 +761,14 @@ rtp_jitter_buffer_calculate_pts (RTPJitterBuffer * jbuf, GstClockTime dts,
   if (G_LIKELY (jbuf->base_rtptime != -1)) {
     /* check elapsed time in RTP units */
     if (gstrtptime < jbuf->base_rtptime) {
-      if (!is_rtx) {
+      if (!is_redundant) {
         /* elapsed time at sender, timestamps can go backwards and thus be
          * smaller than our base time, schedule to take a new base time in
          * that case. */
         GST_WARNING ("backward timestamps at server, schedule resync");
         jbuf->need_resync = TRUE;
       } else {
-        GST_WARNING ("backward timestamps: ignore rtx packet");
+        GST_WARNING ("backward timestamps: ignore redundant packet");
         pts = GST_CLOCK_TIME_NONE;
         goto done;
       }
@@ -801,8 +801,8 @@ rtp_jitter_buffer_calculate_pts (RTPJitterBuffer * jbuf, GstClockTime dts,
   /* need resync, lock on to time and gstrtptime if we can, otherwise we
    * do with the previous values */
   if (G_UNLIKELY (jbuf->need_resync && dts != -1)) {
-    if (is_rtx) {
-      GST_DEBUG ("not resyncing on rtx packet, discard");
+    if (is_redundant) {
+      GST_DEBUG ("not resyncing on redundant packet, discard");
       pts = GST_CLOCK_TIME_NONE;
       goto done;
     }
@@ -934,7 +934,8 @@ rtp_jitter_buffer_calculate_pts (RTPJitterBuffer * jbuf, GstClockTime dts,
 
     /* do skew calculation by measuring the difference between rtptime and the
      * receive dts, this function will return the skew corrected rtptime. */
-    pts = calculate_skew (jbuf, ext_rtptime, gstrtptime, dts, gap, is_rtx);
+    pts =
+        calculate_skew (jbuf, ext_rtptime, gstrtptime, dts, gap, is_redundant);
   }
 
   /* check if timestamps are not going backwards, we can only check this if we
@@ -957,12 +958,18 @@ rtp_jitter_buffer_calculate_pts (RTPJitterBuffer * jbuf, GstClockTime dts,
   }
 
   if (gap == 0 && dts != -1 && pts + jbuf->delay < dts) {
+    if (is_redundant) {
+      GST_DEBUG ("avoiding reset on redundant packet, discard");
+      pts = GST_CLOCK_TIME_NONE;
+      goto done;
+    }
+
     /* if we are going to produce a timestamp that is later than the input
      * timestamp, we need to reset the jitterbuffer. Likely the server paused
      * temporarily */
     GST_DEBUG ("out %" GST_TIME_FORMAT " + %" G_GUINT64_FORMAT " < time %"
-        GST_TIME_FORMAT ", reset jitterbuffer and discard", GST_TIME_ARGS (pts),
-        jbuf->delay, GST_TIME_ARGS (dts));
+        GST_TIME_FORMAT ", reset jitterbuffer and discard",
+        GST_TIME_ARGS (pts), jbuf->delay, GST_TIME_ARGS (dts));
     rtp_jitter_buffer_reset_skew (jbuf);
     rtp_jitter_buffer_resync (jbuf, dts, gstrtptime, ext_rtptime, TRUE);
     pts = dts;
