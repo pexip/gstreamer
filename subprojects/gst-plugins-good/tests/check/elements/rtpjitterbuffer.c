@@ -684,9 +684,9 @@ verify_jb_stats (GstElement * jb, GstStructure * expected)
 
 static guint
 construct_deterministic_initial_state_full (GstHarness * h,
-    gint latency_ms, GstCaps * caps)
+    guint start_seqnum, gint latency_ms, GstCaps * caps)
 {
-  guint next_seqnum = latency_ms / TEST_BUF_MS + 1;
+  guint next_seqnum = start_seqnum + (latency_ms / TEST_BUF_MS + 1);
   guint seqnum;
   gint i;
 
@@ -715,7 +715,7 @@ construct_deterministic_initial_state_full (GstHarness * h,
    */
 
   /* Packet 0 arrives at time 0ms, Packet 5 arrives at time 100ms */
-  for (seqnum = 0; seqnum < next_seqnum; seqnum++) {
+  for (seqnum = start_seqnum; seqnum < next_seqnum; seqnum++) {
     push_test_buffer (h, seqnum);
     gst_harness_wait_for_clock_id_waits (h, 1, 60);
   }
@@ -726,8 +726,9 @@ construct_deterministic_initial_state_full (GstHarness * h,
    */
   gst_harness_crank_single_clock_wait (h);
   fail_unless_equals_int64 (latency_ms * GST_MSECOND,
-      gst_clock_get_time (GST_ELEMENT_CLOCK (h->element)));
-  for (seqnum = 0; seqnum < next_seqnum; seqnum++) {
+      gst_clock_get_time (GST_ELEMENT_CLOCK (h->element)) -
+      (start_seqnum * TEST_BUF_MS * GST_MSECOND));
+  for (seqnum = start_seqnum; seqnum < next_seqnum; seqnum++) {
     GstBuffer *buf = gst_harness_pull (h);
     fail_unless_equals_uint64 (seqnum * TEST_BUF_DURATION,
         GST_BUFFER_PTS (buf));
@@ -756,7 +757,7 @@ construct_deterministic_initial_state_full (GstHarness * h,
 static guint
 construct_deterministic_initial_state (GstHarness * h, gint latency_ms)
 {
-  return construct_deterministic_initial_state_full (h, latency_ms,
+  return construct_deterministic_initial_state_full (h, 0, latency_ms,
       generate_caps ());
 }
 
@@ -3042,9 +3043,45 @@ typedef struct
 {
   gint64 dts_skew;
   gint16 seqnum_skew;
-} RtxSkewCtx;
+} JitterBufferSkewCtx;
 
-static const RtxSkewCtx rtx_does_not_affect_pts_calculation_input[] = {
+static void
+test_redundant_pkt_does_not_affect_pts_calculation (GstRTPBufferFlags flags,
+    const JitterBufferSkewCtx * ctx)
+{
+  GstHarness *h = gst_harness_new ("rtpjitterbuffer");
+  GstBuffer *buffer;
+  guint next_seqnum;
+  guint redundant_pkt_seqnum;
+  GstClockTime now;
+
+  /* set up a deterministic state and take the time on the clock */
+  if (flags & GST_RTP_BUFFER_FLAG_RETRANSMISSION)
+    g_object_set (h->element, "do-retransmission", TRUE, "do-lost", TRUE, NULL);
+
+  next_seqnum = construct_deterministic_initial_state (h, 3000);
+  now = gst_clock_get_time (GST_ELEMENT_CLOCK (h->element));
+
+  /* push in a "bad" redundant buffer, arriving at various times / seqnums */
+  redundant_pkt_seqnum = next_seqnum + ctx->seqnum_skew;
+  buffer = generate_test_buffer_full (now + ctx->dts_skew, redundant_pkt_seqnum,
+      redundant_pkt_seqnum * TEST_RTP_TS_DURATION);
+  GST_BUFFER_FLAG_SET (buffer, flags);
+  gst_harness_push (h, buffer);
+
+  /* now push in the next regular buffer at its ideal time, and verify the
+     rogue RTX or ULPFEC buffer did not mess things up */
+  push_test_buffer (h, next_seqnum);
+  now = gst_clock_get_time (GST_ELEMENT_CLOCK (h->element));
+  buffer = gst_harness_pull (h);
+  fail_unless_equals_int64 (now, GST_BUFFER_PTS (buffer));
+
+  gst_buffer_unref (buffer);
+
+  gst_harness_teardown (h);
+}
+
+static const JitterBufferSkewCtx rtx_does_not_affect_pts_calculation_input[] = {
   {0, 0},
   {20 * GST_MSECOND, -100},
   {20 * GST_MSECOND, 100},
@@ -3054,35 +3091,10 @@ static const RtxSkewCtx rtx_does_not_affect_pts_calculation_input[] = {
 
 GST_START_TEST (test_rtx_does_not_affect_pts_calculation)
 {
-  GstHarness *h = gst_harness_new ("rtpjitterbuffer");
-  GstBuffer *buffer;
-  guint next_seqnum;
-  guint rtx_seqnum;
-  GstClockTime now;
-  const RtxSkewCtx *ctx = &rtx_does_not_affect_pts_calculation_input[__i__];
-
-  /* set up a deterministic state and take the time on the clock */
-  g_object_set (h->element, "do-retransmission", TRUE, "do-lost", TRUE, NULL);
-  next_seqnum = construct_deterministic_initial_state (h, 3000);
-  now = gst_clock_get_time (GST_ELEMENT_CLOCK (h->element));
-
-  /* push in a "bad" RTX buffer, arriving at various times / seqnums */
-  rtx_seqnum = next_seqnum + ctx->seqnum_skew;
-  buffer = generate_test_buffer_full (now + ctx->dts_skew, rtx_seqnum,
-      rtx_seqnum * TEST_RTP_TS_DURATION);
-  GST_BUFFER_FLAG_SET (buffer, GST_RTP_BUFFER_FLAG_RETRANSMISSION);
-  gst_harness_push (h, buffer);
-
-  /* now push in the next regular buffer at its ideal time, and verify the
-     rogue RTX-buffer did not mess things up */
-  push_test_buffer (h, next_seqnum);
-  now = gst_clock_get_time (GST_ELEMENT_CLOCK (h->element));
-  buffer = gst_harness_pull (h);
-  fail_unless_equals_int64 (now, GST_BUFFER_PTS (buffer));
-
-  gst_buffer_unref (buffer);
-
-  gst_harness_teardown (h);
+  const JitterBufferSkewCtx *ctx =
+      &rtx_does_not_affect_pts_calculation_input[__i__];
+  test_redundant_pkt_does_not_affect_pts_calculation
+      (GST_RTP_BUFFER_FLAG_RETRANSMISSION, ctx);
 }
 
 GST_END_TEST;
@@ -3567,7 +3579,6 @@ GST_START_TEST (test_gap_using_rtx_does_not_stall)
 
 GST_END_TEST;
 
-
 static GstCaps *
 generate_dtx_caps (void)
 {
@@ -3583,7 +3594,7 @@ generate_dtx_caps (void)
 static guint
 construct_deterministic_initial_state_for_dtx (GstHarness * h, gint latency_ms)
 {
-  return construct_deterministic_initial_state_full (h, latency_ms,
+  return construct_deterministic_initial_state_full (h, 0, latency_ms,
       generate_dtx_caps ());
 }
 
@@ -3788,6 +3799,181 @@ GST_START_TEST (test_dtx_without_clock)
 
 GST_END_TEST;
 
+GST_START_TEST (test_ulpfec_large_pkt_spacing)
+{
+  gint latency_ms = 20;
+  gint frame_dur_ms = 50;
+  gint i, seq;
+  GstBuffer *buffer;
+  GstClockTime now;
+  GstClockTime frame_dur = frame_dur_ms * GST_MSECOND;
+  GstHarness *h = gst_harness_new ("rtpjitterbuffer");
+
+  g_object_set (h->element, "do-lost", TRUE, "latency", latency_ms, NULL);
+  gst_harness_set_src_caps (h, generate_caps ());
+
+  /* Pushing 2 frames @frame_dur_ms ms apart from each other to initialize
+   * packet_spacing and avg jitter */
+  for (seq = 0, now = 0; seq < 2; ++seq, now += frame_dur) {
+    gst_harness_set_time (h, now);
+    gst_harness_push (h, generate_test_buffer_full (now, seq,
+            AS_TEST_BUF_RTP_TIME (now)));
+    if (seq == 0)
+      gst_harness_crank_single_clock_wait (h);
+    buffer = gst_harness_pull (h);
+    fail_unless_equals_int64 (now, GST_BUFFER_PTS (buffer));
+    gst_buffer_unref (buffer);
+  }
+
+  /* drop GstEventStreamStart & GstEventCaps & GstEventSegment & Latency */
+  for (i = 0; i < 4; i++)
+    gst_event_unref (gst_harness_pull_event (h));
+  /* drop reconfigure event */
+  gst_event_unref (gst_harness_pull_upstream_event (h));
+
+  /* Pushing packet #2 as ULPFEC */
+  now = seq * frame_dur;
+  gst_harness_set_time (h, now);
+  buffer = generate_test_buffer_full (now, seq, AS_TEST_BUF_RTP_TIME (now));
+  GST_BUFFER_FLAG_SET (buffer, GST_RTP_BUFFER_FLAG_ULPFEC);
+  fail_unless_equals_int (GST_FLOW_OK, gst_harness_push (h, buffer));
+  buffer = gst_harness_pull (h);
+  fail_unless_equals_int64 (now, GST_BUFFER_PTS (buffer));
+  gst_buffer_unref (buffer);
+  fail_unless_equals_int (0, gst_harness_buffers_in_queue (h));
+
+
+  /* Packet #3 should have PTS not affected by clock skew logic */
+  seq += 1;
+  now = seq * frame_dur;
+  gst_harness_set_time (h, now);
+  gst_harness_push (h, generate_test_buffer_full (now, seq,
+          AS_TEST_BUF_RTP_TIME (now)));
+  buffer = gst_harness_pull (h);
+  fail_unless_equals_int64 (now, GST_BUFFER_PTS (buffer));
+  gst_buffer_unref (buffer);
+
+  gst_harness_teardown (h);
+}
+
+GST_END_TEST;
+
+
+static const JitterBufferSkewCtx
+    ulpfec_pkt_does_not_affect_pts_calculation_input[] = {
+  {0, 0},
+  {20 * GST_MSECOND, -100},
+  {-10 * GST_MSECOND, 1},
+  {100 * GST_MSECOND, 0},
+};
+
+GST_START_TEST (test_ulpfec_does_not_affect_pts_calculation)
+{
+  const JitterBufferSkewCtx *ctx =
+      &ulpfec_pkt_does_not_affect_pts_calculation_input[__i__];
+
+  test_redundant_pkt_does_not_affect_pts_calculation
+      (GST_RTP_BUFFER_FLAG_ULPFEC, ctx);
+}
+
+GST_END_TEST;
+
+typedef struct
+{
+  guint start_seqnum;
+  gint32 rtptime_diff_in_seqnum;
+} JitterBufferSkewRtxCtx;
+
+static const JitterBufferSkewRtxCtx
+    ulpfec_jump_of_rtp_ts_does_not_drop_pkt_input[] = {
+  {0, 0},
+  {100, 0},
+  {100, 100},
+  {100, 200},
+  {100, -151},
+  {100, -152},
+  {100, -200}
+};
+
+GST_START_TEST (test_ulpfec_jump_of_rtp_ts_does_not_drop_pkt)
+{
+  const JitterBufferSkewRtxCtx *ctx =
+      &ulpfec_jump_of_rtp_ts_does_not_drop_pkt_input[__i__];
+  GstHarness *h = gst_harness_new ("rtpjitterbuffer");
+  GstBuffer *buffer = NULL;
+  guint next_seqnum = 0;
+  GstClockTime now = 0;
+
+  /* Init jitterbuffer from N-th packet (value of 'next_seqnum'). That would make base_time of jitterbuffer
+   * starting from (N * TEST_BUF_MS) */
+  next_seqnum =
+      construct_deterministic_initial_state_full (h, ctx->start_seqnum, 3000,
+      generate_caps ());
+  now = gst_clock_get_time (GST_ELEMENT_CLOCK (h->element));
+
+  /* push in a "bad" ULPFEC buffer with skewed RTP timestamp */
+  buffer = generate_test_buffer_full (now, next_seqnum,
+      ((next_seqnum + ctx->rtptime_diff_in_seqnum) * TEST_RTP_TS_DURATION));
+
+  GST_BUFFER_FLAG_SET (buffer, GST_RTP_BUFFER_FLAG_ULPFEC);
+
+  gst_harness_push (h, buffer);
+
+  /* expect ULPFEC buffer to pass through the rtpjitterbuffer */
+  buffer = gst_harness_pull (h);
+  gst_buffer_unref (buffer);
+  next_seqnum++;
+
+  /* now push in the next regular buffer at its ideal time, and verify the
+     rogue ULPFEC buffer did not mess things up */
+  push_test_buffer (h, next_seqnum);
+  now = gst_clock_get_time (GST_ELEMENT_CLOCK (h->element));
+  buffer = gst_harness_pull (h);
+  fail_unless_equals_int (next_seqnum, get_rtp_seq_num (buffer));
+  fail_unless_equals_int64 (now, GST_BUFFER_PTS (buffer));
+
+  gst_buffer_unref (buffer);
+
+  gst_harness_teardown (h);
+}
+
+GST_END_TEST;
+
+GST_START_TEST (test_find_random_stall)
+{
+  GstHarness *h = gst_harness_new ("rtpjitterbuffer");
+  guint i;
+  guint num_bufs = 10;
+  BufferArrayCtx *ctx = g_new0 (BufferArrayCtx, num_bufs);
+  for (i = 0; i < num_bufs; i++) {
+    ctx[i].seqnum_d = g_random_int_range (0, 300) - 20;
+    ctx[i].rtptime_d = g_random_int_range (0, 300) - 20;
+    ctx[i].rtptime_d *= TEST_RTP_TS_DURATION;
+    ctx[i].rtx = g_random_boolean ();
+    ctx[i].sleep_us = g_random_int_range (0, G_USEC_PER_SEC / 5);
+  }
+
+  g_object_set (h->element, "do-lost", TRUE,
+      "do-retransmission", TRUE,
+      "rtx-next-seqnum", FALSE,
+      "rtx-delay-reorder", 0,
+      "rtx-max-retries", 5,
+      "rtx-min-retry-timeout", 50, "rtx-retry-period", 250, NULL);
+
+  if (!check_for_stall (h, ctx, num_bufs)) {
+    for (i = 0; i < num_bufs; i++) {
+      g_print ("    { %d, %d, %s, %d },\n",
+          ctx[i].seqnum_d, ctx[i].rtptime_d,
+          ctx[i].rtx ? "TRUE" : "FALSE", ctx[i].sleep_us);
+    }
+    fail_if (TRUE);
+  }
+  g_free (ctx);
+
+  gst_harness_teardown (h);
+}
+
+GST_END_TEST;
 
 
 static Suite *
@@ -3877,6 +4063,13 @@ rtpjitterbuffer_suite (void)
   tcase_add_test (tc_chain, test_dtx_with_lost_packet);
   tcase_add_test (tc_chain, test_dtx_reordering);
   tcase_add_test (tc_chain, test_dtx_without_clock);
+
+  tcase_add_test (tc_chain, test_ulpfec_large_pkt_spacing);
+  tcase_add_loop_test (tc_chain, test_ulpfec_jump_of_rtp_ts_does_not_drop_pkt,
+      0, G_N_ELEMENTS (ulpfec_jump_of_rtp_ts_does_not_drop_pkt_input));
+  tcase_add_loop_test (tc_chain, test_ulpfec_does_not_affect_pts_calculation, 0,
+      G_N_ELEMENTS (ulpfec_pkt_does_not_affect_pts_calculation_input));
+  tcase_add_test (tc_chain, test_find_random_stall);
 
   return s;
 }
