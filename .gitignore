@@ -84,3 +84,5 @@ subprojects/moltenvk/*/
 
 # Cache files (from emacs)
 *~
+# from gdb Python helper scripts
+__pycache__
