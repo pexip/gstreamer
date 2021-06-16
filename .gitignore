@@ -67,3 +67,6 @@ subprojects/*/
 
 # clangd integration
 .cache/*
+
+# from gdb Python helper scripts
+__pycache__
