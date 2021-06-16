@@ -79,3 +79,5 @@ subprojects/macos-bison-binary/bison*/
 
 # Cache files (from emacs)
 *~
+# from gdb Python helper scripts
+__pycache__
