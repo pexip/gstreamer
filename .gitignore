@@ -13,3 +13,6 @@ Build
 /build
 /_build
 /subprojects
+
+# from gdb Python helper scripts
+__pycache__
