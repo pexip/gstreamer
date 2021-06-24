@@ -768,7 +768,7 @@ rtp_jitter_buffer_calculate_pts (RTPJitterBuffer * jbuf, GstClockTime dts,
         GST_WARNING ("backward timestamps at server, schedule resync");
         jbuf->need_resync = TRUE;
       } else {
-        GST_WARNING ("backward timestamps: ignore redundant packet");
+        GST_DEBUG ("backward timestamps: ignore redundant packet");
         pts = GST_CLOCK_TIME_NONE;
         goto done;
       }
