@@ -313,6 +313,7 @@ gst_vp9_enc_set_property (GObject * object, guint prop_id,
     case PROP_ROW_MT:
       gst_vp9_enc->row_mt = g_value_get_boolean (value);
       if (gst_vpx_enc->inited) {
+#ifdef VPX_CTRL_VP9E_SET_ROW_MT
         status =
             vpx_codec_control (&gst_vpx_enc->encoder, VP9E_SET_ROW_MT,
             gst_vp9_enc->row_mt ? 1 : 0);
@@ -320,6 +321,7 @@ gst_vp9_enc_set_property (GObject * object, guint prop_id,
           GST_WARNING_OBJECT (gst_vpx_enc,
               "Failed to set VP9E_SET_ROW_MT: %s", gst_vpx_error_name (status));
         }
+#endif
       }
       break;
     case PROP_AQ_MODE:
@@ -493,6 +495,7 @@ gst_vp9_enc_configure_encoder (GstVPXEnc * encoder, GstVideoCodecState * state)
     GST_DEBUG_OBJECT (encoder, "Failed to set VP9E_SET_TILE_ROWS: %s",
         gst_vpx_error_name (status));
   }
+#ifdef VPX_CTRL_VP9E_SET_ROW_MT
   status =
       vpx_codec_control (&encoder->encoder, VP9E_SET_ROW_MT,
       vp9enc->row_mt ? 1 : 0);
@@ -500,6 +503,7 @@ gst_vp9_enc_configure_encoder (GstVPXEnc * encoder, GstVideoCodecState * state)
     GST_DEBUG_OBJECT (encoder,
         "Failed to set VP9E_SET_ROW_MT: %s", gst_vpx_error_name (status));
   }
+#endif
   status =
       vpx_codec_control (&encoder->encoder, VP9E_SET_AQ_MODE, vp9enc->aq_mode);
   if (status != VPX_CODEC_OK) {
