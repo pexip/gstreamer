@@ -47,9 +47,7 @@ struct _GstVP9Enc
 
   guint tile_columns;
   guint tile_rows;
-#ifdef VPX_CTRL_VP9E_SET_ROW_MT
   gboolean row_mt;
-#endif
   GstVPXAQ aq_mode;
   gboolean frame_parallel_decoding;
 };
