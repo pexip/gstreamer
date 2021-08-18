@@ -66,7 +66,7 @@ userland_mutex_t atomic_mtx;
  */
 #ifdef FUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION
 void
-init_random(void)
+init_usrsctp_random(void)
 {
 	return;
 }
@@ -79,7 +79,7 @@ read_random(void *buf, int count)
 }
 #elif defined(__FreeBSD__) || defined(__DragonFly__) || defined(__OpenBSD__) || defined(__OpenBSD__) || defined(__APPLE__)
 void
-init_random(void)
+init_usrsctp_random(void)
 {
 	return;
 }
@@ -94,7 +94,7 @@ read_random(void *buf, int count)
 }
 #else
 void
-init_random(void)
+init_usrsctp_random(void)
 {
 	struct timeval now;
 	unsigned int seed;
