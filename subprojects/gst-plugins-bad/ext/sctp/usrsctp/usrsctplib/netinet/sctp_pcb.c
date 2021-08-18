@@ -901,6 +901,15 @@ sctp_del_addr_from_vrf(uint32_t vrf_id, struct sockaddr *addr,
 			sctp_free_ifa(sctp_ifap);
 			return;
 		}
+#if defined(__Userspace__)
+		else if (sctp_ifap->address.sa.sa_family == AF_CONN) {
+			/* Clean up immediately */
+			SCTPDBG(SCTP_DEBUG_PCB4, "Immediately deleting AF_CONN\n");
+			sctp_free_ifa(sctp_ifap);
+			SCTP_ZONE_FREE(SCTP_BASE_INFO(ipi_zone_laddr), wi);
+			return;
+		}
+#endif
 		SCTP_INCR_LADDR_COUNT();
 		memset(wi, 0, sizeof(*wi));
 		(void)SCTP_GETTIME_TIMEVAL(&wi->start_time);
@@ -6715,7 +6724,9 @@ sctp_pcb_init(void)
 	(void)pthread_cond_init(&sctp_it_ctl.iterator_wakeup, NULL);
 #endif
 #endif
+#if defined(SCTP_ITERATOR)
 	sctp_startup_iterator();
+#endif
 
 #if defined(__FreeBSD__) && !defined(__Userspace__)
 #if defined(SCTP_MCORE_INPUT) && defined(SMP)
@@ -6770,6 +6781,7 @@ sctp_pcb_finish(void)
 		return;
 	}
 	SCTP_BASE_VAR(sctp_pcb_initialized) = 0;
+#if defined(SCTP_ITERATOR)
 #if !(defined(__FreeBSD__) && !defined(__Userspace__))
 	/* Notify the iterator to exit. */
 	SCTP_IPI_ITERATOR_WQ_LOCK();
@@ -6815,6 +6827,7 @@ sctp_pcb_finish(void)
 		sctp_it_ctl.thread_proc = 0;
 #endif
 	}
+#endif
 #endif
 #if defined(SCTP_PROCESS_LEVEL_LOCKS)
 #if defined(_WIN32)
@@ -8062,6 +8075,10 @@ sctp_initiate_iterator(inp_func inpf,
 		       uint8_t chunk_output_off)
 {
 	struct sctp_iterator *it = NULL;
+
+#if !defined(SCTP_ITERATOR)
+	return (-1);
+#endif
 
 	if (af == NULL) {
 		return (-1);
