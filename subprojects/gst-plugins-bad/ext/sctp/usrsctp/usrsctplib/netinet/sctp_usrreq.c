@@ -87,7 +87,7 @@ sctp_init(void)
 	u_long sb_max_adj;
 
 #else
-	init_random();
+	init_usrsctp_random();
 #endif
 	/* Initialize and modify the sysctled variables */
 	sctp_init_sysctls();
