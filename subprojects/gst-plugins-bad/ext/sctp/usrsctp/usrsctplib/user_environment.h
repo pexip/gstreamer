@@ -67,7 +67,7 @@ extern int nmbclusters;
 #define max(a,b) (((a)>(b))?(a):(b))
 #endif
 
-void init_random(void);
+void init_usrsctp_random(void);
 int read_random(void *, int);
 
 /* errno's may differ per OS.  errno.h now included in sctp_os_userspace.h */
