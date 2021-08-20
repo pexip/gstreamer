@@ -135,6 +135,9 @@ enum
 
 struct _GstClockPrivate
 {
+  /* Not locked, but only atomic use */
+  gint weak_refcount;
+
   GMutex slave_lock;            /* order: SLAVE_LOCK, OBJECT_LOCK */
 
   GCond sync_cond;
@@ -166,13 +169,11 @@ struct _GstClockPrivate
   gint post_count;
 
   gboolean synced;
-
-  GWeakRef *clock_weakref;
 };
 
 typedef struct _GstClockEntryImpl GstClockEntryImpl;
 
-#define GST_CLOCK_ENTRY_CLOCK_WEAK_REF(entry) (((GstClockEntryImpl *)(entry))->clock)
+#define GST_CLOCK_ENTRY_CLOCK_GET(entry) (((GstClockEntryImpl *)(entry))->clock)
 
 /* seqlocks */
 #define read_seqbegin(clock)                                   \
@@ -263,8 +264,8 @@ gst_clock_entry_new (GstClock * clock, GstClockTime time,
   entry->_clock = clock;
 #endif
 #endif
-  GST_CLOCK_ENTRY_CLOCK_WEAK_REF (entry) =
-      g_atomic_rc_box_acquire (clock->priv->clock_weakref);
+  GST_CLOCK_ENTRY_CLOCK_GET (entry) = clock;
+  g_atomic_int_inc (&(GST_CLOCK_ENTRY_CLOCK_GET (entry)->priv->weak_refcount));
   entry->type = type;
   entry->time = time;
   entry->interval = interval;
@@ -378,9 +379,10 @@ _gst_clock_id_free (GstClockID id)
   if (entry_impl->destroy_entry)
     entry_impl->destroy_entry (entry_impl);
 
-  g_atomic_rc_box_release_full (GST_CLOCK_ENTRY_CLOCK_WEAK_REF (entry),
-      (GDestroyNotify) g_weak_ref_clear);
-
+  gboolean weak_leak =
+      g_atomic_int_dec_and_test (&(GST_CLOCK_ENTRY_CLOCK_GET (entry)->
+          priv->weak_refcount));
+  g_assert (!weak_leak);
   /* FIXME: add tracer hook for struct allocations such as clock entries */
 
   g_free (id);
@@ -536,7 +538,7 @@ gst_clock_id_wait (GstClockID id, GstClockTimeDiff * jitter)
   entry = (GstClockEntry *) id;
   requested = GST_CLOCK_ENTRY_TIME (entry);
 
-  clock = g_weak_ref_get (GST_CLOCK_ENTRY_CLOCK_WEAK_REF (entry));
+  clock = GST_CLOCK_ENTRY_CLOCK_GET (entry);
   if (G_UNLIKELY (clock == NULL))
     goto invalid_entry;
 
@@ -561,7 +563,6 @@ gst_clock_id_wait (GstClockID id, GstClockTimeDiff * jitter)
   if (entry->type == GST_CLOCK_ENTRY_PERIODIC)
     entry->time = requested + entry->interval;
 
-  gst_object_unref (clock);
   return res;
 
   /* ERRORS */
@@ -569,13 +570,11 @@ invalid_time:
   {
     GST_CAT_DEBUG_OBJECT (GST_CAT_CLOCK, clock,
         "invalid time requested, returning _BADTIME");
-    gst_object_unref (clock);
     return GST_CLOCK_BADTIME;
   }
 not_supported:
   {
     GST_CAT_DEBUG_OBJECT (GST_CAT_CLOCK, clock, "clock wait is not supported");
-    gst_object_unref (clock);
     return GST_CLOCK_UNSUPPORTED;
   }
 invalid_entry:
@@ -618,7 +617,7 @@ gst_clock_id_wait_async (GstClockID id,
 
   entry = (GstClockEntry *) id;
   requested = GST_CLOCK_ENTRY_TIME (entry);
-  clock = g_weak_ref_get (GST_CLOCK_ENTRY_CLOCK_WEAK_REF (entry));
+  clock = GST_CLOCK_ENTRY_CLOCK_GET (entry);
   if (G_UNLIKELY (clock == NULL))
     goto invalid_entry;
 
@@ -637,7 +636,6 @@ gst_clock_id_wait_async (GstClockID id,
 
   res = cclass->wait_async (clock, entry);
 
-  gst_object_unref (clock);
   return res;
 
   /* ERRORS */
@@ -646,13 +644,11 @@ invalid_time:
     (func) (clock, GST_CLOCK_TIME_NONE, id, user_data);
     GST_CAT_DEBUG_OBJECT (GST_CAT_CLOCK, clock,
         "invalid time requested, returning _BADTIME");
-    gst_object_unref (clock);
     return GST_CLOCK_BADTIME;
   }
 not_supported:
   {
     GST_CAT_DEBUG_OBJECT (GST_CAT_CLOCK, clock, "clock wait is not supported");
-    gst_object_unref (clock);
     return GST_CLOCK_UNSUPPORTED;
   }
 invalid_entry:
@@ -681,7 +677,7 @@ gst_clock_id_unschedule (GstClockID id)
   g_return_if_fail (id != NULL);
 
   entry = (GstClockEntry *) id;
-  clock = g_weak_ref_get (GST_CLOCK_ENTRY_CLOCK_WEAK_REF (entry));
+  clock = GST_CLOCK_ENTRY_CLOCK_GET (entry);
   if (G_UNLIKELY (clock == NULL))
     goto invalid_entry;
 
@@ -690,7 +686,6 @@ gst_clock_id_unschedule (GstClockID id)
   if (G_LIKELY (cclass->unschedule))
     cclass->unschedule (clock, entry);
 
-  gst_object_unref (clock);
   return;
 
 invalid_entry:
@@ -758,6 +753,8 @@ gst_clock_init (GstClock * clock)
 
   clock->priv = priv = gst_clock_get_instance_private (clock);
 
+  priv->weak_refcount = 1;      /* Set it to 1 so we can assert on dec and test */
+
   priv->last_time = 0;
 
   priv->internal_calibration = 0;
@@ -774,17 +771,6 @@ gst_clock_init (GstClock * clock)
   priv->timeout = DEFAULT_TIMEOUT;
   priv->times = g_new0 (GstClockTime, 4 * priv->window_size);
   priv->times_temp = priv->times + 2 * priv->window_size;
-  /*
-   * An atomically ref-counted wrapper around a GWeakRef for this GstClock,
-   * created by the clock and shared with all its clock entries.
-   *
-   * This exists because g_weak_ref_ operations are quite expensive and operate
-   * with a global GRWLock. _get takes a reader lock, _init and _clear take
-   * a writer lock. We want to avoid having to instantiate a new GWeakRef for
-   * every clock entry.
-   */
-  priv->clock_weakref = g_atomic_rc_box_new (GWeakRef);
-  g_weak_ref_init (priv->clock_weakref, clock);
 }
 
 static void
@@ -794,6 +780,11 @@ gst_clock_dispose (GObject * object)
   GstClock **master_p;
 
   GST_OBJECT_LOCK (clock);
+
+  /* Ensure we have no dangeling weak pointers */
+  int num_weak_refs = g_atomic_int_get (&(clock->priv->weak_refcount));
+  g_assert (num_weak_refs == 1);
+
   master_p = &clock->priv->master;
   gst_object_replace ((GstObject **) master_p, NULL);
   GST_OBJECT_UNLOCK (clock);
@@ -817,8 +808,6 @@ gst_clock_finalize (GObject * object)
   clock->priv->times_temp = NULL;
   GST_CLOCK_SLAVE_UNLOCK (clock);
 
-  g_atomic_rc_box_release_full (clock->priv->clock_weakref,
-      (GDestroyNotify) g_weak_ref_clear);
   g_mutex_clear (&clock->priv->slave_lock);
   g_cond_clear (&clock->priv->sync_cond);
 
@@ -1399,7 +1388,7 @@ gst_clock_id_get_clock (GstClockID id)
   g_return_val_if_fail (id != NULL, NULL);
 
   entry = (GstClockEntry *) id;
-  return g_weak_ref_get (GST_CLOCK_ENTRY_CLOCK_WEAK_REF (entry));
+  return gst_object_ref (GST_CLOCK_ENTRY_CLOCK_GET (entry));
 }
 
 /**
@@ -1426,12 +1415,9 @@ gst_clock_id_uses_clock (GstClockID id, GstClock * clock)
   g_return_val_if_fail (clock != NULL, FALSE);
 
   entry = (GstClockEntry *) id;
-  entry_clock = g_weak_ref_get (GST_CLOCK_ENTRY_CLOCK_WEAK_REF (entry));
+  entry_clock = GST_CLOCK_ENTRY_CLOCK_GET (entry);
   if (entry_clock == clock)
     ret = TRUE;
-
-  if (G_LIKELY (entry_clock != NULL))
-    gst_object_unref (entry_clock);
 
   return ret;
 }
