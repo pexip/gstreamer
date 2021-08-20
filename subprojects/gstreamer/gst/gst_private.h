@@ -512,7 +512,7 @@ struct _GstDynamicTypeFactoryClass {
 struct _GstClockEntryImpl
 {
   GstClockEntry entry;
-  GWeakRef *clock;
+  GstClock *clock;
   GDestroyNotify destroy_entry;
   gpointer padding[21];                 /* padding for allowing e.g. systemclock
                                          * to add data in lieu of overridable
