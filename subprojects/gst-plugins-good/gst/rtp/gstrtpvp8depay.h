@@ -24,7 +24,6 @@
 #include <gst/rtp/gstrtpbasedepayload.h>
 
 G_BEGIN_DECLS
-
 #define GST_TYPE_RTP_VP8_DEPAY \
   (gst_rtp_vp8_depay_get_type())
 #define GST_RTP_VP8_DEPAY(obj) \
@@ -39,6 +38,7 @@ G_BEGIN_DECLS
 #define GST_RTP_VP8_DEPAY_GET_CLASS(obj) \
   (G_TYPE_INSTANCE_GET_CLASS ((obj), GST_TYPE_RTP_VP8_DEPAY, \
     GstRtpVP8DepayClass))
+#define GST_RTP_VP8_DEPAY_CAST(obj) ((GstRtpVP8Depay *)(obj))
 
 typedef struct _GstRtpVP8Depay GstRtpVP8Depay;
 typedef struct _GstRtpVP8DepayClass GstRtpVP8DepayClass;
@@ -55,23 +55,18 @@ struct _GstRtpVP8Depay
   gboolean started;
 
   gboolean caps_sent;
-  /* In between pictures, we might store GstRTPPacketLost events instead
-   * of forwarding them immediately, we check upon reception of a new
-   * picture id whether a gap was introduced, in which case we do forward
-   * the event. This is to avoid forwarding spurious lost events for FEC
-   * packets.
-   */
   gboolean stop_lost_events;
   GstEvent *last_lost_event;
   gboolean waiting_for_keyframe;
+  gboolean last_pushed_was_lost_event;
   gint last_profile;
   gint last_width;
   gint last_height;
   guint last_picture_id;
 
+  /* properties */
   gboolean wait_for_keyframe;
-  gboolean request_keyframe;
-  gboolean last_pushed_was_lost_event;
+  gboolean hide_picture_id_gap;
 };
 
 GType gst_rtp_vp8_depay_get_type (void);
