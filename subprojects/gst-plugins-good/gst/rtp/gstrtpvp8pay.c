@@ -688,6 +688,11 @@ gst_rtp_vp8_pay_sink_event (GstRTPBasePayload * payload, GstEvent * event)
 
   if (GST_EVENT_TYPE (event) == GST_EVENT_FLUSH_START) {
     gst_rtp_vp8_pay_reset (self);
+  } else if (GST_EVENT_TYPE (event) == GST_EVENT_GAP) {
+    guint picture_id = self->picture_id;
+    gst_rtp_vp8_pay_picture_id_increment (self);
+    GST_DEBUG_OBJECT (payload, "Incrementing picture ID on GAP event %u->%u",
+        picture_id, self->picture_id);
   }
 
   return GST_RTP_BASE_PAYLOAD_CLASS (gst_rtp_vp8_pay_parent_class)->sink_event
