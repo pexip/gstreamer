@@ -129,6 +129,8 @@ static void handle_message (GstSctpAssociation * self, guint8 * data,
     guint32 datalen, guint16 stream_id, guint32 ppid);
 
 static void maybe_set_state_to_ready (GstSctpAssociation * self);
+static void gst_sctp_association_change_state_unlocked (GstSctpAssociation * self,
+    GstSctpAssociationState new_state);
 static gboolean gst_sctp_association_change_state (GstSctpAssociation * self,
     GstSctpAssociationState new_state, gboolean lock);
 
@@ -325,21 +327,13 @@ error:
 static void
 maybe_set_state_to_ready (GstSctpAssociation * self)
 {
-  gboolean signal_ready_state = FALSE;
-
   g_mutex_lock (&self->association_mutex);
   if ((self->state == GST_SCTP_ASSOCIATION_STATE_NEW) &&
       (self->local_port != 0 && self->remote_port != 0)
       && (self->packet_out_cb != NULL) && (self->packet_received_cb != NULL)) {
-    signal_ready_state =
-        gst_sctp_association_change_state (self,
-        GST_SCTP_ASSOCIATION_STATE_READY, FALSE);
+    gst_sctp_association_change_state_unlocked (self, GST_SCTP_ASSOCIATION_STATE_READY);
   }
   g_mutex_unlock (&self->association_mutex);
-
-  if (signal_ready_state)
-    g_object_notify_by_pspec (G_OBJECT (self), properties[PROP_STATE]);
-
 }
 
 static void
@@ -901,17 +895,13 @@ static void
 handle_association_changed (GstSctpAssociation * self,
     const struct sctp_assoc_change *sac)
 {
-  gboolean change_state = FALSE;
-  GstSctpAssociationState new_state;
-
   switch (sac->sac_state) {
     case SCTP_COMM_UP:
       GST_DEBUG_OBJECT (self, "SCTP_COMM_UP");
       g_mutex_lock (&self->association_mutex);
       if (self->state == GST_SCTP_ASSOCIATION_STATE_CONNECTING) {
         self->sctp_assoc_id = sac->sac_assoc_id;
-        change_state = TRUE;
-        new_state = GST_SCTP_ASSOCIATION_STATE_CONNECTED;
+        gst_sctp_association_change_state_unlocked (self, GST_SCTP_ASSOCIATION_STATE_CONNECTED);
         GST_DEBUG_OBJECT (self, "SCTP association connected!");
       } else if (self->state == GST_SCTP_ASSOCIATION_STATE_CONNECTED) {
         GST_FIXME_OBJECT (self, "SCTP association already open");
@@ -925,14 +915,10 @@ handle_association_changed (GstSctpAssociation * self,
       /* TODO: Tear down association */
       g_mutex_lock (&self->association_mutex);
       if (self->state == GST_SCTP_ASSOCIATION_STATE_CONNECTED) {
-        g_mutex_unlock (&self->association_mutex);
-        gst_sctp_association_change_state (self,
-            GST_SCTP_ASSOCIATION_STATE_DISCONNECTING, TRUE);
-        g_mutex_lock (&self->association_mutex);
+        gst_sctp_association_change_state_unlocked (self, GST_SCTP_ASSOCIATION_STATE_DISCONNECTING);
       }
       if (self->state == GST_SCTP_ASSOCIATION_STATE_DISCONNECTING) {
-        change_state = TRUE;
-        new_state = GST_SCTP_ASSOCIATION_STATE_DISCONNECTED;
+        gst_sctp_association_change_state_unlocked (self, GST_SCTP_ASSOCIATION_STATE_DISCONNECTED);
         GST_INFO_OBJECT (self, "SCTP association disconnected!");
       }
       g_mutex_unlock (&self->association_mutex);
@@ -945,27 +931,19 @@ handle_association_changed (GstSctpAssociation * self,
       GST_INFO_OBJECT (self, "SCTP event SCTP_SHUTDOWN_COMP received");
       g_mutex_lock (&self->association_mutex);
       if (self->state == GST_SCTP_ASSOCIATION_STATE_CONNECTED) {
-        g_mutex_unlock (&self->association_mutex);
-        gst_sctp_association_change_state (self,
-            GST_SCTP_ASSOCIATION_STATE_DISCONNECTING, TRUE);
-        g_mutex_lock (&self->association_mutex);
+        gst_sctp_association_change_state_unlocked (self, GST_SCTP_ASSOCIATION_STATE_DISCONNECTING);
       }
       if (self->state == GST_SCTP_ASSOCIATION_STATE_DISCONNECTING) {
-        change_state = TRUE;
-        new_state = GST_SCTP_ASSOCIATION_STATE_DISCONNECTED;
+        gst_sctp_association_change_state_unlocked (self, GST_SCTP_ASSOCIATION_STATE_DISCONNECTED);
         GST_INFO_OBJECT (self, "SCTP association disconnected!");
       }
       g_mutex_unlock (&self->association_mutex);
       break;
     case SCTP_CANT_STR_ASSOC:
       GST_WARNING_OBJECT (self, "SCTP event SCTP_CANT_STR_ASSOC received");
-      change_state = TRUE;
-      new_state = GST_SCTP_ASSOCIATION_STATE_ERROR;
+      gst_sctp_association_change_state (self, GST_SCTP_ASSOCIATION_STATE_ERROR, TRUE);
       break;
   }
-
-  if (change_state)
-    gst_sctp_association_change_state (self, new_state, TRUE);
 }
 
 static void
@@ -1003,6 +981,21 @@ handle_message (GstSctpAssociation * self, guint8 * data, guint32 datalen,
     usrsctp_freedumpbuffer ((gchar *) data);
   }
   g_mutex_unlock (&self->association_mutex);
+}
+
+static void
+gst_sctp_association_change_state_unlocked (GstSctpAssociation * self,
+    GstSctpAssociationState new_state)
+ {
+  /* Association mutex is held on entry */
+  gboolean notify = gst_sctp_association_change_state (self, new_state, FALSE);
+  if (notify) {
+    /* Unlock the mutex to emit the property change event to avoid deadlock
+    * if the client calls back into this object from its event handler. */
+    g_mutex_unlock (&self->association_mutex);
+    g_object_notify_by_pspec (G_OBJECT (self), properties[PROP_STATE]);
+    g_mutex_lock (&self->association_mutex);
+  }
 }
 
 /* Returns TRUE if lock==FALSE and notification is needed later.
