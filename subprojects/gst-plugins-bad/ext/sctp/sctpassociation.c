@@ -109,6 +109,7 @@ static void gst_sctp_association_set_property (GObject * object, guint prop_id,
 static void gst_sctp_association_get_property (GObject * object, guint prop_id,
     GValue * value, GParamSpec * pspec);
 
+static void force_close (GstSctpAssociation * self, gboolean change_state);
 static struct socket *create_sctp_socket (GstSctpAssociation *
     gst_sctp_association);
 static struct sockaddr_conn get_sctp_socket_address (GstSctpAssociation *
@@ -578,6 +579,12 @@ gst_sctp_association_reset_stream (GstSctpAssociation * self, guint16 stream_id)
 void
 gst_sctp_association_force_close (GstSctpAssociation * self)
 {
+  force_close(self, TRUE);
+}
+
+static void
+force_close (GstSctpAssociation * self, gboolean change_state)
+{
   if (self->sctp_ass_sock) {
     struct socket *s = self->sctp_ass_sock;
     self->sctp_ass_sock = NULL;
@@ -586,8 +593,10 @@ gst_sctp_association_force_close (GstSctpAssociation * self)
 
   self->sctp_assoc_id = 0;
 
-  gst_sctp_association_change_state (self,
-      GST_SCTP_ASSOCIATION_STATE_DISCONNECTED, TRUE);
+  if (change_state) {
+    gst_sctp_association_change_state (self,
+        GST_SCTP_ASSOCIATION_STATE_DISCONNECTED, TRUE);
+  }
 }
 
 static struct socket *
@@ -911,6 +920,7 @@ handle_sctp_comm_lost_or_shutdown (GstSctpAssociation * self,
   /* Fall through to ensure the transition to disconnected occurs */
 
   if (self->state == GST_SCTP_ASSOCIATION_STATE_DISCONNECTING) {
+    force_close(self, FALSE);
     gst_sctp_association_change_state_unlocked (self,
         GST_SCTP_ASSOCIATION_STATE_DISCONNECTED);
     GST_INFO_OBJECT (self, "SCTP association disconnected!");
