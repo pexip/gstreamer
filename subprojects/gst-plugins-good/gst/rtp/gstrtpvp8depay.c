@@ -22,11 +22,11 @@
 # include "config.h"
 #endif
 
+#include "gstrtpelements.h"
 #include "gstrtpvp8depay.h"
 #include "gstrtputils.h"
 
 #include <gst/video/video.h>
-#include <gst/video/gstvideovp8meta.h>
 
 #include <stdio.h>
 
@@ -505,9 +505,15 @@ gst_rtp_vp8_depay_get_frame (GstRtpVP8Depay * self,
 
   /* Filter away all metas that are not sensible to copy */
   gst_rtp_drop_non_video_meta (self, out);
-  gst_buffer_add_video_vp8_meta_full (out, packet_info->temporally_scaled, packet_info->layer_sync,     /* Unpack Y bit */
-      packet_info->tid,         /* Unpack TID */
-      packet_info->tl0picidx);
+
+  GstCustomMeta *meta = gst_buffer_add_custom_meta (out, "GstVP8Meta");
+  GstStructure *s = gst_custom_meta_get_structure (meta);
+  gst_structure_set (s,
+      "use-temporal-scaling", G_TYPE_BOOLEAN, packet_info->temporally_scaled,
+      "layer-sync", G_TYPE_BOOLEAN, packet_info->layer_sync,
+      "layer-id", G_TYPE_UINT, packet_info->tid,
+      "tl0picidx", G_TYPE_UINT, packet_info->tl0picidx, NULL);
+
   if (frame_info->is_keyframe) {
     GST_BUFFER_FLAG_UNSET (out, GST_BUFFER_FLAG_DELTA_UNIT);
     GST_DEBUG_OBJECT (self, "Processed keyframe");
