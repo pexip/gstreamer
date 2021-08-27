@@ -465,12 +465,14 @@ gst_vp9_enc_configure_encoder (GstVPXEnc * encoder, GstVideoCodecState * state)
   GstVideoInfo *info = &state->info;
   vpx_codec_err_t status;
 
+#if 0
   status = vpx_codec_control (&encoder->encoder, VP9E_SET_COLOR_SPACE,
       gst_vp9_get_vpx_colorspace (encoder, &GST_VIDEO_INFO_COLORIMETRY (info),
           GST_VIDEO_INFO_FORMAT (info)));
   if (status != VPX_CODEC_OK) {
     GST_VPX_ENC_WARN (encoder, "Failed to set VP9E_SET_COLOR_SPACE", status);
   }
+#endif
 
   status = vpx_codec_control (&encoder->encoder, VP9E_SET_COLOR_RANGE,
       gst_vp9_get_vpx_color_range (&GST_VIDEO_INFO_COLORIMETRY (info)));
