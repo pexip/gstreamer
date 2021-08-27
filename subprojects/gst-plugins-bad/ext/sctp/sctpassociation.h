@@ -80,6 +80,7 @@ struct _GstSctpAssociation
   gboolean shutdown;
 
   GMutex association_mutex;
+  GMutex usrsctp_disconnect_mutex;
 
   GstSctpAssociationState state;
 
