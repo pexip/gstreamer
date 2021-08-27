@@ -251,6 +251,7 @@ gst_sctp_association_init (GstSctpAssociation * self)
   self->sctp_ass_sock = NULL;
 
   g_mutex_init (&self->association_mutex);
+  g_mutex_init (&self->usrsctp_disconnect_mutex);
 
   self->state = GST_SCTP_ASSOCIATION_STATE_NEW;
 
@@ -287,6 +288,7 @@ gst_sctp_association_finalize (GObject * object)
   GstSctpAssociation *self = GST_SCTP_ASSOCIATION (object);
 
   g_mutex_clear (&self->association_mutex);
+  g_mutex_clear (&self->usrsctp_disconnect_mutex);
 
   G_OBJECT_CLASS (gst_sctp_association_parent_class)->finalize (object);
 }
@@ -657,9 +659,11 @@ gst_sctp_association_disconnect_unlocked (GstSctpAssociation * self,
 void
 gst_sctp_association_disconnect (GstSctpAssociation * self)
 {
+  g_mutex_lock (&self->usrsctp_disconnect_mutex);
   g_mutex_lock (&self->association_mutex);
   gst_sctp_association_disconnect_unlocked (self, TRUE);
   g_mutex_unlock (&self->association_mutex);
+  g_mutex_unlock (&self->usrsctp_disconnect_mutex);
 }
 
 static struct socket *
@@ -876,17 +880,31 @@ association_is_valid (GstSctpAssociation * self)
   return valid;
 }
 
+static void
+sctp_packet_out_unlocked (GstSctpAssociation * self, void *addr,
+    void *buffer, size_t length, guint8 tos, guint8 set_df)
+{
+  if (association_is_valid (self) && self->packet_out_cb) {
+    self->packet_out_cb (self, buffer, length, self->packet_out_user_data);
+  }
+}
+
 static int
 sctp_packet_out (void *addr, void *buffer, size_t length, guint8 tos,
     guint8 set_df)
 {
   GstSctpAssociation *self = GST_SCTP_ASSOCIATION (addr);
 
-  g_mutex_lock (&self->association_mutex);
-  if (association_is_valid (self) && self->packet_out_cb) {
-    self->packet_out_cb (self, buffer, length, self->packet_out_user_data);
+  if (g_mutex_trylock (&self->usrsctp_disconnect_mutex)) {
+    g_mutex_lock (&self->association_mutex);
+    sctp_packet_out_unlocked(self, addr, buffer, length, tos, set_df);
+    g_mutex_unlock (&self->association_mutex);
+    g_mutex_unlock (&self->usrsctp_disconnect_mutex);
+  } else {
+    // we are disconnecting - usrsctp_shutdown & usrsctp_close calls back here
+    // purposefully but we already have the association_mutex up the stack
+    sctp_packet_out_unlocked(self, addr, buffer, length, tos, set_df);
   }
-  g_mutex_unlock (&self->association_mutex);
 
   return 0;
 }
@@ -1041,9 +1059,11 @@ handle_sctp_comm_lost_or_shutdown (GstSctpAssociation * self,
       sac->sac_state == SCTP_COMM_LOST ?
       "SCTP_COMM_LOST" : "SCTP_SHUTDOWN_COMP");
 
+  g_mutex_lock (&self->usrsctp_disconnect_mutex);
   g_mutex_lock (&self->association_mutex);
   gst_sctp_association_disconnect_unlocked (self, FALSE);
   g_mutex_unlock (&self->association_mutex);
+  g_mutex_unlock (&self->usrsctp_disconnect_mutex);
 }
 
 static void
