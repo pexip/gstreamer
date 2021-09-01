@@ -9,6 +9,7 @@ rtpmanager_sources = [
   'gstrtphdrext-ntp.c',
   'gstrtphdrext-repairedstreamid.c',
   'gstrtphdrext-streamid.c',
+  'gstrtphdrext-roi.c',
   'gstrtpmux.c',
   'gstrtpptdemux.c',
   'gstrtprtxqueue.c',
