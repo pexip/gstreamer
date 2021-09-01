@@ -5,6 +5,7 @@ rtpmanager_sources = [
   'gstrtpjitterbuffer.c',
   'gstrtphdrext-twcc.c',
   'gstrtphdrext-rfc6464.c',
+  'gstrtphdrext-roi.c',
   'gstrtpmux.c',
   'gstrtpptdemux.c',
   'tokenbucket.c',
