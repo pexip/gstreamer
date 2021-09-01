@@ -40,6 +40,7 @@
 #include "gstrtphdrext-ntp.h"
 #include "gstrtphdrext-repairedstreamid.h"
 #include "gstrtphdrext-streamid.h"
+#include "gstrtphdrext-roi.h"
 
 static gboolean
 plugin_init (GstPlugin * plugin)
@@ -65,6 +66,7 @@ plugin_init (GstPlugin * plugin)
   ret |= GST_ELEMENT_REGISTER (rtphdrextntp64, plugin);
   ret |= GST_ELEMENT_REGISTER (rtphdrextstreamid, plugin);
   ret |= GST_ELEMENT_REGISTER (rtphdrextrepairedstreamid, plugin);
+  ret |= GST_ELEMENT_REGISTER (rtphdrextroi, plugin);
 
   return ret;
 }
