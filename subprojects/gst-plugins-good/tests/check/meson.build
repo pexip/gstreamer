@@ -86,6 +86,7 @@ good_tests = [
 if not get_option('rtp').disabled() and not get_option('rtpmanager').disabled()
   good_tests += [
     [ 'elements/rtphdrext-colorspace' ],
+    [ 'elements/rtphdrext-roi' ],
     [ 'elements/rtph261', ],
     [ 'elements/rtph263' ],
     [ 'elements/rtph264' ],
@@ -101,7 +102,6 @@ if not get_option('rtp').disabled() and not get_option('rtpmanager').disabled()
     [ 'elements/rtphdrextsdes', false, [gstrtp_dep, gstsdp_dep] ],
     [ 'elements/rtpjitterbuffer' ],
     [ 'elements/rtpjpeg' ],
-
     [ 'elements/rtptimerqueue', false, [gstrtp_dep],
       ['../../gst/rtpmanager/rtptimerqueue.c']],
 
