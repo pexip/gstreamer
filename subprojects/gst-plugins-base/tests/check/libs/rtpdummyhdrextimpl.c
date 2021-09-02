@@ -157,8 +157,8 @@ gst_rtp_dummy_hdr_ext_get_supported_flags (GstRTPHeaderExtension * ext)
 }
 
 static gsize
-gst_rtp_dummy_hdr_ext_get_max_size (GstRTPHeaderExtension * ext,
-    const GstBuffer * input_meta)
+gst_rtp_dummy_hdr_ext_get_max_size (G_GNUC_UNUSED GstRTPHeaderExtension * ext,
+    G_GNUC_UNUSED const GstBuffer * input_meta)
 {
   return 1;
 }
@@ -167,8 +167,9 @@ gst_rtp_dummy_hdr_ext_get_max_size (GstRTPHeaderExtension * ext,
 
 static gssize
 gst_rtp_dummy_hdr_ext_write (GstRTPHeaderExtension * ext,
-    const GstBuffer * input_meta, GstRTPHeaderExtensionFlags write_flags,
-    GstBuffer * output, guint8 * data, gsize size)
+    G_GNUC_UNUSED const GstBuffer * input_meta,
+    G_GNUC_UNUSED GstRTPHeaderExtensionFlags write_flags,
+    G_GNUC_UNUSED GstBuffer * output, guint8 * data, gsize size)
 {
   GstRTPDummyHdrExt *dummy = GST_RTP_DUMMY_HDR_EXT (ext);
 
@@ -183,8 +184,8 @@ gst_rtp_dummy_hdr_ext_write (GstRTPHeaderExtension * ext,
 
 static gboolean
 gst_rtp_dummy_hdr_ext_read (GstRTPHeaderExtension * ext,
-    GstRTPHeaderExtensionFlags read_flags, const guint8 * data,
-    gsize size, GstBuffer * buffer)
+    G_GNUC_UNUSED GstRTPHeaderExtensionFlags read_flags, const guint8 * data,
+    G_GNUC_UNUSED gsize size, G_GNUC_UNUSED GstBuffer * buffer)
 {
   GstRTPDummyHdrExt *dummy = GST_RTP_DUMMY_HDR_EXT (ext);
 
