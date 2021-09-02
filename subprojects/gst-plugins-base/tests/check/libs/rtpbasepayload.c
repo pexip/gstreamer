@@ -2146,7 +2146,7 @@ GST_STATIC_PAD_TEMPLATE ("sink",
         DUMMY_HDR_EXT_URI));
 
 static GstRTPHeaderExtension *
-request_extension (GstRTPBasePayload * depayload, guint ext_id,
+request_extension (G_GNUC_UNUSED GstRTPBasePayload * payload, guint ext_id,
     const gchar * ext_uri, gpointer user_data)
 {
   GstRTPHeaderExtension *ext = user_data;
@@ -2199,8 +2199,9 @@ GST_START_TEST (rtp_base_payload_caps_request)
 GST_END_TEST;
 
 static GstRTPHeaderExtension *
-request_extension_ignored (GstRTPBasePayload * depayload, guint ext_id,
-    const gchar * ext_uri, gpointer user_data)
+request_extension_ignored (G_GNUC_UNUSED GstRTPBasePayload * payload,
+    G_GNUC_UNUSED guint ext_id, G_GNUC_UNUSED const gchar * ext_uri,
+    gpointer user_data)
 {
   guint *request_counter = user_data;
 
