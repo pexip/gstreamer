@@ -171,7 +171,6 @@ gst_rtp_dummy_depay_process (GstRTPBaseDepayload * depayload, GstBuffer * buf)
       break;
     case GST_RTP_DUMMY_USE_PUSH_LIST_FUNC:{
       GstBufferList *blist = gst_buffer_list_new ();
-      gint i;
       gst_buffer_list_add (blist, outbuf);
       for (i = 0; i != self->num_buffers_in_blist - 1; ++i) {
         gst_buffer_list_add (blist, gst_buffer_copy (outbuf));
@@ -1636,7 +1635,7 @@ GST_START_TEST (rtp_base_depayload_two_byte_hdr_ext)
 GST_END_TEST;
 
 static GstRTPHeaderExtension *
-request_extension (GstRTPBaseDepayload * depayload, guint ext_id,
+request_extension (G_GNUC_UNUSED GstRTPBaseDepayload * depayload, guint ext_id,
     const gchar * ext_uri, gpointer user_data)
 {
   GstRTPHeaderExtension *ext = user_data;
@@ -1772,8 +1771,9 @@ GST_START_TEST (rtp_base_depayload_multiple_exts)
 GST_END_TEST;
 
 static GstRTPHeaderExtension *
-request_extension_ignored (GstRTPBaseDepayload * depayload, guint ext_id,
-    const gchar * ext_uri, gpointer user_data)
+request_extension_ignored (G_GNUC_UNUSED GstRTPBaseDepayload * depayload,
+    G_GNUC_UNUSED guint ext_id, G_GNUC_UNUSED const gchar * ext_uri,
+    gpointer user_data)
 {
   guint *request_counter = user_data;
 
