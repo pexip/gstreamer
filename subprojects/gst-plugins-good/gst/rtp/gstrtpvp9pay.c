@@ -470,6 +470,19 @@ gst_rtp_vp9_payload_next (GstRtpVP9Pay * self, GstBufferList * list,
   return available;
 }
 
+static void
+gst_rtp_vp9_pay_picture_id_increment (GstRtpVP9Pay * self)
+{
+  if (self->picture_id_mode == VP9_PAY_NO_PICTURE_ID)
+    return;
+
+  /* Incremenent and wrap the picture id if it overflows */
+  if ((self->picture_id_mode == VP9_PAY_PICTURE_ID_7BITS &&
+          ++self->picture_id >= 0x80) ||
+      (self->picture_id_mode == VP9_PAY_PICTURE_ID_15BITS &&
+          ++self->picture_id >= 0x8000))
+    self->picture_id = 0;
+}
 
 static GstFlowReturn
 gst_rtp_vp9_pay_handle_buffer (GstRTPBasePayload * payload, GstBuffer * buffer)
@@ -502,12 +515,7 @@ gst_rtp_vp9_pay_handle_buffer (GstRTPBasePayload * payload, GstBuffer * buffer)
 
   ret = gst_rtp_base_payload_push_list (payload, list);
 
-  /* Incremenent and wrap the picture id if it overflows */
-  if ((self->picture_id_mode == VP9_PAY_PICTURE_ID_7BITS &&
-          ++self->picture_id >= 0x80) ||
-      (self->picture_id_mode == VP9_PAY_PICTURE_ID_15BITS &&
-          ++self->picture_id >= 0x8000))
-    self->picture_id = 0;
+  gst_rtp_vp9_pay_picture_id_increment (self);
 
   gst_buffer_unref (buffer);
 
@@ -524,6 +532,11 @@ gst_rtp_vp9_pay_sink_event (GstRTPBasePayload * payload, GstEvent * event)
       self->picture_id = g_random_int_range (0, G_MAXUINT8) & 0x7F;
     else if (self->picture_id_mode == VP9_PAY_PICTURE_ID_15BITS)
       self->picture_id = g_random_int_range (0, G_MAXUINT16) & 0x7FFF;
+  } else if (GST_EVENT_TYPE (event) == GST_EVENT_GAP) {
+    guint picture_id = self->picture_id;
+    gst_rtp_vp9_pay_picture_id_increment (self);
+    GST_DEBUG_OBJECT (payload, "Incrementing picture ID on GAP event %u->%u",
+        picture_id, self->picture_id);
   }
 
   return GST_RTP_BASE_PAYLOAD_CLASS (gst_rtp_vp9_pay_parent_class)->sink_event
