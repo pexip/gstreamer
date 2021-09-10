@@ -1641,6 +1641,7 @@ gst_rtp_base_depayload_packet_lost (GstRTPBaseDepayload * filter,
   const GstStructure *s;
   gboolean might_have_been_fec;
   gboolean res = TRUE;
+  gboolean noloss = FALSE;
 
   s = gst_event_get_structure (event);
 
@@ -1654,6 +1655,7 @@ gst_rtp_base_depayload_packet_lost (GstRTPBaseDepayload * filter,
         "Packet loss event without timestamp or duration");
     return FALSE;
   }
+  gst_structure_get_boolean (s, "no-packet-loss", &noloss);
 
   sevent = gst_pad_get_sticky_event (filter->srcpad, GST_EVENT_SEGMENT, 0);
   if (G_UNLIKELY (!sevent)) {
@@ -1668,7 +1670,8 @@ gst_rtp_base_depayload_packet_lost (GstRTPBaseDepayload * filter,
           &might_have_been_fec) || !might_have_been_fec) {
     /* send GAP event */
     sevent = gst_event_new_gap (timestamp, duration);
-    gst_event_set_gap_flags (sevent, GST_GAP_FLAG_MISSING_DATA);
+    if (!noloss)
+      gst_event_set_gap_flags (sevent, GST_GAP_FLAG_MISSING_DATA);
     res = gst_pad_push_event (filter->srcpad, sevent);
   }
 
