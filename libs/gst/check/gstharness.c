@@ -1082,8 +1082,11 @@ gst_harness_teardown (GstHarness * h)
   h->sink_harness = NULL;
 
   if (h->srcpad) {
-    if (gst_pad_is_request_pad (GST_PAD_PEER (h->srcpad)))
-      gst_element_release_request_pad (h->element, GST_PAD_PEER (h->srcpad));
+    GstPad *peer_srcpad = gst_pad_get_peer (h->srcpad);
+    if (gst_pad_is_request_pad (peer_srcpad))
+      gst_element_release_request_pad (h->element, peer_srcpad);
+    if (peer_srcpad)
+      gst_object_unref (peer_srcpad);
     g_free (priv->element_sinkpad_name);
 
     gst_pad_set_active (h->srcpad, FALSE);
@@ -1100,8 +1103,11 @@ gst_harness_teardown (GstHarness * h)
   h->srcpad = NULL;
 
   if (h->sinkpad) {
-    if (gst_pad_is_request_pad (GST_PAD_PEER (h->sinkpad)))
-      gst_element_release_request_pad (h->element, GST_PAD_PEER (h->sinkpad));
+    GstPad *peer_sinkpad = gst_pad_get_peer (h->sinkpad);
+    if (gst_pad_is_request_pad (peer_sinkpad))
+      gst_element_release_request_pad (h->element, peer_sinkpad);
+    if (peer_sinkpad)
+      gst_object_unref (peer_sinkpad);
     g_free (priv->element_srcpad_name);
 
     gst_pad_set_active (h->sinkpad, FALSE);
