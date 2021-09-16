@@ -512,7 +512,7 @@ gst_sctp_association_send_data (GstSctpAssociation * self, const guint8 * buf,
   if (self->state != GST_SCTP_ASSOCIATION_STATE_CONNECTED) {
     if (self->state == GST_SCTP_ASSOCIATION_STATE_DISCONNECTED ||
         self->state == GST_SCTP_ASSOCIATION_STATE_DISCONNECTING) {
-      GST_ERROR_OBJECT (self, "Disconnected");
+      GST_INFO_OBJECT (self, "Disconnected");
       flow_ret = GST_FLOW_EOS;
       g_mutex_unlock (&self->association_mutex);
       goto end;
