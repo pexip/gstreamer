@@ -178,8 +178,8 @@ skip:
        * stream is intra coded. */
       if (header->i)
         GST_BUFFER_FLAG_UNSET (outbuf, GST_BUFFER_FLAG_DELTA_UNIT);
-      else
-        GST_BUFFER_FLAG_SET (outbuf, GST_BUFFER_FLAG_DELTA_UNIT);
+      //else
+      //  GST_BUFFER_FLAG_SET (outbuf, GST_BUFFER_FLAG_DELTA_UNIT);
 
       GST_DEBUG_OBJECT (depay, "Pushing out a buffer of %u bytes", avail);
       depay->start = FALSE;
