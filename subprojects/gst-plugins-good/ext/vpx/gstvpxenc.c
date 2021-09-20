@@ -602,12 +602,12 @@ gst_vpx_enc_class_init (GstVPXEncClass * klass)
    * Since: 1.20
    */
   g_object_class_install_property (gobject_class, PROP_TS_LAYER_FLAGS,
-      gst_param_spec_array ("temporal-scalability-layer-flags",
+      g_param_spec_value_array ("temporal-scalability-layer-flags",
           "Coding layer flags", "Sequence defining coding layer flags",
-          g_param_spec_flags ("flags", "Flags", "Flags",
-              GST_VPX_ENC_TS_LAYER_FLAGS_TYPE, 0,
+          g_param_spec_int ("flags", "Flags", "Flags", 0, G_MAXINT, 0,
               G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS),
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+
 
   /**
    * GstVPXEnc:temporal-scalability-layer-sync-flags:
@@ -617,7 +617,7 @@ gst_vpx_enc_class_init (GstVPXEncClass * klass)
    * Since: 1.20
    */
   g_object_class_install_property (gobject_class, PROP_TS_LAYER_SYNC_FLAGS,
-      gst_param_spec_array ("temporal-scalability-layer-sync-flags",
+      g_param_spec_value_array ("temporal-scalability-layer-sync-flags",
           "Coding layer sync flags",
           "Sequence defining coding layer sync flags",
           g_param_spec_boolean ("flags", "Flags", "Flags", FALSE,
@@ -1105,41 +1105,36 @@ gst_vpx_enc_set_property (GObject * object, guint prop_id,
       break;
     }
     case PROP_TS_LAYER_FLAGS:{
-      gint l = gst_value_array_get_size (value);
+      GValueArray *va = g_value_get_boxed (value);
 
       g_free (gst_vpx_enc->ts_layer_flags);
       gst_vpx_enc->n_ts_layer_flags = 0;
 
-      if (l > 0) {
+      if (va && va->n_values > 0) {
         gint i;
 
-        gst_vpx_enc->ts_layer_flags = g_new (gint, l);
-
-        for (i = 0; i < l; i++)
+        gst_vpx_enc->ts_layer_flags = g_new (gint, va->n_values);
+        for (i = 0; i < va->n_values; i++)
           gst_vpx_enc->ts_layer_flags[i] =
-              g_value_get_flags (gst_value_array_get_value (value, i));
-        gst_vpx_enc->n_ts_layer_flags = l;
-      } else {
-        gst_vpx_enc->ts_layer_flags = NULL;
+              g_value_get_int (g_value_array_get_nth (va, i));
+        gst_vpx_enc->n_ts_layer_flags = va->n_values;
       }
       break;
     }
     case PROP_TS_LAYER_SYNC_FLAGS:{
-      gint l = gst_value_array_get_size (value);
+      GValueArray *va = g_value_get_boxed (value);
 
       g_free (gst_vpx_enc->ts_layer_sync_flags);
       gst_vpx_enc->n_ts_layer_sync_flags = 0;
 
-      if (l > 0) {
+      if (va && va->n_values > 0) {
         gint i;
 
-        gst_vpx_enc->ts_layer_sync_flags = g_new (gboolean, l);
-        for (i = 0; i < l; i++)
+        gst_vpx_enc->ts_layer_sync_flags = g_new (gboolean, va->n_values);
+        for (i = 0; i < va->n_values; i++)
           gst_vpx_enc->ts_layer_sync_flags[i] =
-              g_value_get_boolean (gst_value_array_get_value (value, i));
-        gst_vpx_enc->n_ts_layer_sync_flags = l;
-      } else {
-        gst_vpx_enc->ts_layer_sync_flags = NULL;
+              g_value_get_boolean (g_value_array_get_nth (va, i));
+        gst_vpx_enc->n_ts_layer_sync_flags = va->n_values;
       }
       break;
     }
@@ -1538,28 +1533,46 @@ gst_vpx_enc_get_property (GObject * object, guint prop_id, GValue * value,
       break;
     }
     case PROP_TS_LAYER_FLAGS:{
-      gint i;
+      GValueArray *va;
 
-      for (i = 0; i < gst_vpx_enc->n_ts_layer_flags; i++) {
-        GValue v = { 0, };
+      if (gst_vpx_enc->n_ts_layer_flags == 0) {
+        g_value_set_boxed (value, NULL);
+      } else {
+        gint i;
 
-        g_value_init (&v, GST_VPX_ENC_TS_LAYER_FLAGS_TYPE);
-        g_value_set_flags (&v, gst_vpx_enc->ts_layer_flags[i]);
-        gst_value_array_append_value (value, &v);
-        g_value_unset (&v);
+        va = g_value_array_new (gst_vpx_enc->n_ts_layer_flags);
+        for (i = 0; i < gst_vpx_enc->n_ts_layer_flags; i++) {
+          GValue v = { 0, };
+
+          g_value_init (&v, G_TYPE_INT);
+          g_value_set_int (&v, gst_vpx_enc->ts_layer_flags[i]);
+          g_value_array_append (va, &v);
+          g_value_unset (&v);
+        }
+        g_value_set_boxed (value, va);
+        g_value_array_free (va);
       }
       break;
     }
     case PROP_TS_LAYER_SYNC_FLAGS:{
-      gint i;
+      GValueArray *va;
 
-      for (i = 0; i < gst_vpx_enc->n_ts_layer_sync_flags; i++) {
-        GValue v = { 0, };
+      if (gst_vpx_enc->n_ts_layer_sync_flags == 0) {
+        g_value_set_boxed (value, NULL);
+      } else {
+        gint i;
 
-        g_value_init (&v, G_TYPE_BOOLEAN);
-        g_value_set_boolean (&v, gst_vpx_enc->ts_layer_sync_flags[i]);
-        gst_value_array_append_value (value, &v);
-        g_value_unset (&v);
+        va = g_value_array_new (gst_vpx_enc->n_ts_layer_sync_flags);
+        for (i = 0; i < gst_vpx_enc->n_ts_layer_sync_flags; i++) {
+          GValue v = { 0, };
+
+          g_value_init (&v, G_TYPE_BOOLEAN);
+          g_value_set_boolean (&v, gst_vpx_enc->ts_layer_sync_flags[i]);
+          g_value_array_append (va, &v);
+          g_value_unset (&v);
+        }
+        g_value_set_boxed (value, va);
+        g_value_array_free (va);
       }
       break;
     }
