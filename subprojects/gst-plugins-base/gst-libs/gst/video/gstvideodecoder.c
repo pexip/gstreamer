@@ -1342,9 +1342,12 @@ gst_video_decoder_handle_missing_data_default (GstVideoDecoder *
   priv = decoder->priv;
 
   if (priv->automatic_request_sync_points) {
-    GstClockTime deadline =
-        gst_segment_to_running_time (&decoder->input_segment, GST_FORMAT_TIME,
-        timestamp);
+    GstClockTime deadline = timestamp;
+
+    if (decoder->input_segment.format == GST_FORMAT_TIME)
+      deadline =
+          gst_segment_to_running_time (&decoder->input_segment, GST_FORMAT_TIME,
+          timestamp);
 
     GST_DEBUG_OBJECT (decoder,
         "Requesting sync point for missing data at running time %"
