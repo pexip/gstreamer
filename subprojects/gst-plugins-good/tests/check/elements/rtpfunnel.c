@@ -348,6 +348,60 @@ GST_START_TEST (rtpfunnel_twcc_caps)
 
 GST_END_TEST;
 
+
+
+GST_START_TEST (rtpfunnel_non_twcc_caps_then_twcc_caps)
+{
+  GstHarness *h, *h0, *h1, *h2;
+  GstCaps *caps, *expected_caps;
+
+  h = gst_harness_new_with_padnames ("rtpfunnel", NULL, "src");
+
+  /* request a sinkpad, set caps without twcc extmap */
+  h0 = gst_harness_new_with_element (h->element, "sink_0", NULL);
+  gst_harness_set_src_caps_str (h0, "application/x-rtp, " "ssrc=(uint)123");
+
+  /* request a second sinkpad, and verify the extmap is not
+     present in the caps when doing a caps-query downstream */
+  h1 = gst_harness_new_with_element (h->element, "sink_1", NULL);
+  caps = gst_pad_query_caps (GST_PAD_PEER (h1->srcpad), NULL);
+  expected_caps = gst_caps_from_string ("application/x-rtp");
+  fail_unless (caps);
+  fail_unless (gst_caps_is_equal (expected_caps, caps));
+  gst_caps_unref (caps);
+  gst_caps_unref (expected_caps);
+
+  /* set second sinkpad caps with twcc extmap */
+  expected_caps = gst_caps_from_string ("application/x-rtp, "
+      "ssrc=(uint)456, extmap-5=" TWCC_EXTMAP_STR "");
+  gst_harness_set_src_caps (h1, gst_caps_ref (expected_caps));
+  caps = gst_pad_get_current_caps (GST_PAD_PEER (h1->srcpad));
+  fail_unless (caps);
+  fail_unless (gst_caps_is_equal (expected_caps, caps));
+  gst_caps_unref (caps);
+  gst_caps_unref (expected_caps);
+
+  /* request a third sinkpad, and verify the extmap is now
+     present in the caps when doing a caps-query downstream */
+  h2 = gst_harness_new_with_element (h->element, "sink_2", NULL);
+  caps = gst_pad_query_caps (GST_PAD_PEER (h2->srcpad), NULL);
+  expected_caps = gst_caps_from_string ("application/x-rtp, "
+      "extmap-5=" TWCC_EXTMAP_STR "");
+  fail_unless (caps);
+  fail_unless (gst_caps_is_equal (expected_caps, caps));
+  gst_caps_unref (caps);
+  gst_caps_unref (expected_caps);
+
+
+  gst_harness_teardown (h);
+  gst_harness_teardown (h0);
+  gst_harness_teardown (h1);
+  gst_harness_teardown (h2);
+}
+
+GST_END_TEST;
+
+
 static gint32
 get_twcc_seqnum (GstBuffer * buf, guint8 ext_id)
 {
@@ -586,6 +640,7 @@ rtpfunnel_suite (void)
   tcase_add_test (tc_chain, rtpfunnel_stress);
 
   tcase_add_test (tc_chain, rtpfunnel_twcc_caps);
+  tcase_add_test (tc_chain, rtpfunnel_non_twcc_caps_then_twcc_caps);
   tcase_add_test (tc_chain, rtpfunnel_twcc_passthrough);
   tcase_add_test (tc_chain, rtpfunnel_twcc_mux);
   tcase_add_test (tc_chain, rtpfunnel_twcc_passthrough_then_mux);
