@@ -1,12 +1,12 @@
 build_hotdoc = false
 
-if not get_option('doc').enabled()
-    message('Documentation is disabled')
-    subdir_done()
-endif
-
 if meson.is_cross_build()
-    error('Documentation enabled but building the doc while cross building is not supported yet.')
+    if get_option('doc').enabled()
+        error('Documentation enabled but building the doc while cross building is not supported yet.')
+    endif
+
+    message('Documentation not built as building it while cross building is not supported yet.')
+    subdir_done()
 endif
 
 required_hotdoc_extensions = ['gi-extension', 'gst-extension']
@@ -41,18 +41,33 @@ endif
 hotdoc_req = '>= 0.11.0'
 hotdoc_version = run_command(hotdoc_p, '--version').stdout()
 if not hotdoc_version.version_compare(hotdoc_req)
-    error('Hotdoc version @0@ not found, got @1@'.format(hotdoc_req, hotdoc_version))
+    if get_option('doc').enabled()
+        error('Hotdoc version @0@ not found, got @1@'.format(hotdoc_req, hotdoc_version))
+    else
+        message('Hotdoc version @0@ not found, got @1@'.format(hotdoc_req, hotdoc_version))
+        subdir_done()
+    endif
 endif
 
 hotdoc = import('hotdoc')
 foreach extension: required_hotdoc_extensions
     if not hotdoc.has_extensions(extension)
-      error('Documentation enabled but @0@ missing'.format(extension))
+        if get_option('doc').enabled()
+            error('Documentation enabled but @0@ missing'.format(extension))
+        endif
+
+        message('@0@ extension not found, not building documentation'.format(extension))
+        subdir_done()
     endif
 endforeach
 
 if not build_gir
-    error('Documentation enabled but introspection not built.')
+    if get_option('doc').enabled()
+        error('Documentation enabled but introspection not built.')
+    endif
+
+    message('Introspection not built, can\'t build the documentation')
+    subdir_done()
 endif
 
 build_hotdoc = true
@@ -147,7 +162,10 @@ foreach lib: libs
 endforeach
 
 if not hotdoc.has_extensions('c-extension')
-    error('Documentation enabled but c-extension missing')
+    if get_option('doc').enabled()
+        error('Documentation enabled but c-extension missing')
+    endif
+    message('c-extension not found, not building documentation')
 else
     libs_doc += [hotdoc.generate_doc('riff',
         project_version: api_version,
