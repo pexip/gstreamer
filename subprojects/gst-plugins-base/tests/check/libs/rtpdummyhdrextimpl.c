@@ -213,7 +213,8 @@ gst_rtp_dummy_hdr_ext_set_caps_from_attributes (GstRTPHeaderExtension * ext,
 
 static gboolean
 gst_rtp_dummy_hdr_ext_set_attributes (GstRTPHeaderExtension * ext,
-    GstRTPHeaderExtensionDirection direction, const gchar * attributes)
+    G_GNUC_UNUSED GstRTPHeaderExtensionDirection direction,
+    const gchar * attributes)
 {
   GstRTPDummyHdrExt *dummy = GST_RTP_DUMMY_HDR_EXT (ext);
 
