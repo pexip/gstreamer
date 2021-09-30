@@ -53,13 +53,6 @@
  * RTP funnel can than make sure that this event hits the right encoder based
  * on the SSRC embedded in the event.
  *
- * Another feature of the RTP funnel is that it will mux together TWCC
- * (Transport-Wide Congestion Control) sequence-numbers. The point being that
- * it should increment "transport-wide", meaning potentially several
- * bundled streams. Note that not *all* streams being bundled needs to be
- * affected by this. As an example Google WebRTC will use bundle with audio
- * and video, but will only use TWCC sequence-numbers for the video-stream(s).
- *
  */
 
 #ifdef HAVE_CONFIG_H
@@ -269,47 +262,6 @@ done:
   return;
 }
 
-static void
-gst_rtp_funnel_set_twcc_seqnum (GstRtpFunnel * funnel,
-    GstPad * pad, GstBuffer ** buf)
-{
-  GstRtpFunnelPad *fpad = GST_RTP_FUNNEL_PAD_CAST (pad);
-  guint8 twcc_seq[2] = { 0, };
-  GstRTPBuffer rtp = GST_RTP_BUFFER_INIT;
-  guint ext_id = gst_rtp_header_extension_get_id (funnel->twcc_ext);
-  guint8 *existing;
-  guint size;
-
-  if (!funnel->twcc_ext || !fpad->has_twcc)
-    return;
-
-  *buf = gst_buffer_make_writable (*buf);
-
-  gst_rtp_header_extension_write (funnel->twcc_ext, *buf,
-      GST_RTP_HEADER_EXTENSION_ONE_BYTE, *buf, twcc_seq, sizeof (twcc_seq));
-
-  if (!gst_rtp_buffer_map (*buf, GST_MAP_READWRITE, &rtp))
-    goto map_failed;
-
-  if (gst_rtp_buffer_get_extension_onebyte_header (&rtp, ext_id,
-          0, (gpointer) & existing, &size)) {
-    if (size >= gst_rtp_header_extension_get_max_size (funnel->twcc_ext, *buf)) {
-      existing[0] = twcc_seq[0];
-      existing[1] = twcc_seq[1];
-    }
-  }
-  /* TODO: two-byte variant */
-
-  gst_rtp_buffer_unmap (&rtp);
-
-  return;
-
-map_failed:
-  {
-    GST_ERROR ("failed to map buffer %p", *buf);
-  }
-}
-
 static GstFlowReturn
 gst_rtp_funnel_sink_chain_object (GstPad * pad, GstRtpFunnel * funnel,
     gboolean is_list, GstMiniObject * obj)
@@ -332,7 +284,6 @@ gst_rtp_funnel_sink_chain_object (GstPad * pad, GstRtpFunnel * funnel,
     res = gst_pad_push_list (funnel->srcpad, GST_BUFFER_LIST_CAST (obj));
   } else {
     GstBuffer *buf = GST_BUFFER_CAST (obj);
-    gst_rtp_funnel_set_twcc_seqnum (funnel, pad, &buf);
     gst_rtp_funnel_pad_set_buffer_flag (fpad, buf);
     GST_BUFFER_PTS (buf) += fpad->us_latency;
     res = gst_pad_push (funnel->srcpad, buf);
