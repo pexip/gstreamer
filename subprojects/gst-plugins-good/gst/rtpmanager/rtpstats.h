@@ -264,24 +264,41 @@ typedef struct {
   guint         nacks_received;
 } RTPSessionStats;
 
+
+typedef struct
+{
+  GArray *new_packets;
+  GArray *win_packets;
+
+  GstClockTime window_size;
+
+  GstClockTime last_local_ts;
+  GstClockTime last_remote_ts;
+
+  guint last_packets_sent;
+  guint last_packets_recv;
+
+  /* windowed stats */
+  guint bitrate_sent;
+  guint bitrate_recv;
+  gdouble packet_loss_pct;
+  gint64 avg_delta_of_delta;
+
+  /* totals */
+  guint packets_sent;
+  guint packets_recv;
+
+} TWCCStatsCtx;
+
 /**
  * RTPTWCCStats:
  *
  * Stats kept for a session and used to produce TWCC stats.
  */
 typedef struct {
-  GArray       *packets;
+  TWCCStatsCtx *ctx;
+  GHashTable   *ctx_by_pt;
   GstClockTime window_size;
-  GstClockTime  last_local_ts;
-  GstClockTime  last_remote_ts;
-
-  guint bitrate_sent;
-  guint bitrate_recv;
-  guint packets_sent;
-  guint packets_recv;
-  gfloat packet_loss_pct;
-  GstClockTimeDiff avg_delta_of_delta;
-  gfloat avg_delta_of_delta_change;
 } RTPTWCCStats;
 
 
