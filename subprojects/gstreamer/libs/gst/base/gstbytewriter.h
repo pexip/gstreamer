@@ -374,7 +374,7 @@ gst_byte_writer_put_buffer_unchecked (GstByteWriter * writer, GstBuffer * buffer
 
   gst_buffer_extract (buffer, offset,
       (guint8 *) & writer->parent.data[writer->parent.byte], size);
-  writer->parent.byte += size;
+  writer->parent.byte += (guint) size;
   writer->parent.size = MAX (writer->parent.size, writer->parent.byte);
 }
 
@@ -394,7 +394,7 @@ _gst_byte_writer_put_buffer_inline (GstByteWriter * writer, GstBuffer * buffer,
     size -= offset;
   }
 
-  if (G_UNLIKELY (!_gst_byte_writer_ensure_free_space_inline (writer, size)))
+  if (G_UNLIKELY (!_gst_byte_writer_ensure_free_space_inline (writer, (guint) size)))
     return FALSE;
 
   gst_byte_writer_put_buffer_unchecked (writer, buffer, offset, size);
