@@ -424,7 +424,7 @@ gst_sctp_association_get (guint32 association_id)
 }
 
 gboolean
-gst_sctp_association_start (GstSctpAssociation * self)
+gst_sctp_association_start_unlocked (GstSctpAssociation * self)
 {
   if (self->state != GST_SCTP_ASSOCIATION_STATE_READY &&
       self->state != GST_SCTP_ASSOCIATION_STATE_DISCONNECTED) {
@@ -438,21 +438,30 @@ gst_sctp_association_start (GstSctpAssociation * self)
 
   /* TODO: Support both server and client role */
   if (!client_role_connect (self)) {
-    gst_sctp_association_change_state (self, GST_SCTP_ASSOCIATION_STATE_ERROR,
-        TRUE);
+    gst_sctp_association_change_state_unlocked (self,
+        GST_SCTP_ASSOCIATION_STATE_ERROR);
     goto error;
   }
 
-  gst_sctp_association_change_state (self,
-      GST_SCTP_ASSOCIATION_STATE_CONNECTING, TRUE);
+  gst_sctp_association_change_state_unlocked (self,
+      GST_SCTP_ASSOCIATION_STATE_CONNECTING);
 
   return TRUE;
 error:
-  gst_sctp_association_change_state (self, GST_SCTP_ASSOCIATION_STATE_ERROR,
-      TRUE);
+  gst_sctp_association_change_state_unlocked (self,
+      GST_SCTP_ASSOCIATION_STATE_ERROR);
   return FALSE;
 configure_required:
   return FALSE;
+}
+
+gboolean
+gst_sctp_association_start (GstSctpAssociation * self)
+{
+  g_mutex_lock (&self->association_mutex);
+  gboolean ret = gst_sctp_association_start_unlocked (self);
+  g_mutex_unlock (&self->association_mutex);
+  return ret;
 }
 
 void
@@ -808,10 +817,8 @@ client_role_connect (GstSctpAssociation * self)
   socklen_t opt_len;
   gint ret;
 
-  g_mutex_lock (&self->association_mutex);
   local_addr = get_sctp_socket_address (self, self->local_port);
   remote_addr = get_sctp_socket_address (self, self->remote_port);
-  g_mutex_unlock (&self->association_mutex);
 
   /* After an SCTP association is reported as disconnected, there is
    * a window of time before the underlying SCTP stack cleans up.
@@ -1046,7 +1053,7 @@ handle_sctp_comm_up (GstSctpAssociation * self,
     } else if (self->state == GST_SCTP_ASSOCIATION_STATE_CONNECTED) {
       GST_INFO_OBJECT (self, "SCTP association already open");
     } else {
-      GST_WARNING_OBJECT (self, "SCTP association in unexpected state");
+      GST_WARNING_OBJECT (self, "SCTP association in unexpected state: %d", self->state);
     }
   g_mutex_unlock (&self->association_mutex);
 }
