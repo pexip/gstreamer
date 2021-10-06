@@ -112,7 +112,8 @@ static void gst_sctp_association_set_property (GObject * object, guint prop_id,
 static void gst_sctp_association_get_property (GObject * object, guint prop_id,
     GValue * value, GParamSpec * pspec);
 
-static void force_close (GstSctpAssociation * self, gboolean change_state);
+static void force_close_unlocked (GstSctpAssociation * self,
+    gboolean change_state);
 static struct socket *create_sctp_socket (GstSctpAssociation *
     gst_sctp_association);
 static struct sockaddr_conn get_sctp_socket_address (GstSctpAssociation *
@@ -601,11 +602,13 @@ gst_sctp_association_reset_stream (GstSctpAssociation * self, guint16 stream_id)
 void
 gst_sctp_association_force_close (GstSctpAssociation * self)
 {
-  force_close(self, TRUE);
+  g_mutex_lock (&self->association_mutex);
+  force_close_unlocked (self, TRUE);
+  g_mutex_unlock (&self->association_mutex);
 }
 
 static void
-force_close (GstSctpAssociation * self, gboolean change_state)
+force_close_unlocked (GstSctpAssociation * self, gboolean change_state)
 {
   if (self->sctp_ass_sock) {
     struct socket *s = self->sctp_ass_sock;
@@ -616,8 +619,8 @@ force_close (GstSctpAssociation * self, gboolean change_state)
   self->sctp_assoc_id = 0;
 
   if (change_state) {
-    gst_sctp_association_change_state (self,
-        GST_SCTP_ASSOCIATION_STATE_DISCONNECTED, TRUE);
+    gst_sctp_association_change_state_unlocked (self,
+        GST_SCTP_ASSOCIATION_STATE_DISCONNECTED);
   }
 }
 
@@ -647,7 +650,7 @@ gst_sctp_association_disconnect_unlocked (GstSctpAssociation * self,
   /* Fall through to ensure the transition to disconnected occurs */
 
   if (self->state == GST_SCTP_ASSOCIATION_STATE_DISCONNECTING) {
-    force_close(self, FALSE);
+    force_close_unlocked (self, FALSE);
     gst_sctp_association_change_state_unlocked (self,
         GST_SCTP_ASSOCIATION_STATE_DISCONNECTED);
     GST_INFO_OBJECT (self, "SCTP association disconnected!");
@@ -899,11 +902,9 @@ sctp_packet_out (void *addr, void *buffer, size_t length, guint8 tos,
 {
   GstSctpAssociation *self = GST_SCTP_ASSOCIATION (addr);
 
-  g_mutex_lock (&self->association_mutex);
   if (association_is_valid (self) && self->packet_out_cb) {
     self->packet_out_cb (self, buffer, length, self->packet_out_user_data);
   }
-  g_mutex_unlock (&self->association_mutex);
 
   return 0;
 }
