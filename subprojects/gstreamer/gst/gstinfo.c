@@ -1906,14 +1906,11 @@ gst_debug_log_default (GstDebugCategory * category, GstDebugLevel level,
     syslog (LOG_INFO | LOG_LOCAL3, "%" GST_TIME_FORMAT PRINT_FMT,
         GST_TIME_ARGS (elapsed), pid, g_thread_self (),
         gst_debug_level_get_name (level),
-        gst_debug_category_get_name (category), file, line, function, obj,
-        gst_debug_message_get (message));
+        gst_debug_category_get_name (category), file, line, function,
+        object_id ? object_id : "", gst_debug_message_get (message));
 #undef PRINT_FMT
   }
 #endif
-
-  if (object != NULL)
-    g_free (obj);
 }
 
 /**
