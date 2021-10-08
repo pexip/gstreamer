@@ -1,4 +1,5 @@
 option('gst_debug', type : 'boolean', value : true)
+option('gst_debug_syslog', type : 'boolean', value : false)
 option('gst_parse', type : 'boolean', value : true,
        description: 'Enable pipeline string parser')
 option('registry', type : 'boolean', value : true)
