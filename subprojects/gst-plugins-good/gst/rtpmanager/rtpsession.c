@@ -2235,6 +2235,15 @@ update_packet (GstBuffer ** buffer, guint idx, RTPPacketInfo * pinfo)
       /* RTP header extensions */
       pinfo->header_ext = gst_rtp_buffer_get_extension_bytes (&rtp,
           &pinfo->header_ext_bit_pattern);
+    
+      /* if RTX, store the original seqnum (OSN) and SSRC */
+      if (GST_BUFFER_FLAG_IS_SET (*buffer, GST_RTP_BUFFER_FLAG_RETRANSMISSION)) {
+        gpointer payload = gst_rtp_buffer_get_payload (&rtp);
+        if (payload) {
+          pinfo->rtx_osn = GST_READ_UINT16_BE (payload);
+          pinfo->rtx_ssrc = GST_READ_UINT32_BE (payload + 10);
+        }
+      }
     }
     gst_rtp_buffer_unmap (&rtp);
   }
@@ -2284,6 +2293,8 @@ update_packet_info (RTPSession * sess, RTPPacketInfo * pinfo,
   pinfo->payload_len = 0;
   pinfo->packets = 0;
   pinfo->marker = FALSE;
+  pinfo->rtx_osn = -1;
+  pinfo->rtx_ssrc = 0;
 
   if (is_list) {
     GstBufferList *list = GST_BUFFER_LIST_CAST (data);

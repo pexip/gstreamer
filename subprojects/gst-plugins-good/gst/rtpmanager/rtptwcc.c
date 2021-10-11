@@ -69,11 +69,16 @@ typedef struct
   guint8 pt;
   guint size;
   gboolean lost;
+  gint32 rtx_osn;
+  guint32 rtx_ssrc;
+  gboolean recovered;
 } SentPacket;
 
 struct _RTPTWCCManager
 {
   GObject object;
+
+  GHashTable *ssrc_to_seqmap;
 
   guint8 send_ext_id;
   guint8 recv_ext_id;
@@ -121,6 +126,9 @@ G_DEFINE_TYPE_WITH_CODE (RTPTWCCManager, rtp_twcc_manager, G_TYPE_OBJECT,
 static void
 rtp_twcc_manager_init (RTPTWCCManager * twcc)
 {
+  twcc->ssrc_to_seqmap = g_hash_table_new_full (NULL, NULL, NULL,
+      (GDestroyNotify) g_hash_table_destroy);
+
   twcc->recv_packets = g_array_new (FALSE, FALSE, sizeof (RecvPacket));
   twcc->sent_packets = g_array_new (FALSE, FALSE, sizeof (SentPacket));
   twcc->parsed_packets = g_array_new (FALSE, FALSE, sizeof (RecvPacket));
@@ -141,6 +149,8 @@ static void
 rtp_twcc_manager_finalize (GObject * object)
 {
   RTPTWCCManager *twcc = RTP_TWCC_MANAGER_CAST (object);
+
+  g_hash_table_destroy (twcc->ssrc_to_seqmap);
 
   g_array_unref (twcc->recv_packets);
   g_array_unref (twcc->sent_packets);
@@ -887,6 +897,33 @@ sent_packet_init (SentPacket * packet, guint16 seqnum, RTPPacketInfo * pinfo)
   packet->remote_ts = GST_CLOCK_TIME_NONE;
   packet->socket_ts = GST_CLOCK_TIME_NONE;
   packet->lost = FALSE;
+  packet->rtx_osn = pinfo->rtx_osn;
+  packet->rtx_ssrc = pinfo->rtx_ssrc;
+}
+
+static void
+rtp_twcc_manager_register_seqnum (RTPTWCCManager * twcc,
+    guint32 ssrc, guint16 seqnum, guint16 twcc_seqnum)
+{
+  GHashTable *seq_to_twcc = g_hash_table_lookup (twcc->ssrc_to_seqmap, GUINT_TO_POINTER (ssrc));
+  if (!seq_to_twcc) {
+    seq_to_twcc = g_hash_table_new (NULL, NULL);
+    g_hash_table_insert (twcc->ssrc_to_seqmap, GUINT_TO_POINTER (ssrc), seq_to_twcc);
+  }
+  g_hash_table_insert (seq_to_twcc, GUINT_TO_POINTER (seqnum), GUINT_TO_POINTER (twcc_seqnum));
+}
+
+static gint32
+rtp_twcc_manager_lookup_seqnum (RTPTWCCManager * twcc,
+    guint32 ssrc, guint16 seqnum)
+{
+  gint32 ret = -1;
+
+  GHashTable *seq_to_twcc = g_hash_table_lookup (twcc->ssrc_to_seqmap, GUINT_TO_POINTER (ssrc));
+  if (seq_to_twcc) {
+    ret = GPOINTER_TO_UINT (g_hash_table_lookup (seq_to_twcc, GUINT_TO_POINTER (seqnum)));
+  }
+  return ret;
 }
 
 void
@@ -902,6 +939,8 @@ rtp_twcc_manager_send_packet (RTPTWCCManager * twcc, RTPPacketInfo * pinfo)
 
   sent_packet_init (&packet, seqnum, pinfo);
   g_array_append_val (twcc->sent_packets, packet);
+
+  rtp_twcc_manager_register_seqnum (twcc, pinfo->ssrc, pinfo->seqnum, seqnum);
 
   gst_buffer_add_tx_feedback_meta (pinfo->data, seqnum, GST_TX_FEEDBACK (twcc));
 
@@ -1166,6 +1205,14 @@ rtp_twcc_manager_parse_fci (RTPTWCCManager * twcc,
         }
         pkt->size = found->size;
         pkt->pt = found->pt;
+        if (found->rtx_osn != -1) {
+          gint32 recovered_seq = rtp_twcc_manager_lookup_seqnum (twcc, found->rtx_ssrc, found->rtx_osn);
+          guint16 recovered_idx = recovered_seq - first_sent_pkt->seqnum;
+          if (recovered_idx < twcc->sent_packets->len) {
+            SentPacket *recovered_pkt = &g_array_index (twcc->sent_packets, SentPacket, recovered_idx);
+            recovered_pkt->recovered = TRUE;
+          }
+        }
 
         GST_LOG ("matching pkt: #%u with local_ts: %" GST_TIME_FORMAT
             " size: %u", pkt->seqnum, GST_TIME_ARGS (pkt->local_ts), pkt->size);

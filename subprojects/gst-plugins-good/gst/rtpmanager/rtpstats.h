@@ -108,6 +108,8 @@ typedef struct {
   guint32       csrcs[16];
   GBytes        *header_ext;
   guint16       header_ext_bit_pattern;
+  gint32        rtx_osn;
+  guint32       rtx_ssrc;
 } RTPPacketInfo;
 
 /**
