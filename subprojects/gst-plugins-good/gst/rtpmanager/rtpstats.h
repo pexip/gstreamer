@@ -321,6 +321,5 @@ RTPTWCCStats * rtp_twcc_stats_new (void);
 void rtp_twcc_stats_free (RTPTWCCStats * stats);
 GstStructure * rtp_twcc_stats_process_packets (RTPTWCCStats * stats,
     GArray * twcc_packets);
-GstStructure * rtp_twcc_stats_get_packets_structure (GArray * twcc_packets);
 
 #endif /* __RTP_STATS_H__ */

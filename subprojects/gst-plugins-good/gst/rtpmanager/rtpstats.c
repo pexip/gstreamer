@@ -471,32 +471,6 @@ _structure_take_value_array (GstStructure * s,
   g_value_unset (&value);
 }
 
-GstStructure *
-rtp_twcc_stats_get_packets_structure (GArray * twcc_packets)
-{
-  GstStructure *ret = gst_structure_new_empty ("RTPTWCCPackets");
-  GValueArray *array = g_value_array_new (0);
-  guint i;
-
-  for (i = 0; i < twcc_packets->len; i++) {
-    RTPTWCCPacket *pkt = &g_array_index (twcc_packets, RTPTWCCPacket, i);
-
-    GstStructure *pkt_s = gst_structure_new ("RTPTWCCPacket",
-        "seqnum", G_TYPE_UINT, pkt->seqnum,
-        "local-ts", G_TYPE_UINT64, pkt->local_ts,
-        "remote-ts", G_TYPE_UINT64, pkt->remote_ts,
-        "payload-type", G_TYPE_UCHAR, pkt->pt,
-        "size", G_TYPE_UINT, pkt->size,
-        "lost", G_TYPE_BOOLEAN, pkt->status == RTP_TWCC_PACKET_STATUS_NOT_RECV,
-        NULL);
-    _append_structure_to_value_array (array, pkt_s);
-  }
-
-  _structure_take_value_array (ret, "packets", array);
-
-  return ret;
-}
-
 static TWCCStatsCtx *
 twcc_stats_ctx_new (GstClockTime window_size)
 {

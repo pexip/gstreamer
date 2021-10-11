@@ -74,7 +74,7 @@ void rtp_twcc_manager_send_packet (RTPTWCCManager * twcc,
 GstBuffer * rtp_twcc_manager_get_feedback (RTPTWCCManager * twcc,
     guint32 sender_ssrc, GstClockTime current_time);
 
-GArray * rtp_twcc_manager_parse_fci (RTPTWCCManager * twcc,
+GstStructure * rtp_twcc_manager_parse_fci (RTPTWCCManager * twcc,
     guint8 * fci_data, guint fci_length);
 
 #endif /* __RTP_TWCC_H__ */
