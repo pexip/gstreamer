@@ -17,6 +17,8 @@
  * Free Software Foundation, Inc., 51 Franklin St, Fifth Floor,
  * Boston, MA 02110-1301, USA.
  */
+#define GLIB_DISABLE_DEPRECATION_WARNINGS
+
 #include "rtptwcc.h"
 #include <gst/rtp/gstrtcpbuffer.h>
 #include <gst/base/gstbitreader.h>
@@ -25,6 +27,8 @@
 
 GST_DEBUG_CATEGORY_EXTERN (rtp_session_debug);
 #define GST_CAT_DEFAULT rtp_session_debug
+
+#define WEIGHT(a, b, w) (((a) * (w)) + ((b) * (1.0 - (w))))
 
 #define TWCC_EXTMAP_STR "http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01"
 
@@ -49,6 +53,13 @@ typedef struct
   guint8 fb_pkt_count[1];
 } RTPTWCCHeader;
 
+typedef enum
+{
+  RTP_TWCC_PACKET_STATUS_NOT_RECV = 0,
+  RTP_TWCC_PACKET_STATUS_SMALL_DELTA = 1,
+  RTP_TWCC_PACKET_STATUS_LARGE_NEGATIVE_DELTA = 2,
+} RTPTWCCPacketStatus;
+
 typedef struct
 {
   GstClockTime ts;
@@ -62,7 +73,7 @@ typedef struct
 
 typedef struct
 {
-  GstClockTime ts;
+  GstClockTime local_ts;
   GstClockTime socket_ts;
   GstClockTime remote_ts;
   guint16 seqnum;
@@ -71,9 +82,286 @@ typedef struct
   gboolean lost;
 } SentPacket;
 
+typedef struct
+{
+  RTPTWCCPacketStatus status;
+  guint16 seqnum;
+  GstClockTime remote_ts;
+} ParsedPacket;
+
+typedef struct
+{
+  GstClockTime org_ts;
+  GstClockTime local_ts;
+  GstClockTime remote_ts;
+  guint16 seqnum;
+  guint size;
+  guint8 pt;
+
+  GstClockTimeDiff delta_delta;
+} StatsPacket;
+
+typedef struct
+{
+  GArray *new_packets;
+  GArray *win_packets;
+
+  GstClockTime window_size;
+
+  GstClockTime last_local_ts;
+  GstClockTime last_remote_ts;
+
+  guint last_packets_sent;
+  guint last_packets_recv;
+
+  /* windowed stats */
+  guint bitrate_sent;
+  guint bitrate_recv;
+  gdouble packet_loss_pct;
+  gint64 avg_delta_of_delta;
+
+  /* totals */
+  guint packets_sent;
+  guint packets_recv;
+
+} TWCCStatsCtx;
+
+static void
+_append_structure_to_value_array (GValueArray * array, GstStructure * s)
+{
+  GValue *val;
+  g_value_array_append (array, NULL);
+  val = g_value_array_get_nth (array, array->n_values - 1);
+  g_value_init (val, GST_TYPE_STRUCTURE);
+  g_value_take_boxed (val, s);
+}
+
+static void
+_structure_take_value_array (GstStructure * s,
+    const gchar * field_name, GValueArray * array)
+{
+  GValue value = G_VALUE_INIT;
+  g_value_init (&value, G_TYPE_VALUE_ARRAY);
+  g_value_take_boxed (&value, array);
+  gst_structure_take_value (s, field_name, &value);
+  g_value_unset (&value);
+}
+
+static TWCCStatsCtx *
+twcc_stats_ctx_new (GstClockTime window_size)
+{
+  TWCCStatsCtx *ctx = g_new0 (TWCCStatsCtx, 1);
+
+  ctx->new_packets = g_array_new (FALSE, FALSE, sizeof (StatsPacket));
+  ctx->win_packets = g_array_new (FALSE, FALSE, sizeof (StatsPacket));
+
+  ctx->window_size = window_size;
+
+  ctx->last_local_ts = GST_CLOCK_TIME_NONE;
+  ctx->last_remote_ts = GST_CLOCK_TIME_NONE;
+
+  return ctx;
+}
+
+static void
+twcc_stats_ctx_free (TWCCStatsCtx * ctx)
+{
+  g_array_unref (ctx->new_packets);
+  g_array_unref (ctx->win_packets);
+  g_free (ctx);
+}
+
+static void
+twcc_stats_ctx_add_packet (TWCCStatsCtx * ctx, StatsPacket * pkt)
+{
+  g_array_append_val (ctx->new_packets, *pkt);
+}
+
+static void
+twcc_stats_ctx_process_new_stats (TWCCStatsCtx * ctx)
+{
+  guint i;
+
+  ctx->last_packets_sent = ctx->new_packets->len;
+  ctx->last_packets_recv = 0;
+
+  for (i = 0; i < ctx->new_packets->len; i++) {
+    StatsPacket *pkt = &g_array_index (ctx->new_packets, StatsPacket, i);
+    GstClockTimeDiff local_delta = GST_CLOCK_STIME_NONE;
+    GstClockTimeDiff remote_delta = GST_CLOCK_STIME_NONE;
+
+    if (GST_CLOCK_TIME_IS_VALID (pkt->remote_ts))
+      ctx->last_packets_recv++;
+
+    if (GST_CLOCK_TIME_IS_VALID (pkt->local_ts) &&
+        GST_CLOCK_TIME_IS_VALID (ctx->last_local_ts)) {
+      local_delta = GST_CLOCK_DIFF (ctx->last_local_ts, pkt->local_ts);
+    }
+
+    if (GST_CLOCK_TIME_IS_VALID (pkt->remote_ts) &&
+        GST_CLOCK_TIME_IS_VALID (ctx->last_remote_ts)) {
+      remote_delta = GST_CLOCK_DIFF (ctx->last_remote_ts, pkt->remote_ts);
+    }
+
+    if (GST_CLOCK_STIME_IS_VALID (local_delta) &&
+        GST_CLOCK_STIME_IS_VALID (remote_delta)) {
+      pkt->delta_delta = remote_delta - local_delta;
+    }
+
+    ctx->last_local_ts = pkt->local_ts;
+    ctx->last_remote_ts = pkt->remote_ts;
+  }
+
+  /* we add our packets send/recv to the total */
+  ctx->packets_recv += ctx->last_packets_recv;
+  ctx->packets_sent += ctx->last_packets_sent;
+
+  /* and add the processed stats to the windowed stats */
+  g_array_append_vals (ctx->win_packets, ctx->new_packets->data,
+      ctx->new_packets->len);
+
+  /* and we reset the new packets, ready for more */
+  g_array_set_size (ctx->new_packets, 0);
+}
+
+
+static gint
+_get_window_start_index (GArray * packets, GstClockTime duration,
+    GstClockTime * local_duration, GstClockTime * remote_duration)
+{
+  StatsPacket *last = NULL;
+  guint i;
+
+  if (packets->len < 2)
+    return -1;
+
+  for (i = 0; i < packets->len; i++) {
+    guint start_index = packets->len - 1 - i;
+    StatsPacket *pkt = &g_array_index (packets, StatsPacket, start_index);
+    if (GST_CLOCK_TIME_IS_VALID (pkt->local_ts)
+        && GST_CLOCK_TIME_IS_VALID (pkt->remote_ts)) {
+      /* first find the last valid packet */
+      if (last == NULL) {
+        last = pkt;
+      } else {
+        /* and then get the duration in local ts */
+        GstClockTimeDiff ld = GST_CLOCK_DIFF (pkt->local_ts, last->local_ts);
+        if (ld >= duration) {
+          *local_duration = ld;
+          *remote_duration = GST_CLOCK_DIFF (pkt->remote_ts, last->remote_ts);
+          return start_index;
+        }
+      }
+    }
+  }
+
+  return -1;
+}
+
+static void
+twcc_stats_ctx_calculate_windowed_stats (TWCCStatsCtx * ctx,
+    GstClockTimeDiff recovery_deadline)
+{
+  GArray *packets = ctx->win_packets;
+  guint packets_sent = 0;
+  guint packets_recv = 0;
+  guint packets_lost;
+
+  guint i;
+  gint start_idx;
+  guint bits_sent = 0;
+  guint bits_recv = 0;
+  GstClockTimeDiff delta_delta_sum = 0;
+  guint delta_delta_count = 0;
+  GstClockTime local_duration = 0;
+  GstClockTime remote_duration = 0;
+
+  ctx->packet_loss_pct = 0.0;
+  ctx->avg_delta_of_delta = GST_CLOCK_STIME_NONE;
+  ctx->bitrate_sent = 0;
+  ctx->bitrate_recv = 0;
+
+  twcc_stats_ctx_process_new_stats (ctx);
+
+  start_idx = _get_window_start_index (packets, ctx->window_size,
+      &local_duration, &remote_duration);
+  if (start_idx == -1)
+    return;
+
+  /* remove the old packets */
+  if (start_idx > 0)
+    g_array_remove_range (packets, 0, start_idx);
+
+  packets_sent = packets->len;
+
+  for (i = 0; i < packets_sent; i++) {
+    StatsPacket *pkt = &g_array_index (packets, StatsPacket, i);
+    /* we ignore the bit-contribution from the first packet,
+       since that falls outside our window */
+    gboolean first_packet = (i == 0);
+
+    if (GST_CLOCK_TIME_IS_VALID (pkt->local_ts)) {
+      if (!first_packet)
+        bits_sent += pkt->size * 8;
+    }
+
+    if (GST_CLOCK_TIME_IS_VALID (pkt->remote_ts)) {
+      if (!first_packet)
+        bits_recv += pkt->size * 8;
+      packets_recv++;
+    }
+
+    if (GST_CLOCK_STIME_IS_VALID (pkt->delta_delta)) {
+      delta_delta_sum += pkt->delta_delta;
+      delta_delta_count++;
+    }
+  }
+
+  packets_lost = packets_sent - packets_recv;
+  ctx->packet_loss_pct = (packets_lost * 100) / (gfloat) packets_sent;
+
+  if (delta_delta_count) {
+    ctx->avg_delta_of_delta = delta_delta_sum / delta_delta_count;
+  }
+
+  if (local_duration > 0)
+    ctx->bitrate_sent =
+        gst_util_uint64_scale (bits_sent, GST_SECOND, local_duration);
+  if (remote_duration > 0)
+    ctx->bitrate_recv =
+        gst_util_uint64_scale (bits_recv, GST_SECOND, remote_duration);
+
+  GST_LOG ("Got stats: bits_sent: %u, bits_recv: %u, packets_sent = %u, "
+      "packets_recv: %u, packetlost_pct = %f, sent_bitrate = %u, "
+      "recv_bitrate = %u, delta-delta-avg = %" GST_STIME_FORMAT,
+      bits_sent, bits_recv, packets_sent,
+      packets_recv, ctx->packet_loss_pct, ctx->bitrate_sent,
+      ctx->bitrate_recv, GST_STIME_ARGS (ctx->avg_delta_of_delta));
+}
+
+static GstStructure *
+twcc_stats_ctx_get_structure (TWCCStatsCtx * ctx)
+{
+  return gst_structure_new ("RTPTWCCStats",
+      "packets-sent", G_TYPE_UINT, ctx->last_packets_sent,
+      "packets-recv", G_TYPE_UINT, ctx->last_packets_recv,
+      "bitrate-sent", G_TYPE_UINT, ctx->bitrate_sent,
+      "bitrate-recv", G_TYPE_UINT, ctx->bitrate_recv,
+      "packet-loss-pct", G_TYPE_DOUBLE, ctx->packet_loss_pct,
+      "avg-delta-of-delta", G_TYPE_INT64, ctx->avg_delta_of_delta, NULL);
+}
+
+/******************************************************/
+
 struct _RTPTWCCManager
 {
   GObject object;
+
+  GHashTable *ssrc_to_seqmap;
+
+  GstClockTime stats_window_size;
+  TWCCStatsCtx *stats_ctx;
+  GHashTable *stats_ctx_by_pt;
 
   guint8 send_ext_id;
   guint8 recv_ext_id;
@@ -102,6 +390,9 @@ struct _RTPTWCCManager
 
   GstClockTime next_feedback_send_time;
   GstClockTime feedback_interval;
+
+  GstClockTimeDiff avg_rtt;
+  GstClockTime last_report_time;
 };
 
 
@@ -121,11 +412,19 @@ G_DEFINE_TYPE_WITH_CODE (RTPTWCCManager, rtp_twcc_manager, G_TYPE_OBJECT,
 static void
 rtp_twcc_manager_init (RTPTWCCManager * twcc)
 {
+  twcc->ssrc_to_seqmap = g_hash_table_new_full (NULL, NULL, NULL,
+      (GDestroyNotify) g_hash_table_destroy);
+
   twcc->recv_packets = g_array_new (FALSE, FALSE, sizeof (RecvPacket));
   twcc->sent_packets = g_array_new (FALSE, FALSE, sizeof (SentPacket));
-  twcc->parsed_packets = g_array_new (FALSE, FALSE, sizeof (RecvPacket));
+  twcc->parsed_packets = g_array_new (FALSE, FALSE, sizeof (ParsedPacket));
 
   twcc->rtcp_buffers = g_queue_new ();
+
+  twcc->stats_window_size = 300 * GST_MSECOND;
+  twcc->stats_ctx = twcc_stats_ctx_new (twcc->stats_window_size);
+  twcc->stats_ctx_by_pt = g_hash_table_new_full (NULL, NULL,
+      NULL, (GDestroyNotify) twcc_stats_ctx_free);
 
   twcc->last_seqnum = -1;
   twcc->recv_media_ssrc = -1;
@@ -135,6 +434,7 @@ rtp_twcc_manager_init (RTPTWCCManager * twcc)
 
   twcc->feedback_interval = GST_CLOCK_TIME_NONE;
   twcc->next_feedback_send_time = GST_CLOCK_TIME_NONE;
+  twcc->last_report_time = GST_CLOCK_TIME_NONE;
 }
 
 static void
@@ -142,10 +442,15 @@ rtp_twcc_manager_finalize (GObject * object)
 {
   RTPTWCCManager *twcc = RTP_TWCC_MANAGER_CAST (object);
 
+  g_hash_table_destroy (twcc->ssrc_to_seqmap);
+
   g_array_unref (twcc->recv_packets);
   g_array_unref (twcc->sent_packets);
   g_array_unref (twcc->parsed_packets);
   g_queue_free_full (twcc->rtcp_buffers, (GDestroyNotify) gst_buffer_unref);
+
+  g_hash_table_destroy (twcc->stats_ctx_by_pt);
+  twcc_stats_ctx_free (twcc->stats_ctx);
 
   G_OBJECT_CLASS (rtp_twcc_manager_parent_class)->finalize (object);
 }
@@ -165,6 +470,43 @@ rtp_twcc_manager_new (guint mtu)
   rtp_twcc_manager_set_mtu (twcc, mtu);
 
   return twcc;
+}
+
+static TWCCStatsCtx *
+_get_ctx_for_pt (RTPTWCCManager * twcc, guint pt)
+{
+  TWCCStatsCtx *ctx =
+      g_hash_table_lookup (twcc->stats_ctx_by_pt, GUINT_TO_POINTER (pt));
+  if (!ctx) {
+    ctx = twcc_stats_ctx_new (twcc->stats_window_size);
+    g_hash_table_insert (twcc->stats_ctx_by_pt, GUINT_TO_POINTER (pt), ctx);
+  }
+  return ctx;
+}
+
+static void
+_add_packet_to_stats (RTPTWCCManager * twcc, SentPacket * packet)
+{
+  TWCCStatsCtx *ctx;
+  StatsPacket pkt;
+
+  pkt.org_ts = packet->local_ts;
+  pkt.local_ts = packet->local_ts;
+  pkt.remote_ts = packet->remote_ts;
+  pkt.seqnum = packet->seqnum;
+  pkt.size = packet->size;
+  pkt.pt = packet->pt;
+  pkt.delta_delta = GST_CLOCK_STIME_NONE;
+
+  /* if we have a socket-timestamp, use that instead */
+  if (GST_CLOCK_TIME_IS_VALID (packet->socket_ts)) {
+    pkt.local_ts = packet->socket_ts;
+  }
+
+  twcc_stats_ctx_add_packet (twcc->stats_ctx, &pkt);
+
+  ctx = _get_ctx_for_pt (twcc, packet->pt);
+  twcc_stats_ctx_add_packet (ctx, &pkt);
 }
 
 static void
@@ -266,32 +608,16 @@ _get_twcc_seqnum_data (RTPPacketInfo * pinfo, guint8 ext_id, gpointer * data)
   return ret;
 }
 
-static gboolean
-sent_packet_init (SentPacket * packet, guint16 seqnum, RTPPacketInfo * pinfo,
-    GstBuffer * buffer)
+static void
+sent_packet_init (SentPacket * packet, guint16 seqnum, RTPPacketInfo * pinfo)
 {
-  GstRTPBuffer rtp = { NULL };
-
-  if (!gst_rtp_buffer_map (buffer, GST_MAP_READ, &rtp))
-    goto invalid_packet;
-
   packet->seqnum = seqnum;
-  packet->ts = pinfo->current_time;
-  packet->size = gst_rtp_buffer_get_payload_len (&rtp);
-  packet->pt = gst_rtp_buffer_get_payload_type (&rtp);
+  packet->local_ts = pinfo->current_time;
+  packet->size = pinfo->payload_len;
+  packet->pt = pinfo->pt;
   packet->remote_ts = GST_CLOCK_TIME_NONE;
   packet->socket_ts = GST_CLOCK_TIME_NONE;
   packet->lost = FALSE;
-
-  gst_rtp_buffer_unmap (&rtp);
-
-  return TRUE;
-
-invalid_packet:
-  {
-    GST_DEBUG ("invalid RTP packet received");
-    return FALSE;
-  }
 }
 
 static void
@@ -308,7 +634,7 @@ _set_twcc_seqnum_data (RTPTWCCManager * twcc, RTPPacketInfo * pinfo,
       guint16 seqnum = twcc->send_seqnum++;
 
       GST_WRITE_UINT16_BE (data, seqnum);
-      sent_packet_init (&packet, seqnum, pinfo, buf);
+      sent_packet_init (&packet, seqnum, pinfo);
       g_array_append_val (twcc->sent_packets, packet);
 
       gst_buffer_add_tx_feedback_meta (pinfo->data, seqnum, GST_TX_FEEDBACK (twcc));
@@ -960,29 +1286,24 @@ rtp_twcc_manager_tx_feedback (GstTxFeedback * parent, guint64 buffer_id,
     pkt = &g_array_index (twcc->sent_packets, SentPacket, idx);
     if (pkt && pkt->seqnum == seqnum) {
       pkt->socket_ts = ts;
-      GST_LOG ("packet #%u, setting socket-ts %"GST_TIME_FORMAT,
+      GST_LOG ("packet #%u, setting socket-ts %" GST_TIME_FORMAT,
           seqnum, GST_TIME_ARGS (ts));
     }
   }
 }
 
 static void
-_add_twcc_packet (GArray * twcc_packets, guint16 seqnum, guint status)
+_add_parsed_packet (GArray * parsed_packets, guint16 seqnum, guint status)
 {
-  RTPTWCCPacket packet;
-  memset (&packet, 0, sizeof (RTPTWCCPacket));
-  packet.local_ts = GST_CLOCK_TIME_NONE;
-  packet.remote_ts = GST_CLOCK_TIME_NONE;
-  packet.local_delta = GST_CLOCK_STIME_NONE;
-  packet.remote_delta = GST_CLOCK_STIME_NONE;
-  packet.delta_delta = GST_CLOCK_STIME_NONE;
+  ParsedPacket packet;
   packet.seqnum = seqnum;
   packet.status = status;
-  g_array_append_val (twcc_packets, packet);
+  packet.remote_ts = GST_CLOCK_TIME_NONE;
+  g_array_append_val (parsed_packets, packet);
 }
 
 static guint
-_parse_run_length_chunk (GstBitReader * reader, GArray * twcc_packets,
+_parse_run_length_chunk (GstBitReader * reader, GArray * parsed_packets,
     guint16 seqnum_offset, guint remaining_packets)
 {
   guint16 run_length;
@@ -995,14 +1316,14 @@ _parse_run_length_chunk (GstBitReader * reader, GArray * twcc_packets,
   run_length = MIN (remaining_packets, run_length);
 
   for (i = 0; i < run_length; i++) {
-    _add_twcc_packet (twcc_packets, seqnum_offset + i, status_code);
+    _add_parsed_packet (parsed_packets, seqnum_offset + i, status_code);
   }
 
   return run_length;
 }
 
 static guint
-_parse_status_vector_chunk (GstBitReader * reader, GArray * twcc_packets,
+_parse_status_vector_chunk (GstBitReader * reader, GArray * parsed_packets,
     guint16 seqnum_offset, guint remaining_packets)
 {
   guint8 symbol_size;
@@ -1016,7 +1337,7 @@ _parse_status_vector_chunk (GstBitReader * reader, GArray * twcc_packets,
   for (i = 0; i < num_bits; i++) {
     guint8 status_code;
     if (gst_bit_reader_get_bits_uint8 (reader, &status_code, symbol_size))
-      _add_twcc_packet (twcc_packets, seqnum_offset + i, status_code);
+      _add_parsed_packet (parsed_packets, seqnum_offset + i, status_code);
   }
 
   return num_bits;
@@ -1025,17 +1346,17 @@ _parse_status_vector_chunk (GstBitReader * reader, GArray * twcc_packets,
 /* Remove all locally stored packets that has been reported
    back to us */
 static void
-_prune_sent_packets (RTPTWCCManager * twcc, GArray * twcc_packets)
+_prune_sent_packets (RTPTWCCManager * twcc, GArray * parsed_packets)
 {
   SentPacket *first;
-  RTPTWCCPacket *last;
+  ParsedPacket *last;
   guint16 last_idx;
 
-  if (twcc_packets->len == 0 || twcc->sent_packets->len == 0)
+  if (parsed_packets->len == 0 || twcc->sent_packets->len == 0)
     return;
 
   first = &g_array_index (twcc->sent_packets, SentPacket, 0);
-  last = &g_array_index (twcc_packets, RTPTWCCPacket, twcc_packets->len - 1);
+  last = &g_array_index (parsed_packets, ParsedPacket, parsed_packets->len - 1);
 
   last_idx = last->seqnum - first->seqnum;
 
@@ -1044,7 +1365,7 @@ _prune_sent_packets (RTPTWCCManager * twcc, GArray * twcc_packets)
 }
 
 static void
-_check_for_lost_packets (RTPTWCCManager * twcc, GArray * twcc_packets,
+_check_for_lost_packets (RTPTWCCManager * twcc, GArray * parsed_packets,
     guint16 base_seqnum, guint16 packet_count, guint8 fb_pkt_count)
 {
   guint packets_lost;
@@ -1084,7 +1405,7 @@ _check_for_lost_packets (RTPTWCCManager * twcc, GArray * twcc_packets,
 
   packets_lost = base_seqnum - twcc->expected_parsed_seqnum;
   for (i = 0; i < packets_lost; i++) {
-    _add_twcc_packet (twcc_packets, twcc->expected_parsed_seqnum + i,
+    _add_parsed_packet (parsed_packets, twcc->expected_parsed_seqnum + i,
         RTP_TWCC_PACKET_STATUS_NOT_RECV);
   }
 
@@ -1094,11 +1415,34 @@ done:
   return;
 }
 
-GArray *
-rtp_twcc_manager_parse_fci (RTPTWCCManager * twcc,
-    guint8 * fci_data, guint fci_length)
+static void
+_add_found_packet_to_value_array (GValueArray * array, SentPacket * pkt)
 {
-  GArray *twcc_packets;
+  GstClockTime local_ts = pkt->local_ts;
+
+  /* if we have a socket-timestamp, use that instead */
+  if (GST_CLOCK_TIME_IS_VALID (pkt->socket_ts)) {
+    local_ts = pkt->socket_ts;
+  }
+
+  _append_structure_to_value_array (array,
+      gst_structure_new ("RTPTWCCPacket",
+          "seqnum", G_TYPE_UINT, pkt->seqnum,
+          "local-ts", G_TYPE_UINT64, local_ts,
+          "remote-ts", G_TYPE_UINT64, pkt->remote_ts,
+          "payload-type", G_TYPE_UCHAR, pkt->pt,
+          "size", G_TYPE_UINT, pkt->size,
+          "lost", G_TYPE_BOOLEAN, !GST_CLOCK_TIME_IS_VALID (pkt->remote_ts),
+          NULL));
+}
+
+GstStructure *
+rtp_twcc_manager_parse_fci (RTPTWCCManager * twcc,
+    guint8 * fci_data, guint fci_length, GstClockTime current_time)
+{
+  GstStructure *ret;
+  GValueArray *array;
+
   guint16 base_seqnum;
   guint16 packet_count;
   GstClockTime base_time;
@@ -1108,11 +1452,15 @@ rtp_twcc_manager_parse_fci (RTPTWCCManager * twcc,
   guint fci_parsed;
   guint i;
   SentPacket *first_sent_pkt = NULL;
+  GstClockTimeDiff rtt = GST_CLOCK_STIME_NONE;
 
   if (fci_length < 10) {
     GST_WARNING ("Malformed TWCC RTCP feedback packet");
     return NULL;
   }
+
+  ret = gst_structure_new_empty ("RTPTWCCPackets");
+  array = g_value_array_new (0);
 
   base_seqnum = GST_READ_UINT16_BE (&fci_data[0]);
   packet_count = GST_READ_UINT16_BE (&fci_data[2]);
@@ -1123,10 +1471,9 @@ rtp_twcc_manager_parse_fci (RTPTWCCManager * twcc,
       "base_time %" GST_TIME_FORMAT " fb_pkt_count: %u",
       base_seqnum, packet_count, GST_TIME_ARGS (base_time), fb_pkt_count);
 
-  twcc_packets = g_array_sized_new (FALSE, FALSE,
-      sizeof (RTPTWCCPacket), packet_count);
+  g_array_set_size (twcc->parsed_packets, 0);
 
-  _check_for_lost_packets (twcc, twcc_packets,
+  _check_for_lost_packets (twcc, twcc->parsed_packets,
       base_seqnum, packet_count, fb_pkt_count);
 
   fci_parsed = 8;
@@ -1140,10 +1487,10 @@ rtp_twcc_manager_parse_fci (RTPTWCCManager * twcc,
 
     if (chunk_type == RTP_TWCC_CHUNK_TYPE_RUN_LENGTH) {
       packets_parsed += _parse_run_length_chunk (&reader,
-          twcc_packets, seqnum_offset, remaining_packets);
+          twcc->parsed_packets, seqnum_offset, remaining_packets);
     } else {
       packets_parsed += _parse_status_vector_chunk (&reader,
-          twcc_packets, seqnum_offset, remaining_packets);
+          twcc->parsed_packets, seqnum_offset, remaining_packets);
     }
     fci_parsed += 2;
   }
@@ -1152,8 +1499,8 @@ rtp_twcc_manager_parse_fci (RTPTWCCManager * twcc,
     first_sent_pkt = &g_array_index (twcc->sent_packets, SentPacket, 0);
 
   ts_rounded = base_time;
-  for (i = 0; i < twcc_packets->len; i++) {
-    RTPTWCCPacket *pkt = &g_array_index (twcc_packets, RTPTWCCPacket, i);
+  for (i = 0; i < twcc->parsed_packets->len; i++) {
+    ParsedPacket *pkt = &g_array_index (twcc->parsed_packets, ParsedPacket, i);
     gint16 delta = 0;
     GstClockTimeDiff delta_ts;
 
@@ -1167,7 +1514,7 @@ rtp_twcc_manager_parse_fci (RTPTWCCManager * twcc,
 
     if (fci_parsed > fci_length) {
       GST_WARNING ("Malformed TWCC RTCP feedback packet");
-      g_array_set_size (twcc_packets, 0);
+      g_array_set_size (twcc->parsed_packets, 0);
       break;
     }
 
@@ -1189,21 +1536,65 @@ rtp_twcc_manager_parse_fci (RTPTWCCManager * twcc,
       if (sent_idx < twcc->sent_packets->len)
         found = &g_array_index (twcc->sent_packets, SentPacket, sent_idx);
       if (found && found->seqnum == pkt->seqnum) {
-        if (GST_CLOCK_TIME_IS_VALID (found->socket_ts)) {
-          pkt->local_ts = found->socket_ts;
-        } else {
-          pkt->local_ts = found->ts;
-        }
-        pkt->size = found->size;
-        pkt->pt = found->pt;
+        found->remote_ts = pkt->remote_ts;
+
+        GST_LOG ("Adding packet %u to stats", found->seqnum);
+        _add_packet_to_stats (twcc, found);
+
+        _add_found_packet_to_value_array (array, found);
+
+        /* calculate the round-trip time */
+        rtt = GST_CLOCK_DIFF (found->local_ts, current_time);
 
         GST_LOG ("matching pkt: #%u with local_ts: %" GST_TIME_FORMAT
-            " size: %u", pkt->seqnum, GST_TIME_ARGS (pkt->local_ts), pkt->size);
+            " size: %u", pkt->seqnum, GST_TIME_ARGS (found->local_ts),
+            found->size);
       }
     }
   }
 
-  _prune_sent_packets (twcc, twcc_packets);
+  if (GST_CLOCK_STIME_IS_VALID (rtt))
+    twcc->avg_rtt = WEIGHT (rtt, twcc->avg_rtt, 0.1);
+  twcc->last_report_time = current_time;
 
-  return twcc_packets;
+  _prune_sent_packets (twcc, twcc->parsed_packets);
+
+  _structure_take_value_array (ret, "packets", array);
+
+  return ret;
+}
+
+GstStructure *
+rtp_twcc_manager_get_windowed_stats (RTPTWCCManager * twcc)
+{
+  GstStructure *ret;
+  GValueArray *array = g_value_array_new (0);
+  GstClockTimeDiff recovery_deadline;
+  GHashTableIter iter;
+  gpointer key;
+  gpointer value;
+
+  g_assert (GST_CLOCK_TIME_IS_VALID (twcc->last_report_time));
+  recovery_deadline =
+      twcc->last_report_time - twcc->avg_rtt - 100 * GST_MSECOND;
+
+  twcc_stats_ctx_calculate_windowed_stats (twcc->stats_ctx, recovery_deadline);
+  ret = twcc_stats_ctx_get_structure (twcc->stats_ctx);
+
+  g_hash_table_iter_init (&iter, twcc->stats_ctx_by_pt);
+  while (g_hash_table_iter_next (&iter, &key, &value)) {
+    GstStructure *s;
+    guint pt = GPOINTER_TO_UINT (key);
+    TWCCStatsCtx *ctx = value;
+
+    twcc_stats_ctx_calculate_windowed_stats (ctx, recovery_deadline);
+    s = twcc_stats_ctx_get_structure (ctx);
+    gst_structure_set (s, "pt", G_TYPE_UINT, pt, NULL);
+
+    _append_structure_to_value_array (array, s);
+  }
+
+  _structure_take_value_array (ret, "payload-stats", array);
+
+  return ret;
 }
