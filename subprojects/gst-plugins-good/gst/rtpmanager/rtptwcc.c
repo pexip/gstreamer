@@ -118,6 +118,7 @@ typedef struct
   guint bitrate_sent;
   guint bitrate_recv;
   gdouble packet_loss_pct;
+  gdouble actual_packet_loss_pct;
   gint64 avg_delta_of_delta;
 
   /* totals */
@@ -264,12 +265,12 @@ twcc_stats_ctx_calculate_windowed_stats (TWCCStatsCtx * ctx)
   GArray *packets = ctx->win_packets;
   guint packets_sent = 0;
   guint packets_recv = 0;
+  guint packets_recovered = 0;
 
   guint i;
   gint start_idx;
   guint bits_sent = 0;
   guint bits_recv = 0;
-  guint packets_lost;
   GstClockTimeDiff delta_delta_sum = 0;
   guint delta_delta_count = 0;
   GstClockTime local_duration = 0;
@@ -309,7 +310,7 @@ twcc_stats_ctx_calculate_windowed_stats (TWCCStatsCtx * ctx)
         bits_recv += pkt->size * 8;
       packets_recv++;
     } else if (pkt->recovered) {
-      packets_recv++;
+      packets_recovered++;
     }
 
     if (GST_CLOCK_STIME_IS_VALID (pkt->delta_delta)) {
@@ -318,8 +319,11 @@ twcc_stats_ctx_calculate_windowed_stats (TWCCStatsCtx * ctx)
     }
   }
 
-  packets_lost = packets_sent - packets_recv;
-  ctx->packet_loss_pct = (packets_lost * 100) / (gfloat) packets_sent;
+  ctx->packet_loss_pct =
+      ((packets_sent - packets_recv) * 100) / (gfloat) packets_sent;
+  ctx->actual_packet_loss_pct =
+      ((packets_sent - packets_recv -
+          packets_recovered) * 100) / (gfloat) packets_sent;
 
   if (delta_delta_count) {
     ctx->avg_delta_of_delta = delta_delta_sum / delta_delta_count;
@@ -349,6 +353,7 @@ twcc_stats_ctx_get_structure (TWCCStatsCtx * ctx)
       "bitrate-sent", G_TYPE_UINT, ctx->bitrate_sent,
       "bitrate-recv", G_TYPE_UINT, ctx->bitrate_recv,
       "packet-loss-pct", G_TYPE_DOUBLE, ctx->packet_loss_pct,
+      "actual-packet-loss-pct", G_TYPE_DOUBLE, ctx->actual_packet_loss_pct,
       "avg-delta-of-delta", G_TYPE_INT64, ctx->avg_delta_of_delta, NULL);
 }
 
@@ -393,7 +398,7 @@ twcc_stats_ctx_get_packet_for_seqnum_fast (TWCCStatsCtx * ctx, guint16 seqnum)
 
   first = &g_array_index (ctx->win_packets, StatsPacket, 0);
   if (first) {
-  idx = seqnum - first->seqnum;
+    idx = seqnum - first->seqnum;
     if (idx < ctx->win_packets->len) {
       StatsPacket *found = &g_array_index (ctx->win_packets, StatsPacket, idx);
       if (found->seqnum == seqnum) {
@@ -1632,9 +1637,8 @@ rtp_twcc_manager_parse_fci (RTPTWCCManager * twcc,
         GST_LOG ("Adding packet %u to stats", found->seqnum);
         _add_packet_to_stats (twcc, found);
 
-        if (found->rtx_osn != -1) {
-          GST_LOG ("RTX Packet %u protects OSN %u with SSRC: %u", found->seqnum,
-              found->rtx_osn, found->rtx_ssrc);
+        if (pkt->status != RTP_TWCC_PACKET_STATUS_NOT_RECV
+            && found->rtx_osn != -1) {
           gint32 recovered_seq =
               rtp_twcc_manager_lookup_seqnum (twcc, found->rtx_ssrc,
               found->rtx_osn);
