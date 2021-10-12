@@ -260,27 +260,6 @@ typedef struct {
   guint         nacks_received;
 } RTPSessionStats;
 
-/**
- * RTPTWCCStats:
- *
- * Stats kept for a session and used to produce TWCC stats.
- */
-typedef struct {
-  GArray       *packets;
-  GstClockTime window_size;
-  GstClockTime  last_local_ts;
-  GstClockTime  last_remote_ts;
-
-  guint bitrate_sent;
-  guint bitrate_recv;
-  guint packets_sent;
-  guint packets_recv;
-  gfloat packet_loss_pct;
-  GstClockTimeDiff avg_delta_of_delta;
-  gfloat avg_delta_of_delta_change;
-} RTPTWCCStats;
-
-
 void           rtp_stats_init_defaults              (RTPSessionStats *stats);
 
 void           rtp_stats_set_bandwidths             (RTPSessionStats *stats,
@@ -299,11 +278,5 @@ void           rtp_stats_set_min_interval           (RTPSessionStats *stats,
 
 gboolean __g_socket_address_equal (GSocketAddress *a, GSocketAddress *b);
 gchar * __g_socket_address_to_string (GSocketAddress * addr);
-
-RTPTWCCStats * rtp_twcc_stats_new (void);
-void rtp_twcc_stats_free (RTPTWCCStats * stats);
-GstStructure * rtp_twcc_stats_process_packets (RTPTWCCStats * stats,
-    GArray * twcc_packets);
-GstStructure * rtp_twcc_stats_get_packets_structure (GArray * twcc_packets);
 
 #endif /* __RTP_STATS_H__ */
