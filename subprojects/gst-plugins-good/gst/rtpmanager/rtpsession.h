@@ -319,7 +319,8 @@ struct _RTPSession {
 
   /* Transport-wide cc-extension */
   RTPTWCCManager *twcc;
-  RTPTWCCStats *twcc_stats;
+  GstStructure *rtx_ssrc_map;
+  GHashTable *rtx_ssrc_to_ssrc;
 };
 
 /**
@@ -333,6 +334,8 @@ struct _RTPSessionClass {
   GObjectClass   parent_class;
 
   /* action signals */
+  GstStructure* (*get_twcc_windowed_stats) (RTPSession *sess,
+      GstClockTime stats_window_size, GstClockTime stats_window_delay);
   RTPSource* (*get_source_by_ssrc) (RTPSession *sess, guint32 ssrc);
 
   /* signals */
