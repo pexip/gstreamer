@@ -824,7 +824,6 @@ rtp_session_init (RTPSession * sess)
   sess->is_doing_ptp = TRUE;
 
   sess->twcc = rtp_twcc_manager_new (sess->mtu);
-  sess->twcc_stats = rtp_twcc_stats_new ();
 }
 
 static void
@@ -847,7 +846,6 @@ rtp_session_finalize (GObject * object)
     g_hash_table_destroy (sess->ssrcs[i]);
 
   g_object_unref (sess->twcc);
-  rtp_twcc_stats_free (sess->twcc_stats);
 
   g_mutex_clear (&sess->lock);
 
@@ -3092,25 +3090,21 @@ rtp_session_process_sr_req (RTPSession * sess, guint32 sender_ssrc,
 
 static void
 rtp_session_process_twcc (RTPSession * sess, guint32 sender_ssrc,
-    guint32 media_ssrc, guint8 * fci_data, guint fci_length)
+    guint32 media_ssrc, guint8 * fci_data, guint fci_length,
+    GstClockTime current_time)
 {
-  GArray *twcc_packets;
   GstStructure *twcc_packets_s;
   GstStructure *twcc_stats_s;
 
-  twcc_packets = rtp_twcc_manager_parse_fci (sess->twcc,
-      fci_data, fci_length * sizeof (guint32));
-  if (twcc_packets == NULL)
+  twcc_packets_s = rtp_twcc_manager_parse_fci (sess->twcc,
+      fci_data, fci_length * sizeof (guint32), current_time);
+  if (twcc_packets_s == NULL)
     return;
 
-  twcc_packets_s = rtp_twcc_stats_get_packets_structure (twcc_packets);
-  twcc_stats_s =
-      rtp_twcc_stats_process_packets (sess->twcc_stats, twcc_packets);
+  twcc_stats_s = rtp_twcc_manager_get_windowed_stats (sess->twcc);
 
   GST_DEBUG_OBJECT (sess, "Parsed TWCC: %" GST_PTR_FORMAT, twcc_packets_s);
   GST_INFO_OBJECT (sess, "Current TWCC stats %" GST_PTR_FORMAT, twcc_stats_s);
-
-  g_array_unref (twcc_packets);
 
   RTP_SESSION_UNLOCK (sess);
   if (sess->callbacks.notify_twcc)
@@ -3215,7 +3209,7 @@ rtp_session_process_feedback (RTPSession * sess, GstRTCPPacket * packet,
             break;
           case GST_RTCP_RTPFB_TYPE_TWCC:
             rtp_session_process_twcc (sess, sender_ssrc, media_ssrc,
-                fci_data, fci_length);
+                fci_data, fci_length, current_time);
             break;
           default:
             break;
