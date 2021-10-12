@@ -25,32 +25,9 @@
 #include <gst/rtp/rtp.h>
 #include "rtpstats.h"
 
-typedef struct _RTPTWCCPacket RTPTWCCPacket;
-typedef enum _RTPTWCCPacketStatus RTPTWCCPacketStatus;
-
 G_DECLARE_FINAL_TYPE (RTPTWCCManager, rtp_twcc_manager, RTP, TWCC_MANAGER, GObject)
 #define RTP_TYPE_TWCC_MANAGER (rtp_twcc_manager_get_type())
 #define RTP_TWCC_MANAGER_CAST(obj) ((RTPTWCCManager *)(obj))
-
-enum _RTPTWCCPacketStatus
-{
-  RTP_TWCC_PACKET_STATUS_NOT_RECV = 0,
-  RTP_TWCC_PACKET_STATUS_SMALL_DELTA = 1,
-  RTP_TWCC_PACKET_STATUS_LARGE_NEGATIVE_DELTA = 2,
-};
-
-struct _RTPTWCCPacket
-{
-  GstClockTime local_ts;
-  GstClockTime remote_ts;
-  GstClockTimeDiff local_delta;
-  GstClockTimeDiff remote_delta;
-  GstClockTimeDiff delta_delta;
-  RTPTWCCPacketStatus status;
-  guint16 seqnum;
-  guint size;
-  guint8 pt;
-};
 
 RTPTWCCManager * rtp_twcc_manager_new (guint mtu);
 
@@ -74,7 +51,9 @@ void rtp_twcc_manager_send_packet (RTPTWCCManager * twcc,
 GstBuffer * rtp_twcc_manager_get_feedback (RTPTWCCManager * twcc,
     guint32 sender_ssrc, GstClockTime current_time);
 
-GArray * rtp_twcc_manager_parse_fci (RTPTWCCManager * twcc,
-    guint8 * fci_data, guint fci_length);
+GstStructure * rtp_twcc_manager_parse_fci (RTPTWCCManager * twcc,
+    guint8 * fci_data, guint fci_length, GstClockTime current_time);
+
+GstStructure * rtp_twcc_manager_get_windowed_stats (RTPTWCCManager * twcc);
 
 #endif /* __RTP_TWCC_H__ */
