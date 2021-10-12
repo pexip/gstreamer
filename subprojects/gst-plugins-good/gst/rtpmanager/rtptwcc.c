@@ -80,7 +80,6 @@ typedef struct
   gboolean lost;
   gint32 rtx_osn;
   guint32 rtx_ssrc;
-  gboolean recovered;           /* FIXME: KILL! */
 } SentPacket;
 
 typedef struct
@@ -90,33 +89,13 @@ typedef struct
   GstClockTime remote_ts;
 } ParsedPacket;
 
-static void
-_append_structure_to_value_array (GValueArray * array, GstStructure * s)
-{
-  GValue *val;
-  g_value_array_append (array, NULL);
-  val = g_value_array_get_nth (array, array->n_values - 1);
-  g_value_init (val, GST_TYPE_STRUCTURE);
-  g_value_take_boxed (val, s);
-}
-
-static void
-_structure_take_value_array (GstStructure * s,
-    const gchar * field_name, GValueArray * array)
-{
-  GValue value = G_VALUE_INIT;
-  g_value_init (&value, G_TYPE_VALUE_ARRAY);
-  g_value_take_boxed (&value, array);
-  gst_structure_take_value (s, field_name, &value);
-  g_value_unset (&value);
-}
-
 typedef struct
 {
   GstClockTime local_ts;
   GstClockTime remote_ts;
   guint16 seqnum;
   guint size;
+  guint8 pt;
 
   GstClockTimeDiff delta_delta;
   gboolean recovered;
@@ -146,6 +125,27 @@ typedef struct
   guint packets_recv;
 
 } TWCCStatsCtx;
+
+static void
+_append_structure_to_value_array (GValueArray * array, GstStructure * s)
+{
+  GValue *val;
+  g_value_array_append (array, NULL);
+  val = g_value_array_get_nth (array, array->n_values - 1);
+  g_value_init (val, GST_TYPE_STRUCTURE);
+  g_value_take_boxed (val, s);
+}
+
+static void
+_structure_take_value_array (GstStructure * s,
+    const gchar * field_name, GValueArray * array)
+{
+  GValue value = G_VALUE_INIT;
+  g_value_init (&value, G_TYPE_VALUE_ARRAY);
+  g_value_take_boxed (&value, array);
+  gst_structure_take_value (s, field_name, &value);
+  g_value_unset (&value);
+}
 
 static TWCCStatsCtx *
 twcc_stats_ctx_new (GstClockTime window_size)
@@ -332,7 +332,7 @@ twcc_stats_ctx_calculate_windowed_stats (TWCCStatsCtx * ctx)
     ctx->bitrate_recv =
         gst_util_uint64_scale (bits_recv, GST_SECOND, remote_duration);
 
-  GST_ERROR ("Got stats: bits_sent: %u, bits_recv: %u, packets_sent = %u, "
+  GST_LOG ("Got stats: bits_sent: %u, bits_recv: %u, packets_sent = %u, "
       "packets_recv: %u, packetlost_pct = %f, sent_bitrate = %u, "
       "recv_bitrate = %u, delta-delta-avg = %" GST_STIME_FORMAT,
       bits_sent, bits_recv, packets_sent,
@@ -351,6 +351,56 @@ twcc_stats_ctx_get_structure (TWCCStatsCtx * ctx)
       "packet-loss-pct", G_TYPE_DOUBLE, ctx->packet_loss_pct,
       "avg-delta-of-delta", G_TYPE_INT64, ctx->avg_delta_of_delta, NULL);
 }
+
+static StatsPacket *
+twcc_stats_ctx_get_packet_for_seqnum (TWCCStatsCtx * ctx, guint16 seqnum)
+{
+  guint i;
+
+  for (i = 0; i < ctx->new_packets->len; i++) {
+    StatsPacket *pkt = &g_array_index (ctx->new_packets, StatsPacket, i);
+    if (pkt->seqnum == seqnum) {
+      return pkt;
+    }
+  }
+
+  for (i = 0; i < ctx->win_packets->len; i++) {
+    StatsPacket *pkt = &g_array_index (ctx->win_packets, StatsPacket, i);
+    if (pkt->seqnum == seqnum) {
+      return pkt;
+    }
+  }
+  return NULL;
+}
+
+/* assumes all seqnum are in order */
+static StatsPacket *
+twcc_stats_ctx_get_packet_for_seqnum_fast (TWCCStatsCtx * ctx, guint16 seqnum)
+{
+  StatsPacket *first;
+  guint16 idx;
+
+  first = &g_array_index (ctx->new_packets, StatsPacket, 0);
+  idx = seqnum - first->seqnum;
+  if (idx < ctx->win_packets->len) {
+    StatsPacket *found = &g_array_index (ctx->new_packets, StatsPacket, idx);
+    if (found->seqnum == seqnum) {
+      return found;
+    }
+  }
+
+  first = &g_array_index (ctx->win_packets, StatsPacket, 0);
+  idx = seqnum - first->seqnum;
+  if (idx < ctx->win_packets->len) {
+    StatsPacket *found = &g_array_index (ctx->win_packets, StatsPacket, idx);
+    if (found->seqnum == seqnum) {
+      return found;
+    }
+  }
+
+  return NULL;
+}
+
 
 /******************************************************/
 
@@ -491,6 +541,7 @@ _add_packet_to_stats (RTPTWCCManager * twcc, SentPacket * packet)
   pkt.remote_ts = packet->remote_ts;
   pkt.seqnum = packet->seqnum;
   pkt.size = packet->size;
+  pkt.pt = packet->pt;
   pkt.recovered = FALSE;
   pkt.delta_delta = GST_CLOCK_STIME_NONE;
 
@@ -498,6 +549,35 @@ _add_packet_to_stats (RTPTWCCManager * twcc, SentPacket * packet)
 
   ctx = _get_ctx_for_pt (twcc, packet->pt);
   twcc_stats_ctx_add_packet (ctx, &pkt);
+}
+
+static void
+_update_stats_with_recovered (RTPTWCCManager * twcc, guint16 seqnum)
+{
+  TWCCStatsCtx *ctx;
+  StatsPacket *pkt =
+      twcc_stats_ctx_get_packet_for_seqnum_fast (twcc->stats_ctx, seqnum);
+
+  if (pkt == NULL) {
+    pkt = twcc_stats_ctx_get_packet_for_seqnum (twcc->stats_ctx, seqnum);
+    if (pkt)
+      GST_INFO ("Could not find #%u fast, but found it slow?!?!?", seqnum);
+  }
+
+  if (pkt == NULL) {
+    GST_INFO ("Could not find seqnum %u", seqnum);
+    return;
+  }
+
+  pkt->recovered = TRUE;
+
+  /* now find the equivalent packet in the payload */
+  ctx = _get_ctx_for_pt (twcc, pkt->pt);
+  pkt = twcc_stats_ctx_get_packet_for_seqnum (ctx, seqnum);
+
+  if (pkt) {
+    pkt->recovered = TRUE;
+  }
 }
 
 static void
@@ -1236,6 +1316,8 @@ rtp_twcc_manager_register_seqnum (RTPTWCCManager * twcc,
   }
   g_hash_table_insert (seq_to_twcc, GUINT_TO_POINTER (seqnum),
       GUINT_TO_POINTER (twcc_seqnum));
+  GST_LOG ("Registering OSN: %u to twcc-twcc_seqnum: %u with ssrc: %u", seqnum,
+      twcc_seqnum, ssrc);
 }
 
 static gint32
@@ -1543,20 +1625,19 @@ rtp_twcc_manager_parse_fci (RTPTWCCManager * twcc,
             pkt->status == RTP_TWCC_PACKET_STATUS_NOT_RECV, NULL);
         _append_structure_to_value_array (array, pkt_s);
 
+        GST_LOG ("Adding packet %u to stats", found->seqnum);
         _add_packet_to_stats (twcc, found);
 
         if (found->rtx_osn != -1) {
+          GST_LOG ("RTX Packet %u protects OSN %u with SSRC: %u", found->seqnum,
+              found->rtx_osn, found->rtx_ssrc);
           gint32 recovered_seq =
               rtp_twcc_manager_lookup_seqnum (twcc, found->rtx_ssrc,
               found->rtx_osn);
           if (recovered_seq != -1) {
-            guint16 recovered_idx = recovered_seq - first_sent_pkt->seqnum;
-            if (recovered_idx < twcc->sent_packets->len) {
-              SentPacket *recovered_pkt =
-                  &g_array_index (twcc->sent_packets, SentPacket,
-                  recovered_idx);
-              recovered_pkt->recovered = TRUE;
-            }
+            GST_LOG ("RTX Packet %u protects seqnum %d", found->seqnum,
+                recovered_seq);
+            _update_stats_with_recovered (twcc, recovered_seq);
           }
         }
 
