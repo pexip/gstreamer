@@ -87,8 +87,9 @@ struct _GstRtpRtxSend
   /* stuffing properties */
   gint stuffing_kbps;
   gint stuffing_max_burst;
-  /* stuffing token bucket */
-  gint stuffing_max_packet_size;
+
+  /* last ssrc used for stuffing */
+  gint last_stuffing_ssrc;
 
   TokenBucket stuff_tb;
 };
