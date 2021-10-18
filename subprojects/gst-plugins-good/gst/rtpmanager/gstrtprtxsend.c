@@ -142,6 +142,7 @@ buffer_queue_item_free (BufferQueueItem * item)
 
 typedef struct
 {
+  guint32 ssrc;
   guint32 rtx_ssrc;
   guint16 seqnum_base, next_seqnum;
   gint clock_rate;
@@ -151,10 +152,11 @@ typedef struct
 } SSRCRtxData;
 
 static SSRCRtxData *
-ssrc_rtx_data_new (guint32 rtx_ssrc)
+ssrc_rtx_data_new (guint32 ssrc, guint32 rtx_ssrc)
 {
   SSRCRtxData *data = g_slice_new0 (SSRCRtxData);
 
+  data->ssrc = ssrc;
   data->rtx_ssrc = rtx_ssrc;
   data->next_seqnum = data->seqnum_base = g_random_int_range (0, G_MAXUINT16);
   data->queue = g_sequence_new ((GDestroyNotify) buffer_queue_item_free);
@@ -383,7 +385,7 @@ gst_rtp_rtx_send_init (GstRtpRtxSend * rtx)
 
   gst_rtp_rtx_send_reset_stuffing_bucket (rtx, DEFAULT_STUFFING_KBPS,
       DEFAULT_STUFFING_MAX_BURST);
-  rtx->stuffing_max_packet_size = 0;
+  rtx->last_stuffing_ssrc = -1;
 }
 
 static gboolean
@@ -457,7 +459,7 @@ gst_rtp_rtx_send_get_ssrc_data (GstRtpRtxSend * rtx, guint32 ssrc)
       g_free (ssrc_str);
     }
     rtx_ssrc = gst_rtp_rtx_send_choose_ssrc (rtx, rtx_ssrc, consider);
-    data = ssrc_rtx_data_new (rtx_ssrc);
+    data = ssrc_rtx_data_new (ssrc, rtx_ssrc);
     g_hash_table_insert (rtx->ssrc_data, GUINT_TO_POINTER (ssrc), data);
     g_hash_table_insert (rtx->rtx_ssrcs, GUINT_TO_POINTER (rtx_ssrc),
         GUINT_TO_POINTER (ssrc));
@@ -904,104 +906,136 @@ process_buffer (GstRtpRtxSend * rtx, GstBuffer * buffer)
   return data;
 }
 
-static gint
-gst_rtp_rtx_send_stuffing_token_bucket (GstRtpRtxSend * rtx, GstBuffer * buffer,
-    guint8 * padlen)
+static GstFlowReturn
+gst_rtp_rtx_send_push (GstRtpRtxSend * rtx, GstBuffer * buffer)
 {
-  gint buffer_size;
-  gint buffer_bitsize;
-  gint ret = 0;
-  gint64 bucket_size;
+  GstFlowReturn ret;
+  token_bucket_take_tokens (&rtx->stuff_tb, gst_buffer_get_size (buffer) * 8,
+      TRUE);
 
-  buffer_size = gst_buffer_get_size (buffer);
-  buffer_bitsize = buffer_size * 8;
-
-  token_bucket_add_tokens (&rtx->stuff_tb,
-      gst_clock_get_time (GST_ELEMENT_CLOCK (rtx)));
-  token_bucket_take_tokens (&rtx->stuff_tb, buffer_bitsize, TRUE);
-
-  bucket_size = rtx->stuff_tb.bucket_size;
-
-  if (bucket_size > 0) {
-    gint rtx_buffer_size = buffer_size + RTX_OVERHEAD;
-    gint padding = CLAMP (rtx->stuffing_max_packet_size - rtx_buffer_size, 0,
-        255);
-    gint stuffing_buffer_size = rtx_buffer_size + padding;
-
-    if (padlen)
-      *padlen = padding;
-
-    /* The number of packets we can send before the bucket is empty. */
-    ret = bucket_size / (stuffing_buffer_size * 8);
-  }
+  GST_OBJECT_UNLOCK (rtx);
+  ret = gst_pad_push (rtx->srcpad, buffer);
+  GST_OBJECT_LOCK (rtx);
 
   return ret;
 }
 
 static GstFlowReturn
-gst_rtp_rtx_send_push_out_and_stuff (GstRtpRtxSend * rtx, GstBuffer * buffer,
-    SSRCRtxData * rtx_data)
+gst_rtp_rtx_send_push_stuffing (GstRtpRtxSend * rtx, SSRCRtxData * rtx_data)
 {
-  GstFlowReturn ret;
-  gint n_stuffing;
-  guint8 padlen = 0;
-  gint buffer_size = gst_buffer_get_size (buffer);
-  gint i;
+  GstFlowReturn ret = GST_FLOW_OK;
 
-  GST_OBJECT_LOCK (rtx);
-  rtx->stuffing_max_packet_size = MAX (rtx->stuffing_max_packet_size,
-      buffer_size);
-  n_stuffing = gst_rtp_rtx_send_stuffing_token_bucket (rtx, buffer, &padlen);
-  GST_OBJECT_UNLOCK (rtx);
+  GstClockTime running_time;
+  GstClockTime window_size = 100 * GST_MSECOND;
 
-  ret = gst_pad_push (rtx->srcpad, buffer);
+  GSequenceIter *first = NULL;
+  GSequenceIter *last = NULL;
 
-  if (rtx_data == NULL) {
-    /* This pt is not configured with RTX. Return now since we cannot send RTX
-     * for it. */
-    return ret;
+  gint64 bucket_size;
+  gint available_stuffing_bits = 0;
+
+  bucket_size = rtx->stuff_tb.bucket_size;
+  if (bucket_size <= 0)
+    return GST_FLOW_OK;
+
+  /* double check the queue */
+  if (g_sequence_is_empty (rtx_data->queue))
+    return GST_FLOW_OK;
+
+  /* determine the first and last item on the queue to do stuffing with */
+  last = g_sequence_get_end_iter (rtx_data->queue);
+  first = last;
+
+  running_time =
+      gst_clock_get_time (GST_ELEMENT_CLOCK (rtx)) -
+      GST_ELEMENT_CAST (rtx)->base_time;
+
+  do {
+    BufferQueueItem *item = g_sequence_get (g_sequence_iter_prev (first));
+    gint buffer_bitsize = gst_buffer_get_size (item->buffer) * 8;
+
+    /* stop here if we will exceed the bucket with this buffer */
+    if (available_stuffing_bits + buffer_bitsize > bucket_size)
+      break;
+
+    /* stop here if the packet is "too old" */
+    if (GST_BUFFER_PTS_IS_VALID (item->buffer)
+        && ABS (GST_CLOCK_DIFF (GST_BUFFER_PTS (item->buffer),
+                running_time)) > window_size) {
+      break;
+    }
+
+    available_stuffing_bits += buffer_bitsize;
+    first = g_sequence_iter_prev (first);
+  } while (first != g_sequence_get_begin_iter (rtx_data->queue));
+
+  /* not enough bits for stuffing */
+  if (!available_stuffing_bits)
+    return GST_FLOW_OK;
+
+  while (first != last) {
+    BufferQueueItem *item = g_sequence_get (first);
+    GstBuffer *rtx_buf = gst_rtp_rtx_buffer_new (rtx, item->buffer, 0);
+
+    GST_DEBUG_OBJECT (rtx, "Produce 1 stuffing packets with ssrc %X, "
+        "original buffer size %d", rtx_data->rtx_ssrc,
+        gst_buffer_get_size (item->buffer));
+
+    ret = gst_rtp_rtx_send_push (rtx, rtx_buf);
+    first = g_sequence_iter_next (first);
   }
 
-  if (n_stuffing == 0) {
-    return ret;
-  }
-
-  GST_DEBUG_OBJECT (rtx, "Produce %d stuffing packets with ssrc %X, "
-      "original buffer size %d, padlen %d, max packet size %d", n_stuffing,
-      rtx_data->rtx_ssrc, buffer_size, padlen, rtx->stuffing_max_packet_size);
-
-  GST_OBJECT_LOCK (rtx);
-  for (i = 0; i < n_stuffing; i++) {
-    GstBuffer *rtx_buf = gst_rtp_rtx_buffer_new (rtx, buffer, padlen);
-    gst_rtp_rtx_send_stuffing_token_bucket (rtx, rtx_buf, NULL);
-    GST_OBJECT_UNLOCK (rtx);
-    ret = gst_pad_push (rtx->srcpad, rtx_buf);
-    GST_OBJECT_LOCK (rtx);
-  }
-  GST_OBJECT_UNLOCK (rtx);
+  bucket_size = rtx->stuff_tb.bucket_size;
+  /* we still have some left over budget, call this once more */
+  if (bucket_size && ret == GST_FLOW_OK)
+    return gst_rtp_rtx_send_push_stuffing (rtx, rtx_data);
 
   return ret;
+}
+
+/* call with LOCK */
+static SSRCRtxData *
+gst_rtp_rtx_send_get_rtx_data (GstRtpRtxSend * rtx, GstBuffer * buffer)
+{
+  SSRCRtxData *rtx_data = process_buffer (rtx, buffer);
+
+  if (rtx_data) {
+    /* we have rtx data from the current buffer, save the ssrc */
+    rtx->last_stuffing_ssrc = rtx_data->ssrc;
+    return rtx_data;
+  }
+
+  if (rtx->last_stuffing_ssrc != -1) {
+    /* we do not have rtx data from the current buffer, so fetch the last one sent */
+    return gst_rtp_rtx_send_get_ssrc_data (rtx, rtx->last_stuffing_ssrc);
+  }
+
+  return NULL;
 }
 
 static GstFlowReturn
 gst_rtp_rtx_send_chain (GstPad * pad, GstObject * parent, GstBuffer * buffer)
 {
-  GstRtpRtxSend *rtx = GST_RTP_RTX_SEND_CAST (parent);
   GstFlowReturn ret;
+  GstRtpRtxSend *rtx;
+  SSRCRtxData *rtx_data = NULL;
+
+  rtx = GST_RTP_RTX_SEND_CAST (parent);
 
   GST_OBJECT_LOCK (rtx);
-  if (IS_RTX_ENABLED (rtx)) {
-    SSRCRtxData *rtx_data = process_buffer (rtx, buffer);
-    gboolean check_stuffing = rtx->stuffing_kbps != UNLIMITED_KBPS;
 
-    if (G_LIKELY (check_stuffing)) {
-      GST_OBJECT_UNLOCK (rtx);
-      return gst_rtp_rtx_send_push_out_and_stuff (rtx, buffer, rtx_data);
-    }
-  }
+  token_bucket_add_tokens (&rtx->stuff_tb,
+      gst_clock_get_time (GST_ELEMENT_CLOCK (rtx)));
+
+  if (IS_RTX_ENABLED (rtx))
+    rtx_data = gst_rtp_rtx_send_get_rtx_data (rtx, buffer);
+
+  ret = gst_rtp_rtx_send_push (rtx, buffer);
+
+  if (ret == GST_FLOW_OK && rtx_data)
+    ret = gst_rtp_rtx_send_push_stuffing (rtx, rtx_data);
 
   GST_OBJECT_UNLOCK (rtx);
-  ret = gst_pad_push (rtx->srcpad, buffer);
 
   return ret;
 }
@@ -1050,9 +1084,9 @@ gst_rtp_rtx_send_src_loop (GstRtpRtxSend * rtx)
       GST_OBJECT_LOCK (rtx);
       /* Update statistics just before pushing. */
       rtx->num_rtx_packets++;
+      gst_rtp_rtx_send_push (rtx, GST_BUFFER (data->object));
       GST_OBJECT_UNLOCK (rtx);
 
-      gst_pad_push (rtx->srcpad, GST_BUFFER (data->object));
     } else if (GST_IS_EVENT (data->object)) {
       gst_pad_push_event (rtx->srcpad, GST_EVENT (data->object));
 
@@ -1228,8 +1262,8 @@ gst_rtp_rtx_send_set_property (GObject * object,
         gst_structure_free (rtx->rtx_pt_map_structure);
       rtx->rtx_pt_map_structure = g_value_dup_boxed (value);
       g_hash_table_remove_all (rtx->rtx_pt_map);
-      gst_structure_foreach (rtx->rtx_pt_map_structure, structure_to_hash_table,
-          rtx->rtx_pt_map);
+      gst_structure_foreach (rtx->rtx_pt_map_structure,
+          structure_to_hash_table, rtx->rtx_pt_map);
       GST_OBJECT_UNLOCK (rtx);
 
       if (IS_RTX_ENABLED (rtx))
