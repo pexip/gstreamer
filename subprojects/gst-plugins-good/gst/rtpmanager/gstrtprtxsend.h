@@ -86,7 +86,6 @@ struct _GstRtpRtxSend
 
   /* stuffing properties */
   gint stuffing_kbps;
-  gint stuffing_max_burst;
 
   /* last ssrc used for stuffing */
   gint last_stuffing_ssrc;
