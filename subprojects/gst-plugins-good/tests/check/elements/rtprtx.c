@@ -1142,7 +1142,7 @@ GST_END_TEST;
 /*
 * This tests verify that buffers over the window size time are not included for stuffing.
 */
-GST_START_TEST (test_rtxsender_stuffing_over_window)
+GST_START_TEST (test_rtxsender_stuffing_window)
 {
   guint master_ssrc = 1234567;
   guint master_pt = 96;
@@ -1186,6 +1186,72 @@ GST_START_TEST (test_rtxsender_stuffing_over_window)
   pull_and_verify (h, FALSE, master_ssrc, master_pt, 2);
   /* we have budget, so stuff with #1 and #2, but #0 is too old */
   for (i = 0; i < 5; i++) {
+    pull_and_verify (h, TRUE, rtx_ssrc, rtx_pt, 1);
+    pull_and_verify (h, TRUE, rtx_ssrc, rtx_pt, 2);
+  }
+  pull_and_verify (h, TRUE, rtx_ssrc, rtx_pt, 2);
+
+  g_usleep (G_USEC_PER_SEC / 100);
+  fail_if (gst_harness_try_pull (h));
+
+  gst_structure_free (pt_map);
+  gst_structure_free (ssrc_map);
+  gst_harness_teardown (h);
+}
+
+GST_END_TEST;
+
+/*
+* This tests verify that even though there is no packets under the stuffing
+* window, the element still produces stuffing.
+*/
+GST_START_TEST (test_rtxsender_stuffing_no_packets_under_window)
+{
+  guint master_ssrc = 1234567;
+  guint master_pt = 96;
+  guint rtx_ssrc = 7777777;
+  guint rtx_pt = 99;
+  GstStructure *pt_map, *ssrc_map;
+  GstHarness *h = gst_harness_new ("rtprtxsend");
+  gint i;
+
+  pt_map = gst_structure_new ("application/x-rtp-pt-map",
+      "96", G_TYPE_UINT, rtx_pt, NULL);
+  ssrc_map = gst_structure_new ("application/x-rtp-ssrc-map",
+      "1234567", G_TYPE_UINT, rtx_ssrc, NULL);
+  g_object_set (h->element,
+      "payload-type-map", pt_map,
+      "ssrc-map", ssrc_map, "stuffing-kbps", 80, NULL);
+
+  gst_harness_set_src_caps_str (h, "application/x-rtp, "
+      "payload = (int)96, " "ssrc = (uint)1234567, " "clock-rate = (int)90000");
+
+  /* 80 kbps = 10 kBps. 10 ms distance between each packet means 10 packets
+   * per second and 100 bytes per packet to hit target kbps. Also need to
+   * take into account that RTX buffers are 2 bytes larger than original. */
+  gst_harness_set_time (h, 0 * GST_MSECOND);
+  gst_harness_push (h,
+      create_rtp_buffer_with_pts (master_ssrc, master_pt, 0, 80, 0));
+  pull_and_verify (h, FALSE, master_ssrc, master_pt, 0);
+  /* budget 100, sent 80 */
+
+  gst_harness_set_time (h, 10 * GST_MSECOND);
+  gst_harness_push (h,
+      create_rtp_buffer_with_pts (master_ssrc, master_pt, 1, 80,
+          10 * GST_MSECOND));
+  pull_and_verify (h, FALSE, master_ssrc, master_pt, 1);
+  /* budget 200, sent 160, no stuffing */
+
+
+  /* advance far ahead, so the buffers are out of the window */
+  gst_harness_set_time (h, 150 * GST_MSECOND);
+  gst_harness_push (h,
+      create_rtp_buffer_with_pts (master_ssrc, master_pt, 2, 80,
+          20 * GST_MSECOND));
+  pull_and_verify (h, FALSE, master_ssrc, master_pt, 2);
+  /* we have budget, non of the above are under the window, but we get stuff with: #0, 1 and 2 */
+  for (i = 0; i < 5; i++) {
+    pull_and_verify (h, TRUE, rtx_ssrc, rtx_pt, 0);
     pull_and_verify (h, TRUE, rtx_ssrc, rtx_pt, 1);
     pull_and_verify (h, TRUE, rtx_ssrc, rtx_pt, 2);
   }
@@ -1323,7 +1389,8 @@ rtprtx_suite (void)
   tcase_add_test (tc_chain, test_rtxsender_stuffing);
   tcase_add_test (tc_chain, test_rtxsender_stuffing_toggle);
   tcase_add_test (tc_chain, test_rtxsender_stuffing_non_rtx_packets);
-  tcase_add_test (tc_chain, test_rtxsender_stuffing_over_window);
+  tcase_add_test (tc_chain, test_rtxsender_stuffing_window);
+  tcase_add_test (tc_chain, test_rtxsender_stuffing_no_packets_under_window);
   tcase_add_test (tc_chain,
       test_rtxsender_stuffing_sanity_when_input_rate_is_extreme);
   tcase_add_test (tc_chain, test_rtxsender_stuffing_does_not_interfer_with_rtx);

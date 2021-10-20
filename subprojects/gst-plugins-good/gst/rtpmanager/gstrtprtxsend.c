@@ -911,27 +911,18 @@ gst_rtp_rtx_send_push (GstRtpRtxSend * rtx, GstBuffer * buffer)
   return ret;
 }
 
-static GstFlowReturn
-gst_rtp_rtx_send_push_stuffing (GstRtpRtxSend * rtx, SSRCRtxData * rtx_data)
+static GSequenceIter *
+gst_rtp_rtx_send_get_initial_stuffing_buffer (GstRtpRtxSend * rtx,
+    SSRCRtxData * rtx_data, gboolean check_window)
 {
-  GstFlowReturn ret = GST_FLOW_OK;
-
   GstClockTime running_time;
   GstClockTime window_size = 100 * GST_MSECOND;
 
   GSequenceIter *first = NULL;
-  GSequenceIter *last = NULL;
+  const GSequenceIter *last = NULL;
 
-  gint64 bucket_size;
   gint available_stuffing_bits = 0;
-
-  bucket_size = rtx->stuff_tb.bucket_size;
-  if (bucket_size <= 0)
-    return GST_FLOW_OK;
-
-  /* double check the queue */
-  if (g_sequence_is_empty (rtx_data->queue))
-    return GST_FLOW_OK;
+  gint64 bucket_size = rtx->stuff_tb.bucket_size;
 
   /* determine the first and last item on the queue to do stuffing with */
   last = g_sequence_get_end_iter (rtx_data->queue);
@@ -951,7 +942,7 @@ gst_rtp_rtx_send_push_stuffing (GstRtpRtxSend * rtx, SSRCRtxData * rtx_data)
       break;
 
     /* stop here if the packet is "too old" */
-    if (GST_BUFFER_PTS_IS_VALID (item->buffer)
+    if (check_window && GST_BUFFER_PTS_IS_VALID (item->buffer)
         && ABS (GST_CLOCK_DIFF (GST_BUFFER_PTS (item->buffer),
                 running_time)) > window_size) {
       break;
@@ -961,8 +952,42 @@ gst_rtp_rtx_send_push_stuffing (GstRtpRtxSend * rtx, SSRCRtxData * rtx_data)
     first = g_sequence_iter_prev (first);
   } while (first != g_sequence_get_begin_iter (rtx_data->queue));
 
+  if (available_stuffing_bits)
+    return first;
+
   /* not enough bits for stuffing */
-  if (!available_stuffing_bits)
+  return NULL;
+}
+
+
+static GstFlowReturn
+gst_rtp_rtx_send_push_stuffing (GstRtpRtxSend * rtx, SSRCRtxData * rtx_data)
+{
+  GstFlowReturn ret = GST_FLOW_OK;
+
+  GSequenceIter *first = NULL;
+  GSequenceIter *last = NULL;
+
+  gint64 bucket_size = rtx->stuff_tb.bucket_size;
+
+  if (bucket_size <= 0)
+    return GST_FLOW_OK;
+
+  /* double check the queue */
+  if (g_sequence_is_empty (rtx_data->queue))
+    return GST_FLOW_OK;
+
+  last = g_sequence_get_end_iter (rtx_data->queue);
+
+  /* check for the first buffer under the window */
+  first = gst_rtp_rtx_send_get_initial_stuffing_buffer (rtx, rtx_data, TRUE);
+  if (!first) {
+    /* if there is none, fallback to use the last ones */
+    first = gst_rtp_rtx_send_get_initial_stuffing_buffer (rtx, rtx_data, FALSE);
+  }
+
+  /* we cannot generate any stuffing, no bits */
+  if (!first)
     return GST_FLOW_OK;
 
   while (first != last) {
@@ -970,7 +995,7 @@ gst_rtp_rtx_send_push_stuffing (GstRtpRtxSend * rtx, SSRCRtxData * rtx_data)
     GstBuffer *rtx_buf = gst_rtp_rtx_buffer_new (rtx, item->buffer, 0);
 
     GST_DEBUG_OBJECT (rtx, "Produce 1 stuffing packets with ssrc %X, "
-        "original buffer size %d", rtx_data->rtx_ssrc,
+        "original buffer size %" G_GSIZE_FORMAT, rtx_data->rtx_ssrc,
         gst_buffer_get_size (item->buffer));
 
     ret = gst_rtp_rtx_send_push (rtx, rtx_buf);
