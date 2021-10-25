@@ -92,14 +92,14 @@ gst_rtp_header_extension_roi_set_property (GObject * object,
 static GstRTPHeaderExtensionFlags
 gst_rtp_header_extension_roi_get_supported_flags (GstRTPHeaderExtension * ext)
 {
-  return GST_RTP_HEADER_EXTENSION_ONE_BYTE;
+  return GST_RTP_HEADER_EXTENSION_TWO_BYTE;
 }
 
 static gsize
 gst_rtp_header_extension_roi_get_max_size (GstRTPHeaderExtension * ext,
     const GstBuffer * input_meta)
 {
-  return 11;
+  return 11 * 2;
 }
 
 
@@ -108,6 +108,8 @@ gst_rtp_header_extension_roi_write (GstRTPHeaderExtension * ext,
     const GstBuffer * input_meta, GstRTPHeaderExtensionFlags write_flags,
     G_GNUC_UNUSED GstBuffer * output, guint8 * data, gsize size)
 {
+  gint offset = 0;
+  gint num_written_roi_metas = 0;
   GstRTPHeaderExtensionRoi *self = GST_RTP_HEADER_EXTENSION_ROI_CAST (ext);
   GstVideoRegionOfInterestMeta *meta;
   gpointer state = NULL;
@@ -134,23 +136,28 @@ gst_rtp_header_extension_roi_write (GstRTPHeaderExtension * ext,
     // g_assert (meta->h > 0);
 
     /* RoI coordinates */
-    GST_WRITE_UINT16_BE (&data[0], meta->x);
-    GST_WRITE_UINT16_BE (&data[2], meta->y);
-    GST_WRITE_UINT16_BE (&data[4], meta->w);
-    GST_WRITE_UINT16_BE (&data[6], meta->h);
+    GST_WRITE_UINT16_BE (&data[offset + 0], meta->x);
+    GST_WRITE_UINT16_BE (&data[offset + 2], meta->y);
+    GST_WRITE_UINT16_BE (&data[offset + 4], meta->w);
+    GST_WRITE_UINT16_BE (&data[offset + 6], meta->h);
 
     /* RoI type (as in the roi-ext-hdr type) */
-    GST_WRITE_UINT8 (&data[8], ROI_EXTHDR_TYPE);
+    GST_WRITE_UINT8 (&data[offset + 8], ROI_EXTHDR_TYPE);
 
     /* RoI - number of faces */
-
     extra_param_s =
         gst_video_region_of_interest_meta_get_param (meta, "extra-param");
     if (extra_param_s)
       gst_structure_get_uint (extra_param_s, "num_faces", &num_faces);
-    GST_WRITE_UINT16_BE (&data[9], num_faces);
+    GST_WRITE_UINT16_BE (&data[offset + 9], num_faces);
 
-    return 11;
+    offset += 11;
+    num_written_roi_metas++;
+  }
+
+  if (num_written_roi_metas > 0) {
+    g_assert (num_written_roi_metas <= 2);
+    return 11 * num_written_roi_metas;
   }
 
   return 0;
@@ -162,31 +169,32 @@ gst_rtp_header_extension_roi_read (GstRTPHeaderExtension * ext,
     GstBuffer * buffer)
 {
   GstRTPHeaderExtensionRoi *self = GST_RTP_HEADER_EXTENSION_ROI_CAST (ext);
-  guint16 roi_type = GST_READ_UINT8 (&data[8]);
+  guint offset = 0;
+  guint16 roi_type = GST_READ_UINT8 (&data[offset + 8]);
 
   /* safety mechanism to only consider those roi-ext-hdr types
    * which we care about */
-  if (roi_type == ROI_EXTHDR_TYPE) {
-    guint16 x = GST_READ_UINT16_BE (&data[0]);
-    guint16 y = GST_READ_UINT16_BE (&data[2]);
-    guint16 w = GST_READ_UINT16_BE (&data[4]);
-    guint16 h = GST_READ_UINT16_BE (&data[6]);
-    // guint16 roi_type = GST_READ_UINT8 (&bytes[8]);
-    guint16 num_faces = GST_READ_UINT16_BE (&data[9]);
+  while (roi_type == ROI_EXTHDR_TYPE) {
+     guint16 x = GST_READ_UINT16_BE (&data[offset + 0]);
+     guint16 y = GST_READ_UINT16_BE (&data[offset + 2]);
+     guint16 w = GST_READ_UINT16_BE (&data[offset + 4]);
+     guint16 h = GST_READ_UINT16_BE (&data[offset + 6]);
+     guint16 num_faces = GST_READ_UINT16_BE (&data[offset + 9]);
 
-    GstVideoRegionOfInterestMeta *meta =
-        gst_buffer_add_video_region_of_interest_meta_id (buffer,
-        self->roi_type, x, y, w, h);
+     GstVideoRegionOfInterestMeta *meta =
+         gst_buffer_add_video_region_of_interest_meta_id (buffer,
+         self->roi_type, x, y, w, h);
 
-    GstStructure *extra_param_s = gst_structure_new ("extra-param",
-        "num_faces", G_TYPE_UINT, num_faces, NULL);
-    // FIXME: Issue 23027
-    // If these asserts got hit the problem in header corruption
-    // Need to look at re-transmit (?)
-    // g_assert (w > 0);
-    // g_assert (h > 0);
-    gst_video_region_of_interest_meta_add_param (meta, extra_param_s);
-
+     GstStructure *extra_param_s = gst_structure_new ("extra-param",
+         "num_faces", G_TYPE_UINT, num_faces, NULL);
+     // FIXME: Issue 23027
+     // If these asserts got hit the problem in header corruption
+     // Need to look at re-transmit (?)
+     // g_assert (w > 0);
+     // g_assert (h > 0);
+     gst_video_region_of_interest_meta_add_param (meta, extra_param_s);
+     offset += 11;
+     roi_type = GST_READ_UINT8 (&data[offset + 8]);
   }
 
   return TRUE;
