@@ -3101,13 +3101,14 @@ rtp_session_process_nack (RTPSession * sess, guint32 sender_ssrc,
 
 static void
 rtp_session_process_twcc (RTPSession * sess, guint32 sender_ssrc,
-    guint32 media_ssrc, guint8 * fci_data, guint fci_length)
+    guint32 media_ssrc, guint8 * fci_data, guint fci_length,
+    GstClockTime current_time)
 {
   GstStructure *twcc_packets_s;
   GstStructure *twcc_stats_s;
 
   twcc_packets_s = rtp_twcc_manager_parse_fci (sess->twcc,
-      fci_data, fci_length * sizeof (guint32));
+      fci_data, fci_length * sizeof (guint32), current_time);
   if (twcc_packets_s == NULL)
     return;
 
@@ -3216,7 +3217,7 @@ rtp_session_process_feedback (RTPSession * sess, GstRTCPPacket * packet,
             break;
           case GST_RTCP_RTPFB_TYPE_TWCC:
             rtp_session_process_twcc (sess, sender_ssrc, media_ssrc,
-                fci_data, fci_length);
+                fci_data, fci_length, current_time);
             break;
           default:
             break;

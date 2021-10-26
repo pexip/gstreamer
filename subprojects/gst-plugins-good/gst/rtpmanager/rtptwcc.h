@@ -52,7 +52,7 @@ GstBuffer * rtp_twcc_manager_get_feedback (RTPTWCCManager * twcc,
     guint32 sender_ssrc, GstClockTime current_time);
 
 GstStructure * rtp_twcc_manager_parse_fci (RTPTWCCManager * twcc,
-    guint8 * fci_data, guint fci_length);
+    guint8 * fci_data, guint fci_length, GstClockTime current_time);
 
 GstStructure * rtp_twcc_manager_get_windowed_stats (RTPTWCCManager * twcc);
 
