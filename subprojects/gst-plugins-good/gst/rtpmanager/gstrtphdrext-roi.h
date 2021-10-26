@@ -21,6 +21,8 @@
 
 G_BEGIN_DECLS
 
+#define GST_RTP_HDREXT_ROI_URI GST_RTP_HDREXT_BASE "TBD:draft-ford-avtcore-roi-extension-00"
+
 #define GST_TYPE_RTP_HEADER_EXTENSION_ROI (gst_rtp_header_extension_roi_get_type())
 
 G_DECLARE_FINAL_TYPE (GstRTPHeaderExtensionRoi, gst_rtp_header_extension_roi, GST, RTP_HEADER_EXTENSION_ROI, GstRTPHeaderExtension)

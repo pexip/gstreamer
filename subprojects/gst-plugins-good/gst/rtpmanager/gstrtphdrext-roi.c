@@ -37,8 +37,6 @@
  */
 #define ROI_EXTHDR_TYPE 0xFD
 
-#define ROI_HDR_EXT_URI GST_RTP_HDREXT_BASE"TBD:draft-ford-avtcore-roi-extension-00"
-
 enum
 {
   PROP_0,
@@ -238,7 +236,7 @@ gst_rtp_header_extension_roi_class_init (GstRTPHeaderExtensionRoiClass * klass)
       GST_RTP_HDREXT_ELEMENT_CLASS,
       "Region-of-Interest (ROI) RTP Header Extension",
       "Havard Graff <havard@pexip.com>");
-  gst_rtp_header_extension_class_set_uri (rtp_hdr_class, ROI_HDR_EXT_URI);
+  gst_rtp_header_extension_class_set_uri (rtp_hdr_class, GST_RTP_HDREXT_ROI_URI);
 }
 
 static void
