@@ -34,11 +34,11 @@
 GST_START_TEST (test_rtphdrext_roi_basic)
 {
   GstHarness *h;
-  GstCaps *src_caps, *depay_pad_caps, *expected_caps;
+  GstCaps *src_caps, *pay_pad_caps, *expected_caps;
 
   GstElement *pay, *depay;
   GstRTPHeaderExtension *pay_ext, *depay_ext;
-  GstPad *depay_pad;
+  GstPad *pay_pad;
 
   GstBuffer *buf;
 
@@ -69,19 +69,20 @@ GST_START_TEST (test_rtphdrext_roi_basic)
   g_signal_emit_by_name (depay, "add-extension", depay_ext);
 
   /* verify that we can push and pull buffers */
+  gst_harness_play (h);
   fail_unless_equals_int (GST_FLOW_OK, gst_harness_push_from_src (h));
   buf = gst_harness_pull (h);
   fail_unless (buf);
 
   /* verify the presence of RoI URI on the depayloader caps */
-  depay_pad = gst_element_get_static_pad (pay, "src");
-  depay_pad_caps = gst_pad_get_current_caps (depay_pad);
+  pay_pad = gst_element_get_static_pad (pay, "src");
+  pay_pad_caps = gst_pad_get_current_caps (pay_pad);
   expected_caps =
       gst_caps_from_string ("application/x-rtp, extmap-" G_STRINGIFY (EXTMAP_ID)
       "=" URI);
-  fail_unless (gst_caps_is_subset (depay_pad_caps, expected_caps));
-  gst_object_unref (depay_pad);
-  gst_caps_unref (depay_pad_caps);
+  fail_unless (gst_caps_is_subset (pay_pad_caps, expected_caps));
+  gst_object_unref (pay_pad);
+  gst_caps_unref (pay_pad_caps);
   gst_caps_unref (expected_caps);
 
   /* verify there are NO RoI meta on the buffer pulled from the depayloader */
@@ -140,11 +141,11 @@ _gst_harness_create_raw_buffer (GstHarness * h, GstCaps * caps)
 GST_START_TEST (test_rtphdrext_roi_default_roi_type)
 {
   GstHarness *h;
-  GstCaps *src_caps, *depay_pad_caps, *expected_caps;
+  GstCaps *src_caps, *pay_pad_caps, *expected_caps;
 
   GstElement *pay, *depay;
   GstRTPHeaderExtension *pay_ext, *depay_ext;
-  GstPad *depay_pad;
+  GstPad *pay_pad;
 
   GstBuffer *buf;
 
@@ -191,14 +192,14 @@ GST_START_TEST (test_rtphdrext_roi_default_roi_type)
   fail_unless (buf);
 
   /* verify the presence of RoI URI on the depayloader caps */
-  depay_pad = gst_element_get_static_pad (pay, "src");
-  depay_pad_caps = gst_pad_get_current_caps (depay_pad);
+  pay_pad = gst_element_get_static_pad (pay, "src");
+  pay_pad_caps = gst_pad_get_current_caps (pay_pad);
   expected_caps =
       gst_caps_from_string ("application/x-rtp, extmap-" G_STRINGIFY (EXTMAP_ID)
       "=" URI);
-  fail_unless (gst_caps_is_subset (depay_pad_caps, expected_caps));
-  gst_object_unref (depay_pad);
-  gst_caps_unref (depay_pad_caps);
+  fail_unless (gst_caps_is_subset (pay_pad_caps, expected_caps));
+  gst_object_unref (pay_pad);
+  gst_caps_unref (pay_pad_caps);
   gst_caps_unref (expected_caps);
 
   /* verify there are NO RoI meta on the buffer pulled from the depayloader */
@@ -246,11 +247,11 @@ GST_END_TEST;
 GST_START_TEST (test_rtphdrext_roi_unknown_roi_type)
 {
   GstHarness *h;
-  GstCaps *src_caps, *depay_pad_caps, *expected_caps;
+  GstCaps *src_caps, *pay_pad_caps, *expected_caps;
 
   GstElement *pay, *depay;
   GstRTPHeaderExtension *pay_ext, *depay_ext;
-  GstPad *depay_pad;
+  GstPad *pay_pad;
 
   GstBuffer *buf;
 
@@ -285,14 +286,14 @@ GST_START_TEST (test_rtphdrext_roi_unknown_roi_type)
   fail_unless (buf);
 
   /* verify the presence of RoI URI on the depayloader caps */
-  depay_pad = gst_element_get_static_pad (pay, "src");
-  depay_pad_caps = gst_pad_get_current_caps (depay_pad);
+  pay_pad = gst_element_get_static_pad (pay, "src");
+  pay_pad_caps = gst_pad_get_current_caps (pay_pad);
   expected_caps =
       gst_caps_from_string ("application/x-rtp, extmap-" G_STRINGIFY (EXTMAP_ID)
       "=" URI);
-  fail_unless (gst_caps_is_subset (depay_pad_caps, expected_caps));
-  gst_object_unref (depay_pad);
-  gst_caps_unref (depay_pad_caps);
+  fail_unless (gst_caps_is_subset (pay_pad_caps, expected_caps));
+  gst_object_unref (pay_pad);
+  gst_caps_unref (pay_pad_caps);
   gst_caps_unref (expected_caps);
 
   /* verify there are NO RoI meta on the buffer pulled from the depayloader */
@@ -326,11 +327,11 @@ GST_END_TEST;
 GST_START_TEST (test_rtphdrext_roi_explicit_roi_type)
 {
   GstHarness *h;
-  GstCaps *src_caps, *depay_pad_caps, *expected_caps;
+  GstCaps *src_caps, *pay_pad_caps, *expected_caps;
 
   GstElement *pay, *depay;
   GstRTPHeaderExtension *pay_ext, *depay_ext;
-  GstPad *depay_pad;
+  GstPad *pay_pad;
 
   GstBuffer *buf;
 
@@ -366,18 +367,17 @@ GST_START_TEST (test_rtphdrext_roi_explicit_roi_type)
   /* verify that we can push and pull buffers */
   buf = _gst_harness_create_raw_buffer (h, src_caps);
   fail_unless_equals_int (GST_FLOW_OK, gst_harness_push (h, buf));
-  buf = gst_harness_pull (h);
-  fail_unless (buf);
+  gst_buffer_unref (gst_harness_pull (h));
 
   /* verify the presence of RoI URI on the depayloader caps */
-  depay_pad = gst_element_get_static_pad (pay, "src");
-  depay_pad_caps = gst_pad_get_current_caps (depay_pad);
+  pay_pad = gst_element_get_static_pad (pay, "src");
+  pay_pad_caps = gst_pad_get_current_caps (pay_pad);
   expected_caps =
       gst_caps_from_string ("application/x-rtp, extmap-" G_STRINGIFY (EXTMAP_ID)
       "=" URI);
-  fail_unless (gst_caps_is_subset (depay_pad_caps, expected_caps));
-  gst_object_unref (depay_pad);
-  gst_caps_unref (depay_pad_caps);
+  fail_unless (gst_caps_is_subset (pay_pad_caps, expected_caps));
+  gst_object_unref (pay_pad);
+  gst_caps_unref (pay_pad_caps);
   gst_caps_unref (expected_caps);
 
   /* explicitly set a roi-type on both payloader and depayloader extensions
@@ -424,11 +424,11 @@ GST_END_TEST;
 GST_START_TEST (test_rtphdrext_roi_explicit_roi_type_pay_only)
 {
   GstHarness *h;
-  GstCaps *src_caps, *depay_pad_caps, *expected_caps;
+  GstCaps *src_caps, *pay_pad_caps, *expected_caps;
 
   GstElement *pay, *depay;
   GstRTPHeaderExtension *pay_ext, *depay_ext;
-  GstPad *depay_pad;
+  GstPad *pay_pad;
 
   GstBuffer *buf;
 
@@ -469,14 +469,14 @@ GST_START_TEST (test_rtphdrext_roi_explicit_roi_type_pay_only)
   fail_unless (buf);
 
   /* verify the presence of RoI URI on the depayloader caps */
-  depay_pad = gst_element_get_static_pad (pay, "src");
-  depay_pad_caps = gst_pad_get_current_caps (depay_pad);
+  pay_pad = gst_element_get_static_pad (pay, "src");
+  pay_pad_caps = gst_pad_get_current_caps (pay_pad);
   expected_caps =
       gst_caps_from_string ("application/x-rtp, extmap-" G_STRINGIFY (EXTMAP_ID)
       "=" URI);
-  fail_unless (gst_caps_is_subset (depay_pad_caps, expected_caps));
-  gst_object_unref (depay_pad);
-  gst_caps_unref (depay_pad_caps);
+  fail_unless (gst_caps_is_subset (pay_pad_caps, expected_caps));
+  gst_object_unref (pay_pad);
+  gst_caps_unref (pay_pad_caps);
   gst_caps_unref (expected_caps);
 
   /* verify there are NO RoI meta on the buffer pulled from the depayloader */
@@ -528,11 +528,11 @@ GST_END_TEST;
 GST_START_TEST (test_rtphdrext_roi_explicit_roi_type_depay_only)
 {
   GstHarness *h;
-  GstCaps *src_caps, *depay_pad_caps, *expected_caps;
+  GstCaps *src_caps, *pay_pad_caps, *expected_caps;
 
   GstElement *pay, *depay;
   GstRTPHeaderExtension *pay_ext, *depay_ext;
-  GstPad *depay_pad;
+  GstPad *pay_pad;
 
   GstBuffer *buf;
 
@@ -569,14 +569,14 @@ GST_START_TEST (test_rtphdrext_roi_explicit_roi_type_depay_only)
   fail_unless (buf);
 
   /* verify the presence of RoI URI on the depayloader caps */
-  depay_pad = gst_element_get_static_pad (pay, "src");
-  depay_pad_caps = gst_pad_get_current_caps (depay_pad);
+  pay_pad = gst_element_get_static_pad (pay, "src");
+  pay_pad_caps = gst_pad_get_current_caps (pay_pad);
   expected_caps =
       gst_caps_from_string ("application/x-rtp, extmap-" G_STRINGIFY (EXTMAP_ID)
       "=" URI);
-  fail_unless (gst_caps_is_subset (depay_pad_caps, expected_caps));
-  gst_object_unref (depay_pad);
-  gst_caps_unref (depay_pad_caps);
+  fail_unless (gst_caps_is_subset (pay_pad_caps, expected_caps));
+  gst_object_unref (pay_pad);
+  gst_caps_unref (pay_pad_caps);
   gst_caps_unref (expected_caps);
 
   /* verify there are NO RoI meta on the buffer pulled from the depayloader */
