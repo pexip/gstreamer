@@ -157,7 +157,7 @@ GST_START_TEST (test_rtphdrext_roi_default_roi_type)
   GQuark depay_roi_type = ~default_roi_type;
 
   gpointer state = NULL;
-  gsize num_roi_metas_found = 0;
+  gint num_roi_metas_found = 0;
 
   h = gst_harness_new_parse ("rtpvrawpay ! rtpvrawdepay");
 
@@ -341,7 +341,7 @@ GST_START_TEST (test_rtphdrext_roi_explicit_roi_type)
   const GQuark other_roi_type = 0xFFFFFFFF;
 
   gpointer state = NULL;
-  gsize num_roi_metas_found = 0;
+  gint num_roi_metas_found = 0;
 
   h = gst_harness_new_parse ("rtpvrawpay ! rtpvrawdepay");
 
@@ -439,7 +439,7 @@ GST_START_TEST (test_rtphdrext_roi_explicit_roi_type_pay_only)
   const GQuark other_roi_type = ~default_roi_type;
 
   gpointer state = NULL;
-  gsize num_roi_metas_found = 0;
+  gint num_roi_metas_found = 0;
 
   h = gst_harness_new_parse ("rtpvrawpay ! rtpvrawdepay");
 
