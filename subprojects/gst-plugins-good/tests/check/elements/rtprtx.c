@@ -969,9 +969,8 @@ GST_START_TEST (test_rtxsender_stuffing)
   gst_harness_push (h,
       create_rtp_buffer_with_packet_size (master_ssrc, master_pt, 3, 200));
   pull_and_verify (h, FALSE, master_ssrc, master_pt, 3);
-  /* budget 3000, sent 2000. Stuffed packets will be of (200+200+600)=1000 bytes */
+  /* budget 3000, sent 2000. Stuffed packets will be of (202+602)=804 bytes */
   pull_and_verify (h, TRUE, rtx_ssrc, rtx_pt, 2);
-  pull_and_verify (h, TRUE, rtx_ssrc, rtx_pt, 3);
   pull_and_verify (h, TRUE, rtx_ssrc, rtx_pt, 3);
 
   gst_harness_set_time (h, 40 * GST_MSECOND);
@@ -1043,8 +1042,7 @@ GST_START_TEST (test_rtxsender_stuffing_toggle)
       create_rtp_buffer_with_packet_size (master_ssrc, master_pt, 4, 20));
   pull_and_verify (h, FALSE, master_ssrc, master_pt, 4);
 
-  /* budget 80, sent 40, so stuff with 22 * 3 = 66 bytes */
-  pull_and_verify (h, TRUE, rtx_ssrc, rtx_pt, 2);
+  /* budget 80, sent 40, so stuff with 22 * 2 = 44 bytes */
   pull_and_verify (h, TRUE, rtx_ssrc, rtx_pt, 3);
   pull_and_verify (h, TRUE, rtx_ssrc, rtx_pt, 4);
 
@@ -1189,7 +1187,6 @@ GST_START_TEST (test_rtxsender_stuffing_window)
     pull_and_verify (h, TRUE, rtx_ssrc, rtx_pt, 1);
     pull_and_verify (h, TRUE, rtx_ssrc, rtx_pt, 2);
   }
-  pull_and_verify (h, TRUE, rtx_ssrc, rtx_pt, 2);
 
   g_usleep (G_USEC_PER_SEC / 100);
   fail_if (gst_harness_try_pull (h));
@@ -1255,7 +1252,6 @@ GST_START_TEST (test_rtxsender_stuffing_no_packets_under_window)
     pull_and_verify (h, TRUE, rtx_ssrc, rtx_pt, 1);
     pull_and_verify (h, TRUE, rtx_ssrc, rtx_pt, 2);
   }
-  pull_and_verify (h, TRUE, rtx_ssrc, rtx_pt, 2);
 
   g_usleep (G_USEC_PER_SEC / 100);
   fail_if (gst_harness_try_pull (h));
@@ -1349,9 +1345,7 @@ GST_START_TEST (test_rtxsender_stuffing_does_not_interfer_with_rtx)
   gst_harness_push (h,
       create_rtp_buffer_with_packet_size (master_ssrc, master_pt, 2, 400));
   pull_and_verify (h, FALSE, master_ssrc, master_pt, 2);
-  /* budet 2000, sent 1000, send #0 #1 and #2: (100+500+400)=1000 bytes of stuffing */
-  pull_and_verify (h, TRUE, rtx_ssrc, rtx_pt, 0);
-  pull_and_verify (h, TRUE, rtx_ssrc, rtx_pt, 1);
+  /* budet 2000, sent 1000, send #2: 402 bytes of stuffing */
   pull_and_verify (h, TRUE, rtx_ssrc, rtx_pt, 2);
 
   gst_structure_free (pt_map);

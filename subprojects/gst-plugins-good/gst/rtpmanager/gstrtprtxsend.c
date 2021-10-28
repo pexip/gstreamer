@@ -902,7 +902,7 @@ gst_rtp_rtx_send_push (GstRtpRtxSend * rtx, GstBuffer * buffer)
 {
   GstFlowReturn ret;
   token_bucket_take_tokens (&rtx->stuff_tb, gst_buffer_get_size (buffer) * 8,
-      FALSE);
+      TRUE);
 
   GST_OBJECT_UNLOCK (rtx);
   ret = gst_pad_push (rtx->srcpad, buffer);
