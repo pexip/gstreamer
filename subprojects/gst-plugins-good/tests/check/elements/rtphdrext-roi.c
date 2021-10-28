@@ -152,9 +152,7 @@ GST_START_TEST (test_rtphdrext_roi_default_roi_type)
   GstMeta *meta;
   const GstMetaInfo *meta_info = GST_VIDEO_REGION_OF_INTEREST_META_INFO;
 
-  const GQuark default_roi_type = 0;
-  GQuark pay_roi_type = ~default_roi_type;
-  GQuark depay_roi_type = ~default_roi_type;
+  const GQuark default_roi_type = 126;
 
   gpointer state = NULL;
   gint num_roi_metas_found = 0;
@@ -179,11 +177,6 @@ GST_START_TEST (test_rtphdrext_roi_default_roi_type)
 
   g_signal_emit_by_name (pay, "add-extension", pay_ext);
   g_signal_emit_by_name (depay, "add-extension", depay_ext);
-
-  g_object_get (pay_ext, "roi-type", &pay_roi_type, NULL);
-  g_object_get (depay_ext, "roi-type", &depay_roi_type, NULL);
-  fail_unless_equals_int (pay_roi_type, default_roi_type);
-  fail_unless_equals_int (depay_roi_type, default_roi_type);
 
   /* verify that we can push and pull buffers */
   buf = _gst_harness_create_raw_buffer (h, src_caps);
@@ -330,7 +323,6 @@ GST_START_TEST (test_rtphdrext_roi_explicit_roi_type)
   GstCaps *src_caps, *pay_pad_caps, *expected_caps;
 
   GstElement *pay, *depay;
-  GstElementFactory *ext_factory;
   GstRTPHeaderExtension *pay_ext, *depay_ext;
   GstPad *pay_pad;
 
@@ -339,7 +331,8 @@ GST_START_TEST (test_rtphdrext_roi_explicit_roi_type)
   GstMeta *meta;
   const GstMetaInfo *meta_info = GST_VIDEO_REGION_OF_INTEREST_META_INFO;
 
-  const GQuark other_roi_type = 0xFFFFFFFF;
+  GValue roi_types = G_VALUE_INIT, roi_type = G_VALUE_INIT;
+  const GQuark other_roi_type = 12345;
 
   gpointer state = NULL;
   gint num_roi_metas_found = 0;
@@ -352,17 +345,24 @@ GST_START_TEST (test_rtphdrext_roi_explicit_roi_type)
   pay = gst_harness_find_element (h, "rtpvrawpay");
   depay = gst_harness_find_element (h, "rtpvrawdepay");
 
+  gst_value_array_init (&roi_types, 1);
+  g_value_init (&roi_type, G_TYPE_UINT);
+  g_value_set_uint (&roi_type, other_roi_type);
+  gst_value_array_append_value (&roi_types, &roi_type);
+
   /* explicitly set a roi-type on both payloader and depayloader extensions
    * and expect a buffer with such roi-type added to their RoI meta to be
    * correctly payloaded and depayloaded */
-  ext_factory = gst_element_factory_find ("rtphdrextroi");
   pay_ext =
-      GST_RTP_HEADER_EXTENSION (gst_element_factory_create_full (ext_factory,
-          "roi-type", other_roi_type, NULL));
+      GST_RTP_HEADER_EXTENSION (gst_element_factory_make ("rtphdrextroi",
+          NULL));
   depay_ext =
-      GST_RTP_HEADER_EXTENSION (gst_element_factory_create_full (ext_factory,
-          "roi-type", other_roi_type, NULL));
-  gst_object_unref (ext_factory);
+      GST_RTP_HEADER_EXTENSION (gst_element_factory_make ("rtphdrextroi",
+          NULL));
+  g_object_set_property ((GObject *) pay_ext, "roi-types", &roi_types);
+  g_object_set_property ((GObject *) depay_ext, "roi-types", &roi_types);
+  g_value_unset (&roi_type);
+  g_value_unset (&roi_types);
 
   gst_rtp_header_extension_set_id (pay_ext, EXTMAP_ID);
   gst_rtp_header_extension_set_id (depay_ext, EXTMAP_ID);
@@ -427,20 +427,17 @@ GST_START_TEST (test_rtphdrext_roi_explicit_roi_type_pay_only)
   GstCaps *src_caps, *pay_pad_caps, *expected_caps;
 
   GstElement *pay, *depay;
-  GstElementFactory *ext_factory;
   GstRTPHeaderExtension *pay_ext, *depay_ext;
   GstPad *pay_pad;
 
   GstBuffer *buf;
 
-  GstMeta *meta;
   const GstMetaInfo *meta_info = GST_VIDEO_REGION_OF_INTEREST_META_INFO;
 
-  const GQuark default_roi_type = 0;
-  const GQuark other_roi_type = ~default_roi_type;
+  GValue roi_types = G_VALUE_INIT, roi_type = G_VALUE_INIT;
 
-  gpointer state = NULL;
-  gint num_roi_metas_found = 0;
+  const GQuark default_roi_type = 126;
+  const GQuark other_roi_type = default_roi_type / 2;
 
   h = gst_harness_new_parse ("rtpvrawpay ! rtpvrawdepay");
 
@@ -450,19 +447,25 @@ GST_START_TEST (test_rtphdrext_roi_explicit_roi_type_pay_only)
   pay = gst_harness_find_element (h, "rtpvrawpay");
   depay = gst_harness_find_element (h, "rtpvrawdepay");
 
-  /* set a roi-type on the payloader only and expect this to be
-   * partially correctly depayloaded as the depayloader will add a meta for
-   * ANY HDREXT-ROI that has been payloaded by a GStreamer payloader with
-   * the added rtphdrext-roi element. However, the roi-type on the RoI meta
-   * would be the default one for the depayloader */
-  ext_factory = gst_element_factory_find ("rtphdrextroi");
   pay_ext =
-      GST_RTP_HEADER_EXTENSION (gst_element_factory_create_full (ext_factory,
-          "roi-type", other_roi_type, NULL));
+      GST_RTP_HEADER_EXTENSION (gst_element_factory_make ("rtphdrextroi",
+          NULL));
   depay_ext =
       GST_RTP_HEADER_EXTENSION (gst_element_factory_make ("rtphdrextroi",
           NULL));
-  gst_object_unref (ext_factory);
+
+  /* set a roi-type on the payloader only and expect this to NOT be
+   * depayloaded as the depayloader will only depayload data using a specific
+   * set of specified roi-types */
+  gst_value_array_init (&roi_types, 1);
+  g_value_init (&roi_type, G_TYPE_UINT);
+  g_value_set_uint (&roi_type, other_roi_type);
+  gst_value_array_append_value (&roi_types, &roi_type);
+
+  g_object_set_property (G_OBJECT (pay_ext), "roi-types", &roi_types);
+
+  g_value_unset (&roi_type);
+  g_value_unset (&roi_types);
 
   gst_rtp_header_extension_set_id (pay_ext, EXTMAP_ID);
   gst_rtp_header_extension_set_id (depay_ext, EXTMAP_ID);
@@ -499,21 +502,8 @@ GST_START_TEST (test_rtphdrext_roi_explicit_roi_type_pay_only)
   buf = gst_harness_pull (h);
   fail_unless (buf);
 
-  /* verify that we get exactly one RoI meta on the output buffer with
-   * the expected RoI coordinates and type */
-  while ((meta = gst_buffer_iterate_meta (buf, &state))) {
-    if (meta->info->api == meta_info->api) {
-      GstVideoRegionOfInterestMeta *vmeta =
-          (GstVideoRegionOfInterestMeta *) meta;
-      fail_unless_equals_int ((gint) default_roi_type, (gint) vmeta->roi_type);
-      fail_unless_equals_int (0, vmeta->x);
-      fail_unless_equals_int (0, vmeta->y);
-      fail_unless_equals_int (640, vmeta->w);
-      fail_unless_equals_int (360, vmeta->h);
-      num_roi_metas_found++;
-    }
-  }
-  fail_unless_equals_int (1, num_roi_metas_found);
+  /* verify there are NO RoI meta on the buffer pulled from the depayloader */
+  fail_if (gst_buffer_get_meta (buf, meta_info->api));
   gst_buffer_unref (buf);
 
   gst_object_unref (pay_ext);
@@ -532,7 +522,6 @@ GST_START_TEST (test_rtphdrext_roi_explicit_roi_type_depay_only)
   GstCaps *src_caps, *pay_pad_caps, *expected_caps;
 
   GstElement *pay, *depay;
-  GstElementFactory *ext_factory;
   GstRTPHeaderExtension *pay_ext, *depay_ext;
   GstPad *pay_pad;
 
@@ -540,8 +529,10 @@ GST_START_TEST (test_rtphdrext_roi_explicit_roi_type_depay_only)
 
   const GstMetaInfo *meta_info = GST_VIDEO_REGION_OF_INTEREST_META_INFO;
 
-  const GQuark default_roi_type = 0;
-  const GQuark other_roi_type = ~default_roi_type;
+  GValue roi_types = G_VALUE_INIT, roi_type = G_VALUE_INIT;
+
+  const GQuark default_roi_type = 126;
+  const GQuark other_roi_type = default_roi_type / 2;
 
   h = gst_harness_new_parse ("rtpvrawpay ! rtpvrawdepay");
 
@@ -551,14 +542,25 @@ GST_START_TEST (test_rtphdrext_roi_explicit_roi_type_depay_only)
   pay = gst_harness_find_element (h, "rtpvrawpay");
   depay = gst_harness_find_element (h, "rtpvrawdepay");
 
-  /* set a roi-type on the depayloader only */
-  ext_factory = gst_element_factory_find ("rtphdrextroi");
   pay_ext =
       GST_RTP_HEADER_EXTENSION (gst_element_factory_make ("rtphdrextroi",
           NULL));
   depay_ext =
-      GST_RTP_HEADER_EXTENSION (gst_element_factory_create_full (ext_factory,
-          "roi-type", other_roi_type, NULL));
+      GST_RTP_HEADER_EXTENSION (gst_element_factory_make ("rtphdrextroi",
+          NULL));
+
+  /* set a roi-type on the depayloader and expect nothing to be depayloaded
+   * nor payloaded as even if a buffer has RoI meta we would have not signal
+   * the rigt roi-type to payload, hence no header extensions would be added */
+  gst_value_array_init (&roi_types, 1);
+  g_value_init (&roi_type, G_TYPE_UINT);
+  g_value_set_uint (&roi_type, other_roi_type);
+  gst_value_array_append_value (&roi_types, &roi_type);
+
+  g_object_set_property (G_OBJECT (depay_ext), "roi-types", &roi_types);
+
+  g_value_unset (&roi_type);
+  g_value_unset (&roi_types);
 
   gst_rtp_header_extension_set_id (pay_ext, EXTMAP_ID);
   gst_rtp_header_extension_set_id (depay_ext, EXTMAP_ID);
@@ -625,9 +627,7 @@ GST_START_TEST (test_rtphdrext_roi_multiple_metas_with_same_roi_type)
   GstMeta *meta;
   const GstMetaInfo *meta_info = GST_VIDEO_REGION_OF_INTEREST_META_INFO;
 
-  const GQuark default_roi_type = 0;
-  GQuark pay_roi_type = ~default_roi_type;
-  GQuark depay_roi_type = ~default_roi_type;
+  const GQuark default_roi_type = 126;
 
   gpointer state = NULL;
   gint num_roi_metas_found = 0;
@@ -652,11 +652,6 @@ GST_START_TEST (test_rtphdrext_roi_multiple_metas_with_same_roi_type)
 
   g_signal_emit_by_name (pay, "add-extension", pay_ext);
   g_signal_emit_by_name (depay, "add-extension", depay_ext);
-
-  g_object_get (pay_ext, "roi-type", &pay_roi_type, NULL);
-  g_object_get (depay_ext, "roi-type", &depay_roi_type, NULL);
-  fail_unless_equals_int (pay_roi_type, default_roi_type);
-  fail_unless_equals_int (depay_roi_type, default_roi_type);
 
   /* verify that we can push and pull buffers */
   buf = _gst_harness_create_raw_buffer (h, src_caps);
@@ -721,6 +716,123 @@ GST_START_TEST (test_rtphdrext_roi_multiple_metas_with_same_roi_type)
 
 GST_END_TEST;
 
+GST_START_TEST (test_rtphdrext_roi_property_roi_types)
+{
+  GstRTPHeaderExtension *ext;
+  GValue roi_types = G_VALUE_INIT, roi_type = G_VALUE_INIT;
+  GValue invalid_roi_type = G_VALUE_INIT;
+  const GValue *val_ref;
+  const GQuark default_roi_type = 126;
+
+  ext =
+      GST_RTP_HEADER_EXTENSION (gst_element_factory_make ("rtphdrextroi",
+          NULL));
+
+  /* Case 1: default roi-types:
+   * roi-types must be a GValue array of length 1 with a 0 roi-type */
+  gst_value_array_init (&roi_types, 1);
+  g_object_get_property ((GObject *) ext, "roi-types", &roi_types);
+  fail_unless_equals_int (1, (gint) gst_value_array_get_size (&roi_types));
+  val_ref = gst_value_array_get_value (&roi_types, 0);
+  fail_unless (G_VALUE_HOLDS_UINT (val_ref));
+  fail_unless_equals_int (default_roi_type, g_value_get_uint (val_ref));
+  g_value_unset (&roi_types);
+
+  /* Case 2: set a valid GValue array with only uints */
+  gst_value_array_init (&roi_types, 22);
+  g_value_init (&roi_type, G_TYPE_UINT);
+  for (guint i = 1; i <= 22; i++) {
+    g_value_set_uint (&roi_type, i);
+    gst_value_array_append_value (&roi_types, &roi_type);
+  }
+  g_object_set_property ((GObject *) ext, "roi-types", &roi_types);
+  g_value_unset (&roi_type);
+  g_value_unset (&roi_types);
+
+  g_object_get_property ((GObject *) ext, "roi-types", &roi_types);
+  fail_unless_equals_int (22, gst_value_array_get_size (&roi_types));
+  gboolean seen_roi_type[23] = { 0 };
+  for (guint i = 0; i < 22; i++) {
+    const GValue *v = gst_value_array_get_value (&roi_types, i);
+    fail_unless (G_VALUE_HOLDS_UINT (v));
+    fail_if (seen_roi_type[g_value_get_uint (v)]);
+    seen_roi_type[g_value_get_uint (v)] = TRUE;
+  }
+  g_value_unset (&roi_type);
+  g_value_unset (&roi_types);
+
+  /* Case 3: invalid roi-type within GValue array */
+  gst_value_array_init (&roi_types, 1);
+  g_value_init (&roi_type, G_TYPE_UINT);
+  /* 0 is forbiden as a roi-type */
+  g_value_set_uint (&roi_type, 0);
+  gst_value_array_append_value (&roi_types, &roi_type);
+
+  // FIXME: ASSERT_WARNING broken
+  // ASSERT_WARNING (g_object_set_property ((GObject *) ext, "roi-types",
+  //         &roi_types));
+  g_value_unset (&roi_type);
+  g_value_unset (&roi_types);
+
+  /* Case 4: invalid roi-type within GValue array */
+  gst_value_array_init (&roi_types, 3);
+  g_value_init (&roi_type, G_TYPE_UINT);
+  g_value_init (&invalid_roi_type, G_TYPE_STRING);
+  /* valid */
+  g_value_set_uint (&roi_type, 1);
+  gst_value_array_append_value (&roi_types, &roi_type);
+  /* invalid */
+  g_value_set_string (&invalid_roi_type, "Dummy");
+  gst_value_array_append_value (&roi_types, &invalid_roi_type);
+  /* valid */
+  g_value_set_uint (&roi_type, 2);
+  gst_value_array_append_value (&roi_types, &roi_type);
+
+  // FIXME: ASSERT_WARNING broken
+  // ASSERT_WARNING (g_object_set_property ((GObject *) ext, "roi-types",
+  //         &roi_types));
+  g_value_unset (&roi_type);
+  g_value_unset (&invalid_roi_type);
+  g_value_unset (&roi_types);
+
+  /* Case 5: duplicate roi-types on GValue array */
+  gst_value_array_init (&roi_types, 3);
+  g_value_init (&roi_type, G_TYPE_UINT);
+  /* valid */
+  g_value_set_uint (&roi_type, 1);
+  gst_value_array_append_value (&roi_types, &roi_type);
+  /* valid */
+  g_value_set_uint (&roi_type, 2);
+  gst_value_array_append_value (&roi_types, &roi_type);
+  /* duplicate */
+  g_value_set_uint (&roi_type, 2);
+  gst_value_array_append_value (&roi_types, &roi_type);
+
+  // FIXME: ASSERT_WARNING broken
+  // ASSERT_WARNING (g_object_set_property ((GObject *) ext, "roi-types",
+  //         &roi_types));
+  g_value_unset (&roi_type);
+  g_value_unset (&roi_types);
+
+  /* Case 5: invalid length */
+  gst_value_array_init (&roi_types, 500);
+  g_value_init (&roi_type, G_TYPE_UINT);
+  for (guint i = 0; i < 500; i++) {
+    g_value_set_uint (&roi_type, i);
+    gst_value_array_append_value (&roi_types, &roi_type);
+  }
+
+  // FIXME: ASSERT_WARNING broken
+  // ASSERT_WARNING (g_object_set_property ((GObject *) ext, "roi-types",
+  //         &roi_types));
+  g_value_unset (&roi_type);
+  g_value_unset (&roi_types);
+
+  gst_object_unref (ext);
+}
+
+GST_END_TEST;
+
 static Suite *
 rtphdrext_roi_suite (void)
 {
@@ -738,6 +850,8 @@ rtphdrext_roi_suite (void)
 
   tcase_add_test (tc_chain,
       test_rtphdrext_roi_multiple_metas_with_same_roi_type);
+
+  tcase_add_test (tc_chain, test_rtphdrext_roi_property_roi_types);
 
   return s;
 }
