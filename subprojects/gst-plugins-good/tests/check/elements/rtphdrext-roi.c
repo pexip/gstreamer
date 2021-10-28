@@ -330,6 +330,7 @@ GST_START_TEST (test_rtphdrext_roi_explicit_roi_type)
   GstCaps *src_caps, *pay_pad_caps, *expected_caps;
 
   GstElement *pay, *depay;
+  GstElementFactory *ext_factory;
   GstRTPHeaderExtension *pay_ext, *depay_ext;
   GstPad *pay_pad;
 
@@ -351,12 +352,17 @@ GST_START_TEST (test_rtphdrext_roi_explicit_roi_type)
   pay = gst_harness_find_element (h, "rtpvrawpay");
   depay = gst_harness_find_element (h, "rtpvrawdepay");
 
+  /* explicitly set a roi-type on both payloader and depayloader extensions
+   * and expect a buffer with such roi-type added to their RoI meta to be
+   * correctly payloaded and depayloaded */
+  ext_factory = gst_element_factory_find ("rtphdrextroi");
   pay_ext =
-      GST_RTP_HEADER_EXTENSION (gst_element_factory_make ("rtphdrextroi",
-          NULL));
+      GST_RTP_HEADER_EXTENSION (gst_element_factory_create_full (ext_factory,
+          "roi-type", other_roi_type, NULL));
   depay_ext =
-      GST_RTP_HEADER_EXTENSION (gst_element_factory_make ("rtphdrextroi",
-          NULL));
+      GST_RTP_HEADER_EXTENSION (gst_element_factory_create_full (ext_factory,
+          "roi-type", other_roi_type, NULL));
+  gst_object_unref (ext_factory);
 
   gst_rtp_header_extension_set_id (pay_ext, EXTMAP_ID);
   gst_rtp_header_extension_set_id (depay_ext, EXTMAP_ID);
@@ -379,12 +385,6 @@ GST_START_TEST (test_rtphdrext_roi_explicit_roi_type)
   gst_object_unref (pay_pad);
   gst_caps_unref (pay_pad_caps);
   gst_caps_unref (expected_caps);
-
-  /* explicitly set a roi-type on both payloader and depayloader extensions
-   * and expect a buffer with such roi-type added to their RoI meta to be
-   * correctly payloaded and depayloaded */
-  g_object_set (pay_ext, "roi-type", other_roi_type, NULL);
-  g_object_set (depay_ext, "roi-type", other_roi_type, NULL);
 
   buf = _gst_harness_create_raw_buffer (h, src_caps);
   gst_buffer_add_video_region_of_interest_meta_id (buf,
@@ -427,6 +427,7 @@ GST_START_TEST (test_rtphdrext_roi_explicit_roi_type_pay_only)
   GstCaps *src_caps, *pay_pad_caps, *expected_caps;
 
   GstElement *pay, *depay;
+  GstElementFactory *ext_factory;
   GstRTPHeaderExtension *pay_ext, *depay_ext;
   GstPad *pay_pad;
 
@@ -449,12 +450,19 @@ GST_START_TEST (test_rtphdrext_roi_explicit_roi_type_pay_only)
   pay = gst_harness_find_element (h, "rtpvrawpay");
   depay = gst_harness_find_element (h, "rtpvrawdepay");
 
+  /* set a roi-type on the payloader only and expect this to be
+   * partially correctly depayloaded as the depayloader will add a meta for
+   * ANY HDREXT-ROI that has been payloaded by a GStreamer payloader with
+   * the added rtphdrext-roi element. However, the roi-type on the RoI meta
+   * would be the default one for the depayloader */
+  ext_factory = gst_element_factory_find ("rtphdrextroi");
   pay_ext =
-      GST_RTP_HEADER_EXTENSION (gst_element_factory_make ("rtphdrextroi",
-          NULL));
+      GST_RTP_HEADER_EXTENSION (gst_element_factory_create_full (ext_factory,
+          "roi-type", other_roi_type, NULL));
   depay_ext =
       GST_RTP_HEADER_EXTENSION (gst_element_factory_make ("rtphdrextroi",
           NULL));
+  gst_object_unref (ext_factory);
 
   gst_rtp_header_extension_set_id (pay_ext, EXTMAP_ID);
   gst_rtp_header_extension_set_id (depay_ext, EXTMAP_ID);
@@ -482,13 +490,6 @@ GST_START_TEST (test_rtphdrext_roi_explicit_roi_type_pay_only)
   /* verify there are NO RoI meta on the buffer pulled from the depayloader */
   fail_if (gst_buffer_get_meta (buf, meta_info->api));
   gst_buffer_unref (buf);
-
-  /* set a roi-type on the payloader only and expect this to be
-   * partially correctly depayloaded as the depayloader will add a meta for
-   * ANY HDREXT-ROI that has been payloaded by a GStreamer payloader with
-   * the added rtphdrext-roi element. However, the roi-type on the RoI meta
-   * would be the default one for the depayloader */
-  g_object_set (pay_ext, "roi-type", other_roi_type, NULL);
 
   buf = _gst_harness_create_raw_buffer (h, src_caps);
   gst_buffer_add_video_region_of_interest_meta_id (buf,
@@ -531,6 +532,7 @@ GST_START_TEST (test_rtphdrext_roi_explicit_roi_type_depay_only)
   GstCaps *src_caps, *pay_pad_caps, *expected_caps;
 
   GstElement *pay, *depay;
+  GstElementFactory *ext_factory;
   GstRTPHeaderExtension *pay_ext, *depay_ext;
   GstPad *pay_pad;
 
@@ -549,12 +551,14 @@ GST_START_TEST (test_rtphdrext_roi_explicit_roi_type_depay_only)
   pay = gst_harness_find_element (h, "rtpvrawpay");
   depay = gst_harness_find_element (h, "rtpvrawdepay");
 
+  /* set a roi-type on the depayloader only */
+  ext_factory = gst_element_factory_find ("rtphdrextroi");
   pay_ext =
       GST_RTP_HEADER_EXTENSION (gst_element_factory_make ("rtphdrextroi",
           NULL));
   depay_ext =
-      GST_RTP_HEADER_EXTENSION (gst_element_factory_make ("rtphdrextroi",
-          NULL));
+      GST_RTP_HEADER_EXTENSION (gst_element_factory_create_full (ext_factory,
+          "roi-type", other_roi_type, NULL));
 
   gst_rtp_header_extension_set_id (pay_ext, EXTMAP_ID);
   gst_rtp_header_extension_set_id (depay_ext, EXTMAP_ID);
@@ -582,9 +586,6 @@ GST_START_TEST (test_rtphdrext_roi_explicit_roi_type_depay_only)
   /* verify there are NO RoI meta on the buffer pulled from the depayloader */
   fail_if (gst_buffer_get_meta (buf, meta_info->api));
   gst_buffer_unref (buf);
-
-  /* set a roi-type on the depayloader only */
-  g_object_set (depay_ext, "roi-type", other_roi_type, NULL);
 
   buf = _gst_harness_create_raw_buffer (h, src_caps);
   gst_buffer_add_video_region_of_interest_meta_id (buf,

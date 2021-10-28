@@ -217,7 +217,7 @@ gst_rtp_header_extension_roi_class_init (GstRTPHeaderExtensionRoiClass * klass)
       g_param_spec_uint ("roi-type", "ROI TYPE",
           "What roi-type (GQuark) to write the extension-header for",
           0, G_MAXUINT32, 0,
-          G_PARAM_READWRITE | G_PARAM_CONSTRUCT | G_PARAM_STATIC_STRINGS));
+          G_PARAM_READWRITE | G_PARAM_CONSTRUCT_ONLY | G_PARAM_STATIC_STRINGS));
 
   rtp_hdr_class->get_supported_flags =
       gst_rtp_header_extension_roi_get_supported_flags;
