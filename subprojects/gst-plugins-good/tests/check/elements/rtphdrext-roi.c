@@ -31,7 +31,7 @@
 
 #define SRC_CAPS_STR "video/x-raw,format=I420"
 
-#define MAX_ROI_TYPES_ALLOWED 22
+#define MAX_ROI_TYPES_ALLOWED 15
 
 GST_START_TEST (test_rtphdrext_roi_basic)
 {

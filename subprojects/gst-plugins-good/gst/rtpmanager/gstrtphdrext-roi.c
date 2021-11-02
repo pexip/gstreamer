@@ -41,6 +41,7 @@ GST_DEBUG_CATEGORY_STATIC (rtp_hdrext_roi_debug);
 #define ROI_HDR_EXT_URI GST_RTP_HDREXT_BASE"TBD:draft-ford-avtcore-roi-extension-00"
 
 #define ROI_EXTHDR_SIZE 11
+#define ROI_MAX_ROI_TYPES 15 /* 0 is unused and we allocate 1 byte for the ID */
 
 #define DEFAULT_ROI_TYPE 126
 #define DEFAULT_ROI_ID   8
@@ -152,10 +153,10 @@ gst_rtp_header_extension_roi_set_roi_types (GstRTPHeaderExtensionRoi * self,
   /* verify our maximum number of roi-types supported:
    * we can only payload 1 RoI meta per roi-type; and given the a fixed size
    * per header extension we allowed a finite set of roi-tyes */
-  if (num_roi_types >= 256 / ROI_EXTHDR_SIZE) {
+  if (num_roi_types > ROI_MAX_ROI_TYPES) {
     g_warning ("Maximum allowed set of roi-types surpassed. "
         "Current length=%d max-length=%d", num_roi_types,
-        256 / ROI_EXTHDR_SIZE);
+        ROI_MAX_ROI_TYPES);
     return;
   }
 
@@ -238,7 +239,7 @@ gst_rtp_header_extension_roi_write (GstRTPHeaderExtension * ext,
   g_return_val_if_fail (write_flags &
       gst_rtp_header_extension_roi_get_supported_flags (ext), -1);
 
-  gboolean written_roi_ids[(256 / ROI_EXTHDR_SIZE) + 1] = { 0 };
+  gboolean written_roi_ids[ROI_MAX_ROI_TYPES + 1] = { 0 };
   while ((meta = (GstVideoRegionOfInterestMeta *)
           gst_buffer_iterate_meta_filtered ((GstBuffer *) input_meta, &state,
               GST_VIDEO_REGION_OF_INTEREST_META_API_TYPE))) {
