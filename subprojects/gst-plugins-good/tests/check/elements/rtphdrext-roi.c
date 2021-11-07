@@ -929,23 +929,14 @@ GST_START_TEST (test_rtphdrext_roi_property_roi_types)
   g_value_unset (&roi_types);
 
   /* Case 4: invalid roi-type within GValue array */
-  gst_value_array_init (&roi_types, 3);
-  g_value_init (&roi_type, G_TYPE_UINT);
+  gst_value_array_init (&roi_types, 1);
   g_value_init (&invalid_roi_type, G_TYPE_STRING);
-  /* valid */
-  g_value_set_uint (&roi_type, 1);
-  gst_value_array_append_value (&roi_types, &roi_type);
-  /* invalid */
   g_value_set_string (&invalid_roi_type, "Dummy");
   gst_value_array_append_value (&roi_types, &invalid_roi_type);
-  /* valid */
-  g_value_set_uint (&roi_type, 2);
-  gst_value_array_append_value (&roi_types, &roi_type);
 
   // FIXME: ASSERT_WARNING broken
   // ASSERT_WARNING (g_object_set_property ((GObject *) ext, "roi-types",
   //         &roi_types));
-  g_value_unset (&roi_type);
   g_value_unset (&invalid_roi_type);
   g_value_unset (&roi_types);
 
