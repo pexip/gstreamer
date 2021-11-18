@@ -717,29 +717,38 @@ _get_twcc_seqnum_data (RTPPacketInfo * pinfo, guint8 ext_id, gpointer * data)
   return ret;
 }
 
-static void
+static gboolean
 _set_twcc_seqnum_data (GstBuffer * buf, guint8 ext_id, guint16 seqnum)
 {
   GstRTPBuffer rtp = GST_RTP_BUFFER_INIT;
   gpointer data;
 
-  if (gst_rtp_buffer_map (buf, GST_MAP_READWRITE, &rtp)) {
-    if (gst_rtp_buffer_get_extension_onebyte_header (&rtp,
-            ext_id, 0, &data, NULL)) {
-      GST_WRITE_UINT16_BE (data, seqnum);
-    }
+  if (!gst_rtp_buffer_map (buf, GST_MAP_READWRITE, &rtp))
+    return FALSE;
+
+  if (!gst_rtp_buffer_get_extension_onebyte_header (&rtp,
+          ext_id, 0, &data, NULL)) {
     gst_rtp_buffer_unmap (&rtp);
+    return FALSE;
   }
+
+  GST_WRITE_UINT16_BE (data, seqnum);
+  gst_rtp_buffer_unmap (&rtp);
+  return TRUE;
 }
 
-static guint16
+static gint32
 rtp_twcc_manager_set_send_twcc_seqnum (RTPTWCCManager * twcc,
     RTPPacketInfo * pinfo)
 {
-  guint16 seqnum = twcc->send_seqnum++;
+  gint32 twcc_seqnum = twcc->send_seqnum + 1;
   pinfo->data = gst_buffer_make_writable (pinfo->data);
-  _set_twcc_seqnum_data (pinfo->data, twcc->send_ext_id, seqnum);
-  return seqnum;
+
+  if (!_set_twcc_seqnum_data (pinfo->data, twcc->send_ext_id, twcc_seqnum))
+    return -1;
+
+  twcc->send_seqnum = twcc_seqnum;
+  return twcc_seqnum;
 }
 
 static gint32
@@ -1378,12 +1387,14 @@ void
 rtp_twcc_manager_send_packet (RTPTWCCManager * twcc, RTPPacketInfo * pinfo)
 {
   SentPacket packet;
-  guint16 seqnum;
+  gint32 seqnum;
 
   if (twcc->send_ext_id == 0)
     return;
 
   seqnum = rtp_twcc_manager_set_send_twcc_seqnum (twcc, pinfo);
+  if (seqnum == -1)
+    return;
 
   sent_packet_init (&packet, seqnum, pinfo);
   g_array_append_val (twcc->sent_packets, packet);
