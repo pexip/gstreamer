@@ -2288,7 +2288,7 @@ gst_v4l2_object_add_interlace_mode (GstV4l2Object * v4l2object,
     return;
 
   if (v4l2object->never_interlaced) {
-    gst_structure_set (s, "interlace-mode", G_TYPE_STRING, "progressive", NULL);
+    //gst_structure_set (s, "interlace-mode", G_TYPE_STRING, "progressive", NULL);
     return;
   }
 
@@ -2328,11 +2328,13 @@ gst_v4l2_object_add_interlace_mode (GstV4l2Object * v4l2object,
     }
   }
 
+/*
   if (gst_v4l2src_value_simplify (&interlace_formats)
       || gst_value_list_get_size (&interlace_formats) > 0)
     gst_structure_take_value (s, "interlace-mode", &interlace_formats);
   else
     GST_WARNING_OBJECT (v4l2object, "Failed to determine interlace mode");
+*/
 
   return;
 }
@@ -3857,8 +3859,8 @@ gst_v4l2_object_set_format_full (GstV4l2Object * v4l2object, GstCaps * caps,
    * interlace-mode and colorimetry back into the caps. */
   if (v4l2object->skip_try_fmt_probes) {
     if (!disable_interlacing && !gst_structure_has_field (s, "interlace-mode")) {
-      gst_structure_set (s, "interlace-mode", G_TYPE_STRING,
-          gst_video_interlace_mode_to_string (info.interlace_mode), NULL);
+      //gst_structure_set (s, "interlace-mode", G_TYPE_STRING,
+      //    gst_video_interlace_mode_to_string (info.interlace_mode), NULL);
     }
     if (!disable_colorimetry && !gst_structure_has_field (s, "colorimetry")) {
       gchar *str = gst_video_colorimetry_to_string (&info.colorimetry);

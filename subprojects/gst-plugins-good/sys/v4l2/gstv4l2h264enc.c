@@ -92,6 +92,7 @@ gst_v4l2_h264_enc_get_property (GObject * object,
 static void
 gst_v4l2_h264_enc_init (GstV4l2H264Enc * self)
 {
+  GST_PAD_SET_ACCEPT_TEMPLATE (GST_VIDEO_ENCODER_SINK_PAD (self));
 }
 
 static void
