@@ -1253,8 +1253,11 @@ gst_element_request_pad_simple (GstElement * element, const gchar * name)
     }
   }
 
-  if (!templ_found)
+  if (!templ_found) {
+    GST_CAT_WARNING (GST_CAT_PADS, "Could not find template in %" GST_PTR_FORMAT
+        " to match requested pad name %s", element, name);
     return NULL;
+  }
 
   pad = _gst_element_request_pad (element, templ, req_name, NULL);
 
