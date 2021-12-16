@@ -833,7 +833,7 @@ client_role_connect (GstSctpAssociation * self)
         usrsctp_bind (self->sctp_ass_sock, (struct sockaddr *) &local_addr,
         sizeof (struct sockaddr_conn));
     if (ret < 0) {
-      if (errno != EADDRINUSE || retry_count == 5) {
+      if (errno != EADDRINUSE || retry_count == 10) {
         GST_ERROR_OBJECT (self, "usrsctp_bind() error: (%u) %s", errno,
             g_strerror (errno));
         goto error;
