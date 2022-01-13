@@ -838,6 +838,7 @@ rtp_session_init (RTPSession * sess)
 
   sess->twcc = rtp_twcc_manager_new (sess->mtu);
   sess->rtx_ssrc_to_ssrc = g_hash_table_new (NULL, NULL);
+  sess->media_ssrc_to_sender_ssrc = g_hash_table_new (NULL, NULL);
 }
 
 static void
@@ -863,6 +864,8 @@ rtp_session_finalize (GObject * object)
   if (sess->rtx_ssrc_map)
     gst_structure_free (sess->rtx_ssrc_map);
   g_hash_table_destroy (sess->rtx_ssrc_to_ssrc);
+
+  g_hash_table_destroy (sess->media_ssrc_to_sender_ssrc);
 
   g_mutex_clear (&sess->lock);
 
@@ -3144,6 +3147,12 @@ rtp_session_process_feedback (RTPSession * sess, GstRTCPPacket * packet,
   sender_ssrc = gst_rtcp_packet_fb_get_sender_ssrc (packet);
   media_ssrc = gst_rtcp_packet_fb_get_media_ssrc (packet);
 
+  /* Update MAP of our sender SSRC and media SSRC for when we have multiple internal sender RTPSources
+     Limitation: ** Relies on data off wire ** - invert sender & media ssrc
+     1st pass - better to go up stack to get our internal relation */
+  g_hash_table_insert (sess->media_ssrc_to_sender_ssrc,
+      GUINT_TO_POINTER (sender_ssrc), GUINT_TO_POINTER (media_ssrc));
+
   src = find_source (sess, media_ssrc);
 
   /* skip non-bye packets for sources that are marked BYE */
@@ -3921,6 +3930,46 @@ reported:
       GUINT_TO_POINTER (data->source->ssrc));
 }
 
+static void
+debug_print_table (gpointer key, gpointer value, gpointer data)
+{
+  GST_ERROR ("TOMEDIT: debug_print_table key=%08x(%u) ; value=%08x(%u)",
+      GPOINTER_TO_UINT (key), GPOINTER_TO_UINT (key), GPOINTER_TO_UINT (value),
+      GPOINTER_TO_UINT (value));
+}
+
+static gboolean
+is_correct_sender_ssrc_for_bundle_media (RTPSession * sess, guint32 media_ssrc,
+    guint32 proposed_sender_ssrc)
+{
+  gpointer value;
+
+  g_hash_table_foreach (sess->media_ssrc_to_sender_ssrc,
+      (GHFunc) debug_print_table, NULL);
+
+  if (sess->stats.internal_sources > 1
+      && g_hash_table_lookup_extended (sess->media_ssrc_to_sender_ssrc,
+          media_ssrc, NULL, &value)) {
+    if (GPOINTER_TO_UINT (value) != proposed_sender_ssrc
+        && find_source (sess, GPOINTER_TO_UINT (value)) != NULL) {
+      GST_ERROR ("TOMEDIT [2] INVALID sender-ssrc %08x(%u) media-ssrc %08x(%u)",
+          proposed_sender_ssrc, proposed_sender_ssrc, media_ssrc, media_ssrc);
+      return FALSE;
+    } else {
+      GST_ERROR
+          ("TOMEDIT [3] VERIFIED sender-ssrc %08x(%u) media-ssrc %08x(%u)",
+          proposed_sender_ssrc, proposed_sender_ssrc, media_ssrc, media_ssrc);
+    }
+  } else if (sess->stats.internal_sources > 1) {
+    GST_ERROR ("TOMEDIT [4] FALLBACK sender-ssrc %08x(%u) media-ssrc %08x(%u)",
+        proposed_sender_ssrc, proposed_sender_ssrc, media_ssrc, media_ssrc);
+  } else {
+    GST_ERROR ("TOMEDIT [5] DEFAULT sender-ssrc %08x(%u) media-ssrc %08x(%u)",
+        proposed_sender_ssrc, proposed_sender_ssrc, media_ssrc, media_ssrc);
+  }
+  return TRUE;
+}
+
 /* construct FIR */
 static void
 session_add_fir (const gchar * key, RTPSource * source, ReportData * data)
@@ -3929,7 +3978,14 @@ session_add_fir (const gchar * key, RTPSource * source, ReportData * data)
   guint16 len;
   guint8 *fci_data;
 
+  GST_ERROR ("TOMEDIT session_add_fir processing ssrc %08x(%u) %p",
+      source->ssrc, source->ssrc, source);
+
   if (!source->send_fir)
+    return;
+
+  if (!is_correct_sender_ssrc_for_bundle_media (data->sess, source->ssrc,
+          data->source->ssrc))
     return;
 
   len = gst_rtcp_packet_fb_get_fci_length (packet);
@@ -3998,7 +4054,14 @@ session_pli (const gchar * key, RTPSource * source, ReportData * data)
   GstRTCPBuffer *rtcp = &data->rtcpbuf;
   GstRTCPPacket *packet = &data->packet;
 
+  GST_ERROR ("TOMEDIT session_pli processing ssrc %08x(%u) %p", source->ssrc,
+      source->ssrc, source);
+
   if (!source->send_pli)
+    return;
+
+  if (!is_correct_sender_ssrc_for_bundle_media (data->sess, source->ssrc,
+          data->source->ssrc))
     return;
 
   if (rtp_source_has_retained (source, has_pli_compare_func, NULL))
@@ -4033,7 +4096,14 @@ session_nack (const gchar * key, RTPSource * source, ReportData * data)
   guint16 n_fb_nacks = 0;
   guint8 *fci_data;
 
+  GST_ERROR ("TOMEDIT session_nack processing ssrc %08x(%u) %p", source->ssrc,
+      source->ssrc, source);
+
   if (!source->send_nack)
+    return;
+
+  if (!is_correct_sender_ssrc_for_bundle_media (sess, source->ssrc,
+          data->source->ssrc))
     return;
 
   nacks = rtp_source_get_nacks (source, &n_nacks);
@@ -4560,6 +4630,8 @@ generate_rtcp (const gchar * key, RTPSource * source, ReportData * data)
     return;
   }
 
+  GST_ERROR ("TOMEDIT generate_rtcp processing ssrc %08x(%u) %p", source->ssrc,
+      source->ssrc, source);
   data->source = source;
 
   /* open packet */

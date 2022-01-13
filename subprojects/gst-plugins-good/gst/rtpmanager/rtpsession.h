@@ -325,6 +325,8 @@ struct _RTPSession {
   guint nack_probe_pct;
   GstClockTime nack_probe_duration;
   GstClockTime nack_probe_deadline;
+
+  GHashTable *media_ssrc_to_sender_ssrc;
 };
 
 /**
