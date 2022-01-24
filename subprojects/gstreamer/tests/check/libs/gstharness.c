@@ -1,7 +1,7 @@
 /*
  * Tests and examples of GstHarness
  *
- * Copyright (C) 2015 Havard Graff <havard@pexip.com>
+ * Copyright (C) 2015-2021 Havard Graff <havard@pexip.com>
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Library General Public
@@ -21,6 +21,8 @@
 #ifdef HAVE_CONFIG_H
 #include "config.h"
 #endif
+
+#include <gst/base/gstbasetransform.h>
 
 #include <gst/check/gstcheck.h>
 #include <gst/check/gstharness.h>
@@ -293,6 +295,103 @@ GST_START_TEST (test_get_all_data)
 
 GST_END_TEST;
 
+static GstFlowReturn
+gst_harness_dummy_identity_chain_list (GstPad * pad, GstObject * parent,
+    GstBufferList * buffer_list)
+{
+  GstBaseTransform *trans = GST_BASE_TRANSFORM_CAST (parent);
+  return gst_pad_push_list (trans->srcpad, buffer_list);
+}
+
+GST_START_TEST (test_src_harness_buflist)
+{
+  GstBaseTransform *trans;
+  GstBufferList *list, *push_list;
+  GstHarness *h;
+  GstBuffer *buffer;
+
+  h = gst_harness_new ("identity");
+  gst_harness_set_src_caps_str (h, "mycaps");
+
+  /* Make GstIdentity element forward buffer lists as is instead of destructing
+     them into individual buffers */
+  trans = GST_BASE_TRANSFORM_CAST (gst_harness_find_element (h, "identity"));
+  gst_pad_set_chain_list_function (trans->sinkpad,
+      GST_DEBUG_FUNCPTR (gst_harness_dummy_identity_chain_list));
+
+  /* Push and pull list */
+  push_list = gst_buffer_list_new_sized (2);
+  for (int i = 0; i < 2; ++i) {
+    buffer = gst_buffer_new_allocate (NULL, i*17, NULL);
+    gst_buffer_list_add (push_list, buffer);
+  }
+
+  gst_harness_push_list (h, push_list);
+
+  /* Verify that identity outputs a buffer by pulling and unreffing */
+  list = gst_harness_pull_list (h);
+  fail_unless (list != NULL);
+  fail_unless_equals_int (gst_buffer_list_length (list), 2);
+  for (int i = 0; i < 2; ++i) {
+    buffer = gst_buffer_list_get(list, i);
+    fail_unless_equals_int(gst_buffer_get_size(buffer), i*17)
+  }
+  gst_buffer_list_unref (list);
+
+  /* Push list, pull individual buffers */
+  push_list = gst_buffer_list_new_sized (3);
+  for (int i = 0; i < 3; ++i) {
+    buffer = gst_buffer_new_allocate (NULL,  i * 127, NULL);
+    gst_buffer_list_add (push_list, buffer);
+  }
+
+  gst_harness_push_list (h, push_list);
+
+  for (int i = 0; i < 3; ++i) {
+    buffer = gst_harness_pull (h);
+    fail_unless_equals_int (gst_buffer_get_size (buffer), i * 127);
+    fail_unless (buffer != NULL);
+    gst_buffer_unref (buffer);
+  }
+
+  /* Push a buffer */
+  buffer = gst_buffer_new_allocate (NULL, 384, NULL);
+  gst_harness_push (h, buffer);
+
+  /* Push a list */
+  push_list = gst_buffer_list_new_sized (4);
+  for (int i = 0; i < 4; ++i) {
+    buffer = gst_buffer_new_allocate (NULL, i * 937, NULL);
+    gst_buffer_list_add (push_list, buffer);
+  }
+  gst_harness_push_list (h, push_list);
+
+  /* Try to pull list, which should fail as a buffer is at the front of the queue. */
+  list = gst_harness_pull_list (h);
+  fail_unless (list == NULL);
+
+  /* Pull the buffer at the front of the queue */
+  buffer = gst_harness_pull (h);
+  fail_unless_equals_int (gst_buffer_get_size (buffer), 384);
+  fail_unless (buffer != NULL);
+  gst_buffer_unref (buffer);
+
+  /* Pull the list that is now at the front of the queue */
+  list = gst_harness_pull_list (h);
+  fail_unless (list != NULL);
+  fail_unless_equals_int (gst_buffer_list_length (list), 4);
+  for (int i = 0; i < 2; ++i) {
+    buffer = gst_buffer_list_get(list, i);
+    fail_unless_equals_int(gst_buffer_get_size(buffer), i*937);
+  }
+  gst_buffer_list_unref (list);
+
+  gst_harness_teardown (h);
+}
+
+GST_END_TEST;
+
+
 static Suite *
 gst_harness_suite (void)
 {
@@ -304,6 +403,7 @@ gst_harness_suite (void)
   tcase_add_test (tc_chain, test_harness_empty);
   tcase_add_test (tc_chain, test_harness_element_ref);
   tcase_add_test (tc_chain, test_src_harness);
+  tcase_add_test (tc_chain, test_src_harness_buflist);
   tcase_add_test (tc_chain, test_src_harness_no_forwarding);
   tcase_add_test (tc_chain, test_add_sink_harness_without_sinkpad);
 
