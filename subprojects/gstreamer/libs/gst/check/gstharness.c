@@ -1,6 +1,6 @@
 /* GstHarness - A test-harness for GStreamer testing
  *
- * Copyright (C) 2012-2015 Pexip <pexip.com>
+ * Copyright (C) 2012-2021 Pexip <pexip.com>
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Library General Public
@@ -131,7 +131,12 @@
 #include <string.h>
 #include <math.h>
 
+GST_DEBUG_CATEGORY (gst_harness_debug);
+#define GST_CAT_DEFAULT gst_harness_debug
+
 static void gst_harness_stress_free (GstHarnessThread * t);
+static GstBuffer *gst_harness_extract_one_buffer_locked (GstHarness * h,
+    GstMiniObject * queue_element);
 
 #define HARNESS_KEY "harness"
 #define HARNESS_REF "harness-ref"
@@ -218,6 +223,10 @@ gst_harness_chain (GstPad * pad, GstObject * parent, GstBuffer * buffer)
   g_mutex_lock (&priv->blocking_push_mutex);
   g_atomic_int_inc (&priv->recv_buffers);
 
+  GST_TRACE_OBJECT (pad,
+      "receiving chain buffer: harness: %" GST_PTR_FORMAT " buf: %"
+      GST_PTR_FORMAT, h, buffer);
+
   if (priv->drop_buffers) {
     gst_buffer_unref (buffer);
   } else {
@@ -230,6 +239,42 @@ gst_harness_chain (GstPad * pad, GstObject * parent, GstBuffer * buffer)
 
   if (priv->blocking_push_mode) {
     g_cond_wait (&priv->blocking_push_cond, &priv->blocking_push_mutex);
+  }
+  g_mutex_unlock (&priv->blocking_push_mutex);
+
+  return GST_FLOW_OK;
+}
+
+static GstFlowReturn
+gst_harness_chain_list (GstPad * pad, GstObject * parent,
+    GstBufferList * buffer_list)
+{
+  guint32 listlen;
+  GstHarness *h = g_object_get_data (G_OBJECT (pad), HARNESS_KEY);
+  GstHarnessPrivate *priv = h->priv;
+  (void) parent;
+  g_assert (h != NULL);
+  g_mutex_lock (&priv->blocking_push_mutex);
+  listlen = gst_buffer_list_length (buffer_list);
+  (void) g_atomic_int_add (&priv->recv_buffers, listlen);
+
+  GST_TRACE_OBJECT (pad,
+      "receiving chain list harness: %" GST_PTR_FORMAT " #buffers: (%"
+      G_GUINT32_FORMAT ") %" GST_PTR_FORMAT, h, listlen, buffer_list);
+
+  if (priv->drop_buffers) {
+    gst_buffer_list_unref (buffer_list);
+  } else {
+    g_mutex_lock (&priv->buf_or_eos_mutex);
+    g_async_queue_push (priv->buffer_queue, buffer_list);
+    g_cond_signal (&priv->buf_or_eos_cond);
+    g_mutex_unlock (&priv->buf_or_eos_mutex);
+  }
+
+  if (priv->blocking_push_mode) {
+    {
+      g_cond_wait (&priv->blocking_push_cond, &priv->blocking_push_mutex);
+    }
   }
   g_mutex_unlock (&priv->blocking_push_mutex);
 
@@ -603,6 +648,7 @@ gst_harness_setup_sink_pad (GstHarness * h,
   g_object_set_data (G_OBJECT (h->sinkpad), HARNESS_KEY, h);
 
   gst_pad_set_chain_function (h->sinkpad, gst_harness_chain);
+  gst_pad_set_chain_list_function (h->sinkpad, gst_harness_chain_list);
   gst_pad_set_query_function (h->sinkpad, gst_harness_sink_query);
   gst_pad_set_event_function (h->sinkpad, gst_harness_sink_event);
 
@@ -679,6 +725,8 @@ gst_harness_new_empty (void)
   GstHarness *h;
   GstHarnessPrivate *priv;
 
+  GST_DEBUG_CATEGORY_INIT (gst_harness_debug, "gstharness", 0, "GstHarness");
+
   h = g_new0 (GstHarness, 1);
   g_assert (h != NULL);
   h->priv = g_new0 (GstHarnessPrivate, 1);
@@ -693,7 +741,7 @@ gst_harness_new_empty (void)
   priv->testclock = GST_TEST_CLOCK_CAST (gst_test_clock_new ());
 
   priv->buffer_queue = g_async_queue_new_full (
-      (GDestroyNotify) gst_buffer_unref);
+      (GDestroyNotify) gst_mini_object_unref);
   priv->src_event_queue = g_async_queue_new_full (
       (GDestroyNotify) gst_event_unref);
   priv->sink_event_queue = g_async_queue_new_full (
@@ -1047,6 +1095,7 @@ gst_harness_new_parse (const gchar * launchline)
   return h;
 }
 
+
 /**
  * gst_harness_teardown:
  * @h: a #GstHarness
@@ -1116,6 +1165,7 @@ gst_harness_teardown (GstHarness * h)
      * they try to access this harness through pad data */
     GST_PAD_STREAM_LOCK (h->sinkpad);
     gst_pad_set_chain_function (h->sinkpad, NULL);
+    gst_pad_set_chain_list_function (h->sinkpad, NULL);
     gst_pad_set_event_function (h->sinkpad, NULL);
     gst_pad_set_query_function (h->sinkpad, NULL);
     GST_PAD_STREAM_UNLOCK (h->sinkpad);
@@ -1673,6 +1723,33 @@ gst_harness_push (GstHarness * h, GstBuffer * buffer)
 }
 
 /**
+ * gst_harness_push_list:
+ * @h: a #GstHarness
+ * @buffer_list: (transfer full): a #GstBufferList to push
+ *
+ * Pushes a #GstBufferList on the #GstHarness srcpad. The standard way of
+ * interacting with an harnessed element.
+ *
+ * MT safe.
+ *
+ * Returns: a #GstFlowReturn with the result from the push
+ *
+ */
+GstFlowReturn
+gst_harness_push_list (GstHarness * h, GstBufferList * buffer_list)
+{
+  guint32 listlen;
+  GstHarnessPrivate *priv = h->priv;
+  g_assert (buffer_list != NULL);
+  listlen = gst_buffer_list_length (buffer_list);
+  if (listlen > 0) {
+    GstBuffer *last_buffer = gst_buffer_list_get (buffer_list, listlen - 1);
+    priv->last_push_ts = GST_BUFFER_TIMESTAMP (last_buffer);
+  }
+  return gst_pad_push_list (h->srcpad, buffer_list);
+}
+
+/**
  * gst_harness_pull:
  * @h: a #GstHarness
  *
@@ -1689,9 +1766,17 @@ gst_harness_push (GstHarness * h, GstBuffer * buffer)
 GstBuffer *
 gst_harness_pull (GstHarness * h)
 {
-  GstHarnessPrivate *priv = h->priv;
-  GstBuffer *buf = (GstBuffer *) g_async_queue_timeout_pop (priv->buffer_queue,
-      G_USEC_PER_SEC * 60);
+  GstHarnessPrivate *priv;
+  GstMiniObject *queue_element;
+  GstBuffer *buf;
+
+  priv = h->priv;
+  queue_element =
+      GST_MINI_OBJECT_CAST (g_async_queue_timeout_pop (priv->buffer_queue,
+          G_USEC_PER_SEC * 60));
+  g_mutex_lock (&priv->buf_or_eos_mutex);
+  buf = gst_harness_extract_one_buffer_locked (h, queue_element);
+  g_mutex_unlock (&priv->buf_or_eos_mutex);
 
   if (priv->blocking_push_mode) {
     g_mutex_lock (&priv->blocking_push_mutex);
@@ -1719,13 +1804,15 @@ gst_harness_pull (GstHarness * h)
 gboolean
 gst_harness_pull_until_eos (GstHarness * h, GstBuffer ** buf)
 {
+  GstMiniObject *queue_element;
   GstHarnessPrivate *priv = h->priv;
   gboolean success = TRUE;
   gint64 end_time = g_get_monotonic_time () + 60 * G_TIME_SPAN_SECOND;
 
   g_mutex_lock (&priv->buf_or_eos_mutex);
   while (success) {
-    *buf = g_async_queue_try_pop (priv->buffer_queue);
+    queue_element = g_async_queue_try_pop (priv->buffer_queue);
+    *buf = gst_harness_extract_one_buffer_locked (h, queue_element);
     if (*buf || priv->eos_received)
       break;
     success = g_cond_wait_until (&priv->buf_or_eos_cond,
@@ -1734,6 +1821,56 @@ gst_harness_pull_until_eos (GstHarness * h, GstBuffer ** buf)
   g_mutex_unlock (&priv->buf_or_eos_mutex);
 
   return success;
+}
+
+static void
+gst_harness_async_queue_transfer (GAsyncQueue * new, GAsyncQueue * old)
+{
+  gpointer popped;
+  while ((popped = g_async_queue_try_pop (old)) != NULL) {
+    g_async_queue_push (new, popped);
+  }
+}
+
+static GstBuffer *
+gst_harness_extract_one_buffer_locked (GstHarness * h,
+    GstMiniObject * queue_element)
+{
+  GstHarnessPrivate *priv;
+  GAsyncQueue *old_buffer_queue;
+  GstBuffer *buf = NULL;
+  priv = h->priv;
+  if (queue_element != NULL) {
+    if (GST_IS_BUFFER (queue_element)) {
+      buf = GST_BUFFER_CAST (queue_element);
+    } else {
+      guint32 listlen;
+      GstBufferList *list = GST_BUFFER_LIST_CAST (queue_element);
+      g_assert (GST_BUFFER_LIST (queue_element));
+
+      listlen = gst_buffer_list_length (list);
+      if (listlen > 0) {
+        buf = gst_buffer_ref (gst_buffer_list_get (list, 0));
+      }
+      if (listlen > 1) {
+        /* List has multiple elements, remove the first one and transfer the
+           rest of the list as separate buffers to a new queue */
+        gst_buffer_list_remove (list, 0, 1);
+        listlen--;
+        old_buffer_queue = priv->buffer_queue;
+        priv->buffer_queue = g_async_queue_new_full (
+            (GDestroyNotify) gst_mini_object_unref);
+        for (int i = 0; i < listlen; ++i) {
+          g_async_queue_push (priv->buffer_queue,
+              gst_buffer_ref (gst_buffer_list_get (list, i)));
+        }
+        gst_harness_async_queue_transfer (priv->buffer_queue, old_buffer_queue);
+        g_async_queue_unref (old_buffer_queue);
+      }
+      gst_buffer_list_unref (list);
+    }
+  }
+  return buf;
 }
 
 /**
@@ -1753,8 +1890,20 @@ gst_harness_pull_until_eos (GstHarness * h, GstBuffer ** buf)
 GstBuffer *
 gst_harness_try_pull (GstHarness * h)
 {
-  GstHarnessPrivate *priv = h->priv;
-  GstBuffer *buf = (GstBuffer *) g_async_queue_try_pop (priv->buffer_queue);
+  GstHarnessPrivate *priv;
+  GstBuffer *buf;
+  GstMiniObject *queue_element;
+
+  g_return_val_if_fail (h != NULL, NULL);
+
+  priv = h->priv;
+
+  queue_element =
+      GST_MINI_OBJECT_CAST (g_async_queue_try_pop (priv->buffer_queue));
+
+  g_mutex_lock (&priv->buf_or_eos_mutex);
+  buf = gst_harness_extract_one_buffer_locked (h, queue_element);
+  g_mutex_unlock (&priv->buf_or_eos_mutex);
 
   if (priv->blocking_push_mode) {
     g_mutex_lock (&priv->blocking_push_mutex);
@@ -1823,8 +1972,27 @@ gst_harness_buffers_received (GstHarness * h)
 guint
 gst_harness_buffers_in_queue (GstHarness * h)
 {
+  gpointer popped;
+  GAsyncQueue *old_buffer_queue;
   GstHarnessPrivate *priv = h->priv;
-  return g_async_queue_length (priv->buffer_queue);
+  guint enqueued_buffers = 0;
+
+  g_mutex_lock (&priv->buf_or_eos_mutex);
+  old_buffer_queue = priv->buffer_queue;
+  priv->buffer_queue = g_async_queue_new_full (
+      (GDestroyNotify) gst_mini_object_unref);
+  while ((popped = g_async_queue_try_pop (old_buffer_queue)) != NULL) {
+    if (GST_IS_BUFFER_LIST (popped)) {
+      GstBufferList *popped_list = GST_BUFFER_LIST_CAST (popped);
+      enqueued_buffers += gst_buffer_list_length (popped_list);
+    } else {
+      enqueued_buffers++;
+    }
+    g_async_queue_push (priv->buffer_queue, popped);
+  }
+  g_async_queue_unref (old_buffer_queue);
+  g_mutex_unlock (&priv->buf_or_eos_mutex);
+  return enqueued_buffers;
 }
 
 /**
@@ -1862,6 +2030,7 @@ gst_harness_take_all_data_as_buffer (GstHarness * h)
 {
   GstHarnessPrivate *priv;
   GstBuffer *ret, *buf;
+  GstMiniObject *queue_element;
 
   g_return_val_if_fail (h != NULL, NULL);
 
@@ -1869,16 +2038,23 @@ gst_harness_take_all_data_as_buffer (GstHarness * h)
 
   g_async_queue_lock (priv->buffer_queue);
 
-  ret = g_async_queue_try_pop_unlocked (priv->buffer_queue);
+  queue_element = g_async_queue_try_pop_unlocked (priv->buffer_queue);
 
-  if (ret == NULL) {
+  if (queue_element == NULL) {
     ret = gst_buffer_new ();
   } else {
+    /* Extracting one element and pushing the rest to a queue inside the same
+       function is not very efficient, but we are not efficient in appending
+       buffers either, so let's stick with the KISS theme. */
+    ret = gst_harness_extract_one_buffer_locked (h, queue_element);
     /* buffer appending isn't very efficient for larger numbers of buffers
      * or lots of memories, but this function is not performance critical and
      * we can still improve it if and when the need arises. For now KISS. */
-    while ((buf = g_async_queue_try_pop_unlocked (priv->buffer_queue)))
+    while ((queue_element =
+            g_async_queue_try_pop_unlocked (priv->buffer_queue))) {
+      buf = gst_harness_extract_one_buffer_locked (h, queue_element);
       ret = gst_buffer_append (ret, buf);
+    }
   }
 
   g_async_queue_unlock (priv->buffer_queue);
@@ -1938,6 +2114,113 @@ gst_harness_take_all_data_as_bytes (GstHarness * h)
   return g_bytes_new_take (data, size);
 }
 
+
+/**
+ * gst_harness_pull_list
+ * @h: a #GstHarness
+ *
+ * Pulls a #GstBufferList from the #GAsyncQueue on the #GstHarness sinkpad.
+ * The pull will timeout in 60 seconds. This is the standard way of getting
+ * a buffer list from a harnessed #GstElement.
+ *
+ * If a normal buffer is submitted to the GstHarness this function will return
+ * null as long as that buffer is at the head of the queue
+ * (use #gst_harness_pull to remove it)
+ *
+ * MT safe.
+ *
+ * Returns: (transfer full): a #GstBufferList or %NULL if timed out,
+ *                           or buffer lists are not enabled.
+ */
+GstBufferList *
+gst_harness_pull_list (GstHarness * h)
+{
+  GAsyncQueue *old_buffer_queue;
+  GstHarnessPrivate *priv;
+  GstMiniObject *queue_element;
+  g_return_val_if_fail (h != NULL, NULL);
+  priv = h->priv;
+
+  queue_element =
+      GST_MINI_OBJECT_CAST (g_async_queue_timeout_pop (priv->buffer_queue,
+          G_USEC_PER_SEC * 60));
+  g_mutex_lock (&priv->buf_or_eos_mutex);
+  if (queue_element != NULL && GST_IS_BUFFER (queue_element)) {
+    /* Head of queue is a buffer, add it back to the queue */
+    old_buffer_queue = priv->buffer_queue;
+    priv->buffer_queue = g_async_queue_new_full (
+        (GDestroyNotify) gst_mini_object_unref);
+    g_async_queue_push (priv->buffer_queue, queue_element);
+    gst_harness_async_queue_transfer (priv->buffer_queue, old_buffer_queue);
+    queue_element = NULL;
+  }
+  g_mutex_unlock (&priv->buf_or_eos_mutex);
+
+  g_assert (queue_element == NULL || GST_IS_BUFFER_LIST (queue_element));
+
+  if (priv->blocking_push_mode) {
+    g_mutex_lock (&priv->blocking_push_mutex);
+    g_cond_signal (&priv->blocking_push_cond);
+    g_mutex_unlock (&priv->blocking_push_mutex);
+  }
+
+  return GST_BUFFER_LIST_CAST (queue_element);
+}
+
+/**
+ * gst_harness_try_pull_list:
+ * @h: a #GstHarness
+ *
+ * Pulls a #GstBuffer from the #GAsyncQueue on the #GstHarness sinkpad. Unlike
+ * gst_harness_pull this will not wait for any buffers if not any are present,
+ * and return %NULL straight away.
+ *
+ * Pulls a #GstBufferList from the #GAsyncQueue on the #GstHarness sinkpad.
+ * Unlike gst_harness_pull_list this will not wait for any buffers if not any
+ * are present, and return %NULL straight away.
+ * This function is only relevant if #gst_harness_buffer_list_support_set_enable
+ * is set to true, otherwise NULL will be returned.
+ *
+ * MT safe.
+ *
+ * Returns: (transfer full): a #GstBuffer or %NULL if no buffers are present in
+ *                           the #GAsyncQueue, or buffer lists not enabled.
+ *
+ */
+GstBufferList *
+gst_harness_try_pull_list (GstHarness * h)
+{
+  GAsyncQueue *old_buffer_queue;
+  GstMiniObject *queue_element;
+  GstHarnessPrivate *priv;
+  g_return_val_if_fail (h != NULL, NULL);
+  priv = h->priv;
+
+  g_mutex_lock (&priv->buf_or_eos_mutex);
+
+  queue_element = g_async_queue_try_pop (priv->buffer_queue);
+
+  if (queue_element != NULL && GST_IS_BUFFER (queue_element)) {
+    /* Head of queue is a buffer, add it back to the queue */
+    old_buffer_queue = priv->buffer_queue;
+    priv->buffer_queue = g_async_queue_new_full (
+        (GDestroyNotify) gst_mini_object_unref);
+    g_async_queue_push (priv->buffer_queue, queue_element);
+    gst_harness_async_queue_transfer (priv->buffer_queue, old_buffer_queue);
+    g_async_queue_unref (old_buffer_queue);
+    queue_element = NULL;
+  }
+
+  g_mutex_unlock (&priv->buf_or_eos_mutex);
+
+  if (priv->blocking_push_mode) {
+    g_mutex_lock (&priv->blocking_push_mutex);
+    g_cond_signal (&priv->blocking_push_cond);
+    g_mutex_unlock (&priv->blocking_push_mutex);
+  }
+
+  return GST_BUFFER_LIST_CAST (queue_element);
+}
 
 /**
  * gst_harness_dump_to_file:
