@@ -329,6 +329,8 @@ static GstFlowReturn gst_rtp_session_chain_send_rtp (GstPad * pad,
     GstObject * parent, GstBuffer * buffer);
 static GstFlowReturn gst_rtp_session_chain_send_rtp_list (GstPad * pad,
     GstObject * parent, GstBufferList * list);
+static GstCaps *
+gst_rtp_session_get_caps_for_pt (GstRtpSession * rtpsession, guint payload);
 
 static RTPSessionCallbacks callbacks = {
   gst_rtp_session_process_rtp,
@@ -374,6 +376,15 @@ static guint gst_rtp_session_signals[LAST_SIGNAL] = { 0 };
 static void
 on_new_ssrc (RTPSession * session, RTPSource * src, GstRtpSession * sess)
 {
+  GstCaps *caps;
+  caps = gst_rtp_session_get_caps_for_pt (sess, src->pt);
+  if (caps) {
+    const GstStructure *s = gst_caps_get_structure (caps, 0);
+    GST_ERROR("TOMEDIT-0: %s", gst_structure_serialize(s, GST_SERIALIZE_FLAG_NONE));
+    gst_caps_unref (caps);
+  } else {
+        GST_ERROR("TOMEDIT-0: ERROR");
+  }
   g_signal_emit (sess, gst_rtp_session_signals[SIGNAL_ON_NEW_SSRC], 0,
       src->ssrc);
 }
@@ -479,6 +490,16 @@ on_sender_timeout (RTPSession * session, RTPSource * src, GstRtpSession * sess)
 static void
 on_new_sender_ssrc (RTPSession * session, RTPSource * src, GstRtpSession * sess)
 {
+  GstCaps *caps;
+  caps = gst_rtp_session_get_caps_for_pt (sess, src->pt);
+  if (caps) {
+    const GstStructure *s = gst_caps_get_structure (caps, 0);
+    GST_ERROR("TOMEDIT-1: %s", gst_structure_serialize(s, GST_SERIALIZE_FLAG_NONE));
+    gst_caps_unref (caps);
+  } else {
+        GST_ERROR("TOMEDIT-1: ERROR");
+  }
+
   g_signal_emit (sess, gst_rtp_session_signals[SIGNAL_ON_NEW_SENDER_SSRC], 0,
       src->ssrc);
 }

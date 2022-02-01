@@ -2023,6 +2023,9 @@ obtain_source (RTPSession * sess, guint32 ssrc, gboolean * created,
     /* make new Source in probation and insert */
     source = rtp_source_new (ssrc);
 
+    if (! source->pt )
+      source->pt = pinfo->pt;
+
     GST_DEBUG ("creating new source %08x %p", ssrc, source);
 
     /* for RTP packets we need to set the source in probation. Receiving RTCP
@@ -3457,6 +3460,10 @@ rtp_session_send_rtp (RTPSession * sess, gpointer data, gboolean is_list,
 
   source = obtain_internal_source (sess, pinfo.ssrc, &created, current_time);
   if (created)
+
+    if (! source->pt )
+      source->pt = pinfo.pt;
+
     on_new_sender_ssrc (sess, source);
 
   if (!source->internal) {
