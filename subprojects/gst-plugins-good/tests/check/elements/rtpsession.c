@@ -61,11 +61,11 @@
 #define TEST_RTX_BUF_SSRC 0xd3add3ad
 
 static GstCaps *
-generate_caps (void)
+generate_caps (guint8 payload_type)
 {
   return gst_caps_new_simple ("application/x-rtp",
       "clock-rate", G_TYPE_INT, TEST_BUF_CLOCK_RATE,
-      "payload", G_TYPE_INT, TEST_BUF_PT, NULL);
+      "payload", G_TYPE_INT, payload_type, NULL);
 }
 
 static GstBuffer *
@@ -128,7 +128,7 @@ generate_twcc_send_buffer_full (guint seqnum, gboolean marker_bit,
 {
   return generate_test_buffer_full (seqnum * TEST_BUF_DURATION,
       seqnum, seqnum * TEST_RTP_TS_DURATION, ssrc, marker_bit,
-      payload_type, TEST_TWCC_EXT_ID, seqnum);
+      payload_type, 0, 0);
 }
 
 static GstBuffer *
@@ -198,6 +198,32 @@ generate_test_buffer_timed (GstClockTime ts, guint seqnum, guint32 rtp_ts)
       seqnum, rtp_ts, TEST_BUF_SSRC, FALSE, TEST_BUF_PT, 0, 0);
 }
 
+static gint16
+read_twcc_seqnum (GstBuffer * buf, guint8 twcc_ext_id)
+{
+  gint16 twcc_seqnum;
+  gpointer ext_data;
+  guint ext_size;
+  GstRTPBuffer rtp = GST_RTP_BUFFER_INIT;
+
+  if (!gst_rtp_buffer_map (buf, GST_MAP_READ, &rtp))
+    return -1;
+
+  if (!gst_rtp_buffer_get_extension_onebyte_header (&rtp, twcc_ext_id,
+          0, &ext_data, &ext_size)) {
+    gst_rtp_buffer_unmap (&rtp);
+    return -1;
+  }
+
+  fail_unless (ext_data != NULL);
+  fail_unless (ext_size == 2);
+
+  twcc_seqnum = GST_READ_UINT16_BE (ext_data);
+  gst_rtp_buffer_unmap (&rtp);
+
+  return twcc_seqnum;
+}
+
 typedef struct
 {
   GstHarness *send_rtp_h;
@@ -209,16 +235,23 @@ typedef struct
   GstTestClock *testclock;
   GstCaps *caps;
 
+  GHashTable *pt_to_caps_map;
+
   gboolean running;
   GMutex lock;
   GstStructure *last_twcc_stats;
 } SessionHarness;
 
 static GstCaps *
-_pt_map_requested (G_GNUC_UNUSED GstElement * element, G_GNUC_UNUSED guint pt,
-    gpointer data)
+_pt_map_requested (G_GNUC_UNUSED GstElement * element, guint pt, gpointer data)
 {
   SessionHarness *h = data;
+  GstCaps *caps = g_hash_table_lookup (h->pt_to_caps_map,
+      GUINT_TO_POINTER (pt));
+
+  if (caps)
+    return gst_caps_copy (caps);
+
   return gst_caps_copy (h->caps);
 }
 
@@ -252,8 +285,11 @@ static SessionHarness *
 session_harness_new (void)
 {
   SessionHarness *h = g_new0 (SessionHarness, 1);
-  h->caps = generate_caps ();
+  h->caps = generate_caps (TEST_BUF_PT);
   g_mutex_init (&h->lock);
+
+  h->pt_to_caps_map =
+      g_hash_table_new_full (NULL, NULL, NULL, (GDestroyNotify) gst_caps_unref);
 
   h->testclock = GST_TEST_CLOCK_CAST (gst_test_clock_new ());
   gst_system_clock_set_default (GST_CLOCK_CAST (h->testclock));
@@ -291,6 +327,8 @@ session_harness_free (SessionHarness * h)
 
   gst_caps_unref (h->caps);
   gst_object_unref (h->testclock);
+
+  g_hash_table_destroy (h->pt_to_caps_map);
 
   gst_harness_teardown (h->rtcp_h);
   gst_harness_teardown (h->recv_rtp_h);
@@ -449,11 +487,18 @@ session_harness_enable_rtx (SessionHarness * h)
 }
 
 static void
-session_harness_set_twcc_send_ext_id (SessionHarness * h, guint8 ext_id)
+session_harness_add_caps_for_pt (SessionHarness * h, GstCaps * caps, guint8 pt)
 {
-  GstCaps *caps = gst_caps_copy (h->caps);
-  _add_twcc_field_to_caps (caps, ext_id);
-  gst_harness_set_src_caps (h->send_rtp_h, caps);
+  g_hash_table_insert (h->pt_to_caps_map, GUINT_TO_POINTER (pt), caps);
+  g_signal_emit_by_name (h->session, "clear-pt-map");
+}
+
+static void
+session_harness_add_twcc_caps_for_pt (SessionHarness * h, guint8 pt)
+{
+  GstCaps *caps = generate_caps (pt);
+  _add_twcc_field_to_caps (caps, TEST_TWCC_EXT_ID);
+  session_harness_add_caps_for_pt (h, caps, pt);
 }
 
 GST_START_TEST (test_multiple_ssrc_rr)
@@ -1855,7 +1900,7 @@ GST_START_TEST (test_request_fir_after_pli_in_caps)
 
   /* Rebuild the caps */
   gst_caps_unref (h->caps);
-  h->caps = generate_caps ();
+  h->caps = generate_caps (TEST_BUF_PT);
 
   /* add FIR-capabilites to our caps */
   gst_caps_set_simple (h->caps, "rtcp-fb-ccm-fir", G_TYPE_BOOLEAN, TRUE, NULL);
@@ -3260,7 +3305,6 @@ G_STMT_START {                                                                  
 #define twcc_send_recv_buffers(h_send, h_recv, buffers)                       \
 G_STMT_START {                                                                \
   guint i;                                                                    \
-  session_harness_set_twcc_send_ext_id (h_send, TEST_TWCC_EXT_ID);            \
   session_harness_set_twcc_recv_ext_id (h_recv, TEST_TWCC_EXT_ID);            \
   for (i = 0; i < G_N_ELEMENTS(buffers); i++) {                               \
     GstBuffer *buf = buffers[i];                                              \
@@ -4374,7 +4418,7 @@ GST_START_TEST (test_twcc_send_and_recv)
 
   /* enable twcc */
   session_harness_set_twcc_recv_ext_id (h_recv, TEST_TWCC_EXT_ID);
-  session_harness_set_twcc_send_ext_id (h_send, TEST_TWCC_EXT_ID);
+  session_harness_add_twcc_caps_for_pt (h_send, TEST_BUF_PT);
 
   for (frame = 0; frame < num_frames; frame++) {
     GstBuffer *buf;
@@ -4427,6 +4471,9 @@ GST_START_TEST (test_twcc_multiple_payloads_below_window)
     generate_twcc_send_buffer_full (2, FALSE, 0xdef, 111),
     generate_twcc_send_buffer_full (1, TRUE, 0xabc, 98),
   };
+
+  session_harness_add_twcc_caps_for_pt (h_send, 98);
+  session_harness_add_twcc_caps_for_pt (h_send, 111);
 
   twcc_send_recv_buffers (h_send, h_recv, buffers);
   twcc_verify_stats (h_send, 0, 0, 5, 5, 0.0f, GST_CLOCK_STIME_NONE);
@@ -4718,7 +4765,8 @@ test_twcc_stats_rtx_recovery (gboolean rtx_arrive, gdouble recovery_pct)
 
   guint i, next_seqnum;
 
-  session_harness_set_twcc_send_ext_id (h_send, TEST_TWCC_EXT_ID);
+  session_harness_add_twcc_caps_for_pt (h_send, TEST_BUF_PT);
+  session_harness_add_twcc_caps_for_pt (h_send, TEST_RTX_BUF_PT);
   session_harness_set_twcc_recv_ext_id (h_recv, TEST_TWCC_EXT_ID);
 
   next_seqnum = construct_initial_state_for_rtx (h_send, h_recv);
@@ -4763,28 +4811,6 @@ GST_START_TEST (test_twcc_stats_no_rtx_no_recover)
 
 GST_END_TEST;
 
-GST_START_TEST (test_twcc_non_twcc_pkts_does_not_mark_loss)
-{
-  SessionHarness *h_send = session_harness_new ();
-  SessionHarness *h_recv = session_harness_new ();
-
-  GstBuffer *buffers[] = {
-    generate_twcc_send_buffer_full (0, FALSE, 0xabc, 98),
-    generate_test_buffer (0, 0xdeaf),
-    generate_test_buffer (1, 0xdeaf),
-    generate_test_buffer (2, 0xdeaf),
-    generate_twcc_send_buffer_full (1, TRUE, 0xabc, 98),
-  };
-
-  twcc_send_recv_buffers (h_send, h_recv, buffers);
-  twcc_verify_stats (h_send, 0, 0, 2, 2, 0.0f, GST_CLOCK_STIME_NONE);
-
-  session_harness_free (h_send);
-  session_harness_free (h_recv);
-}
-
-GST_END_TEST;
-
 GST_START_TEST (test_twcc_feedback_max_sent_packets)
 {
   /* test is very intense for valgrind  or debug build */
@@ -4810,7 +4836,7 @@ GST_START_TEST (test_twcc_feedback_max_sent_packets)
     0x1f, 0xff,
   };
 
-  session_harness_set_twcc_send_ext_id (h, TEST_TWCC_EXT_ID);
+  session_harness_add_twcc_caps_for_pt (h, TEST_BUF_PT);
 
   /* send over 65536 packets */
   for (i = 0; i < 65536 * 2; i++)
@@ -4834,6 +4860,87 @@ GST_START_TEST (test_twcc_feedback_max_sent_packets)
 
 GST_END_TEST;
 
+GST_START_TEST (test_twcc_non_twcc_pt_no_twcc_seqnum)
+{
+  SessionHarness *h;
+  GstBuffer *buf;
+
+  h = session_harness_new ();
+  session_harness_add_twcc_caps_for_pt (h, 99);
+
+  /* push a buffer with a pt marked for twcc */
+  buf = generate_twcc_send_buffer_full (0, FALSE, 0xabc, 99);
+  fail_unless_equals_int64 (session_harness_send_rtp (h, buf), GST_FLOW_OK);
+
+  /* expect the twcc-seqnum to be written */
+  buf = session_harness_pull_send_rtp (h);
+  fail_unless (read_twcc_seqnum (buf, TEST_TWCC_EXT_ID) == 0);
+  gst_buffer_unref (buf);
+
+  /* push a buffer with a different pt */
+  buf = generate_twcc_send_buffer_full (0, FALSE, 0xabc, 98);
+  fail_unless_equals_int64 (session_harness_send_rtp (h, buf), GST_FLOW_OK);
+
+  /* expect no twcc-seqnum  */
+  buf = session_harness_pull_send_rtp (h);
+  fail_unless (read_twcc_seqnum (buf, TEST_TWCC_EXT_ID) == -1);
+  gst_buffer_unref (buf);
+
+  session_harness_free (h);
+}
+
+GST_END_TEST;
+
+GST_START_TEST (test_twcc_non_twcc_pkts_does_not_mark_loss)
+{
+  SessionHarness *h_send = session_harness_new ();
+  SessionHarness *h_recv = session_harness_new ();
+
+  /* *INDENT-OFF* */
+  GstBuffer *buffers[] = {
+    generate_twcc_send_buffer_full (0, FALSE, 0xabc, 98),
+    generate_twcc_send_buffer_full (0, FALSE, 0xabc, 99),
+    generate_twcc_send_buffer_full (1, FALSE, 0xabc, 99),
+    generate_twcc_send_buffer_full (1, TRUE,  0xabc, 98),
+    generate_twcc_send_buffer_full (2, TRUE,  0xabc, 99),
+  };
+  /* *INDENT-ON* */
+
+  session_harness_add_twcc_caps_for_pt (h_send, 99);
+
+  twcc_send_recv_buffers (h_send, h_recv, buffers);
+  twcc_verify_stats (h_send, 0, 0, 3, 3, 0.0f, GST_CLOCK_STIME_NONE);
+
+  session_harness_free (h_send);
+  session_harness_free (h_recv);
+}
+
+GST_END_TEST;
+
+GST_START_TEST (test_twcc_overwrites_exthdr_seqnum_if_present)
+{
+  SessionHarness *h;
+  GstBuffer *buf;
+
+  h = session_harness_new ();
+  session_harness_add_twcc_caps_for_pt (h, TEST_BUF_PT);
+
+  /* sending the ext-id in generate_test_buffer_full() will add the one-byte
+     header extension  */
+  buf =
+      generate_test_buffer_full (0, 0, 0, 0xabc, FALSE, TEST_BUF_PT,
+      TEST_TWCC_EXT_ID, 255);
+  fail_unless_equals_int64 (session_harness_send_rtp (h, buf), GST_FLOW_OK);
+
+  buf = session_harness_pull_send_rtp (h);
+  fail_unless (read_twcc_seqnum (buf, TEST_TWCC_EXT_ID) != 255);
+  gst_buffer_unref (buf);
+
+  session_harness_free (h);
+}
+
+GST_END_TEST;
+
 GST_START_TEST (test_twcc_run_length_max)
 {
   SessionHarness *h0 = session_harness_new ();
@@ -4841,8 +4948,8 @@ GST_START_TEST (test_twcc_run_length_max)
 
   TWCCPacket packets[] = {
     /* *INDENT-OFF* */
-    {0, 1000 * GST_USECOND, FALSE},
-    {8205, 2000 * GST_USECOND, TRUE},
+    {    0, 1000 * GST_USECOND, FALSE },
+    { 8205, 2000 * GST_USECOND,  TRUE },
     /* *INDENT-ON* */
   };
 
@@ -4876,8 +4983,8 @@ GST_START_TEST (test_twcc_run_length_min)
 
   TWCCPacket packets[] = {
     /* *INDENT-OFF* */
-    {0, 1000 * GST_USECOND, FALSE},
-    {29, 2000 * GST_USECOND, TRUE},
+    {  0, 1000 * GST_USECOND, FALSE },
+    { 29, 2000 * GST_USECOND,  TRUE },
     /* *INDENT-ON* */
   };
 
@@ -5201,7 +5308,7 @@ GST_START_TEST (test_stats_transmission_duration)
   GstStructure *stats = NULL;
   GValueArray *source_stats;
   gboolean stats_verified = FALSE;
-  GstCaps *caps = generate_caps ();
+  GstCaps *caps = generate_caps (TEST_BUF_PT);
   guint i;
 
   /* use testclock as the systemclock to capture the rtcp thread waits */
@@ -5297,7 +5404,7 @@ GST_START_TEST (test_stats_transmission_duration_reordering)
   GstStructure *stats = NULL;
   GValueArray *source_stats;
   gboolean stats_verified = FALSE;
-  GstCaps *caps = generate_caps ();
+  GstCaps *caps = generate_caps (TEST_BUF_PT);
   guint i;
 
   /* use testclock as the systemclock to capture the rtcp thread waits */
@@ -5474,8 +5581,11 @@ rtpsession_suite (void)
   tcase_add_test (tc_chain, test_twcc_feedback_old_seqnum);
   tcase_add_test (tc_chain, test_twcc_stats_rtx_recover_lost);
   tcase_add_test (tc_chain, test_twcc_stats_no_rtx_no_recover);
-  tcase_add_test (tc_chain, test_twcc_non_twcc_pkts_does_not_mark_loss);
   tcase_add_test (tc_chain, test_twcc_feedback_max_sent_packets);
+  tcase_add_test (tc_chain, test_twcc_feedback_max_sent_packets);
+  tcase_add_test (tc_chain, test_twcc_non_twcc_pt_no_twcc_seqnum);
+  tcase_add_test (tc_chain, test_twcc_non_twcc_pkts_does_not_mark_loss);
+  tcase_add_test (tc_chain, test_twcc_overwrites_exthdr_seqnum_if_present);
 
   tcase_add_test (tc_chain, test_send_rtcp_instantly);
   tcase_add_test (tc_chain, test_send_bye_signal);

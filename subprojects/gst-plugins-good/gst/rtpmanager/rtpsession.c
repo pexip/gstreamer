@@ -1412,6 +1412,8 @@ rtp_session_set_callbacks (RTPSession * sess, RTPSessionCallbacks * callbacks,
   if (callbacks->get_caps_for_pt) {
     sess->callbacks.get_caps_for_pt = callbacks->get_caps_for_pt;
     sess->get_caps_for_pt_user_data = user_data;
+    rtp_twcc_manager_set_callback (sess->twcc,
+        (RTPTWCCManagerCaps *) callbacks->get_caps_for_pt, user_data);
   }
 }
 
