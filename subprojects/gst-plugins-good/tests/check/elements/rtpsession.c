@@ -4491,8 +4491,10 @@ GST_START_TEST (test_twcc_multiple_payloads_below_window)
     generate_twcc_send_buffer_full (1, TRUE, 0xabc, 98),
   };
 
+  /* enable twcc */
   session_harness_add_twcc_caps_for_pt (h_send, 98);
   session_harness_add_twcc_caps_for_pt (h_send, 111);
+  session_harness_set_twcc_recv_ext_id (h_recv, TEST_TWCC_EXT_ID);
 
   twcc_send_recv_buffers (h_send, h_recv, buffers);
   twcc_verify_stats (h_send, 0, 0, 5, 5, 0.0f, GST_CLOCK_STIME_NONE);

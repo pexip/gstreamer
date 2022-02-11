@@ -1472,7 +1472,7 @@ get_twcc_ext_id_for_pt (RTPTWCCManager * twcc, guint8 pt)
   if (!twcc->caps_cb)
     return 0;
 
-  caps = twcc->caps_cb (twcc, pt, twcc->caps_ud);
+  caps = twcc->caps_cb (pt, twcc->caps_ud);
   if (!caps)
     return 0;
 

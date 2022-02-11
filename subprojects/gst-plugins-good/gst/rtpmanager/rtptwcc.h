@@ -30,8 +30,7 @@ G_DECLARE_FINAL_TYPE (RTPTWCCManager, rtp_twcc_manager, RTP, TWCC_MANAGER, GObje
 #define RTP_TWCC_MANAGER_CAST(obj) ((RTPTWCCManager *)(obj))
 
 /**
- * RTPTWCCManager:
- * @twcc: an #RTPTWCCManager
+ * RTPTWCCManagerCaps:
  * @payload: the payload
  * @user_data: user data specified when registering
  *
@@ -39,8 +38,7 @@ G_DECLARE_FINAL_TYPE (RTPTWCCManager, rtp_twcc_manager, RTP, TWCC_MANAGER, GObje
  *
  * Returns: the caps of @payload.
  */
-typedef GstCaps * (*RTPTWCCManagerCaps) (RTPTWCCManager *sess, guint8 payload,
-    gpointer user_data);
+typedef GstCaps * (*RTPTWCCManagerCaps) (guint8 payload, gpointer user_data);
 
 RTPTWCCManager * rtp_twcc_manager_new (guint mtu);
 

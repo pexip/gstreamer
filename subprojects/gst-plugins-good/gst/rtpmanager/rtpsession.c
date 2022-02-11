@@ -1347,6 +1347,20 @@ rtp_session_reset (RTPSession * sess)
   RTP_SESSION_UNLOCK (sess);
 }
 
+static GstCaps *
+rtp_session_twcc_manager_caps (guint8 pt, gpointer user_data)
+{
+  GstCaps *caps = NULL;
+  RTPSession *sess = user_data;
+
+  if (sess->callbacks.caps)
+    caps = sess->callbacks.caps (sess, pt, sess->caps_user_data);
+
+  GST_DEBUG ("got caps %" GST_PTR_FORMAT " for pt %d", caps, pt);
+
+  return caps;
+}
+
 /**
  * rtp_session_set_callbacks:
  * @sess: an #RTPSession
@@ -1380,8 +1394,8 @@ rtp_session_set_callbacks (RTPSession * sess, RTPSessionCallbacks * callbacks,
   if (callbacks->caps) {
     sess->callbacks.caps = callbacks->caps;
     sess->caps_user_data = user_data;
-    rtp_twcc_manager_set_callback (sess->twcc,
-        (RTPTWCCManagerCaps *) callbacks->caps, user_data);
+    rtp_twcc_manager_set_callback (sess->twcc, rtp_session_twcc_manager_caps,
+        sess);
   }
   if (callbacks->reconsider) {
     sess->callbacks.reconsider = callbacks->reconsider;
