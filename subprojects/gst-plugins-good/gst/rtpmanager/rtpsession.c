@@ -1239,6 +1239,29 @@ rtp_session_reset (RTPSession * sess)
   sess->conflicting_addresses = NULL;
 }
 
+/* must be called with RTP_SESSION_LOCK held */
+static GstCaps *
+rtp_session_get_caps_unlocked (RTPSession * sess, guint8 pt)
+{
+  GstCaps *ret = NULL;
+
+  RTP_SESSION_UNLOCK (sess);
+
+  if (sess->callbacks.caps)
+    ret = sess->callbacks.caps (sess, pt, sess->caps_user_data);
+
+  RTP_SESSION_LOCK (sess);
+
+  return ret;
+}
+
+static GstCaps *
+rtp_session_twcc_caps_cb (guint8 payload, gpointer user_data)
+{
+  RTPSession *sess = user_data;
+  return rtp_session_get_caps_unlocked (sess, payload);
+}
+
 /**
  * rtp_session_set_callbacks:
  * @sess: an #RTPSession
@@ -1272,6 +1295,7 @@ rtp_session_set_callbacks (RTPSession * sess, RTPSessionCallbacks * callbacks,
   if (callbacks->caps) {
     sess->callbacks.caps = callbacks->caps;
     sess->caps_user_data = user_data;
+    rtp_twcc_manager_set_callback (sess->twcc, rtp_session_twcc_caps_cb, sess);
   }
   if (callbacks->reconsider) {
     sess->callbacks.reconsider = callbacks->reconsider;
@@ -1599,12 +1623,7 @@ source_caps (RTPSource * source, guint8 pt, RTPSession * session)
 {
   GstCaps *result = NULL;
 
-  RTP_SESSION_UNLOCK (session);
-
-  if (session->callbacks.caps)
-    result = session->callbacks.caps (session, pt, session->caps_user_data);
-
-  RTP_SESSION_LOCK (session);
+  result = rtp_session_get_caps_unlocked (session, pt);
 
   GST_DEBUG ("got caps %" GST_PTR_FORMAT " for pt %d", result, pt);
 

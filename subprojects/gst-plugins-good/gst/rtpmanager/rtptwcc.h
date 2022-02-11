@@ -29,6 +29,17 @@ G_DECLARE_FINAL_TYPE (RTPTWCCManager, rtp_twcc_manager, RTP, TWCC_MANAGER, GObje
 #define RTP_TYPE_TWCC_MANAGER (rtp_twcc_manager_get_type())
 #define RTP_TWCC_MANAGER_CAST(obj) ((RTPTWCCManager *)(obj))
 
+/**
+ * RTPTWCCManagerCaps:
+ * @payload: the payload
+ * @user_data: user data specified when registering
+ *
+ * This callback will be called when @twcc needs the caps of @payload.
+ *
+ * Returns: the caps of @payload.
+ */
+typedef GstCaps * (*RTPTWCCManagerCaps) (guint8 payload, gpointer user_data);
+
 RTPTWCCManager * rtp_twcc_manager_new (guint mtu);
 
 void rtp_twcc_manager_parse_recv_ext_id (RTPTWCCManager * twcc,
@@ -55,5 +66,8 @@ GstStructure * rtp_twcc_manager_parse_fci (RTPTWCCManager * twcc,
     guint8 * fci_data, guint fci_length, GstClockTime current_time);
 
 GstStructure * rtp_twcc_manager_get_windowed_stats (RTPTWCCManager * twcc);
+
+void rtp_twcc_manager_set_callback (RTPTWCCManager * twcc, RTPTWCCManagerCaps cb,
+    gpointer user_data);
 
 #endif /* __RTP_TWCC_H__ */
