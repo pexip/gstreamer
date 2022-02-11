@@ -860,6 +860,7 @@ rtp_session_finalize (GObject * object)
     g_hash_table_destroy (sess->ssrcs[i]);
 
   g_object_unref (sess->twcc);
+
   if (sess->rtx_ssrc_map)
     gst_structure_free (sess->rtx_ssrc_map);
   g_hash_table_destroy (sess->rtx_ssrc_to_ssrc);
@@ -1408,6 +1409,12 @@ rtp_session_set_callbacks (RTPSession * sess, RTPSessionCallbacks * callbacks,
   if (callbacks->notify_early_rtcp) {
     sess->callbacks.notify_early_rtcp = callbacks->notify_early_rtcp;
     sess->notify_early_rtcp_user_data = user_data;
+  }
+  if (callbacks->get_caps_for_pt) {
+    sess->callbacks.get_caps_for_pt = callbacks->get_caps_for_pt;
+    sess->get_caps_for_pt_user_data = user_data;
+    rtp_twcc_manager_set_callback (sess->twcc,
+        (RTPTWCCManagerCaps *) callbacks->get_caps_for_pt, user_data);
   }
 }
 

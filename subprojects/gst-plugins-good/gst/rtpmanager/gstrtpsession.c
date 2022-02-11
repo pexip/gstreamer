@@ -319,6 +319,9 @@ static void gst_rtp_session_notify_twcc (RTPSession * sess,
 static void gst_rtp_session_reconfigure (RTPSession * sess, gpointer user_data);
 static void gst_rtp_session_notify_early_rtcp (RTPSession * sess,
     gpointer user_data);
+static GstCaps *gst_rtp_session_get_caps_for_pt (RTPSession * sess,
+    guint8 payload, gpointer user_data);
+
 static GstFlowReturn gst_rtp_session_chain_recv_rtp (GstPad * pad,
     GstObject * parent, GstBuffer * buffer);
 static GstFlowReturn gst_rtp_session_chain_recv_rtp_list (GstPad * pad,
@@ -342,7 +345,8 @@ static RTPSessionCallbacks callbacks = {
   gst_rtp_session_notify_nack,
   gst_rtp_session_notify_twcc,
   gst_rtp_session_reconfigure,
-  gst_rtp_session_notify_early_rtcp
+  gst_rtp_session_notify_early_rtcp,
+  gst_rtp_session_get_caps_for_pt,
 };
 
 /* GObject vmethods */
@@ -1661,7 +1665,7 @@ gst_rtp_session_cache_caps (GstRtpSession * rtpsession, GstCaps * caps)
 }
 
 static GstCaps *
-gst_rtp_session_get_caps_for_pt (GstRtpSession * rtpsession, guint payload)
+get_caps_for_pt (GstRtpSession * rtpsession, guint payload)
 {
   GstCaps *caps = NULL;
   GValue args[2] = { {0}, {0} };
@@ -1712,6 +1716,14 @@ no_caps:
   }
 }
 
+static GstCaps *
+gst_rtp_session_get_caps_for_pt (RTPSession * sess,
+    guint8 payload, gpointer user_data)
+{
+  GstRtpSession *rtpsession = user_data;
+  return get_caps_for_pt (rtpsession, payload);
+}
+
 /* called when the session manager needs the clock rate */
 static gint
 gst_rtp_session_clock_rate (RTPSession * sess, guint8 payload,
@@ -1724,7 +1736,7 @@ gst_rtp_session_clock_rate (RTPSession * sess, guint8 payload,
 
   rtpsession = GST_RTP_SESSION_CAST (user_data);
 
-  caps = gst_rtp_session_get_caps_for_pt (rtpsession, payload);
+  caps = get_caps_for_pt (rtpsession, payload);
 
   if (!caps)
     goto done;
@@ -1853,7 +1865,7 @@ gst_rtp_session_request_remote_key_unit (GstRtpSession * rtpsession,
 {
   GstCaps *caps;
 
-  caps = gst_rtp_session_get_caps_for_pt (rtpsession, payload);
+  caps = get_caps_for_pt (rtpsession, payload);
 
   if (caps) {
     const GstStructure *s = gst_caps_get_structure (caps, 0);

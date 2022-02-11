@@ -439,6 +439,7 @@ struct _RTPTWCCManager
   GObject object;
 
   GHashTable *ssrc_to_seqmap;
+  GHashTable *pt_to_twcc_ext_id;
 
   GstClockTime stats_window_size;
   TWCCStatsCtx *stats_ctx;
@@ -474,6 +475,9 @@ struct _RTPTWCCManager
 
   GstClockTimeDiff avg_rtt;
   GstClockTime last_report_time;
+
+  RTPTWCCManagerCaps get_caps_for_pt_cb;
+  gpointer get_caps_for_pt_ud;
 };
 
 
@@ -495,6 +499,7 @@ rtp_twcc_manager_init (RTPTWCCManager * twcc)
 {
   twcc->ssrc_to_seqmap = g_hash_table_new_full (NULL, NULL, NULL,
       (GDestroyNotify) g_hash_table_destroy);
+  twcc->pt_to_twcc_ext_id = g_hash_table_new (NULL, NULL);
 
   twcc->recv_packets = g_array_new (FALSE, FALSE, sizeof (RecvPacket));
   twcc->sent_packets = g_array_new (FALSE, FALSE, sizeof (SentPacket));
@@ -524,6 +529,7 @@ rtp_twcc_manager_finalize (GObject * object)
   RTPTWCCManager *twcc = RTP_TWCC_MANAGER_CAST (object);
 
   g_hash_table_destroy (twcc->ssrc_to_seqmap);
+  g_hash_table_destroy (twcc->pt_to_twcc_ext_id);
 
   g_array_unref (twcc->recv_packets);
   g_array_unref (twcc->sent_packets);
@@ -719,6 +725,34 @@ _get_twcc_seqnum_data (RTPPacketInfo * pinfo, guint8 ext_id, gpointer * data)
   return ret;
 }
 
+/*
+* Returns a pointer to the twcc extension header data for the given id, or adds
+* it, if it is not present.
+*
+* Note: we want to override the extension value if it is present.
+*/
+static gpointer
+_get_twcc_buffer_ext_data (GstRTPBuffer * rtpbuf, guint8 ext_id)
+{
+  gpointer data = NULL;
+  guint16 tmp = 0;
+  gboolean added;
+
+  if (gst_rtp_buffer_get_extension_onebyte_header (rtpbuf, ext_id, 0, &data,
+          NULL)) {
+    return data;
+  }
+
+  added = gst_rtp_buffer_add_extension_onebyte_header (rtpbuf, ext_id, &tmp,
+      sizeof (tmp));
+  if (added) {
+    gst_rtp_buffer_get_extension_onebyte_header (rtpbuf, ext_id, 0, &data,
+        NULL);
+  }
+
+  return data;
+}
+
 static gboolean
 _set_twcc_seqnum_data (GstBuffer * buf, guint8 ext_id, guint16 seqnum)
 {
@@ -728,14 +762,15 @@ _set_twcc_seqnum_data (GstBuffer * buf, guint8 ext_id, guint16 seqnum)
   if (!gst_rtp_buffer_map (buf, GST_MAP_READWRITE, &rtp))
     return FALSE;
 
-  if (!gst_rtp_buffer_get_extension_onebyte_header (&rtp,
-          ext_id, 0, &data, NULL)) {
+  data = _get_twcc_buffer_ext_data (&rtp, ext_id);
+  if (!data) {
     gst_rtp_buffer_unmap (&rtp);
     return FALSE;
   }
 
   GST_WRITE_UINT16_BE (data, seqnum);
   gst_rtp_buffer_unmap (&rtp);
+
   return TRUE;
 }
 
@@ -1400,13 +1435,57 @@ _prune_old_sent_packets (RTPTWCCManager * twcc)
   g_array_remove_range (twcc->sent_packets, 0, length);
 }
 
+static guint8
+get_twcc_ext_id_for_pt (RTPTWCCManager * twcc, guint8 pt)
+{
+  guint8 twcc_ext_id;
+  GstCaps *caps;
+  gpointer value;
+
+  value = g_hash_table_lookup (twcc->pt_to_twcc_ext_id, GUINT_TO_POINTER (pt));
+  if (value)
+    return GPOINTER_TO_UINT (value);
+
+  if (!twcc->get_caps_for_pt_cb)
+    return 0;
+
+  caps = twcc->get_caps_for_pt_cb (twcc, pt, twcc->get_caps_for_pt_ud);
+  if (!caps)
+    return 0;
+
+  twcc_ext_id =
+      _get_extmap_id_for_attribute (gst_caps_get_structure (caps, 0),
+      TWCC_EXTMAP_STR);
+  gst_caps_unref (caps);
+
+  g_hash_table_insert (twcc->pt_to_twcc_ext_id, GUINT_TO_POINTER (pt),
+      GUINT_TO_POINTER (twcc_ext_id));
+  GST_LOG ("Added payload (%u) for twcc send ext-id: %u", pt, twcc_ext_id);
+
+  return twcc_ext_id;
+}
+
 void
 rtp_twcc_manager_send_packet (RTPTWCCManager * twcc, RTPPacketInfo * pinfo)
 {
   SentPacket packet;
   gint32 seqnum;
+  guint8 pinfo_twcc_ext_id;
+
+  pinfo_twcc_ext_id = get_twcc_ext_id_for_pt (twcc, pinfo->pt);
+
+  /* save the first valid twcc extid we get from pt */
+  if (pinfo_twcc_ext_id > 0 && twcc->send_ext_id == 0) {
+    twcc->send_ext_id = pinfo_twcc_ext_id;
+    GST_INFO ("TWCC enabled for send using extension id: %u",
+        twcc->send_ext_id);
+  }
 
   if (twcc->send_ext_id == 0)
+    return;
+
+  /* the packet info twcc_ext_id should match the parsed one */
+  if (pinfo_twcc_ext_id != twcc->send_ext_id)
     return;
 
   seqnum = rtp_twcc_manager_set_send_twcc_seqnum (twcc, pinfo);
@@ -1769,4 +1848,12 @@ rtp_twcc_manager_get_windowed_stats (RTPTWCCManager * twcc)
   _structure_take_value_array (ret, "payload-stats", array);
 
   return ret;
+}
+
+void
+rtp_twcc_manager_set_callback (RTPTWCCManager * twcc, RTPTWCCManagerCaps cb,
+    gpointer user_data)
+{
+  twcc->get_caps_for_pt_cb = cb;
+  twcc->get_caps_for_pt_ud = user_data;
 }
