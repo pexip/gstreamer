@@ -79,7 +79,6 @@ struct _GstRtpFunnelPad
 {
   GstPad pad;
   guint32 ssrc;
-  gboolean has_twcc;
   GstRTPBufferFlags buffer_flag;
   GstClockTime us_latency;
   gboolean has_latency;
@@ -173,9 +172,6 @@ struct _GstRtpFunnel
   GHashTable *ssrc_to_pad;      /* protected by OBJECT_LOCK */
   /* The last pad data was chained on */
   GstPad *current_pad;
-
-  guint twcc_pads;              /* numer of sinkpads with negotiated twcc */
-  GstRTPHeaderExtension *twcc_ext;
 
   /* properties */
   gint common_ts_offset;
@@ -313,33 +309,6 @@ gst_rtp_funnel_sink_chain (GstPad * pad, GstObject * parent, GstBuffer * buffer)
       GST_MINI_OBJECT_CAST (buffer));
 }
 
-static void
-gst_rtp_funnel_set_twcc_ext_id (GstRtpFunnel * funnel, guint8 twcc_ext_id)
-{
-  gchar *name;
-  guint current_ext_id;
-
-  current_ext_id = gst_rtp_header_extension_get_id (funnel->twcc_ext);
-  g_object_set (funnel->twcc_ext, "n-streams", funnel->twcc_pads, NULL);
-
-  if (current_ext_id == twcc_ext_id)
-    return;
-
-  name = g_strdup_printf ("extmap-%u", twcc_ext_id);
-
-  gst_caps_set_simple (funnel->srccaps, name, G_TYPE_STRING,
-      gst_rtp_header_extension_get_uri (funnel->twcc_ext), NULL);
-
-  g_free (name);
-
-  /* make sure we update the sticky with the new caps */
-  funnel->send_sticky_events = TRUE;
-
-  gst_rtp_header_extension_set_id (funnel->twcc_ext, twcc_ext_id);
-}
-
-#define TWCC_EXTMAP_STR "http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01"
-
 static gboolean
 gst_rtp_funnel_query_latency (GstRtpFunnel * funnel, GstQuery * query)
 {
@@ -416,7 +385,6 @@ gst_rtp_funnel_sink_event (GstPad * pad, GstObject * parent, GstEvent * event)
       GstCaps *caps;
       GstStructure *s;
       guint ssrc;
-      guint8 ext_id;
 
       gst_event_parse_caps (event, &caps);
 
@@ -434,16 +402,6 @@ gst_rtp_funnel_sink_event (GstPad * pad, GstObject * parent, GstEvent * event)
         g_hash_table_insert (funnel->ssrc_to_pad, GUINT_TO_POINTER (ssrc), pad);
       }
 
-      if (!funnel->twcc_ext)
-        funnel->twcc_ext =
-            gst_rtp_header_extension_create_from_uri (TWCC_EXTMAP_STR);
-
-      ext_id = gst_rtp_get_extmap_id_for_attribute (s, TWCC_EXTMAP_STR);
-      if (ext_id > 0) {
-        fpad->has_twcc = TRUE;
-        funnel->twcc_pads++;
-        gst_rtp_funnel_set_twcc_ext_id (funnel, ext_id);
-      }
       gst_rtp_funnel_pad_set_media_type (fpad, s);
       GST_OBJECT_UNLOCK (funnel);
 
@@ -514,24 +472,6 @@ gst_rtp_funnel_sink_query (GstPad * pad, GstObject * parent, GstQuery * query)
         GST_ERROR_OBJECT (pad,
             "caps: %" GST_PTR_FORMAT " were not compatible with: %"
             GST_PTR_FORMAT, caps, funnel->srccaps);
-      } else if (funnel->twcc_ext) {
-        /* we don't accept another extension-ID for TWCC */
-        GstStructure *s = gst_caps_get_structure (caps, 0);
-        guint current_ext_id =
-            gst_rtp_header_extension_get_id (funnel->twcc_ext);
-        gboolean current_caps_have_ext_id = current_ext_id != 0
-            && current_ext_id != G_MAXUINT32;
-        guint8 new_ext_id = gst_rtp_get_extmap_id_for_attribute (s,
-            TWCC_EXTMAP_STR);
-        gboolean new_caps_have_ext_id = new_ext_id > 0;
-
-        if (current_caps_have_ext_id && new_caps_have_ext_id
-            && current_ext_id != new_ext_id) {
-          GST_ERROR_OBJECT (pad,
-              "caps: %" GST_PTR_FORMAT " tries to redefine the"
-              "TWCC extid from %u to %u", caps, current_ext_id, new_ext_id);
-          result = FALSE;
-        }
       }
       GST_OBJECT_UNLOCK (funnel);
 
@@ -718,9 +658,6 @@ gst_rtp_funnel_finalize (GObject * object)
 
   gst_caps_unref (funnel->srccaps);
   g_hash_table_destroy (funnel->ssrc_to_pad);
-
-  gst_clear_object (&funnel->twcc_ext);
-
   G_OBJECT_CLASS (parent_class)->finalize (object);
 }
 
