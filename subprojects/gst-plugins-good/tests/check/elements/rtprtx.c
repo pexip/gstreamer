@@ -133,28 +133,6 @@ create_rtp_buffer_with_payload_size (guint32 ssrc, guint8 payload_type,
 }
 
 static GstBuffer *
-create_rtp_buffer_with_packet_size (guint32 ssrc, guint8 payload_type,
-    guint16 seqnum, guint rtp_packet_size)
-{
-  guint header_size = 12;
-  guint payload_size = rtp_packet_size - header_size;
-
-  return create_rtp_buffer_with_payload_size (ssrc, payload_type,
-      seqnum, payload_size);
-}
-
-static GstBuffer *
-create_rtp_buffer_with_pts (guint32 ssrc, guint8 payload_type,
-    guint16 seqnum, guint rtp_packet_size, GstClockTime pts)
-{
-  GstBuffer *buffer =
-      create_rtp_buffer_with_packet_size (ssrc, payload_type, seqnum,
-      rtp_packet_size);
-  GST_BUFFER_PTS (buffer) = pts;
-  return buffer;
-}
-
-static GstBuffer *
 create_rtp_buffer (guint32 ssrc, guint8 payload_type, guint16 seqnum)
 {
   return create_rtp_buffer_with_payload_size (ssrc, payload_type, seqnum, 29);
@@ -944,40 +922,42 @@ GST_START_TEST (test_rtxsender_stuffing)
       "payload = (int)96, " "ssrc = (uint)1234567, " "clock-rate = (int)90000");
 
   /* 800 kbps = 100 kBps. 10 ms distance between each packet means 100 packets
-   * per second and 1000 bytes per packet to hit target kbps. Also need to
-   * take into account that RTX buffers are 2 bytes larger than original. */
+   * per second and 1000 bytes per packet to hit target kbps.
+   * We stuff considering the payload length. */
   gst_harness_set_time (h, 0 * GST_MSECOND);
   gst_harness_push (h,
-      create_rtp_buffer_with_packet_size (master_ssrc, master_pt, 0, 20));
+      create_rtp_buffer_with_payload_size (master_ssrc, master_pt, 0, 20));
   pull_and_verify (h, FALSE, master_ssrc, master_pt, 0);
 
   gst_harness_set_time (h, 10 * GST_MSECOND);
   gst_harness_push (h,
-      create_rtp_buffer_with_packet_size (master_ssrc, master_pt, 1, 580));
+      create_rtp_buffer_with_payload_size (master_ssrc, master_pt, 1, 580));
   pull_and_verify (h, FALSE, master_ssrc, master_pt, 1);
   /* budget 1000, sent 600, no stuffing (stuff with 580 will exceed budget) */
 
   gst_harness_set_time (h, 20 * GST_MSECOND);
   gst_harness_push (h,
-      create_rtp_buffer_with_packet_size (master_ssrc, master_pt, 2, 600));
+      create_rtp_buffer_with_payload_size (master_ssrc, master_pt, 2, 600));
   pull_and_verify (h, FALSE, master_ssrc, master_pt, 2);
-  /* budget 2000, sent 1200, stuff with 1x 602 */
+  /* budget 2000, sent 1200, stuff with #2, 600 bytes */
   pull_and_verify (h, TRUE, rtx_ssrc, rtx_pt, 2);
-  /* budget 2000, sent 1802, no stuffing */
+  /* budget 2000, sent 1800, no stuffing */
 
   gst_harness_set_time (h, 30 * GST_MSECOND);
   gst_harness_push (h,
-      create_rtp_buffer_with_packet_size (master_ssrc, master_pt, 3, 200));
+      create_rtp_buffer_with_payload_size (master_ssrc, master_pt, 3, 200));
   pull_and_verify (h, FALSE, master_ssrc, master_pt, 3);
-  /* budget 3000, sent 2000. Stuffed packets will be of (202+602)=804 bytes */
+  /* budget 3000, sent 2000. Stuffed packets will be of (600+200+200)=1000 bytes */
   pull_and_verify (h, TRUE, rtx_ssrc, rtx_pt, 2);
   pull_and_verify (h, TRUE, rtx_ssrc, rtx_pt, 3);
+  pull_and_verify (h, TRUE, rtx_ssrc, rtx_pt, 3);
+  /* budget 3000, sent 3000 */
 
   gst_harness_set_time (h, 40 * GST_MSECOND);
   gst_harness_push (h,
-      create_rtp_buffer_with_packet_size (master_ssrc, master_pt, 4, 600));
+      create_rtp_buffer_with_payload_size (master_ssrc, master_pt, 4, 600));
   pull_and_verify (h, FALSE, master_ssrc, master_pt, 4);
-  /* budget 4000, sent 3514, no stuffing because rtx packet is 602 */
+  /* budget 4000, sent 3600, no stuffing because rtx packet is 600 */
   g_usleep (G_USEC_PER_SEC / 100);
   fail_if (gst_harness_try_pull (h));
 
@@ -1014,35 +994,36 @@ GST_START_TEST (test_rtxsender_stuffing_toggle)
 
   gst_harness_set_time (h, 0 * GST_MSECOND);
   gst_harness_push (h,
-      create_rtp_buffer_with_packet_size (master_ssrc, master_pt, 0, 20));
+      create_rtp_buffer_with_payload_size (master_ssrc, master_pt, 0, 20));
   pull_and_verify (h, FALSE, master_ssrc, master_pt, 0);
 
   gst_harness_set_time (h, 10 * GST_MSECOND);
   gst_harness_push (h,
-      create_rtp_buffer_with_packet_size (master_ssrc, master_pt, 1, 20));
+      create_rtp_buffer_with_payload_size (master_ssrc, master_pt, 1, 20));
   pull_and_verify (h, FALSE, master_ssrc, master_pt, 1);
 
   gst_harness_set_time (h, 20 * GST_MSECOND);
   gst_harness_push (h,
-      create_rtp_buffer_with_packet_size (master_ssrc, master_pt, 2, 20));
+      create_rtp_buffer_with_payload_size (master_ssrc, master_pt, 2, 20));
   pull_and_verify (h, FALSE, master_ssrc, master_pt, 2);
 
   /* 80 kbps = 10 kBps. 10 ms distance between each packet means 10 packets
-   * per second and 100 bytes per packet to hit target kbps. Also need to
-   * take into account that RTX buffers are 2 bytes larger than original. */
+   * per second and 100 bytes per packet to hit target kbps.
+   * We stuff considering the payload length. */
   g_object_set (h->element, "stuffing-kbps", 80, NULL);
 
   gst_harness_set_time (h, 30 * GST_MSECOND);
   gst_harness_push (h,
-      create_rtp_buffer_with_packet_size (master_ssrc, master_pt, 3, 20));
+      create_rtp_buffer_with_payload_size (master_ssrc, master_pt, 3, 20));
   pull_and_verify (h, FALSE, master_ssrc, master_pt, 3);
 
   gst_harness_set_time (h, 40 * GST_MSECOND);
   gst_harness_push (h,
-      create_rtp_buffer_with_packet_size (master_ssrc, master_pt, 4, 20));
+      create_rtp_buffer_with_payload_size (master_ssrc, master_pt, 4, 20));
   pull_and_verify (h, FALSE, master_ssrc, master_pt, 4);
 
-  /* budget 80, sent 40, so stuff with 22 * 2 = 44 bytes */
+  /* budget 100, sent 40, so stuff with #2, 3 and 4, total of 60 bytes */
+  pull_and_verify (h, TRUE, rtx_ssrc, rtx_pt, 2);
   pull_and_verify (h, TRUE, rtx_ssrc, rtx_pt, 3);
   pull_and_verify (h, TRUE, rtx_ssrc, rtx_pt, 4);
 
@@ -1051,7 +1032,7 @@ GST_START_TEST (test_rtxsender_stuffing_toggle)
 
   gst_harness_set_time (h, 50 * GST_MSECOND);
   gst_harness_push (h,
-      create_rtp_buffer_with_packet_size (master_ssrc, master_pt, 5, 20));
+      create_rtp_buffer_with_payload_size (master_ssrc, master_pt, 5, 20));
   pull_and_verify (h, FALSE, master_ssrc, master_pt, 5);
 
   g_usleep (G_USEC_PER_SEC / 100);
@@ -1092,41 +1073,38 @@ GST_START_TEST (test_rtxsender_stuffing_non_rtx_packets)
       "payload = (int)96, " "ssrc = (uint)1234567, " "clock-rate = (int)90000");
 
   /* 800 kbps = 100 kBps. 10 ms distance between each packet means 100 packets
-   * per second and 1000 bytes per packet to hit target kbps. Also need to
-   * take into account that RTX buffers are 2 bytes larger than original. */
+   * per second and 1000 bytes per packet to hit target kbps.
+   * We stuff considering the payload length. */
   gst_harness_set_time (h, 0 * GST_MSECOND);
   gst_harness_push (h,
-      create_rtp_buffer_with_packet_size (video_ssrc, video_pt, 0, 20));
+      create_rtp_buffer_with_payload_size (video_ssrc, video_pt, 0, 20));
   pull_and_verify (h, FALSE, video_ssrc, video_pt, 0);
 
   gst_harness_set_time (h, 10 * GST_MSECOND);
   gst_harness_push (h,
-      create_rtp_buffer_with_packet_size (video_ssrc, video_pt, 1, 580));
+      create_rtp_buffer_with_payload_size (video_ssrc, video_pt, 1, 580));
   pull_and_verify (h, FALSE, video_ssrc, video_pt, 1);
   /* budget 1000, sent 600, no stuffing (stuff with 580 will exceed budget) */
 
   gst_harness_set_time (h, 20 * GST_MSECOND);
   gst_harness_push (h,
-      create_rtp_buffer_with_packet_size (video_ssrc, video_pt, 2, 600));
+      create_rtp_buffer_with_payload_size (video_ssrc, video_pt, 2, 600));
   pull_and_verify (h, FALSE, video_ssrc, video_pt, 2);
-  /* budget 2000, sent 1200, stuff with 1x602 */
+  /* budget 2000, sent 1200, stuff with #2, 600 bytes */
   pull_and_verify (h, TRUE, rtx_ssrc, rtx_pt, 2);
 
-  gst_harness_set_time (h, 40 * GST_MSECOND);
+  gst_harness_set_time (h, 30 * GST_MSECOND);
   /* audio packet comes in.. */
   gst_harness_push (h,
-      create_rtp_buffer_with_packet_size (audio_ssrc, audio_pt, 0, 200));
+      create_rtp_buffer_with_payload_size (audio_ssrc, audio_pt, 0, 200));
   pull_and_verify (h, FALSE, audio_ssrc, audio_pt, 0);
-  /* enough budget to stuff with #0 .. #2 */
-  pull_and_verify (h, TRUE, rtx_ssrc, rtx_pt, 0);
-  pull_and_verify (h, TRUE, rtx_ssrc, rtx_pt, 1);
-  pull_and_verify (h, TRUE, rtx_ssrc, rtx_pt, 2);
+  /* budget 3000, sent 2000, stuff with #2, 600 bytes */
   pull_and_verify (h, TRUE, rtx_ssrc, rtx_pt, 2);
 
   gst_harness_push (h,
-      create_rtp_buffer_with_packet_size (video_ssrc, video_pt, 4, 600));
+      create_rtp_buffer_with_payload_size (video_ssrc, video_pt, 4, 600));
   pull_and_verify (h, FALSE, video_ssrc, video_pt, 4);
-  /* budget 4000, sent 3514, no stuffing because rtx packet is 602 */
+  /* budget 4000, sent 2600, no more stuffing */
   g_usleep (G_USEC_PER_SEC / 100);
   fail_if (gst_harness_try_pull (h));
 
@@ -1148,6 +1126,7 @@ GST_START_TEST (test_rtxsender_stuffing_window)
   guint rtx_pt = 99;
   GstStructure *pt_map, *ssrc_map;
   GstHarness *h = gst_harness_new ("rtprtxsend");
+  GstBuffer *buf;
   gint i;
 
   pt_map = gst_structure_new ("application/x-rtp-pt-map",
@@ -1162,26 +1141,30 @@ GST_START_TEST (test_rtxsender_stuffing_window)
       "payload = (int)96, " "ssrc = (uint)1234567, " "clock-rate = (int)90000");
 
   /* 80 kbps = 10 kBps. 10 ms distance between each packet means 10 packets
-   * per second and 100 bytes per packet to hit target kbps. Also need to
-   * take into account that RTX buffers are 2 bytes larger than original. */
+   * per second and 100 bytes per packet to hit target kbps.
+   * We stuff considering the payload length. */
   gst_harness_set_time (h, 0 * GST_MSECOND);
-  gst_harness_push (h,
-      create_rtp_buffer_with_pts (master_ssrc, master_pt, 0, 80, 0));
+  buf = create_rtp_buffer_with_payload_size (master_ssrc, master_pt, 0, 80);
+  GST_BUFFER_PTS (buf) = 0;
+  gst_harness_push (h, buf);
+
   pull_and_verify (h, FALSE, master_ssrc, master_pt, 0);
   /* budget 100, sent 80 */
 
   gst_harness_set_time (h, 10 * GST_MSECOND);
-  gst_harness_push (h,
-      create_rtp_buffer_with_pts (master_ssrc, master_pt, 1, 80,
-          10 * GST_MSECOND));
+  buf = create_rtp_buffer_with_payload_size (master_ssrc, master_pt, 1, 80);
+  GST_BUFFER_PTS (buf) = 10 * GST_MSECOND;
+  gst_harness_push (h, buf);
+
   pull_and_verify (h, FALSE, master_ssrc, master_pt, 1);
   /* budget 200, sent 160, no stuffing */
 
   gst_harness_set_time (h, 110 * GST_MSECOND);
-  gst_harness_push (h,
-      create_rtp_buffer_with_pts (master_ssrc, master_pt, 2, 80,
-          110 * GST_MSECOND));
+  buf = create_rtp_buffer_with_payload_size (master_ssrc, master_pt, 2, 80);
+  GST_BUFFER_PTS (buf) = 110 * GST_MSECOND;
+  gst_harness_push (h, buf);
   pull_and_verify (h, FALSE, master_ssrc, master_pt, 2);
+
   /* we have budget, so stuff with #1 and #2, but #0 is too old */
   for (i = 0; i < 5; i++) {
     pull_and_verify (h, TRUE, rtx_ssrc, rtx_pt, 1);
@@ -1210,6 +1193,7 @@ GST_START_TEST (test_rtxsender_stuffing_no_packets_under_window)
   guint rtx_pt = 99;
   GstStructure *pt_map, *ssrc_map;
   GstHarness *h = gst_harness_new ("rtprtxsend");
+  GstBuffer *buf;
   gint i;
 
   pt_map = gst_structure_new ("application/x-rtp-pt-map",
@@ -1224,28 +1208,29 @@ GST_START_TEST (test_rtxsender_stuffing_no_packets_under_window)
       "payload = (int)96, " "ssrc = (uint)1234567, " "clock-rate = (int)90000");
 
   /* 80 kbps = 10 kBps. 10 ms distance between each packet means 10 packets
-   * per second and 100 bytes per packet to hit target kbps. Also need to
-   * take into account that RTX buffers are 2 bytes larger than original. */
+   * per second and 100 bytes per packet to hit target kbps.
+   * We stuff considering the payload length. */
   gst_harness_set_time (h, 0 * GST_MSECOND);
-  gst_harness_push (h,
-      create_rtp_buffer_with_pts (master_ssrc, master_pt, 0, 80, 0));
+  buf = create_rtp_buffer_with_payload_size (master_ssrc, master_pt, 0, 80);
+  GST_BUFFER_PTS (buf) = 0;
+  gst_harness_push (h, buf);
   pull_and_verify (h, FALSE, master_ssrc, master_pt, 0);
   /* budget 100, sent 80 */
 
   gst_harness_set_time (h, 10 * GST_MSECOND);
-  gst_harness_push (h,
-      create_rtp_buffer_with_pts (master_ssrc, master_pt, 1, 80,
-          10 * GST_MSECOND));
+  buf = create_rtp_buffer_with_payload_size (master_ssrc, master_pt, 1, 80);
+  GST_BUFFER_PTS (buf) = 10 * GST_MSECOND;
+  gst_harness_push (h, buf);
   pull_and_verify (h, FALSE, master_ssrc, master_pt, 1);
   /* budget 200, sent 160, no stuffing */
 
-
   /* advance far ahead, so the buffers are out of the window */
   gst_harness_set_time (h, 150 * GST_MSECOND);
-  gst_harness_push (h,
-      create_rtp_buffer_with_pts (master_ssrc, master_pt, 2, 80,
-          20 * GST_MSECOND));
+  buf = create_rtp_buffer_with_payload_size (master_ssrc, master_pt, 2, 80);
+  GST_BUFFER_PTS (buf) = 20 * GST_MSECOND;
+  gst_harness_push (h, buf);
   pull_and_verify (h, FALSE, master_ssrc, master_pt, 2);
+
   /* we have budget, non of the above are under the window, but we get stuff with: #0, 1 and 2 */
   for (i = 0; i < 5; i++) {
     pull_and_verify (h, TRUE, rtx_ssrc, rtx_pt, 0);
@@ -1289,7 +1274,7 @@ GST_START_TEST (test_rtxsender_stuffing_sanity_when_input_rate_is_extreme)
   for (i = 0; i < 300; i++) {
     gst_harness_set_time (h, i * GST_NSECOND);
     gst_harness_push (h,
-        create_rtp_buffer_with_packet_size (master_ssrc, master_pt, i,
+        create_rtp_buffer_with_payload_size (master_ssrc, master_pt, i,
             1000000));
     pull_and_verify (h, FALSE, master_ssrc, master_pt, i);
   }
@@ -1326,12 +1311,12 @@ GST_START_TEST (test_rtxsender_stuffing_does_not_interfer_with_rtx)
 
   gst_harness_set_time (h, 0 * GST_MSECOND);
   gst_harness_push (h,
-      create_rtp_buffer_with_packet_size (master_ssrc, master_pt, 0, 100));
+      create_rtp_buffer_with_payload_size (master_ssrc, master_pt, 0, 100));
   pull_and_verify (h, FALSE, master_ssrc, master_pt, 0);
 
   gst_harness_set_time (h, 10 * GST_MSECOND);
   gst_harness_push (h,
-      create_rtp_buffer_with_packet_size (master_ssrc, master_pt, 1, 500));
+      create_rtp_buffer_with_payload_size (master_ssrc, master_pt, 1, 500));
   pull_and_verify (h, FALSE, master_ssrc, master_pt, 1);
   /* budget 1000, sent 600 */
 
@@ -1343,7 +1328,7 @@ GST_START_TEST (test_rtxsender_stuffing_does_not_interfer_with_rtx)
   /* Send media packet. Budget should still be untouched for before.  */
   gst_harness_set_time (h, 20 * GST_MSECOND);
   gst_harness_push (h,
-      create_rtp_buffer_with_packet_size (master_ssrc, master_pt, 2, 400));
+      create_rtp_buffer_with_payload_size (master_ssrc, master_pt, 2, 400));
   pull_and_verify (h, FALSE, master_ssrc, master_pt, 2);
   /* budet 2000, sent 1000, send #2: 402 bytes of stuffing */
   pull_and_verify (h, TRUE, rtx_ssrc, rtx_pt, 2);

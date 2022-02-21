@@ -50,6 +50,8 @@
 GST_DEBUG_CATEGORY_STATIC (gst_rtp_rtx_send_debug);
 #define GST_CAT_DEFAULT gst_rtp_rtx_send_debug
 
+#define MIN_RTP_HEADER_LEN 12
+
 #define UNLIMITED_KBPS (-1)
 
 #define DEFAULT_RTX_PAYLOAD_TYPE 0
@@ -897,12 +899,24 @@ process_buffer (GstRtpRtxSend * rtx, GstBuffer * buffer)
   return data;
 }
 
+static gint
+get_buffer_payload_len (GstBuffer * buffer)
+{
+  gint length = gst_buffer_get_size (buffer) - MIN_RTP_HEADER_LEN;
+
+  if (GST_BUFFER_FLAG_IS_SET (buffer, GST_RTP_BUFFER_FLAG_RETRANSMISSION)) {
+    length -= RTX_OVERHEAD;
+  }
+
+  return length;
+}
+
 static GstFlowReturn
 gst_rtp_rtx_send_push (GstRtpRtxSend * rtx, GstBuffer * buffer)
 {
   GstFlowReturn ret;
-  token_bucket_take_tokens (&rtx->stuff_tb, gst_buffer_get_size (buffer) * 8,
-      TRUE);
+  token_bucket_take_tokens (&rtx->stuff_tb,
+      get_buffer_payload_len (buffer) * 8, TRUE);
 
   GST_OBJECT_UNLOCK (rtx);
   ret = gst_pad_push (rtx->srcpad, buffer);
@@ -934,8 +948,7 @@ gst_rtp_rtx_send_get_initial_stuffing_buffer (GstRtpRtxSend * rtx,
 
   do {
     BufferQueueItem *item = g_sequence_get (g_sequence_iter_prev (first));
-    gint buffer_bitsize =
-        (gst_buffer_get_size (item->buffer) + RTX_OVERHEAD) * 8;
+    gint buffer_bitsize = get_buffer_payload_len (item->buffer) * 8;
 
     /* stop here if we will exceed the bucket with this buffer */
     if (available_stuffing_bits + buffer_bitsize > bucket_size)
