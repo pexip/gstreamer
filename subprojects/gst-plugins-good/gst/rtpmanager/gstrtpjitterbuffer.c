@@ -3505,8 +3505,12 @@ gst_rtp_jitter_buffer_chain (GstPad * pad, GstObject * parent,
         gap, is_rtx || is_ulpfec, &ntp_time);
 
     if (G_UNLIKELY (!GST_CLOCK_TIME_IS_VALID (pts))) {
-      /* A valid timestamp cannot be calculated, discard packet */
-      goto discard_invalid;
+      if (is_ulpfec) {
+        pts = priv->ips_rtptime;
+      } else {
+        /* A valid timestamp cannot be calculated, discard packet */
+        goto discard_invalid;
+      }
     }
 
     if (G_LIKELY (gap == 0)) {
