@@ -3265,8 +3265,7 @@ gst_rtp_jitter_buffer_chain (GstPad * pad, GstObject * parent,
         expected, seqnum, gap);
 
     /* Special handling of large gaps */
-    if (!is_rtx && !is_ulpfec && ((gap != -1 && gap < -max_misorder)
-            || (gap >= max_dropout))) {
+    if (!is_rtx && !is_ulpfec && ((gap != -1 && gap < -max_misorder) || (gap >= max_dropout))) {
       gboolean reset = handle_big_gap_buffer (jitterbuffer, buffer, pt, seqnum,
           gap, max_dropout, max_misorder);
       if (reset) {
@@ -3291,12 +3290,8 @@ gst_rtp_jitter_buffer_chain (GstPad * pad, GstObject * parent,
         gap, is_rtx || is_ulpfec);
 
     if (G_UNLIKELY (!GST_CLOCK_TIME_IS_VALID (pts))) {
-      if (is_ulpfec) {
-        pts = priv->ips_rtptime;
-      } else {
-        /* A valid timestamp cannot be calculated, discard packet */
-        goto discard_invalid;
-      }
+      /* A valid timestamp cannot be calculated, discard packet */
+      goto discard_invalid;
     }
 
     if (G_LIKELY (gap == 0)) {
