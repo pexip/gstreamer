@@ -933,7 +933,7 @@ gst_rtp_rtx_send_get_initial_stuffing_buffer (GstRtpRtxSend * rtx,
   GstClockTime window_size = 100 * GST_MSECOND;
 
   GSequenceIter *first = NULL;
-  const GSequenceIter *last = NULL;
+  GSequenceIter *last = NULL;
 
   gint available_stuffing_bits = 0;
   gint64 bucket_size = rtx->stuff_tb.bucket_size;
