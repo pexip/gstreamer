@@ -1096,24 +1096,31 @@ class GstDot(gdb.Command):
     """\
 Create a pipeline dot file as close as possible to the output of
 GST_DEBUG_BIN_TO_DOT_FILE. This command will find the top-level parent
-for the given gstreamer object and create the dot for that element.
+for the given gstreamer object and create the dot representation
+for that element or allow the creation of a 'local' dot representation
+iff the given object is a valid bin and the optional argument 'local'
+is provided in the argument list.
 
-Usage: gst-dot <gst-object> <file-name>"""
+Usage: gst-dot <gst-object> <file-name> (local)"""
     def __init__(self):
         super(GstDot, self).__init__("gst-dot", gdb.COMMAND_DATA)
 
     def invoke(self, arg, from_tty):
         self.dont_repeat()
         args = gdb.string_to_argv(arg)
-        if len(args) != 2:
-            raise Exception("Usage: gst-dot <gst-object> <file>")
+        if ((3 > len(args) < 2)
+                or (len(args) == 3 and args[2] != "local")):
+            raise Exception("Usage: gst-dot <gst-object> <file> (local)")
 
         value = gdb.parse_and_eval(args[0])
         if not value:
             raise Exception("'%s' is not a valid object" % args[0])
 
         value = gst_object_from_value(value)
-        value = gst_object_pipeline(value)
+        if len(args) == 2:
+            value = gst_object_pipeline(value)
+        elif not gst_is_bin(value):
+            raise Exception("'%s' is not a valid bin" % value)
 
         dot = GdbGstElement(value).pipeline_dot()
         file = open(args[1], "w")
