@@ -97,7 +97,8 @@ enum
 #define DEFAULT_SKIP_TO_FIRST   FALSE
 #define DEFAULT_DROP_ONLY       FALSE
 #define DEFAULT_AVERAGE_PERIOD  0
-#define DEFAULT_MAX_RATE        G_MAXINT
+#define DEFAULT_MAX_RATE_N      G_MAXINT
+#define DEFAULT_MAX_RATE_D      G_MAXINT
 #define DEFAULT_RATE            1.0
 #define DEFAULT_MAX_DUPLICATION_TIME      0
 
@@ -260,10 +261,9 @@ gst_video_rate_class_init (GstVideoRateClass * klass)
    * maximum framerate to pass through
    */
   g_object_class_install_property (object_class, PROP_MAX_RATE,
-      g_param_spec_int ("max-rate", "maximum framerate",
-          "Maximum framerate allowed to pass through "
-          "(in frames per second, implies drop-only)",
-          1, G_MAXINT, DEFAULT_MAX_RATE,
+      gst_param_spec_fraction ("max-rate", "maximum framerate",
+          "Maximum framerate allowed to pass through (implies drop-only)",
+          0, 1, G_MAXINT, 1, DEFAULT_MAX_RATE_N, DEFAULT_MAX_RATE_D,
           G_PARAM_READWRITE | G_PARAM_CONSTRUCT | G_PARAM_STATIC_STRINGS));
 
   /**
@@ -362,8 +362,9 @@ gst_value_fraction_get_extremes (const GValue * v,
 /* Clamp the framerate in a caps structure to be a smaller range then
  * [1...max_rate], otherwise return false */
 static gboolean
-gst_video_max_rate_clamp_structure (GstStructure * s, gint maxrate,
-    gint * min_num, gint * min_denom, gint * max_num, gint * max_denom)
+gst_video_max_rate_clamp_structure (GstStructure * s,
+    gint maxrate_n, gint maxrate_d, gint * min_num, gint * min_denom,
+    gint * max_num, gint * max_denom)
 {
   gboolean ret = FALSE;
 
@@ -378,7 +379,7 @@ gst_video_max_rate_clamp_structure (GstStructure * s, gint maxrate,
     gint tmp_num, tmp_denom;
 
     g_value_init (&clamp, GST_TYPE_FRACTION_RANGE);
-    gst_value_set_fraction_range_full (&clamp, 0, 1, maxrate, 1);
+    gst_value_set_fraction_range_full (&clamp, 0, 1, maxrate_n, maxrate_d);
 
     v = gst_structure_get_value (s, "framerate");
     ret = gst_value_intersect (&intersection, v, &clamp);
@@ -393,9 +394,10 @@ gst_video_max_rate_clamp_structure (GstStructure * s, gint maxrate,
     gst_value_fraction_get_extremes (v,
         &tmp_num, &tmp_denom, max_num, max_denom);
 
-    if (gst_util_fraction_compare (*max_num, *max_denom, maxrate, 1) > 0) {
-      *max_num = maxrate;
-      *max_denom = 1;
+    if (gst_util_fraction_compare (*max_num, *max_denom,
+          maxrate_n, maxrate_d) > 0) {
+      *max_num = maxrate_n;
+      *max_denom = maxrate_d;
     }
 
     gst_structure_take_value (s, "framerate", &intersection);
@@ -412,7 +414,8 @@ gst_video_rate_transform_caps (GstBaseTransform * trans,
   GstVideoRate *videorate = GST_VIDEO_RATE (trans);
   GstCaps *ret;
   GstStructure *s, *s1, *s2, *s3 = NULL;
-  int maxrate = g_atomic_int_get (&videorate->max_rate);
+  int maxrate_n = g_atomic_int_get (&videorate->max_rate_n);
+  int maxrate_d = g_atomic_int_get (&videorate->max_rate_d);
   gint i;
 
   ret = gst_caps_new_empty ();
@@ -442,12 +445,12 @@ gst_video_rate_transform_caps (GstBaseTransform * trans,
       gint max_num = G_MAXINT, max_denom = 1;
 
       /* Clamp the caps to our maximum rate as the first caps if possible */
-      if (!gst_video_max_rate_clamp_structure (s1, maxrate,
+      if (!gst_video_max_rate_clamp_structure (s1, maxrate_n, maxrate_d,
               &min_num, &min_denom, &max_num, &max_denom)) {
         min_num = 0;
         min_denom = 1;
-        max_num = maxrate;
-        max_denom = 1;
+        max_num = maxrate_n;
+        max_denom = maxrate_d;
 
         /* clamp wouldn't be a real subset of 1..maxrate, in this case the sink
          * caps should become [1..maxrate], [1..maxint] and the src caps just
@@ -456,9 +459,9 @@ gst_video_rate_transform_caps (GstBaseTransform * trans,
          *
          * In case [X..maxrate] == [X..maxint], skip as we'll set it later
          */
-        if (direction == GST_PAD_SRC && maxrate != G_MAXINT)
+        if (direction == GST_PAD_SRC && maxrate_n != G_MAXINT)
           gst_structure_set (s1, "framerate", GST_TYPE_FRACTION_RANGE,
-              min_num, min_denom, maxrate, 1, NULL);
+              min_num, min_denom, maxrate_n, maxrate_d, NULL);
         else {
           gst_structure_free (s1);
           s1 = NULL;
@@ -485,13 +488,13 @@ gst_video_rate_transform_caps (GstBaseTransform * trans,
       gint min_num = 0, min_denom = 1;
       gint max_num = G_MAXINT, max_denom = 1;
 
-      if (!gst_video_max_rate_clamp_structure (s1, maxrate,
+      if (!gst_video_max_rate_clamp_structure (s1, maxrate_n, maxrate_d,
               &min_num, &min_denom, &max_num, &max_denom)) {
         gst_structure_free (s1);
         s1 = NULL;
       }
       gst_structure_set (s2, "framerate", GST_TYPE_FRACTION_RANGE, 0, 1,
-          maxrate, 1, NULL);
+          maxrate_n, maxrate_d, NULL);
     } else {
       /* set the framerate as a range */
       gst_structure_set (s2, "framerate", GST_TYPE_FRACTION_RANGE, 0, 1,
@@ -633,7 +636,8 @@ gst_video_rate_init (GstVideoRate * videorate)
   videorate->drop_only = DEFAULT_DROP_ONLY;
   videorate->average_period = DEFAULT_AVERAGE_PERIOD;
   videorate->average_period_set = DEFAULT_AVERAGE_PERIOD;
-  videorate->max_rate = DEFAULT_MAX_RATE;
+  videorate->max_rate_n = DEFAULT_MAX_RATE_N;
+  videorate->max_rate_d = DEFAULT_MAX_RATE_D;
   videorate->rate = DEFAULT_RATE;
   videorate->pending_rate = DEFAULT_RATE;
   videorate->max_duplication_time = DEFAULT_MAX_DUPLICATION_TIME;
@@ -1853,7 +1857,10 @@ gst_video_rate_set_property (GObject * object,
       videorate->average_period_set = g_value_get_uint64 (value);
       break;
     case PROP_MAX_RATE:
-      g_atomic_int_set (&videorate->max_rate, g_value_get_int (value));
+      g_atomic_int_set (&videorate->max_rate_n,
+          gst_value_get_fraction_numerator (value));
+      g_atomic_int_set (&videorate->max_rate_d,
+          gst_value_get_fraction_denominator (value));
       goto reconfigure;
     case PROP_RATE:
       videorate->pending_rate = g_value_get_double (value);
@@ -1918,7 +1925,9 @@ gst_video_rate_get_property (GObject * object,
       g_value_set_uint64 (value, videorate->average_period_set);
       break;
     case PROP_MAX_RATE:
-      g_value_set_int (value, g_atomic_int_get (&videorate->max_rate));
+      gst_value_set_fraction (value,
+          g_atomic_int_get (&videorate->max_rate_n),
+          g_atomic_int_get (&videorate->max_rate_d));
       break;
     case PROP_RATE:
       g_value_set_double (value, videorate->pending_rate);

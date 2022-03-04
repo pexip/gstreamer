@@ -70,7 +70,8 @@ struct _GstVideoRate
   gboolean drop_only;
   guint64 average_period_set;
 
-  int max_rate;
+  gint max_rate_n;
+  gint max_rate_d;
   gdouble rate;
   gdouble pending_rate;
 };
