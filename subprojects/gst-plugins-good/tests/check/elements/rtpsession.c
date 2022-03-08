@@ -39,7 +39,7 @@
 #include "config.h"
 #endif
 
-#ifdef HAVE_VALGRIND_VALGRIND_H
+#ifdef HAVE_VALGRIND
 # include <valgrind/valgrind.h>
 #else
 # define RUNNING_ON_VALGRIND 0
