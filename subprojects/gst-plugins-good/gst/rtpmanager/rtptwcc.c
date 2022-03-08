@@ -39,6 +39,8 @@ GST_DEBUG_CATEGORY_EXTERN (rtp_session_debug);
 #define STATUS_VECTOR_MAX_CAPACITY 14
 #define STATUS_VECTOR_TWO_BIT_MAX_CAPACITY 7
 
+#define MAX_PACKETS_PER_FEEDBACK 65535
+
 typedef enum
 {
   RTP_TWCC_CHUNK_TYPE_RUN_LENGTH = 0,
@@ -1383,6 +1385,22 @@ rtp_twcc_manager_lookup_seqnum (RTPTWCCManager * twcc,
   return ret;
 }
 
+/* Remove old sent packets and keep them under a maximum threshold, as we
+   can't accumulate them if we don't get a feedback message from the
+   receiver. */
+static void
+_prune_old_sent_packets (RTPTWCCManager * twcc)
+{
+  guint length;
+
+  if (twcc->sent_packets->len <= MAX_PACKETS_PER_FEEDBACK)
+    return;
+
+  length = twcc->sent_packets->len - MAX_PACKETS_PER_FEEDBACK;
+
+  g_array_remove_range (twcc->sent_packets, 0, length);
+}
+
 void
 rtp_twcc_manager_send_packet (RTPTWCCManager * twcc, RTPPacketInfo * pinfo)
 {
@@ -1398,6 +1416,7 @@ rtp_twcc_manager_send_packet (RTPTWCCManager * twcc, RTPPacketInfo * pinfo)
 
   sent_packet_init (&packet, seqnum, pinfo);
   g_array_append_val (twcc->sent_packets, packet);
+  _prune_old_sent_packets (twcc);
 
   rtp_twcc_manager_register_seqnum (twcc, pinfo->ssrc, pinfo->seqnum, seqnum);
 
@@ -1500,9 +1519,9 @@ _prune_sent_packets (RTPTWCCManager * twcc, GArray * parsed_packets)
   first = &g_array_index (twcc->sent_packets, SentPacket, 0);
   last = &g_array_index (parsed_packets, ParsedPacket, parsed_packets->len - 1);
 
-  last_idx = last->seqnum - first->seqnum;
+  last_idx = last->seqnum - first->seqnum + 1;
 
-  if (last_idx < twcc->sent_packets->len)
+  if (last_idx <= twcc->sent_packets->len)
     g_array_remove_range (twcc->sent_packets, 0, last_idx);
 }
 

@@ -4517,6 +4517,51 @@ GST_START_TEST (test_twcc_feedback_old_seqnum)
 
 GST_END_TEST;
 
+GST_START_TEST (test_twcc_feedback_max_sent_packets)
+{
+  SessionHarness *h = session_harness_new ();
+  guint i;
+
+  guint8 fci[] = {
+    0x00, 0x00,                 /* base sequence number: 0 */
+    0xff, 0xff,                 /* packet status count: 65535 */
+    0x00, 0x00, 0x00,           /* reference time: 0 */
+    0x00,                       /* feedback packet count: 0 */
+    0x1f, 0xff,                 /* (9x) run-length with max length as not recv: 0 0 0 1 1 1 1 1 | 1 1 1 1 1 1 1 1 */
+    0x1f, 0xff,
+    0x1f, 0xff,
+    0x1f, 0xff,
+    0x1f, 0xff,
+    0x1f, 0xff,
+    0x1f, 0xff,
+    0x1f, 0xff,
+    0x1f, 0xff,
+  };
+
+  session_harness_set_twcc_send_ext_id (h, TEST_TWCC_EXT_ID);
+
+  /* send over 65535 packets */
+  for (i = 0; i < 65535 * 2; i++)
+    session_harness_send_rtp (h, generate_twcc_send_buffer (i, FALSE));
+
+  /* receive the feedback message and verify we have sent out 65535 packets,
+     which internally means that we only keep a history of the last 65535
+     sent packets */
+  session_harness_recv_rtcp (h,
+      generate_twcc_feedback_rtcp (fci, sizeof (fci)));
+  twcc_verify_stats (h, 0, 0, 65535, 0, 0.0f, GST_CLOCK_STIME_NONE);
+
+  /* after this, the history is cleaned up, so the same feedback message will
+     get us 0 sent packets */
+  session_harness_recv_rtcp (h,
+      generate_twcc_feedback_rtcp (fci, sizeof (fci)));
+  twcc_verify_stats (h, 0, 0, 0, 0, 0.0f, GST_CLOCK_STIME_NONE);
+
+  session_harness_free (h);
+}
+
+GST_END_TEST;
+
 GST_START_TEST (test_twcc_non_twcc_pkts_does_not_mark_loss)
 {
   SessionHarness *h_send = session_harness_new ();
@@ -5175,6 +5220,7 @@ rtpsession_suite (void)
   tcase_add_test (tc_chain, test_twcc_feedback_interval_new_internal_source);
   tcase_add_test (tc_chain, test_twcc_feedback_count_wrap);
   tcase_add_test (tc_chain, test_twcc_feedback_old_seqnum);
+  tcase_add_test (tc_chain, test_twcc_feedback_max_sent_packets);
   tcase_add_test (tc_chain, test_twcc_non_twcc_pkts_does_not_mark_loss);
 
   tcase_add_test (tc_chain, test_send_rtcp_instantly);
