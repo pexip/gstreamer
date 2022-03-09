@@ -276,7 +276,7 @@ GST_END_TEST;
  *  - makes sure source doesn't send EOS event when reaching the max.
  *    number of buffers configured in pull-mode
  *  - make sure source doesn't send EOS event either when being shut down
- *    (PAUSED => READY state change) after EOSing in pull mode 
+ *    (PAUSED => READY state change) after EOSing in pull mode
  */
 GST_START_TEST (basesrc_eos_events_pull)
 {
