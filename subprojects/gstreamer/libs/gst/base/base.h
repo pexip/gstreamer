@@ -26,6 +26,7 @@
 
 #include <gst/base/gstadapter.h>
 #include <gst/base/gstaggregator.h>
+#include <gst/base/gstbaseidlesrc.h>
 #include <gst/base/gstbaseparse.h>
 #include <gst/base/gstbasesink.h>
 #include <gst/base/gstbasesrc.h>
