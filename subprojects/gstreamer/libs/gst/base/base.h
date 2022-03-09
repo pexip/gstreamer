@@ -29,6 +29,7 @@
 #include <gst/base/gstbaseparse.h>
 #include <gst/base/gstbasesink.h>
 #include <gst/base/gstbasesrc.h>
+#include <gst/base/gstbaseidlesrc.h>
 #include <gst/base/gstbasetransform.h>
 #include <gst/base/gstbitreader.h>
 #include <gst/base/gstbitwriter.h>
