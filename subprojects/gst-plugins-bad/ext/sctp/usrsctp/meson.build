@@ -165,6 +165,9 @@ compile_args += ['-DSCTP_STDINT_INCLUDE=<stdint.h>']
 # Library
 subdir('usrsctplib')
 
+compile_args += ['-fsanitize=address']
+dependencies += compiler.find_library('libasan', required: true)
+
 # Build library
 usrsctp_static = static_library('usrsctp-static', sources,
     c_args: compile_args,
