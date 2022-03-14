@@ -39,6 +39,8 @@ GST_DEBUG_CATEGORY_EXTERN (rtp_session_debug);
 #define STATUS_VECTOR_MAX_CAPACITY 14
 #define STATUS_VECTOR_TWO_BIT_MAX_CAPACITY 7
 
+#define MAX_PACKETS_PER_FEEDBACK 65536
+
 typedef enum
 {
   RTP_TWCC_CHUNK_TYPE_RUN_LENGTH = 0,
@@ -377,23 +379,53 @@ twcc_stats_ctx_get_structure (TWCCStatsCtx * ctx)
 }
 
 static StatsPacket *
-twcc_stats_ctx_get_packet_for_seqnum (TWCCStatsCtx * ctx, guint16 seqnum)
+_get_packet_for_seqnum (GArray * array, guint16 seqnum)
 {
   guint i;
 
-  for (i = 0; i < ctx->new_packets->len; i++) {
-    StatsPacket *pkt = &g_array_index (ctx->new_packets, StatsPacket, i);
+  for (i = 0; i < array->len; i++) {
+    StatsPacket *pkt = &g_array_index (array, StatsPacket, i);
     if (pkt->seqnum == seqnum) {
       return pkt;
     }
   }
 
-  for (i = 0; i < ctx->win_packets->len; i++) {
-    StatsPacket *pkt = &g_array_index (ctx->win_packets, StatsPacket, i);
-    if (pkt->seqnum == seqnum) {
-      return pkt;
+  return NULL;
+}
+
+static StatsPacket *
+twcc_stats_ctx_get_packet_for_seqnum (TWCCStatsCtx * ctx, guint16 seqnum)
+{
+  StatsPacket *pkt;
+
+  if ((pkt = _get_packet_for_seqnum (ctx->new_packets, seqnum)) != NULL)
+    return pkt;
+
+  if ((pkt = _get_packet_for_seqnum (ctx->win_packets, seqnum)) != NULL)
+    return pkt;
+
+  return NULL;
+}
+
+static StatsPacket *
+_get_packet_for_seqnum_fast (GArray * array, guint16 seqnum)
+{
+  StatsPacket *first;
+  guint16 idx;
+
+  if (array->len == 0)
+    return NULL;
+
+  first = &g_array_index (array, StatsPacket, 0);
+  idx = seqnum - first->seqnum;
+
+  if (idx < array->len) {
+    StatsPacket *found = &g_array_index (array, StatsPacket, idx);
+    if (found->seqnum == seqnum) {
+      return found;
     }
   }
+
   return NULL;
 }
 
@@ -401,30 +433,13 @@ twcc_stats_ctx_get_packet_for_seqnum (TWCCStatsCtx * ctx, guint16 seqnum)
 static StatsPacket *
 twcc_stats_ctx_get_packet_for_seqnum_fast (TWCCStatsCtx * ctx, guint16 seqnum)
 {
-  StatsPacket *first;
-  guint16 idx;
+  StatsPacket *pkt;
 
-  first = &g_array_index (ctx->new_packets, StatsPacket, 0);
-  if (first) {
-    idx = seqnum - first->seqnum;
-    if (idx < ctx->win_packets->len) {
-      StatsPacket *found = &g_array_index (ctx->new_packets, StatsPacket, idx);
-      if (found->seqnum == seqnum) {
-        return found;
-      }
-    }
-  }
+  if ((pkt = _get_packet_for_seqnum_fast (ctx->new_packets, seqnum)) != NULL)
+    return pkt;
 
-  first = &g_array_index (ctx->win_packets, StatsPacket, 0);
-  if (first) {
-    idx = seqnum - first->seqnum;
-    if (idx < ctx->win_packets->len) {
-      StatsPacket *found = &g_array_index (ctx->win_packets, StatsPacket, idx);
-      if (found->seqnum == seqnum) {
-        return found;
-      }
-    }
-  }
+  if ((pkt = _get_packet_for_seqnum_fast (ctx->win_packets, seqnum)) != NULL)
+    return pkt;
 
   return NULL;
 }
@@ -1383,6 +1398,21 @@ rtp_twcc_manager_lookup_seqnum (RTPTWCCManager * twcc,
   return ret;
 }
 
+/* Remove old sent packets and keep them under a maximum threshold, as we
+   can't accumulate them if we don't get a feedback message from the
+   receiver. */
+static void
+_prune_old_sent_packets (RTPTWCCManager * twcc)
+{
+  guint length;
+
+  if (twcc->sent_packets->len <= MAX_PACKETS_PER_FEEDBACK)
+    return;
+
+  length = twcc->sent_packets->len - MAX_PACKETS_PER_FEEDBACK;
+  g_array_remove_range (twcc->sent_packets, 0, length);
+}
+
 void
 rtp_twcc_manager_send_packet (RTPTWCCManager * twcc, RTPPacketInfo * pinfo)
 {
@@ -1398,6 +1428,7 @@ rtp_twcc_manager_send_packet (RTPTWCCManager * twcc, RTPPacketInfo * pinfo)
 
   sent_packet_init (&packet, seqnum, pinfo);
   g_array_append_val (twcc->sent_packets, packet);
+  _prune_old_sent_packets (twcc);
 
   rtp_twcc_manager_register_seqnum (twcc, pinfo->ssrc, pinfo->seqnum, seqnum);
 
