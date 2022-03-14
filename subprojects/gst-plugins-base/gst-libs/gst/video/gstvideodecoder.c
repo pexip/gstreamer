@@ -5266,7 +5266,7 @@ gst_video_decoder_request_sync_point_internal (GstVideoDecoder * dec,
         "Requesting a new key-unit for frame with deadline %" GST_TIME_FORMAT,
         GST_TIME_ARGS (deadline));
     fku =
-        gst_video_event_new_upstream_force_key_unit (GST_CLOCK_TIME_NONE, FALSE,
+        gst_video_event_new_upstream_force_key_unit (GST_CLOCK_TIME_NONE, TRUE,
         0);
     priv->last_force_key_unit_time = deadline;
   } else {
