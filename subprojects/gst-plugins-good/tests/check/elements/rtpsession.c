@@ -443,7 +443,7 @@ static void
 session_harness_enable_rtx (SessionHarness * h)
 {
   GstStructure *rtx_map =
-      create_rtx_map (NULL, TEST_BUF_SSRC, TEST_RTX_BUF_SSRC);
+      create_rtx_map ("rtx-map", TEST_BUF_SSRC, TEST_RTX_BUF_SSRC);
   g_object_set (h->internal_session, "rtx-ssrc-map", rtx_map, NULL);
   gst_structure_free (rtx_map);
 }
