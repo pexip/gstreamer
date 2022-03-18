@@ -211,6 +211,8 @@ struct _GstHarnessPrivate
   gboolean eos_received;
 
   GPtrArray *stress;
+
+  guint64 pull_timeout;
 };
 
 static GstFlowReturn
@@ -763,6 +765,9 @@ gst_harness_new_empty (void)
 
   /* we have forwarding on as a default */
   gst_harness_set_forwarding (h, TRUE);
+
+  /* we default to 60s as pull timeout */
+  gst_harness_set_pull_timeout (h, G_USEC_PER_SEC * 60);
 
   return h;
 }
@@ -1655,6 +1660,31 @@ gst_harness_set_forward_pad (GstHarness * h, GstPad * fwdpad)
 }
 
 /**
+ * gst_harness_set_pull_timeout:
+ * @h: a #GstHarness
+ * @timeout: timeout in microseconds
+ *
+ * Sets the timeout to use on all pull-like methods. This affects src and sink
+ * harnesses if any.
+ *
+ * MT safe.
+ *
+ * Since: 1.20
+ **/
+void
+gst_harness_set_pull_timeout (GstHarness * h, guint64 timeout)
+{
+  GstHarnessPrivate *priv = h->priv;
+  priv->pull_timeout = timeout;
+
+  /* propagate timeout to src and sink harnesses, if any */
+  if (h->src_harness)
+    gst_harness_set_pull_timeout (h->src_harness, timeout);
+  if (h->sink_harness)
+    gst_harness_set_pull_timeout (h->sink_harness, timeout);
+}
+
+/**
  * gst_harness_create_buffer:
  * @h: a #GstHarness
  * @size: a #gsize specifying the size of the buffer
@@ -1754,8 +1784,8 @@ gst_harness_push_list (GstHarness * h, GstBufferList * buffer_list)
  * @h: a #GstHarness
  *
  * Pulls a #GstBuffer from the #GAsyncQueue on the #GstHarness sinkpad. The pull
- * will timeout in 60 seconds. This is the standard way of getting a buffer
- * from a harnessed #GstElement.
+ * will timeout in #GstHarness.pull_timeout seconds. This is the standard way
+ * of getting a buffer from a harnessed #GstElement.
  *
  * MT safe.
  *
@@ -1773,7 +1803,7 @@ gst_harness_pull (GstHarness * h)
   priv = h->priv;
   queue_element =
       GST_MINI_OBJECT_CAST (g_async_queue_timeout_pop (priv->buffer_queue,
-          G_USEC_PER_SEC * 60));
+          priv->pull_timeout));
   g_mutex_lock (&priv->buf_or_eos_mutex);
   buf = gst_harness_extract_one_buffer_locked (h, queue_element);
   g_mutex_unlock (&priv->buf_or_eos_mutex);
@@ -2294,7 +2324,7 @@ gst_harness_push_event (GstHarness * h, GstEvent * event)
  * @h: a #GstHarness
  *
  * Pulls an #GstEvent from the #GAsyncQueue on the #GstHarness sinkpad.
- * Timeouts after 60 seconds similar to gst_harness_pull.
+ * Timeouts after #GstHarness.pull_timeout seconds similar to gst_harness_pull.
  *
  * MT safe.
  *
@@ -2307,7 +2337,7 @@ gst_harness_pull_event (GstHarness * h)
 {
   GstHarnessPrivate *priv = h->priv;
   return (GstEvent *) g_async_queue_timeout_pop (priv->sink_event_queue,
-      G_USEC_PER_SEC * 60);
+      priv->pull_timeout);
 }
 
 /**
@@ -2397,7 +2427,7 @@ gst_harness_push_upstream_event (GstHarness * h, GstEvent * event)
  * @h: a #GstHarness
  *
  * Pulls an #GstEvent from the #GAsyncQueue on the #GstHarness srcpad.
- * Timeouts after 60 seconds similar to gst_harness_pull.
+ * Timeouts after #GstHarness.pull_timeout seconds similar to gst_harness_pull.
  *
  * MT safe.
  *
@@ -2410,7 +2440,7 @@ gst_harness_pull_upstream_event (GstHarness * h)
 {
   GstHarnessPrivate *priv = h->priv;
   return (GstEvent *) g_async_queue_timeout_pop (priv->src_event_queue,
-      G_USEC_PER_SEC * 60);
+      priv->pull_timeout);
 }
 
 /**
