@@ -174,6 +174,9 @@ void           gst_harness_set_blocking_push_mode (GstHarness * h);
 GST_CHECK_API
 void           gst_harness_set_forwarding (GstHarness * h, gboolean forwarding);
 
+GST_CHECK_API
+void           gst_harness_set_pull_timeout (GstHarness * h, guint64 timeout);
+
 /* buffers */
 
 GST_CHECK_API
