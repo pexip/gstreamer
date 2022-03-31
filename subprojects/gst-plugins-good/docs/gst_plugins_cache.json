@@ -18876,6 +18876,20 @@
                         "readable": false,
                         "type": "GstStructure",
                         "writable": true
+                    },
+                    "stuffing-kbps": {
+                        "blurb": "Use RTX to send stuffing packets to produce a near constant rate of total packets (media and stuffing) (0 = disabled)",
+                        "conditionally-available": false,
+                        "construct": true,
+                        "construct-only": false,
+                        "controllable": false,
+                        "default": "0",
+                        "max": "2147483647",
+                        "min": "0",
+                        "mutable": "null",
+                        "readable": true,
+                        "type": "gint",
+                        "writable": true
                     }
                 },
                 "rank": "none",
@@ -18933,6 +18947,34 @@
                         "mutable": "null",
                         "readable": true,
                         "type": "GstStructure",
+                        "writable": true
+                    },
+                    "max-bucket-size": {
+                        "blurb": "The size of the token bucket, related to burstiness resilience (-1 = unlimited)",
+                        "conditionally-available": false,
+                        "construct": true,
+                        "construct-only": false,
+                        "controllable": false,
+                        "default": "-1",
+                        "max": "2147483647",
+                        "min": "-1",
+                        "mutable": "null",
+                        "readable": true,
+                        "type": "gint",
+                        "writable": true
+                    },
+                    "max-kbps": {
+                        "blurb": "The maximum number of kilobits of RTX packets to allow (-1 = unlimited)",
+                        "conditionally-available": false,
+                        "construct": true,
+                        "construct-only": false,
+                        "controllable": false,
+                        "default": "-1",
+                        "max": "2147483647",
+                        "min": "-1",
+                        "mutable": "null",
+                        "readable": true,
+                        "type": "gint",
                         "writable": true
                     },
                     "max-size-packets": {
