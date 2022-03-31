@@ -3170,6 +3170,23 @@ G_STMT_START {                                                                  
   gst_structure_free (twcc_stats);                                                                 \
 } G_STMT_END
 
+#define twcc_send_recv_buffers(h_send, h_recv, buffers)                       \
+G_STMT_START {                                                                \
+  guint i;                                                                    \
+  session_harness_set_twcc_send_ext_id (h_send, TEST_TWCC_EXT_ID);            \
+  session_harness_set_twcc_recv_ext_id (h_recv, TEST_TWCC_EXT_ID);            \
+  for (i = 0; i < G_N_ELEMENTS(buffers); i++) {                               \
+    GstBuffer *buf = buffers[i];                                              \
+    GstFlowReturn res = session_harness_send_rtp (h_send, buf);               \
+    fail_unless_equals_int (GST_FLOW_OK, res);                                \
+    buf = session_harness_pull_send_rtp (h_send);                             \
+    session_harness_advance_and_crank (h_send, TEST_BUF_DURATION);            \
+    res = session_harness_recv_rtp (h_recv, buf);                             \
+    fail_unless_equals_int (GST_FLOW_OK, res);                                \
+  }                                                                           \
+  session_harness_recv_rtcp (h_send, session_harness_produce_twcc (h_recv));  \
+} G_STMT_END
+
 GST_START_TEST (test_twcc_1_bit_status_vector)
 {
   SessionHarness *h0 = session_harness_new ();
@@ -4281,8 +4298,6 @@ GST_START_TEST (test_twcc_multiple_payloads_below_window)
   SessionHarness *h_send = session_harness_new ();
   SessionHarness *h_recv = session_harness_new ();
 
-  guint i;
-
   GstBuffer *buffers[] = {
     generate_twcc_send_buffer_full (0, FALSE, 0xabc, 98),
     generate_twcc_send_buffer_full (0, FALSE, 0xdef, 111),
@@ -4291,28 +4306,7 @@ GST_START_TEST (test_twcc_multiple_payloads_below_window)
     generate_twcc_send_buffer_full (1, TRUE, 0xabc, 98),
   };
 
-  /* enable twcc */
-  session_harness_set_twcc_recv_ext_id (h_recv, TEST_TWCC_EXT_ID);
-  session_harness_set_twcc_send_ext_id (h_send, TEST_TWCC_EXT_ID);
-
-  for (i = 0; i < G_N_ELEMENTS (buffers); i++) {
-    GstBuffer *buf = buffers[i];
-    GstFlowReturn res;
-
-    /* from payloder to rtpbin */
-    res = session_harness_send_rtp (h_send, buf);
-    fail_unless_equals_int (GST_FLOW_OK, res);
-
-    buf = session_harness_pull_send_rtp (h_send);
-    session_harness_advance_and_crank (h_send, TEST_BUF_DURATION);
-
-    /* buffer arrives at the receiver */
-    res = session_harness_recv_rtp (h_recv, buf);
-    fail_unless_equals_int (GST_FLOW_OK, res);
-  }
-
-  /* sender receives the TWCC packet from the receiver */
-  session_harness_recv_rtcp (h_send, session_harness_produce_twcc (h_recv));
+  twcc_send_recv_buffers (h_send, h_recv, buffers);
   twcc_verify_stats (h_send, 0, 0, 5, 5, 0.0f, GST_CLOCK_STIME_NONE);
 
   session_harness_free (h_send);
@@ -4519,6 +4513,28 @@ GST_START_TEST (test_twcc_feedback_old_seqnum)
   }
 
   session_harness_free (h);
+}
+
+GST_END_TEST;
+
+GST_START_TEST (test_twcc_non_twcc_pkts_does_not_mark_loss)
+{
+  SessionHarness *h_send = session_harness_new ();
+  SessionHarness *h_recv = session_harness_new ();
+
+  GstBuffer *buffers[] = {
+    generate_twcc_send_buffer_full (0, FALSE, 0xabc, 98),
+    generate_test_buffer (0, 0xdeaf),
+    generate_test_buffer (1, 0xdeaf),
+    generate_test_buffer (2, 0xdeaf),
+    generate_twcc_send_buffer_full (1, TRUE, 0xabc, 98),
+  };
+
+  twcc_send_recv_buffers (h_send, h_recv, buffers);
+  twcc_verify_stats (h_send, 0, 0, 2, 2, 0.0f, GST_CLOCK_STIME_NONE);
+
+  session_harness_free (h_send);
+  session_harness_free (h_recv);
 }
 
 GST_END_TEST;
@@ -5159,6 +5175,7 @@ rtpsession_suite (void)
   tcase_add_test (tc_chain, test_twcc_feedback_interval_new_internal_source);
   tcase_add_test (tc_chain, test_twcc_feedback_count_wrap);
   tcase_add_test (tc_chain, test_twcc_feedback_old_seqnum);
+  tcase_add_test (tc_chain, test_twcc_non_twcc_pkts_does_not_mark_loss);
 
   tcase_add_test (tc_chain, test_send_rtcp_instantly);
   tcase_add_test (tc_chain, test_send_bye_signal);
