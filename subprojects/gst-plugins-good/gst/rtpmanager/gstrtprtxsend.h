@@ -27,6 +27,7 @@
 #include <gst/gst.h>
 #include <gst/rtp/rtp.h>
 #include <gst/base/gstdataqueue.h>
+#include "tokenbucket.h"
 
 G_BEGIN_DECLS
 
@@ -83,6 +84,19 @@ struct _GstRtpRtxSend
   GstRTPHeaderExtension *rid_repaired;
 
   GstBuffer *dummy_writable;
+
+  /* bucket */
+  gint max_kbps;
+  gint max_bucket_size;
+  TokenBucket max_tb;
+
+  /* stuffing properties */
+  gint stuffing_kbps;
+
+  /* last ssrc used for stuffing */
+  gint last_stuffing_ssrc;
+
+  TokenBucket stuff_tb;
 };
 
 struct _GstRtpRtxSendClass
