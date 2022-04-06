@@ -792,7 +792,7 @@ _set_twcc_seqnum_data (RTPTWCCManager * twcc, RTPPacketInfo * pinfo,
       guint16 seqnum = twcc->send_seqnum++;
 
       GST_WRITE_UINT16_BE (data, seqnum);
-      sent_packet_init (&packet, seqnum, pinfo, buf);
+      sent_packet_init (&packet, seqnum, pinfo);
       g_array_append_val (twcc->sent_packets, packet);
       _prune_old_sent_packets (twcc);
 
