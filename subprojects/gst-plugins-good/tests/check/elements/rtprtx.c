@@ -147,6 +147,55 @@ create_rtp_buffer_with_payload_size (guint32 ssrc, guint8 payload_type,
 }
 
 static GstBuffer *
+create_rtp_buffer_with_twcc_ext (guint32 ssrc, guint8 payload_type,
+    guint16 seqnum, guint payload_size, guint8 twcc_ext_id, guint16 twcc_seqnum)
+{
+  GstRTPBuffer rtp = GST_RTP_BUFFER_INIT;
+  GstBuffer *buf =
+      create_rtp_buffer_with_payload_size (ssrc, payload_type, seqnum,
+      payload_size);
+
+  gst_rtp_buffer_map (buf, GST_MAP_READWRITE, &rtp);
+
+  if (twcc_ext_id > 0) {
+    guint8 twcc_seqnum_be[2];
+    GST_WRITE_UINT16_BE (twcc_seqnum_be, twcc_seqnum);
+    gst_rtp_buffer_add_extension_onebyte_header (&rtp, twcc_ext_id,
+        twcc_seqnum_be, sizeof (twcc_seqnum_be));
+  }
+
+  gst_rtp_buffer_unmap (&rtp);
+
+  return buf;
+}
+
+static gint16
+read_twcc_seqnum (GstBuffer * buf, guint8 twcc_ext_id)
+{
+  gint16 twcc_seqnum;
+  gpointer ext_data;
+  guint ext_size;
+  GstRTPBuffer rtp = GST_RTP_BUFFER_INIT;
+
+  if (!gst_rtp_buffer_map (buf, GST_MAP_READ, &rtp))
+    return -1;
+
+  if (!gst_rtp_buffer_get_extension_onebyte_header (&rtp, twcc_ext_id,
+          0, &ext_data, &ext_size)) {
+    gst_rtp_buffer_unmap (&rtp);
+    return -1;
+  }
+
+  fail_unless (ext_data != NULL);
+  fail_unless (ext_size == 2);
+
+  twcc_seqnum = GST_READ_UINT16_BE (ext_data);
+  gst_rtp_buffer_unmap (&rtp);
+
+  return twcc_seqnum;
+}
+
+static GstBuffer *
 create_rtp_buffer (guint32 ssrc, guint8 payload_type, guint16 seqnum)
 {
   return create_rtp_buffer_with_payload_size (ssrc, payload_type, seqnum, 29);
@@ -1041,6 +1090,48 @@ GST_START_TEST (test_rtxsend_header_extensions_copy)
 
 GST_END_TEST;
 
+GST_START_TEST (test_rtxsender_copy_twcc_exthdr)
+{
+  guint master_ssrc = 1234567;
+  guint master_pt = 96;
+  guint rtx_ssrc = 7777777;
+  guint rtx_pt = 99;
+  GstStructure *pt_map, *ssrc_map;
+  GstBuffer *rtx_buf;
+  guint8 twcc_ext_id = 5;
+  GstHarness *h = gst_harness_new ("rtprtxsend");
+
+  pt_map = gst_structure_new ("application/x-rtp-pt-map",
+      "96", G_TYPE_UINT, rtx_pt, NULL);
+  ssrc_map = gst_structure_new ("application/x-rtp-ssrc-map",
+      "1234567", G_TYPE_UINT, rtx_ssrc, NULL);
+  g_object_set (h->element,
+      "payload-type-map", pt_map,
+      "ssrc-map", ssrc_map, "stuffing-kbps", 800, NULL);
+
+  gst_harness_set_src_caps_str (h, "application/x-rtp, "
+      "payload = (int)96, " "ssrc = (uint)1234567, " "clock-rate = (int)90000");
+
+  gst_harness_set_time (h, 0 * GST_MSECOND);
+  gst_harness_push (h,
+      create_rtp_buffer_with_twcc_ext (master_ssrc, master_pt, 0, 20,
+          twcc_ext_id, 33));
+  pull_and_verify (h, FALSE, master_ssrc, master_pt, 0);
+
+  gst_harness_push_upstream_event (h, create_rtx_event (master_ssrc,
+          master_pt, 0));
+
+  rtx_buf = gst_harness_pull (h);
+  verify_buf (rtx_buf, TRUE, rtx_ssrc, rtx_pt, 0);
+  fail_unless (read_twcc_seqnum (rtx_buf, twcc_ext_id) == 33);
+  gst_buffer_unref (rtx_buf);
+
+  gst_structure_free (pt_map);
+  gst_structure_free (ssrc_map);
+  gst_harness_teardown (h);
+}
+
+GST_END_TEST;
 
 #define RTPHDREXT_STREAM_ID GST_RTP_HDREXT_BASE "sdes:rtp-stream-id"
 #define RTPHDREXT_REPAIRED_STREAM_ID GST_RTP_HDREXT_BASE "sdes:repaired-rtp-stream-id"
@@ -1633,6 +1724,7 @@ rtprtx_suite (void)
   tcase_add_test (tc_chain, test_rtxsender_clock_rate_map);
   tcase_add_test (tc_chain, test_rtxsend_header_extensions);
   tcase_add_test (tc_chain, test_rtxsend_header_extensions_copy);
+  tcase_add_test (tc_chain, test_rtxsender_copy_twcc_exthdr);
 
   tcase_add_test (tc_chain, test_rtxsender_stuffing);
   tcase_add_test (tc_chain, test_rtxsender_stuffing_toggle);
