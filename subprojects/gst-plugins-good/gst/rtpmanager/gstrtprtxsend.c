@@ -766,7 +766,12 @@ gst_rtp_rtx_buffer_new (GstRtpRtxSend * rtx, GstBuffer * buffer, guint8 padlen)
 
   /* copy extension if any */
   if (rtp.size[1]) {
-    mem = rewrite_header_extensions (rtx, &rtp);
+    if (rtx->rid_stream) {
+      mem = rewrite_header_extensions (rtx, &rtp);
+    } else {
+      mem = gst_memory_copy (rtp.map[1].memory,
+          (guint8 *) rtp.data[1] - rtp.map[1].data, rtp.size[1]);
+    }
     gst_buffer_append_memory (new_buffer, mem);
   }
 
