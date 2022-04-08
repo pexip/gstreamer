@@ -60,7 +60,7 @@
   internal =                                                            \
       GST_PAD_CAST (gst_proxy_pad_get_internal (GST_PROXY_PAD_CAST (pad))); \
   if (internal == NULL) {\
-    if (retval == GST_FLOW_NOT_LINKED) {\
+    if ((GstFlowReturn)retval == GST_FLOW_NOT_LINKED) {\
       GST_WARNING_OBJECT ((pad), "%p:%p returning not-linked", GST_PAD_PARENT(pad), (pad));\
     }\
     return retval;\
