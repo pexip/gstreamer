@@ -72,7 +72,6 @@ if cc.get_id() == 'msvc'
     msvc_args += cc.get_supported_arguments([
       '/we4002', # too many actual parameters for macro 'identifier'
       '/we4003', # not enough actual parameters for macro 'identifier'
-      '/we4013', # 'function' undefined; assuming extern returning int
       '/we4020', # 'function' : too many actual parameters
       '/we4027', # function declared without formal parameter list
       '/we4029', # declared formal parameter list different from definition
@@ -82,9 +81,17 @@ if cc.get_id() == 'msvc'
       '/we4053', # one void operand for '?:'
       '/we4062', # enumerator 'identifier' in switch of enum 'enumeration' is not handled
       '/we4098', # 'function' : void function returning a value
+    ])
+
+    # add these warnings only if checks are enabled,
+    # if the checks are not built, it will leave behind some "unused" variables
+    if get_option('glib-checks').enabled()
+      msvc_args += cc.get_supported_arguments([
+      '/we4013', # 'function' undefined; assuming extern returning int
       '/we4101', # 'identifier' : unreferenced local variable
       '/we4189', # 'identifier' : local variable is initialized but not referenced
-    ])
+      ])
+    endif
   endif
   add_project_arguments(msvc_args, language: ['c', 'cpp'])
   # Disable SAFESEH with MSVC for plugins and libs that use external deps that
