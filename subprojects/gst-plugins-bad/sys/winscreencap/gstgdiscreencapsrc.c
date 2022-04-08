@@ -367,7 +367,7 @@ gst_gdiscreencapsrc_get_caps (GstBaseSrc * bsrc, GstCaps * filter)
   GstCaps *caps;
 
   if (src->window > 0)
-    src->screen_rect = rect_dst = gst_win32_get_window_rect (src->window);
+    src->screen_rect = rect_dst = gst_win32_get_window_rect ((HWND)src->window);
   else
     src->screen_rect = rect_dst = gst_win32_get_monitor_rect (src->monitor);
 
