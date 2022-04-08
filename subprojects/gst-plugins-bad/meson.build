@@ -53,6 +53,10 @@ endif
 
 cdata = configuration_data()
 
+cast_checks = get_option('gobject-cast-checks')
+glib_checks = get_option('glib-checks')
+glib_asserts = get_option('glib-asserts')
+
 if cc.get_id() == 'msvc'
   msvc_args = [
       # Ignore several spurious warnings for things gstreamer does very commonly
@@ -71,7 +75,6 @@ if cc.get_id() == 'msvc'
     msvc_args += cc.get_supported_arguments([
       '/we4002', # too many actual parameters for macro 'identifier'
       '/we4003', # not enough actual parameters for macro 'identifier'
-      '/we4013', # 'function' undefined; assuming extern returning int
       '/we4020', # 'function' : too many actual parameters
       '/we4027', # function declared without formal parameter list
       '/we4029', # declared formal parameter list different from definition
@@ -81,9 +84,17 @@ if cc.get_id() == 'msvc'
       '/we4053', # one void operand for '?:'
       '/we4062', # enumerator 'identifier' in switch of enum 'enumeration' is not handled
       '/we4098', # 'function' : void function returning a value
+    ])
+
+    # add these warnings only if checks are enabled,
+    # if the checks are not built, it will leave behind some "unused" variables
+    if glib_checks.enabled()
+      msvc_args += cc.get_supported_arguments([
+      '/we4013', # 'function' undefined; assuming extern returning int
       '/we4101', # 'identifier' : unreferenced local variable
       '/we4189', # 'identifier' : local variable is initialized but not referenced
-    ])
+      ])
+    endif
   endif
   add_project_arguments(msvc_args, language: ['c', 'cpp'])
   # Disable SAFESEH with MSVC for plugins and libs that use external deps that
@@ -132,19 +143,16 @@ if gst_version_is_dev
   add_project_arguments('-DG_DISABLE_DEPRECATED', language: 'c')
 endif
 
-cast_checks = get_option('gobject-cast-checks')
 if cast_checks.disabled() or (cast_checks.auto() and not gst_version_is_dev)
   message('Disabling GLib cast checks')
   add_project_arguments('-DG_DISABLE_CAST_CHECKS', language: 'c')
 endif
 
-glib_asserts = get_option('glib-asserts')
 if glib_asserts.disabled() or (glib_asserts.auto() and not gst_version_is_dev)
   message('Disabling GLib asserts')
   add_project_arguments('-DG_DISABLE_ASSERT', language: 'c')
 endif
 
-glib_checks = get_option('glib-checks')
 if glib_checks.disabled() or (glib_checks.auto() and not gst_version_is_dev)
   message('Disabling GLib checks')
   add_project_arguments('-DG_DISABLE_CHECKS', language: 'c')
@@ -458,7 +466,6 @@ if host_system == 'android'
   gnustl_dep = dependency('gnustl', required : false)
 endif
 
-# Disable compiler warnings for unused variables and args if gst debug system is disabled
 if gst_dep.type_name() == 'internal'
   gst_debug_disabled = not subproject('gstreamer').get_variable('gst_debug')
 else
@@ -467,16 +474,13 @@ else
   gst_debug_disabled = cc.has_header_symbol('gst/gstconfig.h', 'GST_DISABLE_GST_DEBUG', dependencies: gst_dep)
 endif
 
-if gst_debug_disabled
-  message('GStreamer debug system is disabled')
-  if cc.has_argument('-Wno-unused')
-    add_project_arguments('-Wno-unused', language: 'c')
-  endif
-  if cxx.has_argument ('-Wno-unused')
-    add_project_arguments('-Wno-unused', language: 'cpp')
-  endif
-else
-  message('GStreamer debug system is enabled')
+message('GStreamer debug system is ', gst_debug_disabled ? 'disabled' : 'enabled')
+
+# Disable compiler warnings for unused variables and args
+# if gst debug system or glib-checks is disabled
+if gst_debug_disabled or glib_checks.disabled()
+  add_project_arguments(cc.get_supported_arguments(['-Wno-unused']), language: 'c')
+  add_project_arguments(cxx.get_supported_arguments(['-Wno-unused']), language: 'cpp')
 endif
 
 gst_plugins_bad_args = ['-DHAVE_CONFIG_H']

@@ -17,7 +17,6 @@ endif
 gst_version_is_dev = gst_version_minor % 2 == 1 and gst_version_micro < 90
 
 host_system = host_machine.system()
-
 apiversion = '1.0'
 soversion = 0
 # maintaining compatibility with the previous libtool versioning
@@ -31,6 +30,10 @@ prefix = get_option('prefix')
 datadir = join_paths(prefix, get_option('datadir'))
 libexecdir = get_option('libexecdir')
 helpers_install_dir = join_paths(libexecdir, 'gstreamer-1.0')
+
+cast_checks = get_option('gobject-cast-checks')
+glib_checks = get_option('glib-checks')
+glib_asserts = get_option('glib-asserts')
 
 cc = meson.get_compiler('c')
 
@@ -64,9 +67,16 @@ if cc.get_id() == 'msvc'
       '/we4053', # one void operand for '?:'
       '/we4062', # enumerator 'identifier' in switch of enum 'enumeration' is not handled
       '/we4098', # 'function' : void function returning a value
+    ])
+
+    # add these warnings only if checks are enabled,
+    # if the checks are not built, it will leave behind some "unused" variables
+    if glib_checks.enabled()
+      msvc_args += cc.get_supported_arguments([
       '/we4101', # 'identifier' : unreferenced local variable
       '/we4189', # 'identifier' : local variable is initialized but not referenced
-    ])
+      ])
+    endif
   endif
   add_project_arguments(msvc_args, language: 'c')
 elif cc.has_link_argument('-Wl,-Bsymbolic-functions')
@@ -100,19 +110,16 @@ if gst_version_is_dev
   add_project_arguments('-DG_DISABLE_DEPRECATED', language: 'c')
 endif
 
-cast_checks = get_option('gobject-cast-checks')
 if cast_checks.disabled() or (cast_checks.auto() and not gst_version_is_dev)
   message('Disabling GLib cast checks')
   add_project_arguments('-DG_DISABLE_CAST_CHECKS', language: 'c')
 endif
 
-glib_asserts = get_option('glib-asserts')
 if glib_asserts.disabled() or (glib_asserts.auto() and not gst_version_is_dev)
   message('Disabling GLib asserts')
   add_project_arguments('-DG_DISABLE_ASSERT', language: 'c')
 endif
 
-glib_checks = get_option('glib-checks')
 if glib_checks.disabled() or (glib_checks.auto() and not gst_version_is_dev)
   message('Disabling GLib checks')
   add_project_arguments('-DG_DISABLE_CHECKS', language: 'c')
@@ -456,8 +463,12 @@ if cc.has_header('execinfo.h')
 endif
 
 gst_debug = get_option('gst_debug')
-if not gst_debug
-  add_project_arguments(['-Wno-unused'], language: 'c')
+message('GStreamer debug system is ', gst_debug ? 'enabled' : 'disabled')
+
+# Disable compiler warnings for unused variables and args
+# if gst debug system or glib-checks is disabled
+if not gst_debug or glib_checks.disabled()
+    add_project_arguments(cc.get_supported_arguments(['-Wno-unused']), language: 'c')
 endif
 
 gst_debug_syslog = get_option('gst_debug_syslog')
