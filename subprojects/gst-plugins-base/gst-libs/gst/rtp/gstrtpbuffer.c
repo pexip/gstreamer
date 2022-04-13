@@ -1784,8 +1784,8 @@ gst_rtp_buffer_video_roi_meta_to_one_byte_ext (GstRTPBuffer * rtp,
   gpointer state = NULL;
   gboolean ret = FALSE;
 
-  g_return_val_if_fail (buffer != NULL, NULL);
-  g_return_val_if_fail (rtp != NULL, NULL);
+  g_return_val_if_fail (buffer != NULL, FALSE);
+  g_return_val_if_fail (rtp != NULL, FALSE);
   g_return_val_if_fail (id > 0, FALSE);
   g_return_val_if_fail (id <= 14, FALSE);
 
@@ -1825,10 +1825,10 @@ gst_rtp_buffer_video_roi_meta_from_one_byte_ext (GstRTPBuffer * rtp,
   gpointer data;
   guint nth = 0;
 
-  g_return_val_if_fail (buffer != NULL, NULL);
-  g_return_val_if_fail (rtp != NULL, NULL);
-  g_return_val_if_fail (id > 0, NULL);
-  g_return_val_if_fail (id <= 14, NULL);
+  g_return_val_if_fail (buffer != NULL, FALSE);
+  g_return_val_if_fail (rtp != NULL, FALSE);
+  g_return_val_if_fail (id > 0, FALSE);
+  g_return_val_if_fail (id <= 14, FALSE);
 
   while (gst_rtp_buffer_get_extension_onebyte_header (rtp, id, nth, &data,
           NULL)) {
