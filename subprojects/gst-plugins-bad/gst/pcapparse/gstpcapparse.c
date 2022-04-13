@@ -59,6 +59,7 @@
 #else
 #include <winsock2.h>
 #include <Ws2ipdef.h>
+#include <ws2tcpip.h>
 #endif
 
 
