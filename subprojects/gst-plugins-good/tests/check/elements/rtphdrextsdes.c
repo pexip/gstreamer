@@ -76,7 +76,6 @@ read_write_extension (GstRTPHeaderExtension * read_ext,
   fail_unless (gst_rtp_header_extension_read (read_ext,
           flags, data, written, buffer));
   fail_unless_equals_string (got_val, val);
-  g_clear_pointer (&got_val, g_free);
   got_val = (char *) property_name;
   fail_unless (gst_rtp_header_extension_read (read_ext,
           flags, data, written, buffer));
