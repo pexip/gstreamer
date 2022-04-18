@@ -1086,7 +1086,7 @@ struct _GstH264PicTiming
   /* if pic_struct_present_flag */
   guint8 pic_struct;
 
-  guint8 clock_timestamp_flag[3];
+  guint8 clock_timestamp_flag[4];
   GstH264ClockTimestamp clock_timestamp[3];
   guint8 time_offset_length;
 };
