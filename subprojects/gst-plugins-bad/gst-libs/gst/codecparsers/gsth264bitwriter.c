@@ -1185,7 +1185,7 @@ _h264_bit_writer_sei_pic_timing (const GstH264PicTiming * tim,
   }
 
   if (tim->pic_struct_present_flag) {
-    const guint8 num_clock_ts_table[9] = {
+    const guint8 num_clock_ts_table[] = {
       1, 1, 1, 2, 2, 3, 3, 2, 3
     };
     guint8 num_clock_num_ts;
