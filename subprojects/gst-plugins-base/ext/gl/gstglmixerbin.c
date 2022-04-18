@@ -375,7 +375,7 @@ _find_element_pad_template (GstElement * element,
 {
   GstElementClass *klass = GST_ELEMENT_GET_CLASS (element);
   GList *templ_list = gst_element_class_get_pad_template_list (klass);
-  GstPadTemplate *templ;
+  GstPadTemplate *templ = NULL;
 
   /* find suitable template */
   while (templ_list) {
