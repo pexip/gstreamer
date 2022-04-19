@@ -115,6 +115,7 @@ enum
   PROP_RTCP_REDUCED_SIZE,
   PROP_RTCP_DISABLE_SR_TIMESTAMP,
   PROP_TWCC_FEEDBACK_INTERVAL,
+  PROP_RTX_SSRC_MAP,
   PROP_LAST,
 };
 
@@ -732,6 +733,18 @@ rtp_session_class_init (RTPSessionClass * klass)
 
   g_object_class_install_properties (gobject_class, PROP_LAST, properties);
 
+  /**
+   * RTPSession:rtx-ssrc-map:
+   *
+   * Mapping from SSRC to RTX ssrcs.
+   *
+   * Since: 1.20
+   */
+  g_object_class_install_property (gobject_class, PROP_RTX_SSRC_MAP,
+      g_param_spec_boxed ("rtx-ssrc-map", "RTX SSRC Map",
+          "Map of SSRCs to their retransmission SSRCs",
+          GST_TYPE_STRUCTURE, G_PARAM_WRITABLE | G_PARAM_STATIC_STRINGS));
+
   klass->get_source_by_ssrc =
       GST_DEBUG_FUNCPTR (rtp_session_get_source_by_ssrc);
   klass->send_rtcp = GST_DEBUG_FUNCPTR (rtp_session_send_rtcp);
@@ -824,6 +837,7 @@ rtp_session_init (RTPSession * sess)
   sess->is_doing_ptp = TRUE;
 
   sess->twcc = rtp_twcc_manager_new (sess->mtu);
+  sess->rtx_ssrc_to_ssrc = g_hash_table_new (NULL, NULL);
 }
 
 static void
@@ -846,6 +860,9 @@ rtp_session_finalize (GObject * object)
     g_hash_table_destroy (sess->ssrcs[i]);
 
   g_object_unref (sess->twcc);
+  if (sess->rtx_ssrc_map)
+    gst_structure_free (sess->rtx_ssrc_map);
+  g_hash_table_destroy (sess->rtx_ssrc_to_ssrc);
 
   g_mutex_clear (&sess->lock);
 
@@ -921,6 +938,23 @@ rtp_session_create_stats (RTPSession * sess)
   gst_structure_id_take_value (s, quark_source_stats, &source_stats_v);
 
   return s;
+}
+
+static gboolean
+structure_to_hash_table_reverse (GQuark field_id, const GValue * value,
+    gpointer hash)
+{
+  const gchar *field_str;
+  guint field_uint;
+  guint value_uint;
+
+  field_str = g_quark_to_string (field_id);
+  field_uint = atoi (field_str);
+  value_uint = g_value_get_uint (value);
+  g_hash_table_insert ((GHashTable *) hash, GUINT_TO_POINTER (value_uint),
+      GUINT_TO_POINTER (field_uint));
+
+  return TRUE;
 }
 
 static void
@@ -1025,6 +1059,17 @@ rtp_session_set_property (GObject * object, guint prop_id,
       rtp_twcc_manager_set_feedback_interval (sess->twcc,
           g_value_get_uint64 (value));
       break;
+    case PROP_RTX_SSRC_MAP:
+      RTP_SESSION_LOCK (sess);
+      if (sess->rtx_ssrc_map)
+        gst_structure_free (sess->rtx_ssrc_map);
+      sess->rtx_ssrc_map = g_value_dup_boxed (value);
+      g_hash_table_remove_all (sess->rtx_ssrc_to_ssrc);
+      gst_structure_foreach (sess->rtx_ssrc_map,
+          structure_to_hash_table_reverse, sess->rtx_ssrc_to_ssrc);
+      RTP_SESSION_UNLOCK (sess);
+      break;
+
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
       break;
@@ -2233,6 +2278,14 @@ update_packet (GstBuffer ** buffer, guint idx, RTPPacketInfo * pinfo)
       /* RTP header extensions */
       pinfo->header_ext = gst_rtp_buffer_get_extension_bytes (&rtp,
           &pinfo->header_ext_bit_pattern);
+
+      /* if RTX, store the original seqnum (OSN) and SSRC */
+      if (GST_BUFFER_FLAG_IS_SET (*buffer, GST_RTP_BUFFER_FLAG_RETRANSMISSION)) {
+        guint8 *payload = gst_rtp_buffer_get_payload (&rtp);
+        if (payload) {
+          pinfo->rtx_osn = GST_READ_UINT16_BE (payload);
+        }
+      }
     }
 
     if (pinfo->ntp64_ext_id != 0 && pinfo->send && !pinfo->have_ntp64_ext) {
@@ -2303,6 +2356,8 @@ update_packet_info (RTPSession * sess, RTPPacketInfo * pinfo,
   pinfo->marker = FALSE;
   pinfo->ntp64_ext_id = send ? sess->send_ntp64_ext_id : 0;
   pinfo->have_ntp64_ext = FALSE;
+  pinfo->rtx_osn = -1;
+  pinfo->rtx_ssrc = 0;
 
   if (is_list) {
     GstBufferList *list = GST_BUFFER_LIST_CAST (data);
@@ -2315,6 +2370,11 @@ update_packet_info (RTPSession * sess, RTPPacketInfo * pinfo,
     res = update_packet (&buffer, 0, pinfo);
     pinfo->arrival_time = GST_BUFFER_DTS (buffer);
   }
+
+  if (pinfo->rtx_osn != -1)
+    pinfo->rtx_ssrc =
+        GPOINTER_TO_UINT (g_hash_table_lookup (sess->rtx_ssrc_to_ssrc,
+            GUINT_TO_POINTER (pinfo->ssrc)));
 
   return res;
 }

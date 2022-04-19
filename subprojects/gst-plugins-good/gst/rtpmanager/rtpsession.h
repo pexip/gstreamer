@@ -319,7 +319,8 @@ struct _RTPSession {
 
   /* Transport-wide cc-extension */
   RTPTWCCManager *twcc;
-  RTPTWCCStats *twcc_stats;
+  GstStructure *rtx_ssrc_map;
+  GHashTable *rtx_ssrc_to_ssrc;
 
   /* nack probe */
   guint32 nack_probe_ssrc;

@@ -114,6 +114,8 @@ typedef struct {
   guint16       header_ext_bit_pattern;
   guint8        ntp64_ext_id;
   gboolean      have_ntp64_ext;
+  gint32        rtx_osn;
+  guint32       rtx_ssrc;
 } RTPPacketInfo;
 
 /**
