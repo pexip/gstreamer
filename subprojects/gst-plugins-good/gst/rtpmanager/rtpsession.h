@@ -317,6 +317,8 @@ struct _RTPSession {
   RTPTWCCManager *twcc;
   guint8 twcc_recv_ext_id;
   guint8 twcc_send_ext_id;
+  GstStructure *rtx_ssrc_map;
+  GHashTable *rtx_ssrc_to_ssrc;
 
   /* nack probe */
   guint32 nack_probe_ssrc;
