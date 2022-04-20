@@ -1320,8 +1320,7 @@ GST_START_TEST (test_ssrc_collision_third_party_disable)
   GstStructure *stats;
 
   g_object_set (h->internal_session,
-      "ssrc-collision-detection", FALSE,
-      "favor-new", TRUE, NULL);
+      "ssrc-collision-detection", FALSE, "favor-new", TRUE, NULL);
   g_signal_connect (h->internal_session, "on-ssrc-collision",
       G_CALLBACK (on_ssrc_collision_cb), &had_collision);
 
@@ -1347,7 +1346,8 @@ GST_START_TEST (test_ssrc_collision_third_party_disable)
       &source);
   g_object_get (source, "stats", &stats, NULL);
 
-  fail_unless_equals_string (gst_structure_get_string (stats, "rtp-from"), "127.0.0.1:8080");
+  fail_unless_equals_string (gst_structure_get_string (stats, "rtp-from"),
+      "127.0.0.1:8080");
 
   gst_structure_free (stats);
   g_object_unref (source);
@@ -1370,7 +1370,8 @@ GST_START_TEST (test_ssrc_collision_third_party_disable)
       &source);
   g_object_get (source, "stats", &stats, NULL);
 
-  fail_unless_equals_string (gst_structure_get_string (stats, "rtp-from"), "127.0.0.2:8080");
+  fail_unless_equals_string (gst_structure_get_string (stats, "rtp-from"),
+      "127.0.0.2:8080");
 
   gst_structure_free (stats);
   g_object_unref (source);
@@ -1394,7 +1395,8 @@ GST_START_TEST (test_ssrc_collision_third_party_disable)
       &source);
   g_object_get (source, "stats", &stats, NULL);
 
-  fail_unless_equals_string (gst_structure_get_string (stats, "rtp-from"), "127.0.0.1:8080");
+  fail_unless_equals_string (gst_structure_get_string (stats, "rtp-from"),
+      "127.0.0.1:8080");
 
   gst_structure_free (stats);
   g_object_unref (source);
@@ -4801,6 +4803,7 @@ GST_START_TEST (test_twcc_feedback_interval_new_internal_source)
 
   session_harness_free (h);
 }
+
 GST_END_TEST;
 
 static void
