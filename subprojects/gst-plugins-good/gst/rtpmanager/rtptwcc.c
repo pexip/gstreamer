@@ -311,7 +311,8 @@ _set_twcc_seqnum_data (RTPTWCCManager * twcc, RTPPacketInfo * pinfo,
       sent_packet_init (&packet, seqnum, pinfo, buf);
       g_array_append_val (twcc->sent_packets, packet);
 
-      gst_buffer_add_tx_feedback_meta (pinfo->data, seqnum, GST_TX_FEEDBACK (twcc));
+      gst_buffer_add_tx_feedback_meta (pinfo->data, seqnum,
+          GST_TX_FEEDBACK (twcc));
 
       GST_LOG ("Send: twcc-seqnum: %u, pt: %u, marker: %d, len: %u, ts: %"
           GST_TIME_FORMAT, seqnum, pinfo->pt, pinfo->marker, packet.size,
@@ -960,7 +961,7 @@ rtp_twcc_manager_tx_feedback (GstTxFeedback * parent, guint64 buffer_id,
     pkt = &g_array_index (twcc->sent_packets, SentPacket, idx);
     if (pkt && pkt->seqnum == seqnum) {
       pkt->socket_ts = ts;
-      GST_LOG ("packet #%u, setting socket-ts %"GST_TIME_FORMAT,
+      GST_LOG ("packet #%u, setting socket-ts %" GST_TIME_FORMAT,
           seqnum, GST_TIME_ARGS (ts));
     }
   }
