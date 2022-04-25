@@ -35,6 +35,8 @@
 #include "gstjniutils.h"
 #endif
 
+#include "gstahc2src.h"
+
 #include "gstamc.h"
 #include "gstamc-constants.h"
 
@@ -1929,6 +1931,13 @@ plugin_init (GstPlugin * plugin)
   if (ahs_init (plugin))
     init_ok = TRUE;
 #endif
+
+  if (gst_element_register (plugin, "ahc2src", GST_RANK_NONE,
+          GST_TYPE_AHC2_SRC)) {
+    init_ok = TRUE;
+  } else {
+    GST_ERROR ("Failed to register android camera2 source");
+  }
 
   return init_ok;
 }
