@@ -74,7 +74,16 @@ else
   plugin_name = 'gstandroidmedia'
 endif
 
-if have_jni_h or have_mlsdk
+have_ndkcamera = cc.has_header('camera/NdkCameraError.h', required : false)
+if have_ndkcamera
+  androidmedia_sources += ['gstahc2src.c']
+  foreach lib : ['camera2ndk', 'mediandk']
+    dep = cc.find_library(lib, required : true)
+    extra_deps += dep
+  endforeach
+endif
+
+if have_jni_h or have_mlsdk or have_ndkcamera
   gstandroidmedia = library(plugin_name,
     androidmedia_sources,
     c_args : [gst_plugins_bad_args, extra_cargs],
