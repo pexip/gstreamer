@@ -89,6 +89,15 @@ if cc.check_header('media/NdkMediaCodec.h')
   extra_deps += [ cc.find_library('android', required : true) ]
 endif
 
+have_ndkcamera = cc.has_header('camera/NdkCameraError.h', required : false)
+if have_ndkcamera
+  androidmedia_sources += ['gstahc2src.c']
+  foreach lib : ['camera2ndk', 'mediandk']
+    dep = cc.find_library(lib, required : true)
+    extra_deps += dep
+  endforeach
+endif
+
 gstandroidmedia = library('gstandroidmedia',
   androidmedia_sources,
   c_args : [gst_plugins_bad_args, extra_cargs],
