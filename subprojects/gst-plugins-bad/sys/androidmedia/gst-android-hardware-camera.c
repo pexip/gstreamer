@@ -960,68 +960,68 @@ _init_classes (void)
         gst_amc_jni_object_make_global (env, local);
   }
 
-  fieldID =
-      gst_amc_jni_get_static_field_id (env, &err, klass, "EFFECT_EMBOSS",
-      "Ljava/lang/String;");
-  if (fieldID) {
-    if (!gst_amc_jni_get_static_object_field (env, &err, klass, fieldID,
-            &android_hardware_camera_parameters.EFFECT_EMBOSS))
-      goto failed;
+  // fieldID =
+  //     gst_amc_jni_get_static_field_id (env, &err, klass, "EFFECT_EMBOSS",
+  //     "Ljava/lang/String;");
+  // if (fieldID) {
+  //   if (!gst_amc_jni_get_static_object_field (env, &err, klass, fieldID,
+  //           &android_hardware_camera_parameters.EFFECT_EMBOSS))
+  //     goto failed;
 
-    Parameters_EFFECT_EMBOSS =
-        (*env)->GetStringUTFChars (env,
-        android_hardware_camera_parameters.EFFECT_EMBOSS, NULL);
-    {
-      jobject local = android_hardware_camera_parameters.EFFECT_EMBOSS;
+  //   Parameters_EFFECT_EMBOSS =
+  //       (*env)->GetStringUTFChars (env,
+  //       android_hardware_camera_parameters.EFFECT_EMBOSS, NULL);
+  //   {
+  //     jobject local = android_hardware_camera_parameters.EFFECT_EMBOSS;
 
-      android_hardware_camera_parameters.EFFECT_EMBOSS =
-          gst_amc_jni_object_make_global (env, local);
-    }
-  } else {
+  //     android_hardware_camera_parameters.EFFECT_EMBOSS =
+  //         gst_amc_jni_object_make_global (env, local);
+  //   }
+  // } else {
     android_hardware_camera_parameters.EFFECT_EMBOSS = NULL;
-  }
+  // }
 
-  fieldID =
-      gst_amc_jni_get_static_field_id (env, &err, klass, "EFFECT_SKETCH",
-      "Ljava/lang/String;");
-  if (fieldID) {
-    if (!gst_amc_jni_get_static_object_field (env, &err, klass, fieldID,
-            &android_hardware_camera_parameters.EFFECT_SKETCH))
-      goto failed;
+  // fieldID =
+  //     gst_amc_jni_get_static_field_id (env, &err, klass, "EFFECT_SKETCH",
+  //     "Ljava/lang/String;");
+  // if (fieldID) {
+  //   if (!gst_amc_jni_get_static_object_field (env, &err, klass, fieldID,
+  //           &android_hardware_camera_parameters.EFFECT_SKETCH))
+  //     goto failed;
 
-    Parameters_EFFECT_SKETCH =
-        (*env)->GetStringUTFChars (env,
-        android_hardware_camera_parameters.EFFECT_SKETCH, NULL);
-    {
-      jobject local = android_hardware_camera_parameters.EFFECT_SKETCH;
+  //   Parameters_EFFECT_SKETCH =
+  //       (*env)->GetStringUTFChars (env,
+  //       android_hardware_camera_parameters.EFFECT_SKETCH, NULL);
+  //   {
+  //     jobject local = android_hardware_camera_parameters.EFFECT_SKETCH;
 
-      android_hardware_camera_parameters.EFFECT_SKETCH =
-          gst_amc_jni_object_make_global (env, local);
-    }
-  } else {
+  //     android_hardware_camera_parameters.EFFECT_SKETCH =
+  //         gst_amc_jni_object_make_global (env, local);
+  //   }
+  // } else {
     android_hardware_camera_parameters.EFFECT_SKETCH = NULL;
-  }
+  // }
 
-  fieldID =
-      gst_amc_jni_get_static_field_id (env, &err, klass, "EFFECT_NEON",
-      "Ljava/lang/String;");
-  if (fieldID) {
-    if (!gst_amc_jni_get_static_object_field (env, &err, klass, fieldID,
-            &android_hardware_camera_parameters.EFFECT_NEON))
-      goto failed;
+  // fieldID =
+  //     gst_amc_jni_get_static_field_id (env, &err, klass, "EFFECT_NEON",
+  //     "Ljava/lang/String;");
+  // if (fieldID) {
+  //   if (!gst_amc_jni_get_static_object_field (env, &err, klass, fieldID,
+  //           &android_hardware_camera_parameters.EFFECT_NEON))
+  //     goto failed;
 
-    Parameters_EFFECT_NEON =
-        (*env)->GetStringUTFChars (env,
-        android_hardware_camera_parameters.EFFECT_NEON, NULL);
-    {
-      jobject local = android_hardware_camera_parameters.EFFECT_NEON;
+  //   Parameters_EFFECT_NEON =
+  //       (*env)->GetStringUTFChars (env,
+  //       android_hardware_camera_parameters.EFFECT_NEON, NULL);
+  //   {
+  //     jobject local = android_hardware_camera_parameters.EFFECT_NEON;
 
-      android_hardware_camera_parameters.EFFECT_NEON =
-          gst_amc_jni_object_make_global (env, local);
-    }
-  } else {
+  //     android_hardware_camera_parameters.EFFECT_NEON =
+  //         gst_amc_jni_object_make_global (env, local);
+  //   }
+  // } else {
     android_hardware_camera_parameters.EFFECT_NEON = NULL;
-  }
+  // }
 
   fieldID =
       gst_amc_jni_get_static_field_id (env, &err, klass, "ANTIBANDING_AUTO",
@@ -1500,89 +1500,89 @@ _init_classes (void)
         gst_amc_jni_object_make_global (env, local);
   }
 
-  fieldID =
-      gst_amc_jni_get_static_field_id (env, &err, klass, "SCENE_MODE_BACKLIGHT",
-      "Ljava/lang/String;");
-  if (fieldID) {
-    if (!gst_amc_jni_get_static_object_field (env, &err, klass, fieldID,
-            &android_hardware_camera_parameters.SCENE_MODE_BACKLIGHT))
-      goto failed;
+  // fieldID =
+  //     gst_amc_jni_get_static_field_id (env, &err, klass, "SCENE_MODE_BACKLIGHT",
+  //     "Ljava/lang/String;");
+  // if (fieldID) {
+  //   if (!gst_amc_jni_get_static_object_field (env, &err, klass, fieldID,
+  //           &android_hardware_camera_parameters.SCENE_MODE_BACKLIGHT))
+  //     goto failed;
 
-    Parameters_SCENE_MODE_BACKLIGHT =
-        (*env)->GetStringUTFChars (env,
-        android_hardware_camera_parameters.SCENE_MODE_BACKLIGHT, NULL);
-    {
-      jobject local = android_hardware_camera_parameters.SCENE_MODE_BACKLIGHT;
+  //   Parameters_SCENE_MODE_BACKLIGHT =
+  //       (*env)->GetStringUTFChars (env,
+  //       android_hardware_camera_parameters.SCENE_MODE_BACKLIGHT, NULL);
+  //   {
+  //     jobject local = android_hardware_camera_parameters.SCENE_MODE_BACKLIGHT;
 
-      android_hardware_camera_parameters.SCENE_MODE_BACKLIGHT =
-          gst_amc_jni_object_make_global (env, local);
-    }
-  } else {
+  //     android_hardware_camera_parameters.SCENE_MODE_BACKLIGHT =
+  //         gst_amc_jni_object_make_global (env, local);
+  //   }
+  // } else {
     android_hardware_camera_parameters.SCENE_MODE_BACKLIGHT = NULL;
-  }
+  // }
 
-  fieldID =
-      gst_amc_jni_get_static_field_id (env, &err, klass, "SCENE_MODE_FLOWERS",
-      "Ljava/lang/String;");
-  if (fieldID) {
-    if (!gst_amc_jni_get_static_object_field (env, &err, klass, fieldID,
-            &android_hardware_camera_parameters.SCENE_MODE_FLOWERS))
-      goto failed;
+  // fieldID =
+  //     gst_amc_jni_get_static_field_id (env, &err, klass, "SCENE_MODE_FLOWERS",
+  //     "Ljava/lang/String;");
+  // if (fieldID) {
+  //   if (!gst_amc_jni_get_static_object_field (env, &err, klass, fieldID,
+  //           &android_hardware_camera_parameters.SCENE_MODE_FLOWERS))
+  //     goto failed;
 
-    Parameters_SCENE_MODE_FLOWERS =
-        (*env)->GetStringUTFChars (env,
-        android_hardware_camera_parameters.SCENE_MODE_FLOWERS, NULL);
-    {
-      jobject local = android_hardware_camera_parameters.SCENE_MODE_FLOWERS;
+  //   Parameters_SCENE_MODE_FLOWERS =
+  //       (*env)->GetStringUTFChars (env,
+  //       android_hardware_camera_parameters.SCENE_MODE_FLOWERS, NULL);
+  //   {
+  //     jobject local = android_hardware_camera_parameters.SCENE_MODE_FLOWERS;
 
-      android_hardware_camera_parameters.SCENE_MODE_FLOWERS =
-          gst_amc_jni_object_make_global (env, local);
-    }
-  } else {
+  //     android_hardware_camera_parameters.SCENE_MODE_FLOWERS =
+  //         gst_amc_jni_object_make_global (env, local);
+  //   }
+  // } else {
     android_hardware_camera_parameters.SCENE_MODE_FLOWERS = NULL;
-  }
+  // }
 
-  fieldID =
-      gst_amc_jni_get_static_field_id (env, &err, klass, "SCENE_MODE_AR",
-      "Ljava/lang/String;");
-  if (fieldID) {
-    if (!gst_amc_jni_get_static_object_field (env, &err, klass, fieldID,
-            &android_hardware_camera_parameters.SCENE_MODE_AR))
-      goto failed;
+  // fieldID =
+  //     gst_amc_jni_get_static_field_id (env, &err, klass, "SCENE_MODE_AR",
+  //     "Ljava/lang/String;");
+  // if (fieldID) {
+  //   if (!gst_amc_jni_get_static_object_field (env, &err, klass, fieldID,
+  //           &android_hardware_camera_parameters.SCENE_MODE_AR))
+  //     goto failed;
 
-    Parameters_SCENE_MODE_AR =
-        (*env)->GetStringUTFChars (env,
-        android_hardware_camera_parameters.SCENE_MODE_AR, NULL);
-    {
-      jobject local = android_hardware_camera_parameters.SCENE_MODE_AR;
+  //   Parameters_SCENE_MODE_AR =
+  //       (*env)->GetStringUTFChars (env,
+  //       android_hardware_camera_parameters.SCENE_MODE_AR, NULL);
+  //   {
+  //     jobject local = android_hardware_camera_parameters.SCENE_MODE_AR;
 
-      android_hardware_camera_parameters.SCENE_MODE_AR =
-          gst_amc_jni_object_make_global (env, local);
-    }
-  } else {
+  //     android_hardware_camera_parameters.SCENE_MODE_AR =
+  //         gst_amc_jni_object_make_global (env, local);
+  //   }
+  // } else {
     android_hardware_camera_parameters.SCENE_MODE_AR = NULL;
-  }
+  // }
 
-  fieldID =
-      gst_amc_jni_get_static_field_id (env, &err, klass, "SCENE_MODE_HDR",
-      "Ljava/lang/String;");
-  if (fieldID) {
-    if (!gst_amc_jni_get_static_object_field (env, &err, klass, fieldID,
-            &android_hardware_camera_parameters.SCENE_MODE_HDR))
-      goto failed;
+  // fieldID =
+  //     gst_amc_jni_get_static_field_id (env, &err, klass, "SCENE_MODE_HDR",
+  //     "Ljava/lang/String;");
+  // if (fieldID) {
+  //   if (!gst_amc_jni_get_static_object_field (env, &err, klass, fieldID,
+  //           &android_hardware_camera_parameters.SCENE_MODE_HDR))
+  //     goto failed;
 
-    Parameters_SCENE_MODE_HDR =
-        (*env)->GetStringUTFChars (env,
-        android_hardware_camera_parameters.SCENE_MODE_HDR, NULL);
-    {
-      jobject local = android_hardware_camera_parameters.SCENE_MODE_HDR;
+  //   Parameters_SCENE_MODE_HDR =
+  //       (*env)->GetStringUTFChars (env,
+  //       android_hardware_camera_parameters.SCENE_MODE_HDR, NULL);
+  //   {
+  //     jobject local = android_hardware_camera_parameters.SCENE_MODE_HDR;
 
-      android_hardware_camera_parameters.SCENE_MODE_HDR =
-          gst_amc_jni_object_make_global (env, local);
-    }
-  } else {
+  //     android_hardware_camera_parameters.SCENE_MODE_HDR =
+  //         gst_amc_jni_object_make_global (env, local);
+  //   }
+  // } else {
     android_hardware_camera_parameters.SCENE_MODE_HDR = NULL;
-  }
+  // }
 
   fieldID =
       gst_amc_jni_get_static_field_id (env, &err, klass, "FOCUS_MODE_AUTO",
