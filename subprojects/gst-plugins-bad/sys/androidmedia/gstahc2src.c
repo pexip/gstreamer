@@ -1838,7 +1838,7 @@ gst_ahc2_src_class_init (GstAHC2SrcClass * klass)
    *
    * The number of connected camera devices.
    */
-  properties[PROP_CAMERA_INDEX] =
+  properties[PROP_N_CAMERAS] =
       g_param_spec_int ("n-cameras", "Number of Cameras",
       "The number of connected camera devices", 0, G_MAXINT, 0,
       G_PARAM_READABLE | G_PARAM_STATIC_STRINGS);
