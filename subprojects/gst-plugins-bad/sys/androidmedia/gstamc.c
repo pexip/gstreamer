@@ -36,6 +36,7 @@
 #endif
 
 #include "gstahc2src.h"
+#include "gstacamdeviceprovider.h"
 
 #include "gstamc.h"
 #include "gstamc-constants.h"
@@ -1922,6 +1923,12 @@ plugin_init (GstPlugin * plugin)
     init_ok = TRUE;
   } else {
     GST_ERROR ("Failed to register android camera2 source");
+  }
+
+  if (GST_DEVICE_PROVIDER_REGISTER (acamdeviceprovider, plugin)) {
+    init_ok = TRUE;
+  } else {
+    GST_ERROR ("Failed to register android camera device provider");
   }
 
   return init_ok;

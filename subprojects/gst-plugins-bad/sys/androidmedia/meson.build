@@ -76,7 +76,11 @@ endif
 
 have_ndkcamera = cc.has_header('camera/NdkCameraError.h', required : false)
 if have_ndkcamera
-  androidmedia_sources += ['gstahc2src.c']
+  androidmedia_sources += [
+    'gstacamdeviceprovider.c',
+    'gstahc2src.c'
+  ]
+  
   foreach lib : ['camera2ndk', 'mediandk']
     dep = cc.find_library(lib, required : true)
     extra_deps += dep
