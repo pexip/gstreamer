@@ -991,38 +991,64 @@ GST_START_TEST (test_rtxsender_copy_twcc_exthdr)
   guint rtx_ssrc = 7777777;
   guint rtx_pt = 99;
   GstStructure *pt_map, *ssrc_map;
-  GstBuffer *rtx_buf;
+  GstBuffer *inbuf, *outbuf, *rtxbuf;
   guint8 twcc_ext_id = 5;
-  GstHarness *h = gst_harness_new ("rtprtxsend");
+  gint16 twcc_seqnum = 33;
+  GstHarness *hsend = gst_harness_new ("rtprtxsend");
+  GstHarness *hrecv = gst_harness_new ("rtprtxreceive");
 
   pt_map = gst_structure_new ("application/x-rtp-pt-map",
       "96", G_TYPE_UINT, rtx_pt, NULL);
   ssrc_map = gst_structure_new ("application/x-rtp-ssrc-map",
       "1234567", G_TYPE_UINT, rtx_ssrc, NULL);
-  g_object_set (h->element,
+  g_object_set (hsend->element,
       "payload-type-map", pt_map,
       "ssrc-map", ssrc_map, "stuffing-kbps", 800, NULL);
+  g_object_set (hrecv->element,
+      "payload-type-map", pt_map, "ssrc-map", ssrc_map, NULL);
 
-  gst_harness_set_src_caps_str (h, "application/x-rtp, "
+  gst_harness_set_src_caps_str (hsend, "application/x-rtp, "
+      "payload = (int)96, " "ssrc = (uint)1234567, " "clock-rate = (int)90000");
+  gst_harness_set_src_caps_str (hrecv, "application/x-rtp, "
       "payload = (int)96, " "ssrc = (uint)1234567, " "clock-rate = (int)90000");
 
-  gst_harness_set_time (h, 0 * GST_MSECOND);
-  gst_harness_push (h,
-      create_rtp_buffer_with_twcc_ext (master_ssrc, master_pt, 0, 20,
-          twcc_ext_id, 33));
-  pull_and_verify (h, FALSE, master_ssrc, master_pt, 0);
+  gst_harness_set_time (hsend, 0 * GST_MSECOND);
+  gst_harness_set_time (hrecv, 0 * GST_MSECOND);
 
-  gst_harness_push_upstream_event (h, create_rtx_event (master_ssrc,
-          master_pt, 0));
+  /* create buffer with TWCC extension on it */
+  inbuf = create_rtp_buffer_with_twcc_ext (master_ssrc, master_pt,
+      0, 20, twcc_ext_id, twcc_seqnum);
 
-  rtx_buf = gst_harness_pull (h);
-  verify_buf (rtx_buf, TRUE, rtx_ssrc, rtx_pt, 0);
-  fail_unless (read_twcc_seqnum (rtx_buf, twcc_ext_id) == 33);
-  gst_buffer_unref (rtx_buf);
+  /* push packets through rtxsend to rtxreceive */
+  gst_harness_push (hsend, gst_buffer_ref (inbuf));
+  gst_harness_push (hrecv, gst_harness_pull (hsend));
+  pull_and_verify (hrecv, FALSE, master_ssrc, master_pt, 0);
+
+  /* get rid of reconfigure event in preparation for next step */
+  gst_event_unref (gst_harness_pull_upstream_event (hrecv));
+  fail_unless_equals_int (gst_harness_upstream_events_in_queue (hrecv), 0);
+
+  /* push RTX events through rtxsend to rtxreceive */
+  gst_harness_push_upstream_event (hrecv,
+      create_rtx_event (master_ssrc, master_pt, 0));
+  gst_harness_push_upstream_event (hsend,
+      gst_harness_pull_upstream_event (hrecv));
+
+  /* pull RTX event and make sure it is as we expect and push it through */
+  rtxbuf = gst_harness_pull (hsend);
+  verify_buf (rtxbuf, TRUE, rtx_ssrc, rtx_pt, 0);
+  fail_unless (read_twcc_seqnum (rtxbuf, twcc_ext_id) == twcc_seqnum);
+  gst_harness_push (hrecv, rtxbuf);
+
+  outbuf = gst_harness_pull (hrecv);
+  compare_rtp_packets (inbuf, outbuf);
+  gst_buffer_unref (inbuf);
+  gst_buffer_unref (outbuf);
 
   gst_structure_free (pt_map);
   gst_structure_free (ssrc_map);
-  gst_harness_teardown (h);
+  gst_harness_teardown (hsend);
+  gst_harness_teardown (hrecv);
 }
 
 GST_END_TEST;
