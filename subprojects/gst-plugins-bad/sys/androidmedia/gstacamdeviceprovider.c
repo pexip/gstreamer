@@ -50,20 +50,72 @@ GST_DEBUG_CATEGORY_STATIC (gst_acam_device_provider_debug);
 #define GST_CAT_DEFAULT (gst_acam_device_provider_debug)
 #define device_provider_parent_class gst_acam_device_provider_parent_class
 
+#define CAM_FRONT "Front Camera"
+#define CAM_BACK "Back Camera"
+#define CAM_EXT "External Camera"
+#define CAM_UNKNOWN "Unknown Camera"
+
+
+static gchar *
+_build_camera_display_name (gint camera_index, uint8_t lens_facing)
+{
+  if (camera_index == -1)
+    return g_strdup (CAM_UNKNOWN);
+
+  if (lens_facing == ACAMERA_LENS_FACING_FRONT)
+    return g_strdup (CAM_FRONT);
+  if (lens_facing == ACAMERA_LENS_FACING_BACK)
+    return g_strdup (CAM_BACK);
+  if (lens_facing == ACAMERA_LENS_FACING_EXTERNAL)
+    return g_strdup_printf ("%s (%d)", CAM_EXT, camera_index + 1);
+
+  return g_strdup (CAM_UNKNOWN);
+}
+
+static gchar *
+gst_acam_device_provider_get_device_display_name (GstAcamDeviceProvider *
+    provider, const char *camera_id, gint camera_index)
+{
+  ACameraMetadata *metadata = NULL;
+  ACameraMetadata_const_entry lens_facing;
+  uint8_t lens_facing_value;
+
+  if (ACameraManager_getCameraCharacteristics (provider->manager,
+          camera_id, &metadata) != ACAMERA_OK) {
+
+    GST_ERROR ("Failed to retrieve camera (%s) metadata", camera_id);
+    return _build_camera_display_name (-1, 0);
+  }
+
+  if (ACameraMetadata_getConstEntry (metadata,
+          ACAMERA_LENS_FACING, &lens_facing) != ACAMERA_OK) {
+    GST_ERROR ("Failed to retrieve camera (%s) LENS_FACING", camera_id);
+    camera_index = -1;
+  } else {
+    lens_facing_value = lens_facing.data.u8[0];
+  }
+
+  ACameraMetadata_free (metadata);
+
+  return _build_camera_display_name (camera_index, lens_facing_value);
+}
 
 static GstAcamDevice *
 gst_acam_device_provider_create_device (GstAcamDeviceProvider *
     provider, const char *camera_id, gint camera_index)
 {
   GstAcamDevice *device;
-
-  // FIXME: add a descriptive display name
-  gchar *display_name = g_strdup_printf ("Camera (%s)", camera_id);
-  GstCaps *caps = gst_caps_new_empty_simple ("video/x-raw");
+  gchar *display_name;
+  GstCaps *caps;
 
   GST_TRACE_OBJECT (provider,
       "Creating device with camera_id: %s, camera_index: %d", camera_id,
       camera_index);
+
+  display_name =
+      gst_acam_device_provider_get_device_display_name (provider, camera_id,
+      camera_index);
+  caps = gst_caps_new_empty_simple ("video/x-raw");
 
   device = g_object_new (GST_TYPE_ACAM_DEVICE,  //
       "device-class", "Video/Source",   //
@@ -147,8 +199,8 @@ gst_acam_device_provider_stop (GstDeviceProvider * object)
 }
 
 static gint
-gst_acam_device_provider_find_camera_index (GstAcamDeviceProvider * provider,
-    const char *camera_id)
+gst_acam_device_provider_find_camera_index (GstAcamDeviceProvider *
+    provider, const char *camera_id)
 {
   gint i, idx = -1;
   ACameraIdList *id_list;
