@@ -53,6 +53,30 @@ cast_checks = get_option('gobject-cast-checks')
 glib_checks = get_option('glib-checks')
 glib_asserts = get_option('glib-asserts')
 
+# To use the subproject make subprojects directory
+# and put gstreamer meson git there (symlinking is fine)
+gst_dep = dependency('gstreamer-1.0', version : gst_req,
+  fallback : ['gstreamer', 'gst_dep'])
+gst_base_dep = dependency('gstreamer-base-1.0', version : gst_req,
+  fallback : ['gstreamer', 'gst_base_dep'])
+gst_net_dep = dependency('gstreamer-net-1.0', version : gst_req,
+  fallback : ['gstreamer', 'gst_net_dep'])
+gst_check_dep = dependency('gstreamer-check-1.0', version : gst_req,
+  required : get_option('tests'),
+  fallback : ['gstreamer', 'gst_check_dep'])
+gst_controller_dep = dependency('gstreamer-controller-1.0', version : gst_req,
+  fallback : ['gstreamer', 'gst_controller_dep'])
+
+if gst_dep.type_name() == 'internal'
+  gst_proj = subproject('gstreamer')
+  gst_debug_disabled = not subproject('gstreamer').get_variable('gst_debug')
+else
+  # We can't check that in the case of subprojects as we won't
+  # be able to build against an internal dependency (which is not built yet)
+  gst_debug_disabled = cc.has_header_symbol('gst/gstconfig.h', 'GST_DISABLE_GST_DEBUG', dependencies: gst_dep)
+endif
+message('GStreamer debug system is ', gst_debug_disabled ? 'disabled' : 'enabled')
+
 cc = meson.get_compiler('c')
 
 if cc.get_id() == 'msvc'
@@ -87,7 +111,7 @@ if cc.get_id() == 'msvc'
 
     # add these warnings only if checks are enabled,
     # if the checks are not built, it will leave behind some "unused" variables
-    if glib_checks.enabled()
+    if not gst_debug_disabled and glib_checks.enabled()
       msvc_args += cc.get_supported_arguments([
       '/we4101', # 'identifier' : unreferenced local variable
       '/we4189', # 'identifier' : local variable is initialized but not referenced
@@ -368,20 +392,6 @@ endif
 configinc = include_directories('.')
 libsinc = include_directories('gst-libs')
 
-# To use the subproject make subprojects directory
-# and put gstreamer meson git there (symlinking is fine)
-gst_dep = dependency('gstreamer-1.0', version : gst_req,
-  fallback : ['gstreamer', 'gst_dep'])
-gst_base_dep = dependency('gstreamer-base-1.0', version : gst_req,
-  fallback : ['gstreamer', 'gst_base_dep'])
-gst_net_dep = dependency('gstreamer-net-1.0', version : gst_req,
-  fallback : ['gstreamer', 'gst_net_dep'])
-gst_check_dep = dependency('gstreamer-check-1.0', version : gst_req,
-  required : get_option('tests'),
-  fallback : ['gstreamer', 'gst_check_dep'])
-gst_controller_dep = dependency('gstreamer-controller-1.0', version : gst_req,
-  fallback : ['gstreamer', 'gst_controller_dep'])
-
 have_orcc = false
 orcc_args = []
 orc_targets = []
@@ -418,17 +428,6 @@ int32x4_t testfunc(int16_t *a, int16_t *b) {
     core_conf.set('HAVE_ARM_NEON', true)
   endif
 endif
-
-if gst_dep.type_name() == 'internal'
-  gst_proj = subproject('gstreamer')
-  gst_debug_disabled = not subproject('gstreamer').get_variable('gst_debug')
-else
-  # We can't check that in the case of subprojects as we won't
-  # be able to build against an internal dependency (which is not built yet)
-  gst_debug_disabled = cc.has_header_symbol('gst/gstconfig.h', 'GST_DISABLE_GST_DEBUG', dependencies: gst_dep)
-endif
-
-message('GStreamer debug system is ', gst_debug_disabled ? 'disabled' : 'enabled')
 
 # Disable compiler warnings for unused variables and args
 # if gst debug system or glib-checks is disabled

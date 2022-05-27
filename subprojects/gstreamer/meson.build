@@ -35,6 +35,9 @@ cast_checks = get_option('gobject-cast-checks')
 glib_checks = get_option('glib-checks')
 glib_asserts = get_option('glib-asserts')
 
+gst_debug = get_option('gst_debug')
+message('GStreamer debug system is ', gst_debug ? 'enabled' : 'disabled')
+
 cc = meson.get_compiler('c')
 
 cdata = configuration_data()
@@ -71,7 +74,7 @@ if cc.get_id() == 'msvc'
 
     # add these warnings only if checks are enabled,
     # if the checks are not built, it will leave behind some "unused" variables
-    if glib_checks.enabled()
+    if gst_debug and glib_checks.enabled()
       msvc_args += cc.get_supported_arguments([
       '/we4101', # 'identifier' : unreferenced local variable
       '/we4189', # 'identifier' : local variable is initialized but not referenced
@@ -461,9 +464,6 @@ if cc.has_header('execinfo.h')
     endif
   endif
 endif
-
-gst_debug = get_option('gst_debug')
-message('GStreamer debug system is ', gst_debug ? 'enabled' : 'disabled')
 
 # Disable compiler warnings for unused variables and args
 # if gst debug system or glib-checks is disabled

@@ -53,9 +53,63 @@ endif
 
 cdata = configuration_data()
 
+# Mandatory GST deps
+gst_dep = dependency('gstreamer-1.0', version : gst_req,
+  fallback : ['gstreamer', 'gst_dep'])
+gstbase_dep = dependency('gstreamer-base-1.0', version : gst_req,
+  fallback : ['gstreamer', 'gst_base_dep'])
+gstnet_dep = dependency('gstreamer-net-1.0', version : gst_req,
+  fallback : ['gstreamer', 'gst_net_dep'])
+gstcontroller_dep = dependency('gstreamer-controller-1.0', version : gst_req,
+  fallback : ['gstreamer', 'gst_controller_dep'])
+
+gstpbutils_dep = dependency('gstreamer-pbutils-1.0', version : gst_req,
+    fallback : ['gst-plugins-base', 'pbutils_dep'])
+gstallocators_dep = dependency('gstreamer-allocators-1.0', version : gst_req,
+    fallback : ['gst-plugins-base', 'allocators_dep'])
+gstapp_dep = dependency('gstreamer-app-1.0', version : gst_req,
+    fallback : ['gst-plugins-base', 'app_dep'])
+gstaudio_dep = dependency('gstreamer-audio-1.0', version : gst_req,
+    fallback : ['gst-plugins-base', 'audio_dep'])
+gstfft_dep = dependency('gstreamer-fft-1.0', version : gst_req,
+    fallback : ['gst-plugins-base', 'fft_dep'])
+gstriff_dep = dependency('gstreamer-riff-1.0', version : gst_req,
+    fallback : ['gst-plugins-base', 'riff_dep'])
+gstrtp_dep = dependency('gstreamer-rtp-1.0', version : gst_req,
+    fallback : ['gst-plugins-base', 'rtp_dep'])
+gstrtsp_dep = dependency('gstreamer-rtsp-1.0', version : gst_req,
+    fallback : ['gst-plugins-base', 'rtsp_dep'])
+gstsdp_dep = dependency('gstreamer-sdp-1.0', version : gst_req,
+    fallback : ['gst-plugins-base', 'sdp_dep'])
+gsttag_dep = dependency('gstreamer-tag-1.0', version : gst_req,
+    fallback : ['gst-plugins-base', 'tag_dep'])
+gstvideo_dep = dependency('gstreamer-video-1.0', version : gst_req,
+    fallback : ['gst-plugins-base', 'video_dep'])
+gstcheck_dep = dependency('gstreamer-check-1.0', version : gst_req,
+    required : get_option('tests'),
+    fallback : ['gstreamer', 'gst_check_dep'])
+
+# GStreamer OpenGL
+gstgl_dep = dependency('gstreamer-gl-1.0', version : gst_req,
+    fallback : ['gst-plugins-base', 'gstgl_dep'], required: get_option('gl'))
+gstglproto_dep = dependency('gstreamer-gl-prototypes-1.0', version : gst_req,
+    fallback : ['gst-plugins-base', 'gstglproto_dep'], required: get_option('gl'))
+gstglx11_dep = dependency('', required : false)
+gstglwayland_dep = dependency('', required : false)
+gstglegl_dep = dependency('', required : false)
+
 cast_checks = get_option('gobject-cast-checks')
 glib_checks = get_option('glib-checks')
 glib_asserts = get_option('glib-asserts')
+
+if gst_dep.type_name() == 'internal'
+  gst_debug_disabled = not subproject('gstreamer').get_variable('gst_debug')
+else
+  # We can't check that in the case of subprojects as we won't
+  # be able to build against an internal dependency (which is not built yet)
+  gst_debug_disabled = cc.has_header_symbol('gst/gstconfig.h', 'GST_DISABLE_GST_DEBUG', dependencies: gst_dep)
+endif
+message('GStreamer debug system is ', gst_debug_disabled ? 'disabled' : 'enabled')
 
 if cc.get_id() == 'msvc'
   msvc_args = [
@@ -88,7 +142,7 @@ if cc.get_id() == 'msvc'
 
     # add these warnings only if checks are enabled,
     # if the checks are not built, it will leave behind some "unused" variables
-    if glib_checks.enabled()
+    if not gst_debug_disabled and glib_checks.enabled()
       msvc_args += cc.get_supported_arguments([
       '/we4013', # 'function' undefined; assuming extern returning int
       '/we4101', # 'identifier' : unreferenced local variable
@@ -297,51 +351,6 @@ else
   cdata.set_quoted('DEFAULT_VIDEOSRC', 'videotestsrc')
 endif
 
-# Mandatory GST deps
-gst_dep = dependency('gstreamer-1.0', version : gst_req,
-  fallback : ['gstreamer', 'gst_dep'])
-gstbase_dep = dependency('gstreamer-base-1.0', version : gst_req,
-  fallback : ['gstreamer', 'gst_base_dep'])
-gstnet_dep = dependency('gstreamer-net-1.0', version : gst_req,
-  fallback : ['gstreamer', 'gst_net_dep'])
-gstcontroller_dep = dependency('gstreamer-controller-1.0', version : gst_req,
-  fallback : ['gstreamer', 'gst_controller_dep'])
-
-gstpbutils_dep = dependency('gstreamer-pbutils-1.0', version : gst_req,
-    fallback : ['gst-plugins-base', 'pbutils_dep'])
-gstallocators_dep = dependency('gstreamer-allocators-1.0', version : gst_req,
-    fallback : ['gst-plugins-base', 'allocators_dep'])
-gstapp_dep = dependency('gstreamer-app-1.0', version : gst_req,
-    fallback : ['gst-plugins-base', 'app_dep'])
-gstaudio_dep = dependency('gstreamer-audio-1.0', version : gst_req,
-    fallback : ['gst-plugins-base', 'audio_dep'])
-gstfft_dep = dependency('gstreamer-fft-1.0', version : gst_req,
-    fallback : ['gst-plugins-base', 'fft_dep'])
-gstriff_dep = dependency('gstreamer-riff-1.0', version : gst_req,
-    fallback : ['gst-plugins-base', 'riff_dep'])
-gstrtp_dep = dependency('gstreamer-rtp-1.0', version : gst_req,
-    fallback : ['gst-plugins-base', 'rtp_dep'])
-gstrtsp_dep = dependency('gstreamer-rtsp-1.0', version : gst_req,
-    fallback : ['gst-plugins-base', 'rtsp_dep'])
-gstsdp_dep = dependency('gstreamer-sdp-1.0', version : gst_req,
-    fallback : ['gst-plugins-base', 'sdp_dep'])
-gsttag_dep = dependency('gstreamer-tag-1.0', version : gst_req,
-    fallback : ['gst-plugins-base', 'tag_dep'])
-gstvideo_dep = dependency('gstreamer-video-1.0', version : gst_req,
-    fallback : ['gst-plugins-base', 'video_dep'])
-gstcheck_dep = dependency('gstreamer-check-1.0', version : gst_req,
-    required : get_option('tests'),
-    fallback : ['gstreamer', 'gst_check_dep'])
-
-# GStreamer OpenGL
-gstgl_dep = dependency('gstreamer-gl-1.0', version : gst_req,
-    fallback : ['gst-plugins-base', 'gstgl_dep'], required: get_option('gl'))
-gstglproto_dep = dependency('gstreamer-gl-prototypes-1.0', version : gst_req,
-    fallback : ['gst-plugins-base', 'gstglproto_dep'], required: get_option('gl'))
-gstglx11_dep = dependency('', required : false)
-gstglwayland_dep = dependency('', required : false)
-gstglegl_dep = dependency('', required : false)
-
 if gstgl_dep.found()
   if gstgl_dep.type_name() == 'pkgconfig'
     gst_gl_apis = gstgl_dep.get_variable('gl_apis').split()
@@ -465,16 +474,6 @@ gnustl_dep = declare_dependency()
 if host_system == 'android'
   gnustl_dep = dependency('gnustl', required : false)
 endif
-
-if gst_dep.type_name() == 'internal'
-  gst_debug_disabled = not subproject('gstreamer').get_variable('gst_debug')
-else
-  # We can't check that in the case of subprojects as we won't
-  # be able to build against an internal dependency (which is not built yet)
-  gst_debug_disabled = cc.has_header_symbol('gst/gstconfig.h', 'GST_DISABLE_GST_DEBUG', dependencies: gst_dep)
-endif
-
-message('GStreamer debug system is ', gst_debug_disabled ? 'disabled' : 'enabled')
 
 # Disable compiler warnings for unused variables and args
 # if gst debug system or glib-checks is disabled
