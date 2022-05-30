@@ -57,17 +57,19 @@ GST_DEBUG_CATEGORY_STATIC (gst_acam_device_provider_debug);
 
 
 static gchar *
-_build_camera_display_name (gint camera_index, uint8_t lens_facing)
+_build_camera_display_name (gint camera_index, uint8_t lens_facing,
+    gfloat lens_aperture)
 {
   if (camera_index == -1)
     return g_strdup (CAM_UNKNOWN);
 
   if (lens_facing == ACAMERA_LENS_FACING_FRONT)
-    return g_strdup (CAM_FRONT);
+    return g_strdup_printf ("%s (f/%.2f)", CAM_FRONT, lens_aperture);
   if (lens_facing == ACAMERA_LENS_FACING_BACK)
-    return g_strdup (CAM_BACK);
+    return g_strdup_printf ("%s (f/%.2f)", CAM_BACK, lens_aperture);
   if (lens_facing == ACAMERA_LENS_FACING_EXTERNAL)
-    return g_strdup_printf ("%s (%d)", CAM_EXT, camera_index + 1);
+    return g_strdup_printf ("%s (%d, f/%.2f)", CAM_EXT, camera_index + 1,
+        lens_aperture);
 
   return g_strdup (CAM_UNKNOWN);
 }
@@ -77,27 +79,36 @@ gst_acam_device_provider_get_device_display_name (GstAcamDeviceProvider *
     provider, const char *camera_id, gint camera_index)
 {
   ACameraMetadata *metadata = NULL;
-  ACameraMetadata_const_entry lens_facing;
-  uint8_t lens_facing_value;
+  ACameraMetadata_const_entry entry;
+  uint8_t lens_facing;
+  gfloat lens_aperture = 0.f;
 
   if (ACameraManager_getCameraCharacteristics (provider->manager,
           camera_id, &metadata) != ACAMERA_OK) {
 
     GST_ERROR ("Failed to retrieve camera (%s) metadata", camera_id);
-    return _build_camera_display_name (-1, 0);
+    return _build_camera_display_name (-1, 0, lens_aperture);
   }
 
   if (ACameraMetadata_getConstEntry (metadata,
-          ACAMERA_LENS_FACING, &lens_facing) != ACAMERA_OK) {
+          ACAMERA_LENS_FACING, &entry) != ACAMERA_OK) {
     GST_ERROR ("Failed to retrieve camera (%s) LENS_FACING", camera_id);
     camera_index = -1;
   } else {
-    lens_facing_value = lens_facing.data.u8[0];
+    lens_facing = entry.data.u8[0];
+  }
+
+  if (ACameraMetadata_getConstEntry (metadata,
+          ACAMERA_LENS_INFO_AVAILABLE_APERTURES, &entry) != ACAMERA_OK) {
+    GST_ERROR
+        ("Failed to retrieve camera (%s) LENS_INFO_AVAILABLE_FOCAL_LENGTHS",
+        camera_id);
+  } else {
+    lens_aperture = entry.data.f[0];
   }
 
   ACameraMetadata_free (metadata);
-
-  return _build_camera_display_name (camera_index, lens_facing_value);
+  return _build_camera_display_name (camera_index, lens_facing, lens_aperture);
 }
 
 static GstAcamDevice *
