@@ -35,6 +35,7 @@ struct _GstAcamDevice
 {
   GstDevice parent;
 
+  gchar *camera_id;
   gint camera_index;
 };
 
@@ -80,7 +81,7 @@ gst_acam_device_provider_get_device_display_name (GstAcamDeviceProvider *
 {
   ACameraMetadata *metadata = NULL;
   ACameraMetadata_const_entry entry;
-  uint8_t lens_facing;
+  uint8_t lens_facing = 0;
   gfloat lens_aperture = 0.f;
 
   if (ACameraManager_getCameraCharacteristics (provider->manager,
@@ -132,6 +133,7 @@ gst_acam_device_provider_create_device (GstAcamDeviceProvider *
       "device-class", "Video/Source",   //
       "display-name", display_name,     //
       "caps", caps,             //
+      "camera-id", g_strdup (camera_id),        //
       "camera-index", camera_index,     //
       NULL);
 
@@ -249,25 +251,56 @@ gst_acam_device_provider_on_camera_available (void *context,
       camera_index);
 
   GST_INFO_OBJECT (provider, "Camera became available (%s)", camera_id);
-  gst_device_provider_device_add (provider, GST_DEVICE_CAST (device));
+  gst_device_provider_device_add (GST_DEVICE_PROVIDER_CAST (provider),
+      GST_DEVICE_CAST (device));
 }
+
+static void
+gst_acam_device_provider_remove_device (GstAcamDeviceProvider * acamprovider,
+    const char *camera_id_to_remove)
+{
+  GstDeviceProvider *provider = GST_DEVICE_PROVIDER_CAST (acamprovider);
+  GstDevice *device = NULL;
+  GList *item;
+
+  GST_OBJECT_LOCK (provider);
+  for (item = provider->devices; item; item = item->next) {
+    device = item->data;
+    gchar *camera_id;
+    gboolean found;
+
+    g_object_get (device, "camera-id", &camera_id, NULL);
+    found = (g_strcmp0 (camera_id_to_remove, camera_id) == 0);
+    g_free (camera_id);
+
+    if (found) {
+      gst_object_ref (device);
+      break;
+    }
+
+    device = NULL;
+  }
+  GST_OBJECT_UNLOCK (provider);
+
+  if (device) {
+    gst_device_provider_device_remove (provider, device);
+    g_object_unref (device);
+  }
+}
+
 
 static void
 gst_acam_device_provider_on_camera_unavailable (void *context,
     const char *camera_id)
 {
   GstAcamDeviceProvider *provider = GST_ACAM_DEVICE_PROVIDER_CAST (context);
-  GstDevice *device;
   ACameraMetadata *metadata = NULL;
 
   // if we can't retrieve the metadata for the camera, it has been disconnected
   if (ACameraManager_getCameraCharacteristics (provider->manager,
           camera_id, &metadata) != ACAMERA_OK) {
-
-    device = gst_acam_device_provider_create_device (provider, camera_id, -1);
     GST_INFO_OBJECT (provider, "Camera became unavailable (%s)", camera_id);
-    gst_device_provider_device_remove (provider, device);
-    g_object_unref (device);
+    gst_acam_device_provider_remove_device (provider, camera_id);
   }
 
   if (metadata)
@@ -335,6 +368,7 @@ gst_acam_device_create_element (GstDevice * object, const gchar * name)
 enum
 {
   PROP_CAMERA_INDEX = 1,
+  PROP_CAMERA_ID = 2,
 };
 
 static void
@@ -346,6 +380,9 @@ gst_acam_device_get_property (GObject * object, guint prop_id,
   switch (prop_id) {
     case PROP_CAMERA_INDEX:
       g_value_set_int (value, device->camera_index);
+      break;
+    case PROP_CAMERA_ID:
+      g_value_set_string (value, (gchar *) device->camera_id);
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
@@ -363,6 +400,12 @@ gst_acam_device_set_property (GObject * object, guint prop_id,
     case PROP_CAMERA_INDEX:
       device->camera_index = g_value_get_int (value);
       break;
+    case PROP_CAMERA_ID:
+      if (device->camera_id)
+        g_free (device->camera_id);
+
+      device->camera_id = g_strdup (g_value_get_string (value));
+      break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
       break;
@@ -372,17 +415,22 @@ gst_acam_device_set_property (GObject * object, guint prop_id,
 static void
 gst_acam_device_class_init (GstAcamDeviceClass * klass)
 {
-  GObjectClass *object_class = G_OBJECT_CLASS (klass);
+  GObjectClass *gobject_class = G_OBJECT_CLASS (klass);
   GstDeviceClass *dev_class = GST_DEVICE_CLASS (klass);
 
   dev_class->create_element = gst_acam_device_create_element;
-  object_class->get_property = gst_acam_device_get_property;
-  object_class->set_property = gst_acam_device_set_property;
+  gobject_class->get_property = gst_acam_device_get_property;
+  gobject_class->set_property = gst_acam_device_set_property;
 
-  g_object_class_install_property (object_class, PROP_CAMERA_INDEX,
+  g_object_class_install_property (gobject_class, PROP_CAMERA_INDEX,
       g_param_spec_int ("camera-index", "Camera Index",
           "The camera device index", 0, G_MAXINT, 0,
           G_PARAM_STATIC_STRINGS | G_PARAM_READWRITE | G_PARAM_CONSTRUCT_ONLY));
+
+  g_object_class_install_property (gobject_class, PROP_CAMERA_ID,
+      g_param_spec_string ("camera-id", "Camera ID",
+          "The Unique ID for the camera",
+          NULL, G_PARAM_READWRITE | G_PARAM_CONSTRUCT_ONLY));
 }
 
 static void
