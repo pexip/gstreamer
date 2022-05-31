@@ -32,6 +32,7 @@
 #ifdef HAVE_JNI_H
 #include "gstahcsrc.h"
 #include "gstahssrc.h"
+#include "gstamdeviceprovider.h"
 #include "gstjniutils.h"
 #endif
 
@@ -1945,6 +1946,14 @@ plugin_init (GstPlugin * plugin)
   } else {
     GST_ERROR ("Failed to register android camera device provider");
   }
+
+#ifdef HAVE_JNI_H
+  if (GST_DEVICE_PROVIDER_REGISTER (amdeviceprovider, plugin)) {
+    init_ok = TRUE;
+  } else {
+    GST_ERROR ("Failed to register android AudioManager device provider");
+  }
+#endif
 
   return init_ok;
 }
