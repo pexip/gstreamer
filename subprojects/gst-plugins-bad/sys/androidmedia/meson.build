@@ -89,6 +89,15 @@ if cc.check_header('media/NdkMediaCodec.h')
   extra_deps += [ cc.find_library('android', required : true) ]
 endif
 
+if have_jni_h
+  androidmedia_java_sources += [
+    'org/freedesktop/gstreamer/androidmedia/GstAmAudioDeviceCallback.java',
+  ]
+  androidmedia_sources += [
+    'gstamdeviceprovider.c',
+  ]
+endif
+
 have_ndkcamera = cc.has_header('camera/NdkCameraError.h', required : false)
 if have_ndkcamera
   androidmedia_sources += [
