@@ -217,7 +217,7 @@ gst_am_device_provider_remove_device (GstAmDeviceProvider * amprovider,
   GST_OBJECT_UNLOCK (provider);
 
   if (device) {
-    GST_ERROR_OBJECT (provider, "Removing %" GST_PTR_FORMAT, device);
+    GST_DEBUG_OBJECT (provider, "Removing %" GST_PTR_FORMAT, device);
     gst_device_provider_device_remove (provider, GST_DEVICE (device));
     g_object_unref (device);
   }
@@ -255,7 +255,7 @@ gst_am_device_provider_add_device (GstAmDeviceProvider * provider, JNIEnv * env,
       "caps", caps,             //
       NULL);
 
-  GST_ERROR_OBJECT (provider, "Adding %" GST_PTR_FORMAT, device);
+  GST_DEBUG_OBJECT (provider, "Adding %" GST_PTR_FORMAT, device);
   gst_device_provider_device_add (GST_DEVICE_PROVIDER_CAST (provider),
       GST_DEVICE_CAST (device));
 }
@@ -268,7 +268,7 @@ gst_am_device_provider_on_audio_devices_changed (GstAmDeviceProvider * provider,
   jsize numAudioDevices;
 
   numAudioDevices = (*env)->GetArrayLength (env, audioDevices);
-  GST_ERROR_OBJECT (provider, "Audio devices %s (%d)",
+  GST_DEBUG_OBJECT (provider, "Audio devices %s (%d)",
       action_type == ADDED_DEVICES ? "added" : "removed", numAudioDevices);
 
   for (i = 0; i < numAudioDevices; i++) {
@@ -416,7 +416,7 @@ gst_am_device_provider_start (GstDeviceProvider * object)
     return FALSE;
   }
 
-  GST_ERROR_OBJECT (provider, "Starting...");
+  GST_DEBUG_OBJECT (provider, "Starting...");
 
   ctx = jni_get_global_context (env);
   if (!ctx) {
