@@ -645,10 +645,26 @@ gst_am_device_provider_stop (GstDeviceProvider * object)
   provider->audioDeviceCB = NULL;
 }
 
+
+static void
+gst_am_device_provider_populate_devices (GstDeviceProvider * provider)
+{
+  GList *devices, *it;
+
+  devices = gst_am_device_provider_probe (provider);
+
+  for (it = devices; it != NULL; it = g_list_next (it)) {
+    GstDevice *device = GST_DEVICE_CAST (it->data);
+    gst_device_provider_device_add (provider, device);
+  }
+
+  g_list_free_full (devices, gst_object_unref);
+}
+
 static void
 gst_am_device_provider_init (GstAmDeviceProvider * provider)
 {
-  (void) provider;
+  gst_am_device_provider_populate_devices (GST_DEVICE_PROVIDER_CAST (provider));
 }
 
 static void
