@@ -112,7 +112,7 @@ gst_acam_device_provider_get_device_display_name (GstAcamDeviceProvider *
   return _build_camera_display_name (camera_index, lens_facing, lens_aperture);
 }
 
-static GstAcamDevice *
+static GstDevice *
 gst_acam_device_provider_create_device (GstAcamDeviceProvider *
     provider, const char *camera_id, gint camera_index)
 {
@@ -137,14 +137,13 @@ gst_acam_device_provider_create_device (GstAcamDeviceProvider *
       "camera-index", camera_index,     //
       NULL);
 
-  return device;
+  return GST_DEVICE_CAST (device);
 }
 
 static GList *
 gst_acam_device_provider_probe (GstDeviceProvider * object)
 {
-  GList *devices;
-
+  GList *devices = NULL;
   GstAcamDeviceProvider *provider = GST_ACAM_DEVICE_PROVIDER_CAST (object);
   ACameraIdList *id_list;
   gint i;
@@ -159,10 +158,12 @@ gst_acam_device_provider_probe (GstDeviceProvider * object)
 
   for (i = 0; i < id_list->numCameras; i++) {
     const char *camera_id = id_list->cameraIds[i];
-    GstAcamDevice *device =
-        gst_acam_device_provider_create_device (provider, camera_id, i);
+    GstDevice *device;
 
-    devices = g_list_append (devices, GST_DEVICE_CAST (device));
+    device = gst_acam_device_provider_create_device (provider, camera_id, i);
+
+    gst_object_ref_sink (device);
+    devices = g_list_append (devices, device);
   }
 
   ACameraManager_deleteCameraIdList (id_list);
@@ -242,7 +243,7 @@ gst_acam_device_provider_on_camera_available (void *context,
 {
   GstAcamDeviceProvider *provider = GST_ACAM_DEVICE_PROVIDER_CAST (context);
   gint camera_index;
-  GstAcamDevice *device;
+  GstDevice *device;
 
   camera_index =
       gst_acam_device_provider_find_camera_index (provider, camera_id);
@@ -251,8 +252,7 @@ gst_acam_device_provider_on_camera_available (void *context,
       camera_index);
 
   GST_INFO_OBJECT (provider, "Camera became available (%s)", camera_id);
-  gst_device_provider_device_add (GST_DEVICE_PROVIDER_CAST (provider),
-      GST_DEVICE_CAST (device));
+  gst_device_provider_device_add (GST_DEVICE_PROVIDER_CAST (provider), device);
 }
 
 static void
