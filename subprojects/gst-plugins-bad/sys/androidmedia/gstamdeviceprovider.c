@@ -54,6 +54,43 @@ GST_DEBUG_CATEGORY_STATIC (gst_am_device_provider_debug);
 #define GST_CAT_DEFAULT (gst_am_device_provider_debug)
 #define device_provider_parent_class gst_am_device_provider_parent_class
 
+#define GET_DEVICES_ALL 0x00000003
+
+/* from: https://developer.android.com/reference/android/media/AudioDeviceInfo */
+typedef enum
+{
+  TYPE_AUX_LINE = 19,
+  TYPE_BLE_BROADCAST = 30,
+  TYPE_BLE_HEADSET = 26,
+  TYPE_BLE_SPEAKER = 27,
+  TYPE_BLUETOOTH_A2DP = 8,
+  TYPE_BLUETOOTH_SCO = 7,
+  TYPE_BUILTIN_EARPIECE = 1,
+  TYPE_BUILTIN_MIC = 15,
+  TYPE_BUILTIN_SPEAKER = 2,
+  TYPE_BUILTIN_SPEAKER_SAFE = 24,
+  TYPE_BUS = 21,
+  TYPE_DOCK = 13,
+  TYPE_FM = 14,
+  TYPE_FM_TUNER = 16,
+  TYPE_HDMI = 9,
+  TYPE_HDMI_ARC = 10,
+  TYPE_HDMI_EARC = 29,
+  TYPE_HEARING_AID = 23,
+  TYPE_IP = 20,
+  TYPE_LINE_ANALOG = 5,
+  TYPE_LINE_DIGITAL = 6,
+  TYPE_REMOTE_SUBMIX = 25,
+  TYPE_TELEPHONY = 18,
+  TYPE_TV_TUNER = 17,
+  TYPE_UNKNOWN = 0,
+  TYPE_USB_ACCESSORY = 12,
+  TYPE_USB_DEVICE = 11,
+  TYPE_USB_HEADSET = 22,
+  TYPE_WIRED_HEADPHONES = 4,
+  TYPE_WIRED_HEADSET = 3,
+} AudioInfo_DeviceType;
+
 static jobject
 jni_get_global_context (JNIEnv * env)
 {
@@ -192,14 +229,16 @@ jni_AudioInfo_getProductName (JNIEnv * env, jobject audioInfo)
   return jni_String_GetStringUTFChars (env, productNameString);
 }
 
-
 static void
 gst_am_device_provider_remove_device (GstAmDeviceProvider * amprovider,
-    gint id_to_remove)
+    JNIEnv * env, jobject audioInfo)
 {
   GstDeviceProvider *provider = GST_DEVICE_PROVIDER_CAST (amprovider);
   GstDevice *device = NULL;
   GList *item;
+  gint id_to_remove;
+
+  id_to_remove = jni_AudioInfo_getId (env, audioInfo);
 
   GST_OBJECT_LOCK (provider);
   for (item = provider->devices; item; item = item->next) {
@@ -223,13 +262,67 @@ gst_am_device_provider_remove_device (GstAmDeviceProvider * amprovider,
   }
 }
 
-static void
-gst_am_device_provider_add_device (GstAmDeviceProvider * provider, JNIEnv * env,
-    jobject audioInfo, gint id)
+static gchar *
+jni_get_AudioInfo_DeviceType_Name (AudioInfo_DeviceType deviceType)
 {
+  switch (deviceType) {
+    case TYPE_BLE_BROADCAST:
+    case TYPE_BLE_HEADSET:
+    case TYPE_BLE_SPEAKER:
+    case TYPE_BLUETOOTH_A2DP:
+    case TYPE_BLUETOOTH_SCO:
+      return g_strdup ("Bluetooth");
+
+    case TYPE_BUILTIN_EARPIECE:
+    case TYPE_BUILTIN_MIC:
+    case TYPE_BUILTIN_SPEAKER:
+    case TYPE_BUILTIN_SPEAKER_SAFE:
+      return g_strdup ("Built-in");
+
+    case TYPE_HDMI:
+    case TYPE_HDMI_ARC:
+    case TYPE_HDMI_EARC:
+      return g_strdup ("HDMI");
+
+    case TYPE_USB_ACCESSORY:
+    case TYPE_USB_DEVICE:
+    case TYPE_USB_HEADSET:
+      return g_strdup ("USB");
+
+    case TYPE_WIRED_HEADPHONES:
+    case TYPE_WIRED_HEADSET:
+      return g_strdup ("Wired");
+
+    default:
+      break;
+  }
+
+  return NULL;
+}
+
+static AudioInfo_DeviceType
+jni_AudioInfo_getDeviceType (JNIEnv * env, jobject audioInfo)
+{
+  jclass audioInfoClass;
+  jmethodID getType;
+
+  audioInfoClass = (*env)->FindClass (env, "android/media/AudioDeviceInfo");
+  getType = (*env)->GetMethodID (env, audioInfoClass, "getType", "()I");
+
+  return (AudioInfo_DeviceType) (*env)->CallIntMethod (env, audioInfo, getType);
+}
+
+
+static GstDevice *
+gst_am_device_from_audio_info (JNIEnv * env, jobject audioInfo)
+{
+  gint id;
   gchar *product_name;
+  gchar *display_name;
+  gchar *type_name;
   gboolean is_sink;
   gboolean is_source;
+  AudioInfo_DeviceType deviceType;
   GstDevice *device;
   GstCaps *caps;
   const gchar *device_class = NULL;
@@ -238,10 +331,23 @@ gst_am_device_provider_add_device (GstAmDeviceProvider * provider, JNIEnv * env,
   is_source = jni_AudioInfo_isSource (env, audioInfo);
 
   if (!is_sink && !is_source)
-    return;
+    return NULL;
 
+  deviceType = jni_AudioInfo_getDeviceType (env, audioInfo);
+  type_name = jni_get_AudioInfo_DeviceType_Name (deviceType);
+
+  /* filter the enumerated devices by supported type */
+  if (!type_name)
+    return NULL;
+
+  id = jni_AudioInfo_getId (env, audioInfo);
   product_name = jni_AudioInfo_getProductName (env, audioInfo);
+  display_name = g_strdup_printf ("%s (%s)", product_name, type_name);
+  // FIXME: call getAudioProfiles() on the audioInfo and transform to caps
   caps = gst_caps_new_empty_simple ("audio/x-raw");
+
+  g_free (type_name);
+  g_free (product_name);
 
   if (is_source)
     device_class = "Audio/Source";
@@ -251,13 +357,24 @@ gst_am_device_provider_add_device (GstAmDeviceProvider * provider, JNIEnv * env,
   device = g_object_new (GST_TYPE_AM_DEVICE,    //
       "device-id", id,          //
       "device-class", device_class,     //
-      "display-name", product_name,     //
+      "display-name", display_name,     //
       "caps", caps,             //
       NULL);
 
-  GST_DEBUG_OBJECT (provider, "Adding %" GST_PTR_FORMAT, device);
-  gst_device_provider_device_add (GST_DEVICE_PROVIDER_CAST (provider),
-      GST_DEVICE_CAST (device));
+  return GST_DEVICE_CAST (device);
+}
+
+static void
+gst_am_device_provider_add_device (GstAmDeviceProvider * provider, JNIEnv * env,
+    jobject audioInfo)
+{
+  GstDevice *device = gst_am_device_from_audio_info (env, audioInfo);
+
+  if (device) {
+    GST_DEBUG_OBJECT (provider, "Adding %" GST_PTR_FORMAT, device);
+    gst_device_provider_device_add (GST_DEVICE_PROVIDER_CAST (provider),
+        device);
+  }
 }
 
 static void
@@ -272,16 +389,13 @@ gst_am_device_provider_on_audio_devices_changed (GstAmDeviceProvider * provider,
       action_type == ADDED_DEVICES ? "added" : "removed", numAudioDevices);
 
   for (i = 0; i < numAudioDevices; i++) {
-    gint id;
     jobject audioInfo;
-
     audioInfo = (*env)->GetObjectArrayElement (env, audioDevices, i);
-    id = jni_AudioInfo_getId (env, audioInfo);
 
     if (action_type == ADDED_DEVICES)
-      gst_am_device_provider_add_device (provider, env, audioInfo, id);
+      gst_am_device_provider_add_device (provider, env, audioInfo);
     else if (action_type == REMOVED_DEVICES)
-      gst_am_device_provider_remove_device (provider, id);
+      gst_am_device_provider_remove_device (provider, env, audioInfo);
   }
 }
 
@@ -389,10 +503,69 @@ jni_AudioManager_unregisterAudioDeviceCallback (JNIEnv * env,
       audioDeviceCallback);
 }
 
+static jobjectArray
+jni_AudioManager_getDevices (JNIEnv * env, jobject audioManager,
+    gint deviceType)
+{
+  jobjectArray audioDevices;    // AudioDeviceInfo[]
+  jclass audioManagerClass;
+  jmethodID getDevicesID;
+
+  audioManagerClass = (*env)->FindClass (env, "android/media/AudioManager");
+  getDevicesID = (*env)->GetMethodID (env, audioManagerClass, "getDevices",
+      "(I)[Landroid/media/AudioDeviceInfo;");
+  audioDevices =
+      (*env)->CallObjectMethod (env, audioManager, getDevicesID, deviceType);
+
+  return audioDevices;
+}
+
 static GList *
 gst_am_device_provider_probe (GstDeviceProvider * object)
 {
-  return NULL;
+  GList *devices = NULL;
+  JNIEnv *env;
+  jobject ctx;
+  jobject audioManager;
+  jsize i, numAudioDevices;
+  jobjectArray audioDevices;
+
+  env = gst_amc_jni_get_env ();
+  ctx = jni_get_global_context (env);
+  if (!ctx) {
+    GST_ERROR ("Can't get an instance of global context");
+    return NULL;
+  }
+
+  audioManager = jni_get_AudioManager_Instance (env, ctx);
+  if (!audioManager) {
+    GST_ERROR ("Can't get an instance of AudioManager");
+    return NULL;
+  }
+
+  audioDevices =
+      jni_AudioManager_getDevices (env, audioManager, GET_DEVICES_ALL);
+  if (!audioDevices) {
+    GST_ERROR ("No audio devices found!");
+    return NULL;
+  }
+
+  numAudioDevices = (*env)->GetArrayLength (env, audioDevices);
+  GST_DEBUG ("numAudioDevices: %u", numAudioDevices);
+  for (i = 0; i < numAudioDevices; i++) {
+    jobject audioInfo;
+    GstDevice *device;
+
+    audioInfo = (*env)->GetObjectArrayElement (env, audioDevices, i);
+    device = gst_am_device_from_audio_info (env, audioInfo);
+
+    if (device) {
+      gst_object_ref_sink (device);
+      devices = g_list_append (devices, device);
+    }
+  }
+
+  return devices;
 }
 
 static gboolean
