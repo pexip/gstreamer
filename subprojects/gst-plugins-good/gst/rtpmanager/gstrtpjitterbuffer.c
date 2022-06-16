@@ -2982,6 +2982,10 @@ update_dtx_timer (GstRtpJitterBuffer * jitterbuffer, guint16 seqnum,
       insert_gap_event (jitterbuffer,
           timer_pts + (gaps - i - 1) * duration, duration, TRUE);
     }
+    /* The packet arrived lare as we have sent already gap event,
+     * thus counting it as late packet. */
+    if (diff < 0)
+      jitterbuffer->priv->num_late++;
   }
 
   GST_DEBUG_OBJECT (jitterbuffer,
