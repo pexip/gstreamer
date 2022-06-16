@@ -2707,9 +2707,9 @@ static void
 calculate_jitter (GstRtpJitterBuffer * jitterbuffer, GstClockTime dts,
     guint32 rtptime)
 {
-  gint32 rtpdiff;
-  GstClockTimeDiff dtsdiff, rtpdiffns, diff;
-  gint factor;
+  gint32 rtpdiff = 0;
+  GstClockTimeDiff rtpdiffns = 0, diff = 0, dtsdiff = 0;
+  gint factor = 1;
   GstRtpJitterBufferPrivate *priv;
 
   priv = jitterbuffer->priv;
@@ -2732,6 +2732,10 @@ calculate_jitter (GstRtpJitterBuffer * jitterbuffer, GstClockTime dts,
   else
     priv->equidistant += 1;
   priv->equidistant = CLAMP (priv->equidistant, -7, 7);
+
+  /* Non-equidistant packets are not used in jitter calculation */
+  if (rtpdiff == 0)
+    return;
 
   if (rtpdiff > 0)
     rtpdiffns =
