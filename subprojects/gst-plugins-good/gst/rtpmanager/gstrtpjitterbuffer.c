@@ -2837,12 +2837,12 @@ update_dtx_timer (GstRtpJitterBuffer * jitterbuffer, guint16 seqnum,
 
   /* produce gap-event up until this buffer */
   if (timer) {
-    gint i;
+    gint64 i;
     GstClockTime timer_pts = get_pts_timeout (timer);
     GstClockTimeDiff diff = GST_CLOCK_DIFF (timer_pts, pts);
-    gint gaps = (diff + duration / 2) / duration;       /* integer division round */
+    gint64 gaps = (diff + (gint64) (duration / 2)) / (gint64) duration; /* integer division round */
 
-    GST_DEBUG_OBJECT (jitterbuffer, "Diff %" GST_STIME_FORMAT " gives %d gaps",
+    GST_DEBUG_OBJECT (jitterbuffer, "Diff %" GST_STIME_FORMAT " gives %ld gaps",
         GST_STIME_ARGS (diff), gaps);
     /* we need to prepend them to get them out before the buffer they preceed,
        and hence we need to insert in reverse order */
