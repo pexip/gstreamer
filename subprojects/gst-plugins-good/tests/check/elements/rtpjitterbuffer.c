@@ -1859,7 +1859,7 @@ GST_START_TEST (test_rtx_original_buffer_does_not_update_rtx_stats)
      an rtx-request for 7 */
   next_seqnum++;
   verify_rtx_event (h, next_seqnum,
-      next_seqnum * TEST_BUF_DURATION, 26, TEST_BUF_DURATION);
+      next_seqnum * TEST_BUF_DURATION, 60, TEST_BUF_DURATION);
 
   /* The original buffer does not count in the RTX stats. */
   fail_unless (verify_jb_stats (h->element,
@@ -3810,7 +3810,183 @@ GST_START_TEST (test_ulpfec_does_not_affect_pts_calculation)
 
 GST_END_TEST;
 
+static void
+validate_estimated_latency (GstHarness * h, guint expected_estimated_latency_ms)
+{
+  GstStructure *s = NULL;
+  gint diff = 0;
+  guint actual_estimated_latency_ms = 0;
+  g_object_get (h->element, "stats", &s, NULL);
+  fail_unless (gst_structure_get_uint (s, "estimated-latency-ms",
+          &actual_estimated_latency_ms));
 
+  diff = (actual_estimated_latency_ms - expected_estimated_latency_ms);
+  fail_unless ((diff == 0),
+      "Actual 'estimated-latency-ms' (%" GST_TIME_FORMAT
+      ") is off from expected value (%" GST_TIME_FORMAT ") " "by %"
+      GST_STIME_FORMAT ".",
+      GST_TIME_ARGS (actual_estimated_latency_ms * GST_MSECOND),
+      GST_TIME_ARGS (expected_estimated_latency_ms * GST_MSECOND),
+      GST_STIME_ARGS (diff * GST_MSECOND));
+  gst_structure_free (s);
+}
+
+
+static gint
+buffer_array_append_sequential_with_jitter (GArray * array,
+    gint * jitter_array_ms, guint num_bufs, gint prev_jitter)
+{
+  guint i;
+  for (i = 0; i < num_bufs; i++) {
+    BufferArrayCtx ctx;
+    ctx.seqnum_d = 1;
+    ctx.rtptime_d = TEST_RTP_TS_DURATION;       /* 20ms for 8KHz */
+    ctx.rtx = FALSE;
+    ctx.sleep_us =
+        (G_USEC_PER_SEC / 1000 * (TEST_BUF_MS - prev_jitter +
+            jitter_array_ms[i]));
+    g_array_append_val (array, ctx);
+    prev_jitter = jitter_array_ms[i];
+  }
+  return prev_jitter;
+}
+
+static void
+buffer_array_push_fast (GstHarness * h, GArray * array,
+    guint16 seqnum_base, guint32 rtptime_base)
+{
+  guint16 seqnum = seqnum_base;
+  guint32 rtptime = rtptime_base;
+  GstClockTime now = gst_clock_get_time (GST_ELEMENT_CLOCK (h->element));
+  guint i;
+
+  for (i = 0; i < array->len; i++) {
+    BufferArrayCtx *ctx = &g_array_index (array, BufferArrayCtx, i);
+    GstBuffer *buf = generate_test_buffer_full (now, seqnum, rtptime);
+    if (ctx->rtx)
+      GST_BUFFER_FLAG_SET (buf, GST_RTP_BUFFER_FLAG_RETRANSMISSION);
+    fail_unless_equals_int (GST_FLOW_OK, gst_harness_push (h, buf));
+    seqnum += ctx->seqnum_d;
+    rtptime += ctx->rtptime_d;
+    now += (GST_USECOND * ctx->sleep_us);
+  }
+}
+
+static void
+push_buf_array (GstHarness * h, GArray * array)
+{
+  guint16 base_seqnum = 10000;
+  guint32 base_rtptime = base_seqnum * TEST_RTP_TS_DURATION;
+  gst_harness_set_src_caps (h, generate_caps ());
+  buffer_array_push_fast (h, array, base_seqnum, base_rtptime);
+}
+
+GST_START_TEST (test_latency_estimation_no_jitter)
+{
+  GstHarness *h = gst_harness_new ("rtpjitterbuffer");
+  GArray *array = g_array_new (FALSE, FALSE, sizeof (BufferArrayCtx));
+
+  g_object_set (h->element, "latency", 0, NULL);
+  buffer_array_append_sequential (array, 128);
+  push_buf_array (h, array);
+  validate_estimated_latency (h, 0);
+
+  g_array_set_size (array, 0);
+  g_array_unref (array);
+  gst_harness_teardown (h);
+}
+
+GST_END_TEST;
+
+GST_START_TEST (test_latency_estimation_with_jitter)
+{
+  GstHarness *h = gst_harness_new ("rtpjitterbuffer");
+  gint jitter_array_ms[] = { 1, 4, -3, 5, 3, -2, 7 };
+  GArray *array = g_array_new (FALSE, FALSE, sizeof (BufferArrayCtx));
+
+  g_object_set (h->element, "latency", 0, NULL);
+
+  buffer_array_append_sequential (array, 128);
+  /* Push packets with jitter and validate latency estimation */
+  buffer_array_append_sequential_with_jitter (array, jitter_array_ms,
+      G_N_ELEMENTS (jitter_array_ms), 0);
+  push_buf_array (h, array);
+  validate_estimated_latency (h, 7);
+  g_array_set_size (array, 0);
+
+  /* Push more packets without jitter and validate
+   * latency estimation decreasing */
+  buffer_array_append_sequential (array, 256);
+  push_buf_array (h, array);
+  validate_estimated_latency (h, 5);
+
+  g_array_set_size (array, 0);
+  g_array_unref (array);
+  gst_harness_teardown (h);
+}
+
+GST_END_TEST;
+
+
+GST_START_TEST (test_latency_estimation_increasing_delay)
+{
+  GstHarness *h = gst_harness_new ("rtpjitterbuffer");
+  gint jitter_array_ms[] = { 1 };
+  GArray *array = g_array_new (FALSE, FALSE, sizeof (BufferArrayCtx));
+
+  g_object_set (h->element, "latency", 0, NULL);
+
+  buffer_array_append_sequential (array, 128);
+
+  for (size_t i = 0; i < 2000; i++) {
+    buffer_array_append_sequential_with_jitter (array, jitter_array_ms,
+        G_N_ELEMENTS (jitter_array_ms), 0);
+  }
+
+  /* All buffers with ever-increasing delay */
+  push_buf_array (h, array);
+  /* This is unusual usecase but latency estimation
+   * should not blow up */
+  validate_estimated_latency (h, 127);
+
+  g_array_set_size (array, 0);
+  g_array_unref (array);
+  gst_harness_teardown (h);
+}
+
+GST_END_TEST;
+
+
+GST_START_TEST (test_latency_estimation_reaction_on_outlyer)
+{
+  GstHarness *h = gst_harness_new ("rtpjitterbuffer");
+  gint jitter_array_ms[] = { 1, -1, 100, -1, };
+  GArray *array = g_array_new (FALSE, FALSE, sizeof (BufferArrayCtx));
+
+  g_object_set (h->element, "latency", 0, NULL);
+
+  buffer_array_append_sequential (array, 128);
+
+  buffer_array_append_sequential_with_jitter (array, jitter_array_ms,
+      G_N_ELEMENTS (jitter_array_ms), 0);
+  /* Push buffers with one outlayer (100ms late) */
+  push_buf_array (h, array);
+  /* Validat latency estimation */
+  validate_estimated_latency (h, 100);
+
+  g_array_set_size (array, 0);
+  /* Push more buffers and check that we reduce
+   * latency estimation back to 0 */
+  buffer_array_append_sequential (array, 1500);
+  push_buf_array (h, array);
+  validate_estimated_latency (h, 0);
+
+  g_array_set_size (array, 0);
+  g_array_unref (array);
+  gst_harness_teardown (h);
+}
+
+GST_END_TEST;
 
 static Suite *
 rtpjitterbuffer_suite (void)
@@ -3902,6 +4078,11 @@ rtpjitterbuffer_suite (void)
   tcase_add_test (tc_chain, test_ulpfec_large_pkt_spacing);
   tcase_add_loop_test (tc_chain, test_ulpfec_does_not_affect_pts_calculation, 0,
       G_N_ELEMENTS (ulpfec_pkt_does_not_affect_pts_calculation_input));
+
+  tcase_add_test (tc_chain, test_latency_estimation_no_jitter);
+  tcase_add_test (tc_chain, test_latency_estimation_with_jitter);
+  tcase_add_test (tc_chain, test_latency_estimation_increasing_delay);
+  tcase_add_test (tc_chain, test_latency_estimation_reaction_on_outlyer);
 
   return s;
 }
