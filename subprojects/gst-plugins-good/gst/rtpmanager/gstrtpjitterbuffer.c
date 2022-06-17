@@ -105,6 +105,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
+#include <math.h>
 #include <gst/rtp/gstrtpbuffer.h>
 #include <gst/rtp/gstrtcpbuffer.h>
 #include <gst/net/net.h>
@@ -447,6 +448,15 @@ struct _GstRtpJitterBufferPrivate
   GstClockTime total_avg_jitter;
   GstClockTime avg_jitter;
 
+  /* for the latency estimation */
+  guint estimated_latency_ms;
+  GstClockTimeDiff avg_clock_diff;
+  guint64 instant_max_jitter_top;
+  guint64 instant_max_jitter_bottom;
+  guint64 etimatied_max_jitter_top;
+  guint64 etimatied_max_jitter_bottom;
+  gfloat dencity_ratio;
+
   /* for dropped packet messages */
   GstClockTime last_drop_msg_timestamp;
   /* accumulators; reset every time a drop message is posted */
@@ -617,6 +627,7 @@ static GQuark quark_total_avg_jitter;
 static GQuark quark_min_jitter;
 static GQuark quark_max_jitter;
 static GQuark quark_latency_ms;
+static GQuark quark_estimated_latency_ms;
 static GQuark quark_rtx_count;
 static GQuark quark_rtx_success_count;
 static GQuark quark_rtx_per_packet;
@@ -641,6 +652,8 @@ gst_rtp_jitter_buffer_class_init (GstRtpJitterBufferClass * klass)
   quark_total_avg_jitter = g_quark_from_static_string ("total-avg-jitter");
   quark_min_jitter = g_quark_from_static_string ("min-jitter");
   quark_max_jitter = g_quark_from_static_string ("max-jitter");
+  quark_estimated_latency_ms =
+      g_quark_from_static_string ("estimated-latency-ms");
   quark_latency_ms = g_quark_from_static_string ("latency-ms");
   quark_rtx_count = g_quark_from_static_string ("rtx-count");
   quark_rtx_success_count = g_quark_from_static_string ("rtx-success-count");
@@ -1186,6 +1199,13 @@ gst_rtp_jitter_buffer_init (GstRtpJitterBuffer * jitterbuffer)
   priv->last_known_ext_rtptime = -1;
   priv->last_known_ntpnstime = -1;
   priv->avg_jitter = 0;
+  priv->avg_clock_diff = -1;
+  priv->instant_max_jitter_top = 0;
+  priv->instant_max_jitter_bottom = 0;
+  priv->etimatied_max_jitter_top = 0;
+  priv->etimatied_max_jitter_bottom = 0;
+  priv->dencity_ratio = 0.5f;
+  priv->estimated_latency_ms = 0;
   priv->last_drop_msg_timestamp = GST_CLOCK_TIME_NONE;
   priv->num_too_late = 0;
   priv->num_drop_on_latency = 0;
@@ -1791,6 +1811,13 @@ gst_rtp_jitter_buffer_flush_stop (GstRtpJitterBuffer * jitterbuffer)
   priv->avg_jitter = 0;
   priv->min_jitter = G_MAXINT64;
   priv->last_dts = -1;
+  priv->avg_clock_diff = -1;
+  priv->instant_max_jitter_top = 0;
+  priv->instant_max_jitter_bottom = 0;
+  priv->etimatied_max_jitter_top = 0;
+  priv->etimatied_max_jitter_bottom = 0;
+  priv->dencity_ratio = 0.5f;
+  priv->estimated_latency_ms = 0;
   priv->last_rtptime = -1;
   priv->last_ntpnstime = -1;
   priv->last_known_ext_rtptime = -1;
@@ -2835,6 +2862,105 @@ gst_rtp_jitter_buffer_handle_missing_packets (GstRtpJitterBuffer * jitterbuffer,
   }
 }
 
+/* Usually, the distribution of 'jitter' is non-symmetric across the mean value
+ * (it is similar to the gamma distribution) so the latency estimation based
+ * on six jitter standard deviations doesn't always give a good prediction.
+ * The purpose is to give a more precise latency estimation taking into
+ * account the asymmetric nature of the jitter. To do so we estimate two
+ * parameters - "etimatied_max_jitter_top", and "etimatied_max_jitter_bottom",
+ * each of them estimates maximum jitter above or below the mean. In sum, they
+ * give the total estimated latency.
+ * The idea is to outline the maximum observed jitters and interpolate them to
+ * the future. To do so we have two estimations "instant_max_jitter" and "etimatied_max_jitter".
+ * Both of them are increasing to the observed jitter value if it is bigger than
+ * their current value. Otherwise, they are decreasing. The "instant_max_jitter"
+ * is getting decreased to the observed jitter value with some linear factor.
+ * The "etimatied_max_jitter" is decreasing towards the "instant_max_jitter"
+ * with some non-linear factor. Non-linearity is added to smooth out the temporal
+ * fluctuations in "instant_max_jitter".
+ * */
+static inline void
+max_jitter_estimation (guint64 jitter, guint64 * short_estimation,
+    guint64 * long_estimation, gfloat decrease_factor)
+{
+  const gint fast_decrease_factor = 64;
+  const gint slow_decrease_factor = 256;
+  gint64 diff = 0;
+  if (jitter >= *short_estimation)
+    *short_estimation = jitter;
+  else {
+    *short_estimation -= ((*short_estimation - jitter) / fast_decrease_factor);
+  }
+  diff = *long_estimation - *short_estimation;
+  if (diff <= 0)
+    *long_estimation = *short_estimation;
+  else {
+    guint delta = diff / slow_decrease_factor;
+    gfloat ratio =
+        1.f - ((gfloat) (*short_estimation) / (gfloat) (*long_estimation));
+    *long_estimation -= delta * pow (ratio, (16.f * decrease_factor));
+  }
+}
+
+static void
+estimate_latency (GstRtpJitterBuffer * jitterbuffer, GstClockTime dts,
+    guint32 rtptime)
+{
+  gint64 jitter = 0;
+  GstClockTimeDiff clock_diff = 0;
+  GstRtpJitterBufferPrivate *priv = jitterbuffer->priv;
+
+  if (G_UNLIKELY (dts == GST_CLOCK_TIME_NONE) || priv->clock_rate <= 0)
+    return;
+
+  /* clock_diff - consists Cd + D + J where:
+   * Cd - initial clock difference between sender and recover
+   * D  - constant delay.
+   * J  - jitter */
+  clock_diff =
+      ((gint64) dts - (gint64) gst_util_uint64_scale_int (rtptime, GST_SECOND,
+          priv->clock_rate));
+  if (priv->avg_clock_diff == -1) {
+    priv->avg_clock_diff = clock_diff;
+    return;
+  }
+
+  /* By averaging clock_diff we getting  (Cd + D) + Jm
+   * where 'Jm' is mean of the jitter */
+  priv->avg_clock_diff -=
+      ((priv->avg_clock_diff - clock_diff) / (gint) MIN (128, MAX (1,
+              priv->jitter_count)));
+
+  /* Jitter is a deviation form the average clock_diff. */
+  jitter = clock_diff - priv->avg_clock_diff;
+
+  /* Purpouse of 'dencity_ratio' is to represent assimmetric distrebution of the jitter.
+   * The bigger 'dencity_ratio' the faster decreasing the bottom jitter estimation,
+   * but top estimation slower. If it 0.5 both top and bottom has equal decreasing factor. */
+  priv->dencity_ratio -=
+      ((priv->dencity_ratio - (gfloat) (clock_diff <
+              priv->avg_clock_diff)) / 16.f);
+  priv->dencity_ratio = MIN (1., MAX (0., priv->dencity_ratio));
+
+  /* Update estimations of max jiiter above the jitter mean. */
+  max_jitter_estimation (MAX (0, jitter), &priv->instant_max_jitter_top,
+      &priv->etimatied_max_jitter_top, priv->dencity_ratio);
+
+  /* Update estimations of max jiiter below the jitter mean. */
+  max_jitter_estimation (ABS (MIN (0, jitter)),
+      &priv->instant_max_jitter_bottom, &priv->etimatied_max_jitter_bottom,
+      (1.f - priv->dencity_ratio));
+
+  priv->estimated_latency_ms =
+      (priv->etimatied_max_jitter_top +
+      priv->etimatied_max_jitter_bottom) / GST_MSECOND;
+
+  GST_LOG_OBJECT (jitterbuffer,
+      "estimated_latency:%" GST_TIME_FORMAT,
+      GST_TIME_ARGS (priv->etimatied_max_jitter_top +
+          priv->etimatied_max_jitter_bottom));
+}
+
 static void
 calculate_jitter (GstRtpJitterBuffer * jitterbuffer, GstClockTime dts,
     guint32 rtptime)
@@ -3400,8 +3526,10 @@ gst_rtp_jitter_buffer_chain (GstPad * pad, GstObject * parent,
   if (G_UNLIKELY (priv->eos))
     goto have_eos;
 
-  if (!is_rtx && !is_ulpfec)
+  if (!is_rtx && !is_ulpfec) {
     calculate_jitter (jitterbuffer, dts, rtptime);
+    estimate_latency (jitterbuffer, dts, rtptime);
+  }
 
   if (priv->seqnum_base != -1) {
     gint gap;
@@ -5582,6 +5710,7 @@ gst_rtp_jitter_buffer_create_stats (GstRtpJitterBuffer * jbuf)
       quark_total_avg_jitter, G_TYPE_UINT64, priv->total_avg_jitter,
       quark_min_jitter, G_TYPE_UINT64, priv->min_jitter,
       quark_max_jitter, G_TYPE_UINT64, priv->max_jitter,
+      quark_estimated_latency_ms, G_TYPE_UINT, priv->estimated_latency_ms,
       quark_latency_ms, G_TYPE_UINT, priv->latency_ms,
       quark_rtx_count, G_TYPE_UINT64, priv->num_rtx_requests,
       quark_rtx_success_count, G_TYPE_UINT64, priv->num_rtx_success,
