@@ -254,8 +254,10 @@ gst_sctp_dec_dispose (GObject * object)
 {
   GstSctpDec *self = GST_SCTP_DEC (object);
 
-  g_object_unref (self->sctp_association);
-  self->sctp_association = NULL;
+  if (self->sctp_association) {
+    g_object_unref (self->sctp_association);
+    self->sctp_association = NULL;
+  }
 
   G_OBJECT_CLASS (gst_sctp_dec_parent_class)->dispose (object);
 }
