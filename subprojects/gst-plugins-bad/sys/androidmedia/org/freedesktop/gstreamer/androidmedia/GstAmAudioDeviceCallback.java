@@ -32,11 +32,13 @@ public class GstAmAudioDeviceCallback extends AudioDeviceCallback
     }
 
     public synchronized void onAudioDevicesAdded(AudioDeviceInfo[] addedDevices) {
-    	native_onAudioDevicesAdded(context, addedDevices);
+        if (context != 0)
+    	   native_onAudioDevicesAdded(context, addedDevices);
     }
 
     public synchronized void onAudioDevicesRemoved(AudioDeviceInfo[] removedDevices) {
-    	native_onAudioDevicesRemoved(context, removedDevices);
+        if (context != 0)
+    	   native_onAudioDevicesRemoved(context, removedDevices);
     }
 
     private native void native_onAudioDevicesAdded (long context, AudioDeviceInfo[] addedDevices);
