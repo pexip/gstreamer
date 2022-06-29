@@ -422,14 +422,12 @@ gst_am_device_provider_on_audio_devices_removed (JNIEnv * env,
 }
 
 static jobject
-gst_am_device_provider_create_callback (GstAmDeviceProvider * provider,
-    JNIEnv * env)
+gst_am_device_provider_create_callback (JNIEnv * env)
 {
   jclass class;
   jobject callback = NULL;
 
   jmethodID constructor_id;
-  jmethodID setContext;
 
   class =
       gst_amc_jni_get_application_class (env,
@@ -446,27 +444,41 @@ gst_am_device_provider_create_callback (GstAmDeviceProvider * provider,
     goto done;
   }
 
-  setContext =
-      gst_amc_jni_get_method_id (env, NULL, class, "setContext", "(J)V");
-  if (!setContext) {
-    GST_ERROR ("Can't find setContext method");
-    goto done;
-  }
-
   callback = gst_amc_jni_new_object (env, NULL, TRUE, class, constructor_id);
-
-  /* call setContext on GstAmAudioDeviceCallback */
-  if (!gst_amc_jni_call_void_method (env, NULL, callback, setContext,
-          GPOINTER_TO_JLONG (provider))) {
-    GST_ERROR ("setContext call failed");
-    goto done;
-  }
 
 done:
   if (class)
     gst_amc_jni_object_unref (env, class);
 
   return callback;
+}
+
+static void
+gst_am_device_provider_callback_set_context (JNIEnv * env,
+    jobject audioDeviceCallback, jlong context)
+{
+  jclass class;
+  jmethodID setContext;
+
+  class =
+      gst_amc_jni_get_application_class (env,
+      "org/freedesktop/gstreamer/androidmedia/GstAmAudioDeviceCallback", NULL);
+  if (!class) {
+    GST_ERROR ("Failed to load GstAmAudioDeviceCallback class");
+    return;
+  }
+
+  setContext =
+      gst_amc_jni_get_method_id (env, NULL, class, "setContext", "(J)V");
+
+  /* call setContext on GstAmAudioDeviceCallback */
+  if (!gst_amc_jni_call_void_method (env, NULL, audioDeviceCallback, setContext,
+          context)) {
+    GST_ERROR ("setContext call failed");
+  }
+
+  if (class)
+    gst_amc_jni_object_unref (env, class);
 }
 
 static void
@@ -568,6 +580,22 @@ gst_am_device_provider_probe (GstDeviceProvider * object)
   return devices;
 }
 
+static void
+gst_am_device_provider_populate_devices (GstDeviceProvider * provider)
+{
+  GList *devices, *it;
+
+  devices = gst_am_device_provider_probe (provider);
+
+  for (it = devices; it != NULL; it = g_list_next (it)) {
+    GstDevice *device = GST_DEVICE_CAST (it->data);
+    if (device)
+      gst_device_provider_device_add (provider, device);
+  }
+
+  g_list_free_full (devices, gst_object_unref);
+}
+
 static gboolean
 gst_am_device_provider_start (GstDeviceProvider * object)
 {
@@ -583,13 +611,19 @@ gst_am_device_provider_start (GstDeviceProvider * object)
     return FALSE;
   }
 
+  GST_DEBUG_OBJECT (provider, "Starting...");
+
+  gst_am_device_provider_populate_devices (object);
+
   env = gst_amc_jni_get_env ();
-  audioDeviceCallback = gst_am_device_provider_create_callback (provider, env);
+  audioDeviceCallback = gst_am_device_provider_create_callback (env);
   if (!audioDeviceCallback) {
     return FALSE;
   }
 
-  GST_DEBUG_OBJECT (provider, "Starting...");
+  gst_am_device_provider_callback_set_context (env, audioDeviceCallback,
+      GPOINTER_TO_JLONG (provider));
+
 
   ctx = jni_get_global_context (env);
   if (!ctx) {
@@ -639,32 +673,17 @@ gst_am_device_provider_stop (GstDeviceProvider * object)
     return;
   }
 
+  gst_am_device_provider_callback_set_context (env, provider->audioDeviceCB, 0);
+
   jni_AudioManager_unregisterAudioDeviceCallback (env, audioManager,
       provider->audioDeviceCB);
   gst_amc_jni_object_unref (env, provider->audioDeviceCB);
   provider->audioDeviceCB = NULL;
 }
 
-
-static void
-gst_am_device_provider_populate_devices (GstDeviceProvider * provider)
-{
-  GList *devices, *it;
-
-  devices = gst_am_device_provider_probe (provider);
-
-  for (it = devices; it != NULL; it = g_list_next (it)) {
-    GstDevice *device = GST_DEVICE_CAST (it->data);
-    gst_device_provider_device_add (provider, device);
-  }
-
-  g_list_free_full (devices, gst_object_unref);
-}
-
 static void
 gst_am_device_provider_init (GstAmDeviceProvider * provider)
 {
-  gst_am_device_provider_populate_devices (GST_DEVICE_PROVIDER_CAST (provider));
 }
 
 static void
