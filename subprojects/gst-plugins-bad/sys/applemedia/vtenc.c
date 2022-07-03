@@ -909,6 +909,8 @@ gst_vtenc_set_format (GstVideoEncoder * enc, GstVideoCodecState * state)
   self->negotiated_fps_d = state->info.fps_d;
   self->video_info = state->info;
 
+  gst_vtenc_finish (enc);
+
   GST_OBJECT_LOCK (self);
   gst_vtenc_destroy_session (self, &self->session);
   GST_OBJECT_UNLOCK (self);
