@@ -828,7 +828,8 @@ gst_amc_color_format_copy (GstAmcColorFormatInfo * cinfo,
     goto done;
   }
 
-  GST_DEBUG ("Sizes not equal (%d vs %" G_GSIZE_FORMAT
+  /* FIXME: this should really be a warning! Investigate!!! */
+  GST_LOG ("Sizes not equal (%d vs %" G_GSIZE_FORMAT
       "), doing slow line-by-line copying", cbuffer_info->size,
       gst_buffer_get_size (vbuffer));
 
