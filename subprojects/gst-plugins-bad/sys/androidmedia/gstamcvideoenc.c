@@ -258,14 +258,18 @@ create_amc_format (GstAmcVideoEnc * encoder, GstVideoCodecState * input_state,
 
     /* FIXME: Set to any value in AVCProfile* leads to
      * codec configuration fail */
-    /* gst_amc_format_set_int (format, amc_profile.key, 0x40); */
+    gst_amc_format_set_int (format, amc_profile.key, amc_profile.id, &err);
+    if (err)
+      GST_ELEMENT_WARNING_FROM_ERROR (encoder, err);
   }
 
   if (level_string) {
     if (amc_level.id == -1)
       goto unsupported_level;
 
-    /* gst_amc_format_set_int (format, amc_level.key, amc_level.id); */
+    gst_amc_format_set_int (format, amc_level.key, amc_level.id, &err);
+    if (err)
+      GST_ELEMENT_WARNING_FROM_ERROR (encoder, err);
   }
 
   /* On Android N_MR1 and higher, i-frame-interval can be a float value */
@@ -380,7 +384,7 @@ caps_from_amc_format (GstAmcFormat * amc_format)
     }
 
     if (gst_amc_format_get_int (amc_format, "level", &amc_level, NULL)) {
-      level_string = gst_amc_mpeg4_level_to_string (amc_profile);
+      level_string = gst_amc_mpeg4_level_to_string (amc_level);
       if (!level_string)
         goto unsupported_level;
 
@@ -396,7 +400,8 @@ caps_from_amc_format (GstAmcFormat * amc_format)
 
     caps =
         gst_caps_new_simple ("video/x-h264",
-        "stream-format", G_TYPE_STRING, "byte-stream", NULL);
+        "stream-format", G_TYPE_STRING, "byte-stream",
+        "alignment", G_TYPE_STRING, "au", NULL);
 
     if (gst_amc_format_get_int (amc_format, "profile", &amc_profile, NULL)) {
       profile_string = gst_amc_avc_profile_to_string (amc_profile, NULL);
@@ -408,7 +413,7 @@ caps_from_amc_format (GstAmcFormat * amc_format)
     }
 
     if (gst_amc_format_get_int (amc_format, "level", &amc_level, NULL)) {
-      level_string = gst_amc_avc_level_to_string (amc_profile);
+      level_string = gst_amc_avc_level_to_string (amc_level);
       if (!level_string)
         goto unsupported_level;
 
@@ -998,7 +1003,7 @@ gst_amc_video_enc_loop (GstAmcVideoEnc * self)
   GST_VIDEO_ENCODER_STREAM_LOCK (self);
 
 retry:
-  GST_DEBUG_OBJECT (self, "Waiting for available output buffer");
+  GST_LOG_OBJECT (self, "Waiting for available output buffer");
   GST_VIDEO_ENCODER_STREAM_UNLOCK (self);
   /* Wait at most 100ms here, some codecs don't fail dequeueing if
    * the codec is flushing, causing deadlocks during shutdown */
@@ -1083,7 +1088,7 @@ retry:
   }
 
 process_buffer:
-  GST_DEBUG_OBJECT (self,
+  GST_LOG_OBJECT (self,
       "Got output buffer at index %d: size %d time %" G_GINT64_FORMAT
       " flags 0x%08x", idx, buffer_info.size, buffer_info.presentation_time_us,
       buffer_info.flags);
@@ -1133,7 +1138,7 @@ process_buffer:
     g_mutex_unlock (&self->drain_lock);
     GST_VIDEO_ENCODER_STREAM_LOCK (self);
   } else {
-    GST_DEBUG_OBJECT (self, "Finished frame: %s", gst_flow_get_name (flow_ret));
+    GST_LOG_OBJECT (self, "Finished frame: %s", gst_flow_get_name (flow_ret));
   }
 
   self->downstream_flow_ret = flow_ret;
@@ -1475,7 +1480,7 @@ gst_amc_video_enc_handle_frame (GstVideoEncoder * encoder,
 
   self = GST_AMC_VIDEO_ENC (encoder);
 
-  GST_DEBUG_OBJECT (self, "Handling frame");
+  GST_LOG_OBJECT (self, "Handling frame");
 
   if (!self->started) {
     GST_ERROR_OBJECT (self, "Codec not started yet");
@@ -1565,6 +1570,9 @@ again:
   gst_amc_buffer_set_position_and_limit (buf, NULL, buffer_info.offset,
       buffer_info.size);
 
+  /* FIXME: this should NOT be happening, but is anyway */
+  frame->input_buffer = gst_buffer_make_writable (frame->input_buffer);
+
   if (!gst_amc_video_enc_fill_buffer (self, frame->input_buffer, buf,
           &buffer_info)) {
     memset (&buffer_info, 0, sizeof (buffer_info));
@@ -1594,7 +1602,7 @@ again:
   gst_video_codec_frame_set_user_data (frame, id,
       (GDestroyNotify) buffer_identification_free);
 
-  GST_DEBUG_OBJECT (self,
+  GST_LOG_OBJECT (self,
       "Queueing buffer %d: size %d time %" G_GINT64_FORMAT " flags 0x%08x",
       idx, buffer_info.size, buffer_info.presentation_time_us,
       buffer_info.flags);
