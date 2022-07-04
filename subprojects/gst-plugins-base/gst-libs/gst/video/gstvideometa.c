@@ -411,7 +411,7 @@ gst_video_meta_validate_alignment (GstVideoMeta * meta,
 
   for (i = 0; i < GST_VIDEO_INFO_N_PLANES (&info); i++) {
     if (GST_VIDEO_INFO_PLANE_STRIDE (&info, i) != meta->stride[i]) {
-      GST_WARNING
+      GST_INFO
           ("Stride of plane %d defined in meta (%d) is different from the one computed from the alignment (%d)",
           i, meta->stride[i], GST_VIDEO_INFO_PLANE_STRIDE (&info, i));
       return FALSE;
