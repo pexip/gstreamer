@@ -1682,10 +1682,20 @@ image_reader_on_image_available (void *context, AImageReader * reader)
     gst_object_unref (clock);
   }
 
-  if (AImageReader_acquireLatestImage (reader, &image) != AMEDIA_OK) {
-    GST_DEBUG_OBJECT (self, "No image available");
-    return;
+  if (self->max_images > 1) {
+    if (AImageReader_acquireLatestImage (reader, &image) != AMEDIA_OK) {
+      GST_DEBUG_OBJECT (self, "No image available");
+      return;
+    }
+
+  } else {
+    if (AImageReader_acquireNextImage (reader, &image) != AMEDIA_OK) {
+      GST_DEBUG_OBJECT (self, "No image available");
+      return;
+
+    }
   }
+
   g_mutex_lock (&self->mutex);
 
   GST_DEBUG_OBJECT (self, "Acquired an image (ts: %" GST_TIME_FORMAT ")",
