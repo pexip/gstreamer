@@ -26,6 +26,7 @@
 #ifdef HAVE_IOS
 #include "iosassetsrc.h"
 #include "iosglmemory.h"
+#include "avaudiodeviceprovider.h"
 #endif
 #ifdef HAVE_AVFOUNDATION
 #include "avfvideosrc.h"
@@ -52,7 +53,7 @@ void gst_vtenc_register_elements (GstPlugin * plugin);
 static void
 enable_mt_mode (void)
 {
-  NSThread * th = [[NSThread alloc] init];
+  NSThread *th =[[NSThread alloc] init];
   [th start];
   g_assert ([NSThread isMultiThreaded]);
 }
@@ -70,6 +71,9 @@ plugin_init (GstPlugin * plugin)
 
   res &= gst_element_register (plugin, "iosassetsrc", GST_RANK_SECONDARY,
       GST_TYPE_IOS_ASSET_SRC);
+  res &=
+      gst_device_provider_register (plugin, "avaudiodeviceprovider", GST_RANK_PRIMARY,
+      GST_TYPE_AV_AUDIO_DEVICE_PROVIDER);
 #else
   enable_mt_mode ();
 #endif
@@ -82,10 +86,11 @@ plugin_init (GstPlugin * plugin)
   res &= gst_element_register (plugin, "avsamplebufferlayersink",
       GST_RANK_NONE, GST_TYPE_AV_SAMPLE_VIDEO_SINK);
   res &= gst_device_provider_register (plugin, "avfdeviceprovider",
-    GST_RANK_PRIMARY, GST_TYPE_AVF_DEVICE_PROVIDER);
+      GST_RANK_PRIMARY, GST_TYPE_AVF_DEVICE_PROVIDER);
 #endif
 
-  res &= gst_element_register (plugin, "atdec", GST_RANK_MARGINAL, GST_TYPE_ATDEC);
+  res &=
+      gst_element_register (plugin, "atdec", GST_RANK_MARGINAL, GST_TYPE_ATDEC);
 
 #ifdef HAVE_VIDEOTOOLBOX
   /* Check if the framework actually exists at runtime */
