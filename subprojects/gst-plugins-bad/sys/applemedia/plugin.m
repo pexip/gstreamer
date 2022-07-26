@@ -31,6 +31,7 @@
 
 #if TARGET_OS_IOS || TARGET_OS_TV
 #include "iosglmemory.h"
+#include "avaudiodeviceprovider.h"
 #endif
 
 #include "avfassetsrc.h"
@@ -51,7 +52,7 @@
 static void
 enable_mt_mode (void)
 {
-  NSThread * th = [[NSThread alloc] init];
+  NSThread *th =[[NSThread alloc] init];
   [th start];
   g_assert ([NSThread isMultiThreaded]);
 }
@@ -70,6 +71,11 @@ plugin_init (GstPlugin * plugin)
 
 #if TARGET_OS_IOS
   res |= GST_ELEMENT_REGISTER (iosassetsrc, plugin);
+#endif
+
+#if TARGET_OS_IOS || TARGET_OS_TV
+  res |= gst_device_provider_register (plugin, "avaudiodeviceprovider",
+      GST_RANK_PRIMARY, GST_TYPE_AV_AUDIO_DEVICE_PROVIDER);
 #endif
 
 #if TARGET_OS_OSX

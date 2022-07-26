@@ -57,6 +57,7 @@ ios_deprecated_sources = [
 
 ios_sources = [
   'iosglmemory.c',
+  'avaudiodeviceprovider.m',
 ]
 
 non_ios_sources = [
