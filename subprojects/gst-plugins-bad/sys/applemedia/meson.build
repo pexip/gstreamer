@@ -65,7 +65,8 @@ endif
 if host_system == 'ios'
     applemedia_sources += [
         'iosassetsrc.m',
-        'iosglmemory.c'
+        'iosglmemory.c',
+        'avaudiodeviceprovider.m',
     ]
     applemedia_objc_args += ['-fobjc-abi-version=2', '-fobjc-legacy-dispatch']
 
