@@ -57,6 +57,7 @@ vt_sources = [
 ios_sources = [
   'iosassetsrc.m',
   'iosglmemory.c',
+  'avaudiodeviceprovider.m',
 ]
 
 non_ios_sources = [
