@@ -105,7 +105,6 @@ static GHashTable *ids_by_association = NULL;
 static guint32 number_of_associations = 0;
 
 /* Interface implementations */
-static void gst_sctp_association_dispose (GObject * object);
 static void gst_sctp_association_finalize (GObject * object);
 static void gst_sctp_association_set_property (GObject * object, guint prop_id,
     const GValue * value, GParamSpec * pspec);
@@ -146,7 +145,6 @@ gst_sctp_association_class_init (GstSctpAssociationClass * klass)
 
   gobject_class = (GObjectClass *) klass;
 
-  gobject_class->dispose = gst_sctp_association_dispose;
   gobject_class->finalize = gst_sctp_association_finalize;
   gobject_class->set_property = gst_sctp_association_set_property;
   gobject_class->get_property = gst_sctp_association_get_property;
@@ -261,13 +259,14 @@ gst_sctp_association_init (GstSctpAssociation * self)
 }
 
 static void
-gst_sctp_association_dispose (GObject * object)
+gst_sctp_association_finalize (GObject * object)
 {
   GstSctpAssociation *self = GST_SCTP_ASSOCIATION (object);
 
   G_LOCK (associations_lock);
 
-  g_hash_table_remove (associations_by_id, GUINT_TO_POINTER (self->association_id));
+  g_hash_table_remove (associations_by_id,
+      GUINT_TO_POINTER (self->association_id));
   g_hash_table_remove (ids_by_association, self);
 
   usrsctp_deregister_address ((void *) self);
@@ -275,17 +274,8 @@ gst_sctp_association_dispose (GObject * object)
   if (number_of_associations == 0) {
     usrsctp_finish ();
   }
+
   G_UNLOCK (associations_lock);
-
-  if (G_OBJECT_CLASS (gst_sctp_association_parent_class)->dispose) {
-    G_OBJECT_CLASS (gst_sctp_association_parent_class)->dispose (object);
-  }
-}
-
-static void
-gst_sctp_association_finalize (GObject * object)
-{
-  GstSctpAssociation *self = GST_SCTP_ASSOCIATION (object);
 
   g_mutex_clear (&self->association_mutex);
 
