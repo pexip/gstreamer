@@ -547,7 +547,6 @@ ks_video_probe_filter_for_caps (HANDLE filter_handle)
                   range->Specifier, &entry->is_rgb);
 
               if (media_structure == NULL) {
-                g_warning ("ks_video_format_to_structure returned NULL");
                 ks_video_media_type_free (entry);
                 entry = NULL;
               } else if (src_vscc == NULL) {
