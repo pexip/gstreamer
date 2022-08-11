@@ -3632,6 +3632,41 @@ GST_START_TEST (test_twcc_duplicate_seqnums)
 
 GST_END_TEST;
 
+GST_START_TEST (test_twcc_duplicate_previous_seqnums)
+{
+  SessionHarness *h = session_harness_new ();
+  GstBuffer *buf;
+
+  /* We receive pkt #1 again and this last one should be ignored */
+  TWCCPacket packets[] = {
+    {1, 4 * 32 * GST_MSECOND, FALSE},
+    {2, 5 * 32 * GST_MSECOND, FALSE},
+    {1, 6 * 32 * GST_MSECOND, FALSE},
+    {3, 7 * 32 * GST_MSECOND, TRUE},
+  };
+
+  guint8 exp_fci[] = {
+    0x00, 0x01,                 /* base sequence number: 1 */
+    0x00, 0x03,                 /* packet status count: 2 */
+    0x00, 0x00, 0x02,           /* reference time: 2 * 64ms */
+    0x00,                       /* feedback packet count: 0 */
+    /* packet chunks: */
+    0xd6, 0x00,                 /* 1 1 0 1 0 1 1 0 | 0 0 0 0 0 0 0 0  */
+    0x00, 0x80,                 /* recv deltas: +0, +32ms, + 64ms */
+    0x01, 0x00,
+    0x00, 0x00,                 /* padding */
+  };
+
+  twcc_push_packets (h, packets);
+
+  buf = session_harness_produce_twcc (h);
+  twcc_verify_fci (buf, exp_fci);
+  gst_buffer_unref (buf);
+
+  session_harness_free (h);
+}
+
+GST_END_TEST;
 
 GST_START_TEST (test_twcc_multiple_markers)
 {
@@ -4831,6 +4866,7 @@ rtpsession_suite (void)
   tcase_add_test (tc_chain, test_twcc_huge_seqnum_gap);
   tcase_add_test (tc_chain, test_twcc_double_packets);
   tcase_add_test (tc_chain, test_twcc_duplicate_seqnums);
+  tcase_add_test (tc_chain, test_twcc_duplicate_previous_seqnums);
   tcase_add_test (tc_chain, test_twcc_multiple_markers);
   tcase_add_test (tc_chain, test_twcc_no_marker_and_gaps);
   tcase_add_test (tc_chain, test_twcc_bad_rtcp);

@@ -1368,6 +1368,10 @@ rtp_twcc_manager_recv_packet (RTPTWCCManager * twcc, RTPPacketInfo * pinfo)
       GST_INFO ("Received duplicate packet (%u), dropping", seqnum);
       return FALSE;
     }
+    if (diff < 0) {
+      GST_INFO ("Received a previous duplicate packet (%u), dropping", seqnum);
+      return FALSE;
+    }
   }
 
   /* store the packet for Transport-wide RTCP feedback message */
