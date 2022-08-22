@@ -226,11 +226,13 @@ static GstFlowQuarks flow_quarks[] = {
 };
 
 static void
-gst_pad_warn_if_unlinked (GstPad *pad, GstFlowReturn res) {
+gst_pad_warn_if_unlinked (GstPad * pad, GstFlowReturn res)
+{
   if (G_UNLIKELY (GST_PAD_PEER (pad) == NULL && res == GST_FLOW_NOT_LINKED)) {
     if (!pad->priv->warned_unlinked) {
       pad->priv->warned_unlinked = TRUE;
-      GST_WARNING_OBJECT (pad, "%p:%p returning not-linked", GST_PAD_PARENT(pad), pad);
+      GST_WARNING_OBJECT (pad, "%p:%p returning not-linked",
+          GST_PAD_PARENT (pad), pad);
     }
   } else {
     pad->priv->warned_unlinked = FALSE;
