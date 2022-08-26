@@ -60,8 +60,9 @@ struct _GstAHC2Src
   GstDataQueue *outbound_queue;
   GstClockTime previous_ts;
   gboolean started;
-  GMutex mutex;
   gint max_images;
+
+  volatile gint referenced_images;
 
   gint camera_index;
   ACameraDevice *camera_device;
@@ -84,7 +85,7 @@ struct _GstAHC2Src
 
 typedef struct
 {
-  gsize refcount;
+  volatile gint refcount;
   GstAHC2Src *ahc2src;
   AImage *image;
 } GstWrappedAImage;
@@ -101,10 +102,9 @@ gst_wrapped_aimage_ref (GstWrappedAImage * self)
   g_return_val_if_fail (self->refcount >= 1, NULL);
 
   GST_TRACE_OBJECT (self->ahc2src,
-      "ref GstWrappedAImage %p, refcount: %" G_GSIZE_FORMAT, self,
-      self->refcount);
+      "ref GstWrappedAImage %p, refcount: %d", self, self->refcount);
 
-  self->refcount++;
+  g_atomic_int_add (&self->refcount, 1);
   return self;
 }
 
@@ -117,11 +117,16 @@ gst_wrapped_aimage_unref (GstWrappedAImage * self)
   g_return_if_fail (self->refcount >= 1);
 
   GST_TRACE_OBJECT (self->ahc2src,
-      "unref GstWrappedAImage %p, refcount: %" G_GSIZE_FORMAT, self,
-      self->refcount);
-  if (--self->refcount == 0) {
+      "unref GstWrappedAImage %p, refcount: %d", self, self->refcount);
+  gint old_ref = g_atomic_int_add (&self->refcount, -1);
+
+  if (old_ref == 1) {
+    g_atomic_int_add (&self->ahc2src->referenced_images, -1);
+    GST_TRACE_OBJECT (self->ahc2src,
+        "Destroying image:%p, referenced_images: %d", self->image,
+        self->ahc2src->referenced_images);
+    AImage_delete (self->image);
     gst_object_unref (self->ahc2src);
-    g_clear_pointer (&self->image, (GDestroyNotify) AImage_delete);
   }
 }
 
@@ -213,7 +218,7 @@ gst_ahc2_src_get_capabilities (GstPhotography * photo)
     }
   }
 
-  g_clear_pointer (&metadata, (GDestroyNotify) ACameraMetadata_free);
+  ACameraMetadata_free (metadata);
 
   return caps;
 }
@@ -482,7 +487,7 @@ gst_ahc2_src_get_ev_compensation (GstPhotography * photo, gfloat * ev_comp)
 
   ret = TRUE;
 out:
-  g_clear_pointer (&metadata, (GDestroyNotify) ACameraMetadata_free);
+  ACameraMetadata_free (metadata);
   return ret;
 }
 
@@ -551,7 +556,7 @@ gst_ahc2_src_set_ev_compensation (GstPhotography * photo, gfloat ev_comp)
 
   ret = TRUE;
 out:
-  g_clear_pointer (&metadata, (GDestroyNotify) ACameraMetadata_free);
+  ACameraMetadata_free (metadata);
   return ret;
 }
 
@@ -1025,7 +1030,7 @@ gst_ahc2_src_set_zoom (GstPhotography * photo, gfloat zoom)
 
   ret = TRUE;
 out:
-  g_clear_pointer (&metadata, (GDestroyNotify) ACameraMetadata_free);
+  ACameraMetadata_free (metadata);
 
   return ret;
 }
@@ -1100,6 +1105,8 @@ gst_ahc2_src_set_caps (GstBaseSrc * src, GstCaps * caps)
     GST_WARNING_OBJECT (self, "framerate holds unrecognizable value");
   }
 
+  GST_OBJECT_LOCK (self);
+
   if (fps_min != 0 && fps_max != 0) {
     gint fps_range[2] = { fps_min, fps_max };
     ACaptureRequest_setEntry_i32 (self->capture_request,
@@ -1116,6 +1123,17 @@ gst_ahc2_src_set_caps (GstBaseSrc * src, GstCaps * caps)
       goto failed;
   }
 
+  /* we flush the internal queue, so that old AImages can be cleaned out */
+  gst_data_queue_flush (self->outbound_queue);
+
+  while (self->referenced_images > 0) {
+    g_usleep (G_USEC_PER_SEC / 50);
+    GST_DEBUG_OBJECT (self,
+        "waiting for buffers to come home. referenced_images: %d",
+        self->referenced_images);
+  }
+
+  /* this will possibly invalidate any AImge currently in the pipeline */
   g_clear_pointer (&self->image_reader, (GDestroyNotify) AImageReader_delete);
 
   if (AImageReader_new (width, height, fmt, self->max_images,
@@ -1172,11 +1190,14 @@ gst_ahc2_src_set_caps (GstBaseSrc * src, GstCaps * caps)
   ACameraCaptureSession_setRepeatingRequest (self->camera_capture_session,
       NULL, 1, &self->capture_request, NULL);
 
+  GST_OBJECT_UNLOCK (self);
+
   return TRUE;
 
 failed:
-  g_clear_pointer (&self->image_reader, (GDestroyNotify) AImageReader_delete);
+  GST_OBJECT_UNLOCK (self);
 
+  g_clear_pointer (&self->image_reader, (GDestroyNotify) AImageReader_delete);
   g_clear_pointer (&self->camera_output_target,
       (GDestroyNotify) ACameraOutputTarget_free);
 
@@ -1193,17 +1214,17 @@ gst_ahc2_src_get_caps (GstBaseSrc * src, GstCaps * filter)
   ACameraMetadata *metadata = NULL;
   ACameraMetadata_const_entry entry, fps_entry;
 
+  GST_OBJECT_LOCK (self);
+
   if (ACameraManager_getCameraCharacteristics (self->camera_manager,
           self->camera_id_list->cameraIds[self->camera_index],
           &metadata) != ACAMERA_OK) {
 
     GST_ERROR_OBJECT (self, "Failed to get metadata from camera device");
 
+    GST_OBJECT_UNLOCK (self);
     return caps;
   }
-
-  GST_OBJECT_LOCK (self);
-
 #ifndef GST_DISABLE_GST_DEBUG
   if (ACameraMetadata_getConstEntry (metadata,
           ACAMERA_INFO_SUPPORTED_HARDWARE_LEVEL, &entry) == ACAMERA_OK) {
@@ -1333,8 +1354,8 @@ gst_ahc2_src_get_caps (GstBaseSrc * src, GstCaps * filter)
     GST_WARNING_OBJECT (self, "  No available stream configurations detected");
   }
 
-  g_clear_pointer (&format, gst_structure_free);
-  g_clear_pointer (&metadata, (GDestroyNotify) ACameraMetadata_free);
+  gst_structure_free (format);
+  ACameraMetadata_free (metadata);
 
   GST_DEBUG_OBJECT (self, "%" GST_PTR_FORMAT, caps);
 
@@ -1348,8 +1369,11 @@ gst_ahc2_src_unlock (GstBaseSrc * src)
 {
   GstAHC2Src *self = GST_AHC2_SRC (src);
 
-  GST_DEBUG_OBJECT (self, "unlocking create");
+  GST_DEBUG_OBJECT (self, "flushing the queue");
+  GST_OBJECT_LOCK (self);
   gst_data_queue_set_flushing (self->outbound_queue, TRUE);
+  gst_data_queue_flush (self->outbound_queue);
+  GST_OBJECT_UNLOCK (self);
 
   return TRUE;
 }
@@ -1359,8 +1383,11 @@ gst_ahc2_src_unlock_stop (GstBaseSrc * src)
 {
   GstAHC2Src *self = GST_AHC2_SRC (src);
 
-  GST_DEBUG_OBJECT (self, "stopping unlock");
+  GST_DEBUG_OBJECT (self, "stop flushing the queue");
+  GST_OBJECT_LOCK (self);
   gst_data_queue_set_flushing (self->outbound_queue, FALSE);
+  gst_data_queue_flush (self->outbound_queue);
+  GST_OBJECT_UNLOCK (self);
 
   return TRUE;
 }
@@ -1372,11 +1399,12 @@ gst_ahc2_src_create (GstPushSrc * src, GstBuffer ** buffer)
   GstDataQueueItem *item;
 
   if (!gst_data_queue_pop (self->outbound_queue, &item)) {
-    GST_DEBUG_OBJECT (self, "We're flushing");
+    GST_DEBUG_OBJECT (self, "We're flushing, item: %p", item);
     return GST_FLOW_FLUSHING;
   }
 
   *buffer = GST_BUFFER (item->object);
+  GST_TRACE_OBJECT (self, "Create function for buffer: %p", *buffer);
   g_free (item);
 
   return GST_FLOW_OK;
@@ -1453,7 +1481,7 @@ static gboolean
 gst_ahc2_src_start (GstBaseSrc * src)
 {
   GstAHC2Src *self = GST_AHC2_SRC (src);
-  g_mutex_lock (&self->mutex);
+  GST_OBJECT_LOCK (self);
 
   if (!gst_ahc2_src_camera_open (self)) {
     goto out;
@@ -1463,7 +1491,7 @@ gst_ahc2_src_start (GstBaseSrc * src)
   self->started = TRUE;
 
 out:
-  g_mutex_unlock (&self->mutex);
+  GST_OBJECT_UNLOCK (self);
 
   return self->started;
 }
@@ -1473,14 +1501,14 @@ gst_ahc2_src_stop (GstBaseSrc * src)
 {
   GstAHC2Src *self = GST_AHC2_SRC (src);
 
-  g_mutex_lock (&self->mutex);
+  GST_OBJECT_LOCK (self);
   ACameraCaptureSession_abortCaptures (self->camera_capture_session);
   gst_ahc2_src_camera_close (self);
 
   gst_data_queue_flush (self->outbound_queue);
 
   self->started = FALSE;
-  g_mutex_unlock (&self->mutex);
+  GST_OBJECT_UNLOCK (self);
 
   return TRUE;
 }
@@ -1648,14 +1676,13 @@ gst_ahc2_src_finalize (GObject * object)
 
   g_clear_pointer (&self->outbound_queue, gst_object_unref);
 
-  g_mutex_clear (&self->mutex);
   G_OBJECT_CLASS (parent_class)->finalize (object);
 }
 
 static void
 data_queue_item_free (GstDataQueueItem * item)
 {
-  g_clear_pointer (&item->object, (GDestroyNotify) gst_mini_object_unref);
+  gst_mini_object_unref (item->object);
   g_free (item);
 }
 
@@ -1682,11 +1709,13 @@ image_reader_on_image_available (void *context, AImageReader * reader)
     gst_object_unref (clock);
   }
 
+  GST_OBJECT_LOCK (self);
+
   if (AImageReader_acquireLatestImage (reader, &image) != AMEDIA_OK) {
     GST_DEBUG_OBJECT (self, "No image available");
+    GST_OBJECT_UNLOCK (self);
     return;
   }
-  g_mutex_lock (&self->mutex);
 
   GST_DEBUG_OBJECT (self, "Acquired an image (ts: %" GST_TIME_FORMAT ")",
       GST_TIME_ARGS (current_ts));
@@ -1710,7 +1739,7 @@ image_reader_on_image_available (void *context, AImageReader * reader)
     AImage_delete (image);
     GST_DEBUG_OBJECT (self, "Droping image (reason: %s)",
         self->started ? "first frame" : "not yet started");
-    g_mutex_unlock (&self->mutex);
+    GST_OBJECT_UNLOCK (self);
     return;
   }
 
@@ -1742,25 +1771,30 @@ image_reader_on_image_available (void *context, AImageReader * reader)
     gst_buffer_append_memory (buffer, mem);
   }
 
+  g_atomic_int_add (&self->referenced_images, 1);
+  GST_TRACE_OBJECT (self, "Created image:%p, referenced_images: %d", image,
+      self->referenced_images);
+
   item = g_new0 (GstDataQueueItem, 1);
   item->object = GST_MINI_OBJECT (buffer);
   item->size = gst_buffer_get_size (buffer);
   item->visible = TRUE;
   item->destroy = (GDestroyNotify) data_queue_item_free;
 
+  GST_TRACE_OBJECT (self, "About to push buffer: %p on queue", buffer);
   if (!gst_data_queue_push (self->outbound_queue, item)) {
     item->destroy (item);
     GST_DEBUG_OBJECT (self, "Failed to push item because we're flushing");
   }
 
   gst_wrapped_aimage_unref (wrapped_aimage);
-  g_mutex_unlock (&self->mutex);
+  GST_OBJECT_UNLOCK (self);
 
   GST_TRACE_OBJECT (self,
-      "created buffer from image callback %" G_GSIZE_FORMAT ", ts %"
+      "created buffer %p from image callback %" G_GSIZE_FORMAT ", ts %"
       GST_TIME_FORMAT ", dur %" GST_TIME_FORMAT
       ", offset %" G_GINT64_FORMAT ", offset_end %" G_GINT64_FORMAT,
-      gst_buffer_get_size (buffer),
+      buffer, gst_buffer_get_size (buffer),
       GST_TIME_ARGS (GST_BUFFER_TIMESTAMP (buffer)),
       GST_TIME_ARGS (GST_BUFFER_DURATION (buffer)),
       GST_BUFFER_OFFSET (buffer), GST_BUFFER_OFFSET_END (buffer));
@@ -2051,8 +2085,6 @@ gst_ahc2_src_init (GstAHC2Src * self)
   self->image_reader_listener.context = self;
   self->image_reader_listener.onImageAvailable =
       image_reader_on_image_available;
-
-  g_mutex_init (&self->mutex);
 
 #ifndef GST_DISABLE_GST_DEBUG
   {
