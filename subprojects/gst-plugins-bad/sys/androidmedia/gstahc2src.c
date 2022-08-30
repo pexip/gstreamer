@@ -62,6 +62,9 @@ struct _GstAHC2Src
   gboolean started;
   gint max_images;
 
+  gint width;
+  gint height;
+
   volatile gint referenced_images;
 
   gint camera_index;
@@ -1067,7 +1070,7 @@ gst_ahc2_src_set_caps (GstBaseSrc * src, GstCaps * caps)
   gint fmt = -1;
   const gchar *format_str = NULL;
   const GValue *framerate_value;
-  gint width, height, fps_min = 0, fps_max = 0;
+  gint fps_min = 0, fps_max = 0;
 
   ANativeWindow *image_reader_window = NULL;
 
@@ -1080,8 +1083,8 @@ gst_ahc2_src_set_caps (GstBaseSrc * src, GstCaps * caps)
   format_str = gst_structure_get_string (s, "format");
   format = gst_video_format_from_string (format_str);
 
-  gst_structure_get_int (s, "width", &width);
-  gst_structure_get_int (s, "height", &height);
+  gst_structure_get_int (s, "width", &self->width);
+  gst_structure_get_int (s, "height", &self->height);
   framerate_value = gst_structure_get_value (s, "framerate");
 
   if (GST_VALUE_HOLDS_FRACTION_RANGE (framerate_value)) {
@@ -1136,11 +1139,12 @@ gst_ahc2_src_set_caps (GstBaseSrc * src, GstCaps * caps)
   /* this will possibly invalidate any AImge currently in the pipeline */
   g_clear_pointer (&self->image_reader, (GDestroyNotify) AImageReader_delete);
 
-  if (AImageReader_new (width, height, fmt, self->max_images,
+  if (AImageReader_new (self->width, self->height, fmt, self->max_images,
           &self->image_reader) != AMEDIA_OK) {
     GST_ERROR_OBJECT (self, "One or more of parameter "
         "(width: %d, height: %d, format: %s, max-images: %d) "
-        "is not supported.", width, height, format_str, self->max_images);
+        "is not supported.", self->width, self->height, format_str,
+        self->max_images);
 
     goto failed;
   }
@@ -1686,6 +1690,109 @@ data_queue_item_free (GstDataQueueItem * item)
   g_free (item);
 }
 
+#if 0
+ACameraMetadata *metadata = NULL;
+if (ACameraManager_getCameraCharacteristics (self->camera_manager,
+        self->camera_id_list->cameraIds[self->camera_index],
+        &metadata) != ACAMERA_OK) {
+  return;
+}
+ACameraMetadata_const_entry orientation;
+ACameraMetadata_getConstEntry (metadata, ACAMERA_SENSOR_ORIENTATION,
+    &orientation);
+int32_t angle = orientation.data.i32[0];
+GST_DEBUG ("Our angle is: %d", angle);
+#endif
+
+static void
+_aimage_to_gstbuffer (GstAHC2Src * self, AImage * image, GstBuffer * buffer)
+{
+  GstWrappedAImage *wrapped_aimage;
+
+  guint8 *y_data;
+  guint8 *u_data;
+  guint8 *v_data;
+
+  gint y_length;
+  gint u_length;
+  gint v_length;
+
+  gint y_stride;
+  gint u_stride;
+  gint v_stride;
+
+  gint u_pixelstride;
+  gint v_pixelstride;
+
+  GstMemory *y_mem;
+  GstMemory *uv_mem;
+
+  gint n_planes;
+
+  AImage_getNumberOfPlanes (image, &n_planes);
+  if (n_planes != 3) {
+    GST_ERROR_OBJECT (self, "Not getting 3 planes!!");
+    g_assert_not_reached ();
+  }
+
+  AImage_getPlaneData (image, 0, &y_data, &y_length);
+  AImage_getPlaneData (image, 1, &u_data, &u_length);
+  AImage_getPlaneData (image, 2, &v_data, &v_length);
+
+  AImage_getPlaneRowStride (image, 0, &y_stride);
+  AImage_getPlaneRowStride (image, 1, &u_stride);
+  AImage_getPlaneRowStride (image, 2, &v_stride);
+
+  AImage_getPlanePixelStride (image, 1, &u_pixelstride);
+  AImage_getPlanePixelStride (image, 2, &v_pixelstride);
+
+  if (y_stride != self->width) {
+    GST_ERROR_OBJECT (self,
+        "Assumption about AImage being stride=width broken!");
+    g_assert_not_reached ();
+  }
+
+  wrapped_aimage = g_new0 (GstWrappedAImage, 1);
+  wrapped_aimage->refcount = 1;
+  wrapped_aimage->ahc2src = g_object_ref (self);
+  wrapped_aimage->image = image;
+
+  /* append the Y memory */
+  y_mem = gst_memory_new_wrapped (GST_MEMORY_FLAG_READONLY,
+      y_data, y_length, 0, y_length,
+      gst_wrapped_aimage_ref (wrapped_aimage),
+      (GDestroyNotify) gst_wrapped_aimage_unref);
+  gst_buffer_append_memory (buffer, y_mem);
+
+
+  /* if all of this is true, we can safly assume a NV12 layout, where the
+     whole memory for the UV plane is contained inside both u_data and v_data,
+     with only 1 pixel moved */
+  if (u_length == v_length &&   /* we have the same length */
+      u_stride == v_stride &&   /* we have the same stride */
+      ((u_data + 1 == v_data) || (v_data + 1 == u_data)) &&     /* v_data is basically pointing one pixel into u_data (or v.v), otherwise identical, expected for NV12/NV21 */
+      u_pixelstride == 2 && v_pixelstride == 2 &&       /* the packing you expect from inteleaved U/V/U/V in NV12 */
+      u_length == y_length / u_pixelstride - 1) {       /* when reading all the U pixels, you expect the length to be /2-1 */
+
+    uv_mem = gst_memory_new_wrapped (GST_MEMORY_FLAG_READONLY,
+        u_data, y_length / 2, 0, y_length / 2,
+        gst_wrapped_aimage_ref (wrapped_aimage),
+        (GDestroyNotify) gst_wrapped_aimage_unref);
+    gst_buffer_append_memory (buffer, uv_mem);
+  } else {
+    /* we need this assumption to be true for now! */
+    GST_ERROR_OBJECT (self, "Not getting the NV12 memory-layout we expected: "
+        "y_length=%d u_length=%d, v_length=%d, "
+        "u_stride=%d, v_stride=%d, u_data=%p, v_data=%p, "
+        "u_pixelstride=%d, v_pixelstride=%d",
+        y_length, u_length, v_length, u_stride, v_stride, u_data, v_data,
+        u_pixelstride, v_pixelstride);
+    g_assert_not_reached ();
+  }
+
+  gst_wrapped_aimage_unref (wrapped_aimage);
+}
+
 static void
 image_reader_on_image_available (void *context, AImageReader * reader)
 {
@@ -1696,11 +1803,7 @@ image_reader_on_image_available (void *context, AImageReader * reader)
   GstClockTime duration = GST_CLOCK_TIME_NONE;
   GstClockTime current_ts = GST_CLOCK_TIME_NONE;
   GstClock *clock;
-
-  GstWrappedAImage *wrapped_aimage;
   AImage *image = NULL;
-  gint n_planes;
-  gint i;
 
   if ((clock = GST_ELEMENT_CLOCK (self))) {
     GstClockTime base_time = GST_ELEMENT_CAST (self)->base_time;
@@ -1743,33 +1846,11 @@ image_reader_on_image_available (void *context, AImageReader * reader)
     return;
   }
 
-  AImage_getNumberOfPlanes (image, &n_planes);
-
   buffer = gst_buffer_new ();
   GST_BUFFER_DURATION (buffer) = duration;
   GST_BUFFER_PTS (buffer) = current_ts;
 
-  wrapped_aimage = g_new0 (GstWrappedAImage, 1);
-  wrapped_aimage->refcount = 1;
-  wrapped_aimage->ahc2src = g_object_ref (self);
-  wrapped_aimage->image = image;
-
-  for (i = 0; i < n_planes; i++) {
-    guint8 *data;
-    gint length;
-    GstMemory *mem;
-
-    AImage_getPlaneData (image, i, &data, &length);
-
-    mem = gst_memory_new_wrapped (GST_MEMORY_FLAG_READONLY,
-        data, length, 0, length,
-        gst_wrapped_aimage_ref (wrapped_aimage),
-        (GDestroyNotify) gst_wrapped_aimage_unref);
-
-    GST_TRACE_OBJECT (self, "Created a wrapped memory (ptr: %p, length: %d)",
-        mem, length);
-    gst_buffer_append_memory (buffer, mem);
-  }
+  _aimage_to_gstbuffer (self, image, buffer);
 
   g_atomic_int_add (&self->referenced_images, 1);
   GST_TRACE_OBJECT (self, "Created image:%p, referenced_images: %d", image,
@@ -1787,7 +1868,6 @@ image_reader_on_image_available (void *context, AImageReader * reader)
     GST_DEBUG_OBJECT (self, "Failed to push item because we're flushing");
   }
 
-  gst_wrapped_aimage_unref (wrapped_aimage);
   GST_OBJECT_UNLOCK (self);
 
   GST_TRACE_OBJECT (self,
