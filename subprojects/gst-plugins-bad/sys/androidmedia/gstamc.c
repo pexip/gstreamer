@@ -803,13 +803,16 @@ gst_amc_color_format_copy (GstAmcColorFormatInfo * cinfo,
   gboolean ret = FALSE;
   guint8 *cptr = NULL, *vptr = NULL;
   guint8 **src, **dest;
+  GstMapFlags map_flags;
 
   if (direction == COLOR_FORMAT_COPY_OUT) {
     src = &cptr;
     dest = &vptr;
+    map_flags = GST_MAP_WRITE;
   } else {
     src = &vptr;
     dest = &cptr;
+    map_flags = GST_MAP_READ;
   }
 
   /* Same video format */
@@ -817,7 +820,7 @@ gst_amc_color_format_copy (GstAmcColorFormatInfo * cinfo,
     GstMapInfo minfo;
 
     GST_DEBUG ("Buffer sizes equal, doing fast copy");
-    gst_buffer_map (vbuffer, &minfo, GST_MAP_WRITE);
+    gst_buffer_map (vbuffer, &minfo, map_flags);
 
     cptr = cbuffer->data + cbuffer_info->offset;
     vptr = minfo.data;
@@ -845,7 +848,7 @@ gst_amc_color_format_copy (GstAmcColorFormatInfo * cinfo,
       slice_height = cinfo->slice_height;
       g_assert (stride > 0 && slice_height > 0);
 
-      gst_video_frame_map (&vframe, vinfo, vbuffer, GST_MAP_WRITE);
+      gst_video_frame_map (&vframe, vinfo, vbuffer, map_flags);
 
       for (i = 0; i < 3; i++) {
         if (i == 0) {
@@ -903,7 +906,7 @@ gst_amc_color_format_copy (GstAmcColorFormatInfo * cinfo,
 
       /* FIXME: This does not work for odd widths or heights
        * but might as well be a bug in the codec */
-      gst_video_frame_map (&vframe, vinfo, vbuffer, GST_MAP_WRITE);
+      gst_video_frame_map (&vframe, vinfo, vbuffer, map_flags);
       for (i = 0; i < 2; i++) {
         if (i == 0) {
           c_stride = cinfo->stride;
@@ -946,7 +949,7 @@ gst_amc_color_format_copy (GstAmcColorFormatInfo * cinfo,
       /* This should always be set */
       g_assert (cinfo->stride > 0 && cinfo->slice_height > 0);
 
-      gst_video_frame_map (&vframe, vinfo, vbuffer, GST_MAP_WRITE);
+      gst_video_frame_map (&vframe, vinfo, vbuffer, map_flags);
 
       for (i = 0; i < 2; i++) {
         c_stride = cinfo->stride;
@@ -992,7 +995,7 @@ gst_amc_color_format_copy (GstAmcColorFormatInfo * cinfo,
       const size_t tile_h_chroma = (height / 2 - 1) / TILE_HEIGHT + 1;
       size_t luma_size = tile_w_align * tile_h_luma * TILE_SIZE;
 
-      gst_video_frame_map (&vframe, vinfo, vbuffer, GST_MAP_WRITE);
+      gst_video_frame_map (&vframe, vinfo, vbuffer, map_flags);
       v_luma = GST_VIDEO_FRAME_PLANE_DATA (&vframe, 0);
       v_chroma = GST_VIDEO_FRAME_PLANE_DATA (&vframe, 1);
       v_luma_stride = GST_VIDEO_FRAME_COMP_STRIDE (&vframe, 0);
