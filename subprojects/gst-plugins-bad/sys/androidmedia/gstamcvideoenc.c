@@ -179,6 +179,10 @@ create_amc_format (GstAmcVideoEnc * encoder, GstVideoCodecState * input_state,
   profile_string = gst_structure_get_string (s, "profile");
   level_string = gst_structure_get_string (s, "level");
 
+  GST_DEBUG_OBJECT (encoder,
+      "Creating GstAmcFormat for profile: %s and level: %s",
+      profile_string, level_string);
+
   if (strcmp (name, "video/mpeg") == 0) {
     gint mpegversion;
 
@@ -273,14 +277,20 @@ create_amc_format (GstAmcVideoEnc * encoder, GstVideoCodecState * input_state,
 
     /* FIXME: Set to any value in AVCProfile* leads to
      * codec configuration fail */
-    /* gst_amc_format_set_int (format, amc_profile.key, 0x40); */
+    GST_DEBUG_OBJECT (encoder, "Setting profile-id to %d", amc_profile.id);
+    gst_amc_format_set_int (format, amc_profile.key, amc_profile.id, &err);
+    if (err)
+      GST_ELEMENT_WARNING_FROM_ERROR (encoder, err);
   }
 
   if (level_string) {
     if (amc_level.id == -1)
       goto unsupported_level;
 
-    /* gst_amc_format_set_int (format, amc_level.key, amc_level.id); */
+    GST_DEBUG_OBJECT (encoder, "Setting level-id to %d", amc_level.id);
+    gst_amc_format_set_int (format, amc_level.key, amc_level.id, &err);
+    if (err)
+      GST_ELEMENT_WARNING_FROM_ERROR (encoder, err);
   }
 
   /* On Android N_MR1 and higher, i-frame-interval can be a float value */
@@ -423,7 +433,7 @@ caps_from_amc_format (GstAmcFormat * amc_format)
     }
 
     if (gst_amc_format_get_int (amc_format, "level", &amc_level, NULL)) {
-      level_string = gst_amc_avc_level_to_string (amc_profile);
+      level_string = gst_amc_avc_level_to_string (amc_level);
       if (!level_string)
         goto unsupported_level;
 
@@ -463,7 +473,8 @@ caps_from_amc_format (GstAmcFormat * amc_format)
 
   gst_caps_set_simple (caps, "width", G_TYPE_INT, width,
       "height", G_TYPE_INT, height,
-      "framerate", GST_TYPE_FRACTION, fraction_n, fraction_d, NULL);
+      "framerate", GST_TYPE_FRACTION, fraction_n, fraction_d,
+      "alignment", G_TYPE_STRING, "au", NULL);
 
   g_free (mime);
   return caps;
