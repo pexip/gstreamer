@@ -657,12 +657,12 @@ rtp_session_class_init (RTPSessionClass * klass)
       0, G_MAXUINT, DEFAULT_MAX_MISORDER_TIME,
       G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS);
 
-  g_object_class_install_property (gobject_class, PROP_SSRC_COLLISION_DETECTION,
+  properties[PROP_SSRC_COLLISION_DETECTION] =
       g_param_spec_boolean ("ssrc-collision-detection",
-          "SSRC collision detection",
-          "Enable/Disable SSRC collision detection for remote sources",
-          DEFAULT_SSRC_COLLISION_DETECTION,
-          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+      "SSRC collision detection",
+      "Enable/Disable SSRC collision detection for remote sources",
+      DEFAULT_SSRC_COLLISION_DETECTION,
+      G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS);
 
   /**
    * RTPSession:stats:
