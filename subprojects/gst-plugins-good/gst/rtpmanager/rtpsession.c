@@ -731,8 +731,6 @@ rtp_session_class_init (RTPSessionClass * klass)
       0, G_MAXUINT64, DEFAULT_TWCC_FEEDBACK_INTERVAL,
       G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS);
 
-  g_object_class_install_properties (gobject_class, PROP_LAST, properties);
-
   /**
    * RTPSession:rtx-ssrc-map:
    *
@@ -740,10 +738,12 @@ rtp_session_class_init (RTPSessionClass * klass)
    *
    * Since: 1.20
    */
-  g_object_class_install_property (gobject_class, PROP_RTX_SSRC_MAP,
+  properties[PROP_RTX_SSRC_MAP] =
       g_param_spec_boxed ("rtx-ssrc-map", "RTX SSRC Map",
-          "Map of SSRCs to their retransmission SSRCs",
-          GST_TYPE_STRUCTURE, G_PARAM_WRITABLE | G_PARAM_STATIC_STRINGS));
+      "Map of SSRCs to their retransmission SSRCs",
+      GST_TYPE_STRUCTURE, G_PARAM_WRITABLE | G_PARAM_STATIC_STRINGS);
+
+  g_object_class_install_properties (gobject_class, PROP_LAST, properties);
 
   klass->get_source_by_ssrc =
       GST_DEBUG_FUNCPTR (rtp_session_get_source_by_ssrc);
