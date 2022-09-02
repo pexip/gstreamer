@@ -521,7 +521,8 @@ gst_rtp_funnel_sink_query (GstPad * pad, GstObject * parent, GstQuery * query)
             gst_rtp_header_extension_get_id (funnel->twcc_ext);
         gboolean current_caps_have_ext_id = current_ext_id != 0
             && current_ext_id != G_MAXUINT32;
-        guint8 new_ext_id = _get_extmap_id_for_attribute (s, TWCC_EXTMAP_STR);
+        guint8 new_ext_id = gst_rtp_get_extmap_id_for_attribute (s,
+            TWCC_EXTMAP_STR);
         gboolean new_caps_have_ext_id = new_ext_id > 0;
 
         if (current_caps_have_ext_id && new_caps_have_ext_id
