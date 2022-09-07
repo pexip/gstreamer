@@ -2474,9 +2474,9 @@ gst_rtp_session_chain_send_rtp_common (GstRtpSession * rtpsession,
       if (priv->send_latency != GST_CLOCK_TIME_NONE) {
         running_time += priv->send_latency;
       } else {
-        GST_WARNING_OBJECT (rtpsession,
+        GST_INFO_OBJECT (rtpsession,
             "Can't determine running time for this packet without knowing configured latency");
-        running_time = -1;
+        //running_time = -1;
       }
     }
   } else {
