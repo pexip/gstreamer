@@ -2527,7 +2527,7 @@ gst_rtp_session_chain_send_rtp_common (GstRtpSession * rtpsession,
           GST_LOG_OBJECT (rtpsession,
               "Can't determine running time for this packet without knowing configured latency");
         }
-        running_time = -1;
+        // running_time = -1;
       }
     }
   } else {
