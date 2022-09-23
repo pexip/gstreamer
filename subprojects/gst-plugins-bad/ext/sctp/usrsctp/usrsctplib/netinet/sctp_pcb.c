@@ -6726,6 +6726,10 @@ sctp_pcb_init(void)
 #endif
 #if defined(SCTP_ITERATOR)
 	sctp_startup_iterator();
+#else
+	SCTP_ITERATOR_LOCK_INIT();
+	SCTP_IPI_ITERATOR_WQ_INIT();
+	TAILQ_INIT(&sctp_it_ctl.iteratorhead);
 #endif
 
 #if defined(__FreeBSD__) && !defined(__Userspace__)
