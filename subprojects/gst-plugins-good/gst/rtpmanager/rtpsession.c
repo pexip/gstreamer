@@ -3300,7 +3300,7 @@ rtp_session_process_rtcp (RTPSession * sess, GstBuffer * buffer,
     GstClockTime current_time, GstClockTime running_time, guint64 ntpnstime)
 {
   GstRTCPPacket packet;
-  gboolean more, is_bye = FALSE, do_sync = FALSE, has_report = FALSE;
+  gboolean more, is_bye = FALSE, do_sync = FALSE;
   RTPPacketInfo pinfo = { 0, };
   GstFlowReturn result = GST_FLOW_OK;
   GstRTCPBuffer rtcp = { NULL, };
@@ -3331,11 +3331,9 @@ rtp_session_process_rtcp (RTPSession * sess, GstBuffer * buffer,
 
     switch (type) {
       case GST_RTCP_TYPE_SR:
-        has_report = TRUE;
         rtp_session_process_sr (sess, &packet, &pinfo, &do_sync);
         break;
       case GST_RTCP_TYPE_RR:
-        has_report = TRUE;
         rtp_session_process_rr (sess, &packet, &pinfo);
         break;
       case GST_RTCP_TYPE_SDES:
@@ -3384,10 +3382,6 @@ rtp_session_process_rtcp (RTPSession * sess, GstBuffer * buffer,
   GST_DEBUG ("%p, received RTCP packet, avg size %u, %u", &sess->stats,
       sess->stats.avg_rtcp_packet_size, pinfo.bytes);
   RTP_SESSION_UNLOCK (sess);
-
-  if (has_report) {
-    g_object_notify_by_pspec (G_OBJECT (sess), properties[PROP_STATS]);
-  }
 
   pinfo.data = NULL;
   clean_packet_info (&pinfo);
