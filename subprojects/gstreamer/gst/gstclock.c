@@ -168,8 +168,6 @@ struct _GstClockPrivate
   gint post_count;
 
   gboolean synced;
-
-  GWeakRef *clock_weakref;
 };
 
 typedef struct _GstClockEntryImpl GstClockEntryImpl;
@@ -772,17 +770,6 @@ gst_clock_init (GstClock * clock)
   priv->timeout = DEFAULT_TIMEOUT;
   priv->times = g_new0 (GstClockTime, 4 * priv->window_size);
   priv->times_temp = priv->times + 2 * priv->window_size;
-  /*
-   * An atomically ref-counted wrapper around a GWeakRef for this GstClock,
-   * created by the clock and shared with all its clock entries.
-   *
-   * This exists because g_weak_ref_ operations are quite expensive and operate
-   * with a global GRWLock. _get takes a reader lock, _init and _clear take
-   * a writer lock. We want to avoid having to instantiate a new GWeakRef for
-   * every clock entry.
-   */
-  priv->clock_weakref = g_atomic_rc_box_new (GWeakRef);
-  g_weak_ref_init (priv->clock_weakref, clock);
 }
 
 static void
@@ -820,8 +807,6 @@ gst_clock_finalize (GObject * object)
   clock->priv->times_temp = NULL;
   GST_CLOCK_SLAVE_UNLOCK (clock);
 
-  g_atomic_rc_box_release_full (clock->priv->clock_weakref,
-      (GDestroyNotify) g_weak_ref_clear);
   g_mutex_clear (&clock->priv->slave_lock);
   g_cond_clear (&clock->priv->sync_cond);
 
