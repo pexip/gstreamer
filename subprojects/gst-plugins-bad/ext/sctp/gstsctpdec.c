@@ -80,7 +80,7 @@ static GParamSpec *properties[NUM_PROPERTIES];
 GType gst_sctp_dec_pad_get_type (void);
 
 #define GST_TYPE_SCTP_DEC_PAD (gst_sctp_dec_pad_get_type())
-#define GST_SCTP_DEC_PAD(obj) (G_TYPE_CHECK_INSTANCE_CAST((obj), GST_TYPE_SCTP_DEC_PAD, GstSctpDecPad))
+#define GST_SCTP_DEC_PAD_CAST(obj) (GstSctpDecPad*)(obj)
 #define GST_SCTP_DEC_PAD_CLASS(klass) (G_TYPE_CHECK_CLASS_CAST((klass), GST_TYPE_SCTP_DEC_PAD, GstSctpDecPadClass))
 #define GST_IS_SCTP_DEC_PAD(obj) (G_TYPE_CHECK_INSTANCE_TYPE((obj), GST_TYPE_SCTP_DEC_PAD))
 #define GST_IS_SCTP_DEC_PAD_CLASS(klass) (G_TYPE_CHECK_CLASS_TYPE((klass), GST_TYPE_SCTP_DEC_PAD))
@@ -100,7 +100,7 @@ G_DEFINE_TYPE (GstSctpDecPad, gst_sctp_dec_pad, GST_TYPE_PAD);
 static void
 gst_sctp_dec_pad_finalize (GObject * object)
 {
-  GstSctpDecPad *self = GST_SCTP_DEC_PAD (object);
+  GstSctpDecPad *self = GST_SCTP_DEC_PAD_CAST (object);
 
   gst_object_unref (self->packet_queue);
 
@@ -157,6 +157,7 @@ static gboolean gst_sctp_dec_packet_event (GstPad * pad, GstSctpDec * self,
 static void gst_sctp_data_srcpad_loop (GstPad * pad);
 
 static gboolean configure_association (GstSctpDec * self);
+static void cleanup_association (GstSctpDec * self);
 static void on_gst_sctp_association_stream_reset (GstSctpAssociation *
     gst_sctp_association, guint16 stream_id, GstSctpDec * self);
 static void on_gst_sctp_association_restart (GstSctpAssociation *
@@ -164,9 +165,6 @@ static void on_gst_sctp_association_restart (GstSctpAssociation *
 static void on_receive (GstSctpAssociation * gst_sctp_association,
     guint8 * buf, gsize length, guint16 stream_id, guint ppid,
     gpointer user_data);
-static void stop_srcpad_task (GstPad * pad);
-static void stop_all_srcpad_tasks (GstSctpDec * self);
-static void sctpdec_cleanup (GstSctpDec * self);
 static GstPad *get_pad_for_stream_id (GstSctpDec * self, guint16 stream_id);
 static void remove_pad (GstSctpDec * self, GstPad * pad);
 static void on_reset_stream (GstSctpDec * self, guint stream_id);
@@ -188,9 +186,9 @@ gst_sctp_dec_class_init (GstSctpDecClass * klass)
   gst_element_class_add_pad_template (element_class,
       gst_static_pad_template_get (&sink_template));
 
-  gobject_class->dispose = gst_sctp_dec_dispose;
   gobject_class->set_property = gst_sctp_dec_set_property;
   gobject_class->get_property = gst_sctp_dec_get_property;
+  gobject_class->dispose = gst_sctp_dec_dispose;
   gobject_class->finalize = gst_sctp_dec_finalize;
 
   element_class->change_state = GST_DEBUG_FUNCPTR (gst_sctp_dec_change_state);
@@ -250,23 +248,60 @@ gst_sctp_dec_init (GstSctpDec * self)
 }
 
 static void
+remove_pad (GstSctpDec * self, GstPad * pad)
+{
+  GST_DEBUG_OBJECT (pad, "Removing pad");
+
+  gst_pad_set_active (pad, FALSE);
+  if (gst_object_has_as_parent (GST_OBJECT (pad), GST_OBJECT (self)))
+    gst_element_remove_pad (GST_ELEMENT (self), pad);
+
+  GST_OBJECT_LOCK (self);
+  gst_flow_combiner_remove_pad (self->flow_combiner, pad);
+  GST_OBJECT_UNLOCK (self);
+}
+
+static void
+remove_pad_it (const GValue * item, gpointer user_data)
+{
+  GstPad *pad = g_value_get_object (item);
+  GstSctpDec *self = user_data;
+
+  remove_pad (self, pad);
+}
+
+static void
 gst_sctp_dec_dispose (GObject * object)
 {
-  GstSctpDec *self = GST_SCTP_DEC (object);
+  GstSctpDec *self = GST_SCTP_DEC_CAST (object);
+  GstIterator *it;
 
-  if (self->sctp_association) {
-    g_object_unref (self->sctp_association);
-    self->sctp_association = NULL;
-  }
+  /* remove all srcpads */
+  it = gst_element_iterate_src_pads (GST_ELEMENT (self));
+  while (gst_iterator_foreach (it, remove_pad_it, self) == GST_ITERATOR_RESYNC)
+    gst_iterator_resync (it);
+  gst_iterator_free (it);
+
 
   G_OBJECT_CLASS (gst_sctp_dec_parent_class)->dispose (object);
+}
+
+static void
+gst_sctp_dec_finalize (GObject * object)
+{
+  GstSctpDec *self = GST_SCTP_DEC_CAST (object);
+
+  gst_flow_combiner_free (self->flow_combiner);
+  self->flow_combiner = NULL;
+
+  G_OBJECT_CLASS (parent_class)->finalize (object);
 }
 
 static void
 gst_sctp_dec_set_property (GObject * object, guint prop_id,
     const GValue * value, GParamSpec * pspec)
 {
-  GstSctpDec *self = GST_SCTP_DEC (object);
+  GstSctpDec *self = GST_SCTP_DEC_CAST (object);
 
   switch (prop_id) {
     case PROP_GST_SCTP_ASSOCIATION_ID:
@@ -285,7 +320,7 @@ static void
 gst_sctp_dec_get_property (GObject * object, guint prop_id, GValue * value,
     GParamSpec * pspec)
 {
-  GstSctpDec *self = GST_SCTP_DEC (object);
+  GstSctpDec *self = GST_SCTP_DEC_CAST (object);
 
   switch (prop_id) {
     case PROP_GST_SCTP_ASSOCIATION_ID:
@@ -300,42 +335,22 @@ gst_sctp_dec_get_property (GObject * object, guint prop_id, GValue * value,
   }
 }
 
-static void
-gst_sctp_dec_finalize (GObject * object)
-{
-  GstSctpDec *self = GST_SCTP_DEC (object);
-
-  gst_flow_combiner_free (self->flow_combiner);
-  self->flow_combiner = NULL;
-
-  G_OBJECT_CLASS (parent_class)->finalize (object);
-}
-
 static GstStateChangeReturn
 gst_sctp_dec_change_state (GstElement * element, GstStateChange transition)
 {
-  GstSctpDec *self = GST_SCTP_DEC (element);
-  GstStateChangeReturn ret = GST_STATE_CHANGE_SUCCESS;
+  GstSctpDec *self = GST_SCTP_DEC_CAST (element);
+  GstStateChangeReturn ret;
+
+  ret = GST_ELEMENT_CLASS (parent_class)->change_state (element, transition);
 
   switch (transition) {
-    case GST_STATE_CHANGE_READY_TO_PAUSED:
+    case GST_STATE_CHANGE_NULL_TO_READY:
       gst_flow_combiner_reset (self->flow_combiner);
       if (!configure_association (self))
         ret = GST_STATE_CHANGE_FAILURE;
       break;
-    case GST_STATE_CHANGE_PAUSED_TO_READY:
-      stop_all_srcpad_tasks (self);
-      break;
-    default:
-      break;
-  }
-
-  if (ret != GST_STATE_CHANGE_FAILURE)
-    ret = GST_ELEMENT_CLASS (parent_class)->change_state (element, transition);
-
-  switch (transition) {
-    case GST_STATE_CHANGE_PAUSED_TO_READY:
-      sctpdec_cleanup (self);
+    case GST_STATE_CHANGE_READY_TO_NULL:
+      cleanup_association (self);
       gst_flow_combiner_reset (self->flow_combiner);
       break;
     default:
@@ -389,8 +404,6 @@ flush_srcpad (const GValue * item, gpointer user_data)
     gst_data_queue_flush (sctpdec_pad->packet_queue);
   } else {
     gst_data_queue_set_flushing (sctpdec_pad->packet_queue, FALSE);
-    gst_pad_start_task (GST_PAD (sctpdec_pad),
-        (GstTaskFunction) gst_sctp_data_srcpad_loop, sctpdec_pad, NULL);
   }
 }
 
@@ -440,10 +453,10 @@ static void
 gst_sctp_data_srcpad_loop (GstPad * pad)
 {
   GstSctpDec *self;
-  GstSctpDecPad *sctpdec_pad = GST_SCTP_DEC_PAD (pad);
+  GstSctpDecPad *sctpdec_pad = GST_SCTP_DEC_PAD_CAST (pad);
   GstDataQueueItem *item;
 
-  self = GST_SCTP_DEC (gst_pad_get_parent (pad));
+  self = GST_SCTP_DEC_CAST (gst_pad_get_parent (pad));
 
   if (gst_data_queue_pop (sctpdec_pad->packet_queue, &item)) {
     GstBuffer *buffer;
@@ -495,7 +508,6 @@ configure_association (GstSctpDec * self)
   gint state;
 
   self->sctp_association = gst_sctp_association_get (self->sctp_association_id);
-
   g_object_get (self->sctp_association, "state", &state, NULL);
 
   if (state != GST_SCTP_ASSOCIATION_STATE_NEW) {
@@ -503,7 +515,7 @@ configure_association (GstSctpDec * self)
         "Could not configure SCTP association. Association already in use!");
     g_object_unref (self->sctp_association);
     self->sctp_association = NULL;
-    goto error;
+    return FALSE;
   }
 
   self->signal_handler_stream_reset =
@@ -521,8 +533,6 @@ configure_association (GstSctpDec * self)
       on_receive, gst_object_ref (self), gst_object_unref);
 
   return TRUE;
-error:
-  return FALSE;
 }
 
 static gboolean
@@ -531,17 +541,14 @@ gst_sctp_dec_src_event (GstPad * pad, GstSctpDec * self, GstEvent * event)
   switch (GST_EVENT_TYPE (event)) {
     case GST_EVENT_RECONFIGURE:
     case GST_EVENT_FLUSH_STOP:{
-      GstSctpDecPad *sctpdec_pad = GST_SCTP_DEC_PAD (pad);
-
-      /* Unflush and start task again */
+      GstSctpDecPad *sctpdec_pad = GST_SCTP_DEC_PAD_CAST (pad);
+      
       gst_data_queue_set_flushing (sctpdec_pad->packet_queue, FALSE);
-      gst_pad_start_task (pad, (GstTaskFunction) gst_sctp_data_srcpad_loop, pad,
-          NULL);
 
       return gst_pad_event_default (pad, GST_OBJECT (self), event);
     }
     case GST_EVENT_FLUSH_START:{
-      GstSctpDecPad *sctpdec_pad = GST_SCTP_DEC_PAD (pad);
+      GstSctpDecPad *sctpdec_pad = GST_SCTP_DEC_PAD_CAST (pad);
 
       gst_data_queue_set_flushing (sctpdec_pad->packet_queue, TRUE);
       gst_data_queue_flush (sctpdec_pad->packet_queue);
@@ -551,6 +558,30 @@ gst_sctp_dec_src_event (GstPad * pad, GstSctpDec * self, GstEvent * event)
     default:
       return gst_pad_event_default (pad, GST_OBJECT (self), event);
   }
+}
+
+static gboolean
+gst_sctp_dec_src_activate_mode (GstPad * pad, GstObject * parent,
+    GstPadMode mode, gboolean active)
+{
+  GstSctpDec *self = GST_SCTP_DEC_CAST (parent);
+  GstSctpDecPad *sctpdec_pad = GST_SCTP_DEC_PAD_CAST (pad);
+  gboolean result;
+
+  GST_DEBUG_OBJECT (self, "activate mode %d active %d", mode, active);
+
+  if (active) {
+    gst_data_queue_set_flushing (sctpdec_pad->packet_queue, FALSE);
+    result =
+        gst_pad_start_task (pad, (GstTaskFunction) gst_sctp_data_srcpad_loop,
+        pad, NULL);
+  } else {
+    gst_data_queue_set_flushing (sctpdec_pad->packet_queue, TRUE);
+    gst_data_queue_flush (sctpdec_pad->packet_queue);
+    result = gst_pad_stop_task (pad);
+  }
+
+  return result;
 }
 
 static void
@@ -593,8 +624,12 @@ get_pad_for_stream_id (GstSctpDec * self, guint16 stream_id)
     return new_pad;
   }
 
-  g_object_get (self->sctp_association, "state", &state, NULL);
+  if (!self->sctp_association) {
+    GST_ERROR_OBJECT (self, "Attempt to get pad without a GstSctpAssociation");
+    return NULL;
+  }
 
+  g_object_get (self->sctp_association, "state", &state, NULL);
   if (state != GST_SCTP_ASSOCIATION_STATE_CONNECTED) {
     GST_ERROR_OBJECT (self,
         "The SCTP association must be established before a new stream can be created");
@@ -614,6 +649,8 @@ get_pad_for_stream_id (GstSctpDec * self, guint16 stream_id)
 
   gst_pad_set_event_function (new_pad,
       GST_DEBUG_FUNCPTR ((GstPadEventFunction) gst_sctp_dec_src_event));
+  gst_pad_set_activatemode_function (new_pad,
+      GST_DEBUG_FUNCPTR (gst_sctp_dec_src_activate_mode));
 
   if (!gst_pad_set_active (new_pad, TRUE))
     goto error_cleanup;
@@ -627,9 +664,6 @@ get_pad_for_stream_id (GstSctpDec * self, guint16 stream_id)
   gst_flow_combiner_add_pad (self->flow_combiner, new_pad);
   GST_OBJECT_UNLOCK (self);
 
-  gst_pad_start_task (new_pad, (GstTaskFunction) gst_sctp_data_srcpad_loop,
-      new_pad, NULL);
-
   gst_object_ref (new_pad);
 
   return new_pad;
@@ -638,20 +672,6 @@ error_add:
 error_cleanup:
   gst_object_unref (new_pad);
   return NULL;
-}
-
-static void
-remove_pad (GstSctpDec * self, GstPad * pad)
-{
-  stop_srcpad_task (pad);
-  GST_PAD_STREAM_LOCK (pad);
-  gst_pad_set_active (pad, FALSE);
-  if (gst_object_has_as_parent (GST_OBJECT (pad), GST_OBJECT (self)))
-    gst_element_remove_pad (GST_ELEMENT (self), pad);
-  GST_PAD_STREAM_UNLOCK (pad);
-  GST_OBJECT_LOCK (self);
-  gst_flow_combiner_remove_pad (self->flow_combiner, pad);
-  GST_OBJECT_UNLOCK (self);
 }
 
 static void
@@ -678,7 +698,7 @@ static void
 on_gst_sctp_association_restart (GstSctpAssociation * gst_sctp_association,
     GstSctpDec * self)
 {
-  (void ) gst_sctp_association;
+  (void) gst_sctp_association;
   g_signal_emit (self, signals[SIGNAL_ASSOC_RESTART], 0);
 }
 
@@ -707,7 +727,7 @@ on_receive (GstSctpAssociation * sctp_association, guint8 * buf,
       "Received incoming packet of size %" G_GSIZE_FORMAT
       " with stream id %u ppid %u", length, stream_id, ppid);
 
-  sctpdec_pad = GST_SCTP_DEC_PAD (src_pad);
+  sctpdec_pad = GST_SCTP_DEC_PAD_CAST (src_pad);
   gstbuf =
       gst_buffer_new_wrapped_full (0, buf, length, 0, length, buf,
       (GDestroyNotify) usrsctp_freedumpbuffer);
@@ -727,46 +747,27 @@ on_receive (GstSctpAssociation * sctp_association, guint8 * buf,
 }
 
 static void
-stop_srcpad_task (GstPad * pad)
-{
-  GstSctpDecPad *sctpdec_pad = GST_SCTP_DEC_PAD (pad);
-
-  gst_data_queue_set_flushing (sctpdec_pad->packet_queue, TRUE);
-  gst_data_queue_flush (sctpdec_pad->packet_queue);
-  gst_pad_stop_task (pad);
-}
-
-static void
-remove_pad_it (const GValue * item, gpointer user_data)
-{
-  GstPad *pad = g_value_get_object (item);
-  GstSctpDec *self = user_data;
-
-  remove_pad (self, pad);
-}
-
-static void
-stop_all_srcpad_tasks (GstSctpDec * self)
-{
-  GstIterator *it;
-
-  it = gst_element_iterate_src_pads (GST_ELEMENT (self));
-  while (gst_iterator_foreach (it, remove_pad_it, self) == GST_ITERATOR_RESYNC)
-    gst_iterator_resync (it);
-  gst_iterator_free (it);
-}
-
-static void
-sctpdec_cleanup (GstSctpDec * self)
+cleanup_association (GstSctpDec * self)
 {
   if (self->sctp_association) {
     gst_sctp_association_set_on_packet_received (self->sctp_association, NULL,
         NULL, NULL);
-    g_signal_handler_disconnect (self->sctp_association,
-        self->signal_handler_association_restart);
-    g_signal_handler_disconnect (self->sctp_association,
-        self->signal_handler_stream_reset);
+
+    if (self->signal_handler_association_restart != 0) {
+      g_signal_handler_disconnect (self->sctp_association,
+          self->signal_handler_association_restart);
+      self->signal_handler_association_restart = 0;
+    }
+
+    if (self->signal_handler_stream_reset != 0) {
+      g_signal_handler_disconnect (self->sctp_association,
+          self->signal_handler_stream_reset);
+      self->signal_handler_stream_reset = 0;
+    }
     gst_sctp_association_force_close (self->sctp_association);
+
+    g_object_unref (self->sctp_association);
+    self->sctp_association = NULL;
   }
 }
 

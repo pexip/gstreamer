@@ -34,6 +34,7 @@ G_BEGIN_DECLS
 
 #define GST_TYPE_SCTP_ENC (gst_sctp_enc_get_type())
 #define GST_SCTP_ENC(obj) (G_TYPE_CHECK_INSTANCE_CAST((obj), GST_TYPE_SCTP_ENC, GstSctpEnc))
+#define GST_SCTP_ENC_CAST(obj) (GstSctpEnc*)(obj)
 #define GST_SCTP_ENC_CLASS(klass) (G_TYPE_CHECK_CLASS_CAST((klass), GST_TYPE_SCTP_ENC, GstSctpEncClass))
 #define GST_IS_SCTP_ENC(obj) (G_TYPE_CHECK_INSTANCE_TYPE((obj), GST_TYPE_SCTP_ENC))
 #define GST_IS_SCTP_ENC_CLASS(klass) (G_TYPE_CHECK_CLASS_TYPE((klass), GST_TYPE_SCTP_ENC))
