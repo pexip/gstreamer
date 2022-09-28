@@ -513,7 +513,7 @@ configure_association (GstSctpDec * self)
   if (state != GST_SCTP_ASSOCIATION_STATE_NEW) {
     GST_WARNING_OBJECT (self,
         "Could not configure SCTP association. Association already in use!");
-    g_object_unref (self->sctp_association);
+    gst_sctp_association_unref (self->sctp_association);
     self->sctp_association = NULL;
     return FALSE;
   }
@@ -766,7 +766,7 @@ cleanup_association (GstSctpDec * self)
     }
     gst_sctp_association_force_close (self->sctp_association);
 
-    g_object_unref (self->sctp_association);
+    gst_sctp_association_unref (self->sctp_association);
     self->sctp_association = NULL;
   }
 }
