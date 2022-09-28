@@ -210,50 +210,15 @@ gst_usrsctp_debug (const gchar * format, ...)
 static void
 gst_sctp_association_init (GstSctpAssociation * self)
 {
-  /* No need to lock mutex here as long as the function is only called from gst_sctp_association_get */
-  if (number_of_associations == 0) {
-#if defined(SCTP_DEBUG) && !defined(GST_DISABLE_GST_DEBUG)
-    usrsctp_init (0, sctp_packet_out, gst_usrsctp_debug);
-#else
-    usrsctp_init (0, sctp_packet_out, NULL);
-#endif
-
-    /* Explicit Congestion Notification */
-    usrsctp_sysctl_set_sctp_ecn_enable (0);
-
-    /* Do not send ABORTs in response to INITs (1).
-     * Do not send ABORTs for received Out of the Blue packets (2).
-     */
-    usrsctp_sysctl_set_sctp_blackhole (2);
-
-    /* Enable interleaving messages for different streams (incoming)
-     * See: https://tools.ietf.org/html/rfc6458#section-8.1.20
-     */
-    usrsctp_sysctl_set_sctp_default_frag_interleave (2);
-
-    usrsctp_sysctl_set_sctp_nr_outgoing_streams_default
-        (DEFAULT_NUMBER_OF_SCTP_STREAMS);
-
-#if defined(SCTP_DEBUG) && !defined(GST_DISABLE_GST_DEBUG)
-    if (USRSCTP_GST_DEBUG_LEVEL <= GST_LEVEL_MAX
-        && USRSCTP_GST_DEBUG_LEVEL <= _gst_debug_min
-        && USRSCTP_GST_DEBUG_LEVEL <=
-        gst_debug_category_get_threshold (gst_sctp_debug_category)) {
-      usrsctp_sysctl_set_sctp_debug_on (SCTP_DEBUG_ALL);
-    }
-#endif
-  }
   number_of_associations++;
 
   self->local_port = DEFAULT_LOCAL_SCTP_PORT;
   self->remote_port = DEFAULT_REMOTE_SCTP_PORT;
   self->sctp_ass_sock = NULL;
+  self->state = GST_SCTP_ASSOCIATION_STATE_NEW;
+  self->use_sock_stream = TRUE;
 
   g_mutex_init (&self->association_mutex);
-
-  self->state = GST_SCTP_ASSOCIATION_STATE_NEW;
-
-  self->use_sock_stream = TRUE;
 
   usrsctp_register_address ((void *) self);
 }
@@ -263,19 +228,15 @@ gst_sctp_association_finalize (GObject * object)
 {
   GstSctpAssociation *self = GST_SCTP_ASSOCIATION (object);
 
-  G_LOCK (associations_lock);
+  usrsctp_deregister_address ((void *) self);
 
+  /* no need to hold the association_lock, it is held under
+     gst_sctp_association_unref */
   g_hash_table_remove (associations_by_id,
       GUINT_TO_POINTER (self->association_id));
   g_hash_table_remove (ids_by_association, self);
 
-  usrsctp_deregister_address ((void *) self);
   number_of_associations--;
-  if (number_of_associations == 0) {
-    usrsctp_finish ();
-  }
-
-  G_UNLOCK (associations_lock);
 
   g_mutex_clear (&self->association_mutex);
 
@@ -375,6 +336,41 @@ gst_sctp_association_get_property (GObject * object, guint prop_id,
   }
 }
 
+static void
+gst_sctp_association_usrsctp_init (void)
+{
+#if defined(SCTP_DEBUG) && !defined(GST_DISABLE_GST_DEBUG)
+  usrsctp_init (0, sctp_packet_out, gst_usrsctp_debug);
+#else
+  usrsctp_init (0, sctp_packet_out, NULL);
+#endif
+
+  /* Explicit Congestion Notification */
+  usrsctp_sysctl_set_sctp_ecn_enable (0);
+
+  /* Do not send ABORTs in response to INITs (1).
+   * Do not send ABORTs for received Out of the Blue packets (2).
+   */
+  usrsctp_sysctl_set_sctp_blackhole (2);
+
+  /* Enable interleaving messages for different streams (incoming)
+   * See: https://tools.ietf.org/html/rfc6458#section-8.1.20
+   */
+  usrsctp_sysctl_set_sctp_default_frag_interleave (2);
+
+  usrsctp_sysctl_set_sctp_nr_outgoing_streams_default
+      (DEFAULT_NUMBER_OF_SCTP_STREAMS);
+
+#if defined(SCTP_DEBUG) && !defined(GST_DISABLE_GST_DEBUG)
+  if (USRSCTP_GST_DEBUG_LEVEL <= GST_LEVEL_MAX
+      && USRSCTP_GST_DEBUG_LEVEL <= _gst_debug_min
+      && USRSCTP_GST_DEBUG_LEVEL <=
+      gst_debug_category_get_threshold (gst_sctp_debug_category)) {
+    usrsctp_sysctl_set_sctp_debug_on (SCTP_DEBUG_ALL);
+  }
+#endif
+}
+
 /* Public functions */
 
 GstSctpAssociation *
@@ -388,7 +384,12 @@ gst_sctp_association_get (guint32 association_id)
   GST_DEBUG_CATEGORY_INIT (gst_sctp_debug_category,
       "sctplib", 0, "debug category for messages from usrsctp");
 
+  if (number_of_associations == 0)
+    gst_sctp_association_usrsctp_init ();
+
   if (!associations_by_id) {
+    g_assert (ids_by_association == NULL);
+
     associations_by_id =
         g_hash_table_new_full (g_direct_hash, g_direct_equal, NULL, NULL);
     ids_by_association =
@@ -413,7 +414,24 @@ gst_sctp_association_get (guint32 association_id)
   return association;
 }
 
-gboolean
+void
+gst_sctp_association_unref (GstSctpAssociation * self)
+{
+  G_LOCK (associations_lock);
+  g_object_unref (self);
+
+  if (number_of_associations == 0) {
+    usrsctp_finish ();
+
+    g_hash_table_destroy (associations_by_id);
+    g_hash_table_destroy (ids_by_association);
+    associations_by_id = NULL;
+    ids_by_association = NULL;
+  }
+  G_UNLOCK (associations_lock);
+}
+
+static gboolean
 gst_sctp_association_start_unlocked (GstSctpAssociation * self)
 {
   if (self->state != GST_SCTP_ASSOCIATION_STATE_READY &&
