@@ -431,7 +431,7 @@ gst_sctp_association_unref (GstSctpAssociation * self)
   G_UNLOCK (associations_lock);
 }
 
-gboolean
+static gboolean
 gst_sctp_association_start_unlocked (GstSctpAssociation * self)
 {
   if (self->state != GST_SCTP_ASSOCIATION_STATE_READY &&
