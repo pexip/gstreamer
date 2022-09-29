@@ -774,7 +774,9 @@ gst_element_add_pad (GstElement * element, GstPad * pad)
   /* check for active pads */
   if (!active && (GST_STATE (element) > GST_STATE_READY ||
           GST_STATE_NEXT (element) == GST_STATE_PAUSED)) {
+    GST_OBJECT_UNLOCK (element);
     gst_pad_set_active (pad, TRUE);
+    GST_OBJECT_LOCK (element);
   }
 
   g_free (pad_name);
