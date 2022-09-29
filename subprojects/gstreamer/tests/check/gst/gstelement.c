@@ -962,6 +962,50 @@ GST_START_TEST (test_release_pads_during_dispose)
 
 GST_END_TEST;
 
+static void
+add_srcpad_deadlock_loop (void)
+{
+}
+
+static gboolean
+add_srcpad_deadlock_activate_mode (GstPad * pad, GstObject * parent,
+    GstPadMode mode, gboolean active)
+{
+  if (active)
+    return gst_pad_start_task (pad, (GstTaskFunction) add_srcpad_deadlock_loop,
+        NULL, NULL);
+
+  return gst_pad_stop_task (pad);
+}
+
+GST_START_TEST (test_add_srcpad_deadlock)
+{
+  GstTestElement3 *te3 = g_object_new (gst_test_element3_get_type (), NULL);
+  GstPadTemplate *pad_template;
+  GstPad *srcpad;
+
+  pad_template =
+      gst_element_class_get_pad_template (GST_ELEMENT_GET_CLASS (te3),
+      "src_%u");
+  g_return_if_fail (pad_template != NULL);
+
+  srcpad = gst_pad_new_from_template (pad_template, "src");
+  g_return_if_fail (srcpad != NULL);
+  gst_pad_set_activatemode_function (srcpad, add_srcpad_deadlock_activate_mode);
+
+  gst_element_set_state (GST_ELEMENT (te3), GST_STATE_PLAYING);
+
+  /* gst_element_add_pad should activate the pad, causing activate_mode and
+     gst_pad_start_task to be called */
+  gst_element_add_pad (GST_ELEMENT (te3), srcpad);
+
+  gst_element_set_state (GST_ELEMENT (te3), GST_STATE_NULL);
+
+  gst_object_unref (te3);
+}
+
+GST_END_TEST;
+
 
 static Suite *
 gst_element_suite (void)
@@ -980,6 +1024,7 @@ gst_element_suite (void)
   tcase_add_test (tc_chain, test_request_pad_templates);
   tcase_add_test (tc_chain, test_foreach_pad);
   tcase_add_test (tc_chain, test_release_pads_during_dispose);
+  tcase_add_test (tc_chain, test_add_srcpad_deadlock);
 
   return s;
 }
