@@ -652,13 +652,14 @@ get_pad_for_stream_id (GstSctpDec * self, guint16 stream_id)
   gst_pad_set_activatemode_function (new_pad,
       GST_DEBUG_FUNCPTR (gst_sctp_dec_src_activate_mode));
 
+  if (!gst_element_add_pad (GST_ELEMENT (self), new_pad))
+    goto error_add;
+
   if (!gst_pad_set_active (new_pad, TRUE))
     goto error_cleanup;
 
   send_sticky_events (self, new_pad, stream_id);
 
-  if (!gst_element_add_pad (GST_ELEMENT (self), new_pad))
-    goto error_add;
 
   GST_OBJECT_LOCK (self);
   gst_flow_combiner_add_pad (self->flow_combiner, new_pad);
