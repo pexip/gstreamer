@@ -170,6 +170,22 @@ gst_acam_device_provider_probe (GstDeviceProvider * object)
   return devices;
 }
 
+static void
+gst_acam_device_provider_populate_devices (GstDeviceProvider * provider)
+{
+  GList *devices, *it;
+
+  devices = gst_acam_device_provider_probe (provider);
+
+  for (it = devices; it != NULL; it = g_list_next (it)) {
+    GstDevice *device = GST_DEVICE_CAST (it->data);
+    if (device)
+      gst_device_provider_device_add (provider, device);
+  }
+
+  g_list_free_full (devices, gst_object_unref);
+}
+
 static gboolean
 gst_acam_device_provider_start (GstDeviceProvider * object)
 {
@@ -182,6 +198,8 @@ gst_acam_device_provider_start (GstDeviceProvider * object)
         "Starting without an instance of ACameraManager");
     return FALSE;
   }
+
+  gst_acam_device_provider_populate_devices (object);
 
   if (ACameraManager_registerAvailabilityCallback (provider->manager,
           &provider->listeners) != ACAMERA_OK) {
