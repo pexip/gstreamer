@@ -190,6 +190,36 @@ enum
 
 static guint signals[LAST_SIGNAL] = { 0 };
 
+#ifndef IF_EQUAL_RETURN
+#define IF_EQUAL_RETURN(param, val)  \
+  if (val == param)                  \
+  return #val
+#endif
+
+static const gchar *
+camera_status_t_to_string (camera_status_t s)
+{
+  IF_EQUAL_RETURN (s, ACAMERA_OK);
+  IF_EQUAL_RETURN (s, ACAMERA_ERROR_BASE);
+  IF_EQUAL_RETURN (s, ACAMERA_ERROR_CAMERA_DEVICE);
+  IF_EQUAL_RETURN (s, ACAMERA_ERROR_CAMERA_DISABLED);
+  IF_EQUAL_RETURN (s, ACAMERA_ERROR_CAMERA_DISCONNECTED);
+  IF_EQUAL_RETURN (s, ACAMERA_ERROR_CAMERA_IN_USE);
+  IF_EQUAL_RETURN (s, ACAMERA_ERROR_CAMERA_SERVICE);
+  IF_EQUAL_RETURN (s, ACAMERA_ERROR_INVALID_OPERATION);
+  IF_EQUAL_RETURN (s, ACAMERA_ERROR_INVALID_PARAMETER);
+  IF_EQUAL_RETURN (s, ACAMERA_ERROR_MAX_CAMERA_IN_USE);
+  IF_EQUAL_RETURN (s, ACAMERA_ERROR_METADATA_NOT_FOUND);
+  IF_EQUAL_RETURN (s, ACAMERA_ERROR_NOT_ENOUGH_MEMORY);
+  IF_EQUAL_RETURN (s, ACAMERA_ERROR_PERMISSION_DENIED);
+  IF_EQUAL_RETURN (s, ACAMERA_ERROR_SESSION_CLOSED);
+  IF_EQUAL_RETURN (s, ACAMERA_ERROR_STREAM_CONFIGURE_FAIL);
+  IF_EQUAL_RETURN (s, ACAMERA_ERROR_UNKNOWN);
+  IF_EQUAL_RETURN (s, ACAMERA_ERROR_UNSUPPORTED_OPERATION);
+  return NULL;
+}
+
+
 static GstPhotographyCaps
 gst_ahc2_src_get_capabilities (GstPhotography * photo)
 {
@@ -1438,43 +1468,45 @@ static gboolean
 gst_ahc2_src_camera_open (GstAHC2Src * self)
 {
   gboolean ret = FALSE;
+  camera_status_t status;
   const gchar *camera_id;
 
   g_return_val_if_fail (self->camera_id_list != NULL, FALSE);
-
   g_return_val_if_fail (self->camera_index < self->camera_id_list->numCameras,
       FALSE);
 
   camera_id = self->camera_id_list->cameraIds[self->camera_index];
-
   GST_DEBUG_OBJECT (self, "Trying to open camera device (id: %s)", camera_id);
 
-  if (ACameraManager_openCamera (self->camera_manager, camera_id,
-          &self->device_state_cb, &self->camera_device) != ACAMERA_OK) {
-
-    GST_ERROR_OBJECT (self, "Failed to open camera device (id: %s)", camera_id);
+  status = ACameraManager_openCamera (self->camera_manager, camera_id,
+      &self->device_state_cb, &self->camera_device);
+  if (status != ACAMERA_OK) {
+    GST_ERROR_OBJECT (self, "Failed to open camera device (id: %s, status: %s)",
+        camera_id, camera_status_t_to_string (status));
     goto out;
   }
 
-  if (ACameraDevice_createCaptureRequest (self->camera_device,
-          self->camera_template_type, &self->capture_request) != ACAMERA_OK) {
-    GST_ERROR_OBJECT (self, "Failed to create camera request (camera id: %s)",
-        camera_id);
-    goto out;
-  }
-
-  if (ACaptureSessionOutputContainer_create (&self->capture_sout_container) !=
-      ACAMERA_OK) {
+  status = ACameraDevice_createCaptureRequest (self->camera_device,
+      self->camera_template_type, &self->capture_request);
+  if (status != ACAMERA_OK) {
     GST_ERROR_OBJECT (self,
-        "Failed to create capture session output container (camera id: %s)",
-        camera_id);
+        "Failed to create camera request (camera id: %s, status: %s)",
+        camera_id, camera_status_t_to_string (status));
+    goto out;
+  }
+
+  status =
+      ACaptureSessionOutputContainer_create (&self->capture_sout_container);
+  if (status != ACAMERA_OK) {
+    GST_ERROR_OBJECT (self,
+        "Failed to create capture session output container (camera id: %s, status: %s)",
+        camera_id, camera_status_t_to_string (status));
     goto out;
   }
 
   ret = TRUE;
 
 out:
-
   if (!ret)
     gst_ahc2_src_camera_close (self);
 
