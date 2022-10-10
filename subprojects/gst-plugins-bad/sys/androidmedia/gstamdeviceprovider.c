@@ -797,7 +797,7 @@ gst_am_device_class_init (GstAmDeviceClass * klass)
 
   g_object_class_install_property (object_class, PROP_DEVICE_ID,
       g_param_spec_int ("device-id", "Audio Device ID",
-          "The audio device id", 0, G_MAXINT, -1,
+          "The audio device id", -1, G_MAXINT, -1,
           G_PARAM_STATIC_STRINGS | G_PARAM_READWRITE | G_PARAM_CONSTRUCT_ONLY));
 }
 
