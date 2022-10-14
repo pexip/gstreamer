@@ -349,6 +349,20 @@ object_log_free (ObjectLog * obj)
   g_free (obj);
 }
 
+static guint
+object_log_hash (const ObjectLog * obj)
+{
+  return (guint) obj->object + (guint) obj->type_qname;
+}
+
+static gboolean
+object_log_compare (const ObjectLog * a, const ObjectLog * b)
+{
+  if ((a->object == b->object) && (a->type_qname == b->type_qname))
+    return TRUE;
+  return FALSE;
+}
+
 static void
 handle_object_destroyed (GstLeaksTracer * self, gpointer object,
     ObjectKind kind)
@@ -1042,9 +1056,9 @@ gst_leaks_tracer_activity_start_tracking (GstLeaksTracer * self)
     return;
   }
 
-  self->added = g_hash_table_new_full (NULL, NULL,
+  self->added = g_hash_table_new_full (object_log_hash, object_log_compare,
       (GDestroyNotify) object_log_free, NULL);
-  self->removed = g_hash_table_new_full (NULL, NULL,
+  self->removed = g_hash_table_new_full (object_log_hash, object_log_compare,
       (GDestroyNotify) object_log_free, NULL);
   GST_OBJECT_UNLOCK (self);
 }
@@ -1085,26 +1099,52 @@ process_checkpoint (GstTracerRecord * record, const gchar * record_type,
   }
 }
 
+
+static GHashTable *
+_copy_and_remove (GHashTable * a, GHashTable * b)
+{
+  GHashTable *copy = g_hash_table_new (NULL, NULL);
+  GHashTableIter iter;
+  gpointer o;
+
+  g_hash_table_iter_init (&iter, a);
+  while (g_hash_table_iter_next (&iter, &o, NULL)) {
+    ObjectLog *obj = o;
+    if (!g_hash_table_contains (b, o))
+      g_hash_table_add (copy, o);
+  }
+
+  return copy;
+}
+
 static GstStructure *
 gst_leaks_tracer_activity_get_checkpoint (GstLeaksTracer * self)
 {
   GValue added = G_VALUE_INIT;
   GValue removed = G_VALUE_INIT;
+  GValue alive = G_VALUE_INIT;
   GstStructure *s = gst_structure_new_empty ("activity-checkpoint");
 
   g_value_init (&added, GST_TYPE_LIST);
   g_value_init (&removed, GST_TYPE_LIST);
+  g_value_init (&alive, GST_TYPE_LIST);
 
   GST_OBJECT_LOCK (self);
+
+  GHashTable *copy = _copy_and_remove (self->added, self->removed);
+
   process_checkpoint (tr_added, "objects-created", self->added, &added);
   process_checkpoint (tr_removed, "objects-removed", self->removed, &removed);
+  process_checkpoint (NULL, "objects-created", copy, &alive);
 
   g_hash_table_remove_all (self->added);
   g_hash_table_remove_all (self->removed);
+  g_hash_table_destroy (copy);
   GST_OBJECT_UNLOCK (self);
 
   gst_structure_take_value (s, "objects-created-list", &added);
   gst_structure_take_value (s, "objects-removed-list", &removed);
+  gst_structure_take_value (s, "objects-alive-list", &alive);
 
   return s;
 }
