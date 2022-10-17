@@ -4349,9 +4349,9 @@ done:
   data->may_suppress = FALSE;
 }
 
-/* perform cleanup of sources that timed out */
+/* mark a source that timed out and update its clock-rate */
 static void
-session_cleanup (const gchar * key, RTPSource * source, ReportData * data)
+update_source (const gchar * key, RTPSource * source, ReportData * data)
 {
   gboolean remove = FALSE;
   gboolean byetimeout = FALSE;
@@ -4376,6 +4376,11 @@ session_cleanup (const gchar * key, RTPSource * source, ReportData * data)
 
   is_sender = RTP_SOURCE_IS_SENDER (source);
   is_active = RTP_SOURCE_IS_ACTIVE (source);
+
+  /* Fetching a new clock rate could release the RTPSession lock, so we need to
+   * make sure this is done on a copy of the table */
+  if (is_sender)
+    rtp_source_update_clock_rate (source);
 
   /* our own rtcp interval may have been forced low by secondary configuration,
    * while sender side may still operate with higher interval,
@@ -4986,7 +4991,7 @@ rtp_session_on_timeout (RTPSession * sess, GstClockTime current_time,
 
     /* Clean up the session, mark the source for removing and update clock-rate,
      * this might release the session lock. */
-    g_hash_table_foreach (table_copy, (GHFunc) session_cleanup, &data);
+    g_hash_table_foreach (table_copy, (GHFunc) update_source, &data);
     g_hash_table_destroy (table_copy);
 
     /* Now remove the marked sources */
