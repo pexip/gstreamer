@@ -79,6 +79,7 @@ G_DEFINE_TYPE (GstVP9Dec, gst_vp9_dec, GST_TYPE_VPX_DEC);
 GST_ELEMENT_REGISTER_DEFINE_WITH_CODE (vp9dec, "vp9dec", GST_RANK_PRIMARY,
     gst_vp9_dec_get_type (), vpx_element_init (plugin));
 
+#ifdef VPX_CODEC_CAP_HIGHBITDEPTH
 static GstCaps *
 gst_vp9_dec_get_src_caps (void)
 {
@@ -89,6 +90,13 @@ gst_vp9_dec_get_src_caps (void)
   return gst_caps_from_string ((vpx_codec_get_caps (&vpx_codec_vp9_dx_algo)
           & VPX_CODEC_CAP_HIGHBITDEPTH) ? CAPS_10BIT : CAPS_8BIT);
 }
+#else
+static GstCaps *
+gst_vp9_dec_get_src_caps (void)
+{
+  return gst_caps_from_string (GST_VIDEO_CAPS_MAKE ("{ " GST_VP9_DEC_VIDEO_FORMATS_8BIT " }"));
+}
+#endif
 
 static void
 gst_vp9_dec_class_init (GstVP9DecClass * klass)
