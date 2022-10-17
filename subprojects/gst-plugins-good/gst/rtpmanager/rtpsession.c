@@ -1409,6 +1409,10 @@ rtp_session_set_callbacks (RTPSession * sess, RTPSessionCallbacks * callbacks,
     sess->callbacks.notify_early_rtcp = callbacks->notify_early_rtcp;
     sess->notify_early_rtcp_user_data = user_data;
   }
+  if (callbacks->get_caps_for_pt) {
+    sess->callbacks.get_caps_for_pt = callbacks->get_caps_for_pt;
+    sess->get_caps_for_pt_user_data = user_data;
+  }
 }
 
 /**
