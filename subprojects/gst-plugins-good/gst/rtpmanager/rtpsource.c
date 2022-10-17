@@ -1665,6 +1665,24 @@ rtp_source_process_rb (RTPSource * src, guint32 ssrc, guint32 sender_ssrc,
 }
 
 /**
+ * rtp_source_update_clock_rate:
+ * @src: a #RTPSource
+ *
+ * Update the clock-rate of a source, it fetchs it if not yet set.
+ */
+void
+rtp_source_update_clock_rate (RTPSource * src)
+{
+  g_return_if_fail (RTP_IS_SOURCE (src));
+
+  if (src->clock_rate == -1 && src->pt_set) {
+    GST_INFO ("no clock-rate, getting for pt %u and SSRC %u", src->pt,
+        src->ssrc);
+    fetch_caps_for_payload (src, src->pt);
+  }
+}
+
+/**
  * rtp_source_get_new_sr:
  * @src: an #RTPSource
  * @ntpnstime: the current time in nanoseconds since 1970
@@ -1706,12 +1724,6 @@ rtp_source_get_new_sr (RTPSource * src, guint64 ntpnstime,
 
   GST_DEBUG ("last_rtime %" GST_TIME_FORMAT ", last_rtptime %"
       G_GUINT64_FORMAT, GST_TIME_ARGS (src->last_rtime), t_rtp);
-
-  if (src->clock_rate == -1 && src->pt_set) {
-    GST_INFO ("no clock-rate, getting for pt %u and SSRC %u", src->pt,
-        src->ssrc);
-    fetch_caps_for_payload (src, src->pt);
-  }
 
   if (src->clock_rate != -1) {
     /* if no running time has been set yet we wait until we get one */
