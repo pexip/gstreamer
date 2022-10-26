@@ -533,7 +533,7 @@ scan_codecs (GstPlugin * plugin)
         if (!accepted_color_formats (gst_codec_type, is_encoder)) {
           if (!ignore_unknown_color_formats) {
             gst_codec_info->gl_output_only = TRUE;
-            GST_WARNING
+            GST_DEBUG
                 ("%s %s has unknown color formats, only direct rendering will be supported",
                 gst_codec_type->mime, is_encoder ? "encoder" : "decoder");
           }
@@ -801,7 +801,7 @@ accepted_color_formats (GstAmcCodecType * type, gboolean is_encoder)
     }
 
     if (!found) {
-      GST_ERROR ("Unknown color format 0x%x, ignoring", type->color_formats[i]);
+      GST_DEBUG ("Unknown color format 0x%x, ignoring", type->color_formats[i]);
     }
   }
 
@@ -2348,7 +2348,7 @@ gst_amc_codec_info_to_caps (const GstAmcCodecInfo * codec_info,
                   profile_levels[j].profile);
 
               if (!profile) {
-                GST_ERROR ("Unable to map AAC profile 0x%08x",
+                GST_DEBUG ("Unable to map AAC profile 0x%08x",
                     type->profile_levels[j].profile);
                 continue;
               }
@@ -2421,7 +2421,7 @@ gst_amc_codec_info_to_caps (const GstAmcCodecInfo * codec_info,
               "rate", GST_TYPE_INT_RANGE, 1, G_MAXINT,
               "channels", GST_TYPE_INT_RANGE, 1, G_MAXINT, NULL);
         } else {
-          GST_WARNING ("Unsupported mimetype '%s'", type->mime);
+          GST_DEBUG ("Unsupported mimetype '%s'", type->mime);
         }
       }
     } else if (g_str_has_prefix (type->mime, "video/")) {
@@ -2447,7 +2447,7 @@ gst_amc_codec_info_to_caps (const GstAmcCodecInfo * codec_info,
               gst_amc_color_format_to_video_format (codec_info,
               type->mime, type->color_formats[j]);
           if (format == GST_VIDEO_FORMAT_UNKNOWN) {
-            GST_WARNING ("Unknown color format 0x%08x for codec %s",
+            GST_DEBUG ("Unknown color format 0x%08x for codec %s",
                 type->color_formats[j], type->mime);
             continue;
           } else if (format == GST_VIDEO_FORMAT_I420) {
@@ -2785,7 +2785,7 @@ gst_amc_codec_info_to_caps (const GstAmcCodecInfo * codec_info,
                     profile, &alternative);
 
                 if (!profile) {
-                  GST_ERROR ("Unable to map H264 profile 0x%08x",
+                  GST_DEBUG ("Unable to map H264 profile 0x%08x",
                       type->profile_levels[j].profile);
                   continue;
                 }
@@ -2847,7 +2847,7 @@ gst_amc_codec_info_to_caps (const GstAmcCodecInfo * codec_info,
                     gst_amc_avc_profile_to_string (type->profile_levels[j].
                     profile, &alternative);
                 if (!profile) {
-                  GST_ERROR ("Unable to map H264 profile 0x%08x",
+                  GST_DEBUG ("Unable to map H264 profile 0x%08x",
                       type->profile_levels[j].profile);
                   continue;
                 }
@@ -2960,7 +2960,7 @@ gst_amc_codec_info_to_caps (const GstAmcCodecInfo * codec_info,
                     gst_amc_hevc_profile_to_string (type->profile_levels[j].
                     profile);
                 if (!profile) {
-                  GST_ERROR ("Unable to map H265 profile 0x%08x",
+                  GST_DEBUG ("Unable to map H265 profile 0x%08x",
                       type->profile_levels[j].profile);
                   continue;
                 }
@@ -3020,7 +3020,7 @@ gst_amc_codec_info_to_caps (const GstAmcCodecInfo * codec_info,
                     gst_amc_hevc_profile_to_string (type->profile_levels[j].
                     profile);
                 if (!profile) {
-                  GST_ERROR ("Unable to map H265 profile 0x%08x",
+                  GST_DEBUG ("Unable to map H265 profile 0x%08x",
                       type->profile_levels[j].profile);
                   continue;
                 }
@@ -3137,7 +3137,7 @@ gst_amc_codec_info_to_caps (const GstAmcCodecInfo * codec_info,
               gst_amc_codec_add_video_constraints_to_caps (type, encoded_ret,
               tmp);
         } else {
-          GST_WARNING ("Unsupported mimetype '%s'", type->mime);
+          GST_DEBUG ("Unsupported mimetype '%s'", type->mime);
         }
       }
     }
