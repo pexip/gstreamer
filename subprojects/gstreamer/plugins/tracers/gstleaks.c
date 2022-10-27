@@ -1109,7 +1109,6 @@ _copy_and_remove (GHashTable * a, GHashTable * b)
 
   g_hash_table_iter_init (&iter, a);
   while (g_hash_table_iter_next (&iter, &o, NULL)) {
-    ObjectLog *obj = o;
     if (!g_hash_table_contains (b, o))
       g_hash_table_add (copy, o);
   }
