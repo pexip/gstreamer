@@ -586,7 +586,9 @@ gst_amc_codec_configure (GstAmcCodec * codec, GstAmcFormat * format,
   env = gst_amc_jni_get_env ();
 
   if (surface) {
-    g_object_unref (codec->surface);
+    if (codec->surface)
+      g_object_unref (codec->surface);
+
     codec->surface =
         gst_amc_surface_new ((GstAmcSurfaceTextureJNI *) surface, err);
     if (!codec->surface)
