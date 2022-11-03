@@ -219,6 +219,16 @@ camera_status_t_to_string (camera_status_t s)
   return NULL;
 }
 
+static const gchar *
+camera_error_to_string (int e)
+{
+  IF_EQUAL_RETURN (e, ERROR_CAMERA_IN_USE);
+  IF_EQUAL_RETURN (e, ERROR_MAX_CAMERAS_IN_USE);
+  IF_EQUAL_RETURN (e, ERROR_CAMERA_DISABLED);
+  IF_EQUAL_RETURN (e, ERROR_CAMERA_DEVICE);
+  IF_EQUAL_RETURN (e, ERROR_CAMERA_SERVICE);
+  return NULL;
+}
 
 static GstPhotographyCaps
 gst_ahc2_src_get_capabilities (GstPhotography * photo)
@@ -1926,8 +1936,8 @@ camera_device_on_error (void *context, ACameraDevice * device, int error)
 {
   GstAHC2Src *self = GST_AHC2_SRC (context);
 
-  GST_ERROR_OBJECT (self, "Error (code: %d) on Camera[%s]", error,
-      ACameraDevice_getId (device));
+  GST_ERROR_OBJECT (self, "Error (err: %s, code: %d) on Camera[%s]",
+      camera_error_to_string (error), error, ACameraDevice_getId (device));
 }
 
 static void
