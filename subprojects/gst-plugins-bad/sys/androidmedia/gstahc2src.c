@@ -174,10 +174,11 @@ typedef enum
   PROP_WHITE_BALANCE_MODE,
   PROP_WHITE_POINT,
   PROP_ZOOM,
+  PROP_EXPOSURE_MODE,
 
   /*< private > */
   PROP_N_INSTALL = PROP_MAX_IMAGES + 1,
-  PROP_LAST = PROP_ZOOM,
+  PROP_LAST = PROP_EXPOSURE_MODE,
 } GstAHC2SrcProperty;
 
 static GParamSpec *properties[PROP_LAST + 1];
@@ -483,6 +484,24 @@ gst_ahc2_src_set_focus_mode (GstPhotography * photo,
   ACameraCaptureSession_setRepeatingRequest (self->camera_capture_session,
       NULL, 1, &self->capture_request, NULL);
 
+  return TRUE;
+}
+
+static gboolean
+gst_ahc2_src_get_exposure_mode (GstPhotography * photo,
+    GstPhotographyExposureMode * exposure_mode)
+{
+  (void) photo;
+  (void) exposure_mode;
+  return FALSE;
+}
+
+static gboolean
+gst_ahc2_src_set_exposure_mode (GstPhotography * photo,
+    GstPhotographyExposureMode exposure_mode)
+{
+  (void) photo;
+  (void) exposure_mode;
   return TRUE;
 }
 
@@ -1615,6 +1634,11 @@ gst_ahc2_src_set_property (GObject * object,
       gst_ahc2_src_set_zoom (GST_PHOTOGRAPHY (self), zoom);
       break;
     }
+    case PROP_EXPOSURE_MODE:{
+      GstPhotographyExposureMode exposure_mode = g_value_get_enum (value);
+      gst_ahc2_src_set_exposure_mode (GST_PHOTOGRAPHY (self), exposure_mode);
+      break;
+    }
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
       break;
@@ -1701,6 +1725,13 @@ gst_ahc2_src_get_property (GObject * object,
       gfloat zoom;
       if (gst_ahc2_src_get_zoom (GST_PHOTOGRAPHY (self), &zoom))
         g_value_set_float (value, zoom);
+      break;
+    }
+    case PROP_EXPOSURE_MODE:{
+      GstPhotographyExposureMode exposure_mode;
+      if (gst_ahc2_src_get_exposure_mode (GST_PHOTOGRAPHY (self),
+              &exposure_mode))
+        g_value_set_enum (value, exposure_mode);
       break;
     }
     default:
@@ -2138,6 +2169,11 @@ gst_ahc2_src_class_init (GstAHC2SrcClass * klass)
   properties[PROP_ZOOM] = g_object_class_find_property (gobject_class,
       GST_PHOTOGRAPHY_PROP_ZOOM);
 
+  g_object_class_override_property (gobject_class,
+      PROP_EXPOSURE_MODE, GST_PHOTOGRAPHY_PROP_EXPOSURE_MODE);
+  properties[PROP_EXPOSURE_MODE] = g_object_class_find_property (gobject_class,
+      GST_PHOTOGRAPHY_PROP_EXPOSURE_MODE);
+
   signals[SIG_GET_CAMERA_ID_BY_INDEX] =
       g_signal_new ("get-camera-id-by-index", G_TYPE_FROM_CLASS (klass),
       G_SIGNAL_RUN_LAST | G_SIGNAL_ACTION, G_STRUCT_OFFSET (GstAHC2SrcClass,
@@ -2244,6 +2280,9 @@ gst_ahc2_src_photography_init (gpointer g_iface, gpointer iface_data)
   iface->set_autofocus = gst_ahc2_src_set_autofocus;
   iface->get_focus_mode = gst_ahc2_src_get_focus_mode;
   iface->set_focus_mode = gst_ahc2_src_set_focus_mode;
+
+  iface->get_exposure_mode = gst_ahc2_src_get_exposure_mode;
+  iface->set_exposure_mode = gst_ahc2_src_set_exposure_mode;
 
   iface->get_flash_mode = gst_ahc2_src_get_flash_mode;
   iface->set_flash_mode = gst_ahc2_src_set_flash_mode;
