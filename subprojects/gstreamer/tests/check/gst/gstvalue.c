@@ -450,7 +450,7 @@ GST_END_TEST;
 GST_START_TEST (test_serialize_flags_invalid)
 {
   GValue value = { 0 };
-  gchar *string;
+  gchar *string = NULL;
 
   g_value_init (&value, GST_TYPE_SEEK_FLAGS);
 
