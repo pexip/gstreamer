@@ -5042,7 +5042,7 @@ gst_rtp_jitter_buffer_chain_rtcp (GstPad * pad, GstObject * parent,
   GstRtpJitterBuffer *jitterbuffer;
   GstRtpJitterBufferPrivate *priv;
   GstFlowReturn ret = GST_FLOW_OK;
-  guint32 ssrc;
+  guint32 ssrc = 0x0;
   GstRTCPPacket packet;
   guint64 ext_rtptime, ntptime;
   GstClockTime ntpnstime = GST_CLOCK_TIME_NONE;
