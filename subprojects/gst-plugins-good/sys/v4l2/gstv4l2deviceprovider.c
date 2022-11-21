@@ -218,7 +218,7 @@ gst_v4l2_device_provider_probe (GstDeviceProvider * provider)
 
     if (device) {
       gst_object_ref_sink (device);
-      devices = g_list_prepend (devices, device);
+      devices = g_list_append (devices, device);
     }
   }
 
