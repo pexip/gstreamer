@@ -1175,11 +1175,11 @@ gst_video_encoder_sink_event_default (GstVideoEncoder * encoder,
                 NULL, NULL, &running_time, &all_headers, &count)) {
           ForcedKeyUnitEvent *fevt;
 
-          GST_OBJECT_LOCK (encoder);
+          GST_VIDEO_ENCODER_STREAM_LOCK (encoder);
           fevt = forced_key_unit_event_new (running_time, all_headers, count);
           g_queue_insert_sorted (&encoder->priv->force_key_unit, fevt,
               (GCompareDataFunc) forced_key_unit_event_compare, NULL);
-          GST_OBJECT_UNLOCK (encoder);
+          GST_VIDEO_ENCODER_STREAM_UNLOCK (encoder);
 
           GST_DEBUG_OBJECT (encoder,
               "force-key-unit event: running-time %" GST_TIME_FORMAT
