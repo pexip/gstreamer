@@ -467,6 +467,7 @@ gst_video_encoder_reset (GstVideoEncoder * encoder, gboolean hard)
   priv->presentation_frame_number = 0;
   priv->distance_from_sync = 0;
 
+  GST_OBJECT_LOCK (encoder);
   g_queue_clear_full (&priv->force_key_unit,
       (GDestroyNotify) forced_key_unit_event_free);
   priv->last_force_key_unit_request = GST_CLOCK_TIME_NONE;
@@ -474,7 +475,6 @@ gst_video_encoder_reset (GstVideoEncoder * encoder, gboolean hard)
 
   priv->drained = TRUE;
 
-  GST_OBJECT_LOCK (encoder);
   priv->bytes = 0;
   priv->time = 0;
   GST_OBJECT_UNLOCK (encoder);
@@ -2628,6 +2628,7 @@ gst_video_encoder_finish_frame (GstVideoEncoder * encoder,
   gboolean send_headers = FALSE;
   gboolean key_unit = FALSE;
   gboolean discont = FALSE;
+  gboolean force_key_unit_present;
   GstBuffer *buffer;
 
   g_return_val_if_fail (frame, GST_FLOW_ERROR);
@@ -2662,7 +2663,11 @@ gst_video_encoder_finish_frame (GstVideoEncoder * encoder,
 
   priv->processed++;
 
-  if (GST_VIDEO_CODEC_FRAME_IS_SYNC_POINT (frame) && priv->force_key_unit.head)
+  GST_OBJECT_LOCK (encoder);
+  force_key_unit_present = priv->force_key_unit.head != NULL;
+  GST_OBJECT_UNLOCK (encoder);
+
+  if (GST_VIDEO_CODEC_FRAME_IS_SYNC_POINT (frame) && force_key_unit_present)
     gst_video_encoder_send_key_unit_unlocked (encoder, frame, &send_headers);
 
   if (GST_VIDEO_CODEC_FRAME_IS_SYNC_POINT (frame)
@@ -2780,6 +2785,7 @@ gst_video_encoder_finish_subframe (GstVideoEncoder * encoder,
   gboolean discont = FALSE;
   gboolean send_headers = FALSE;
   gboolean key_unit = FALSE;
+  gboolean force_key_unit_present;
 
   g_return_val_if_fail (frame, GST_FLOW_ERROR);
   g_return_val_if_fail (frame->output_buffer, GST_FLOW_ERROR);
@@ -2802,7 +2808,11 @@ gst_video_encoder_finish_subframe (GstVideoEncoder * encoder,
   if (ret != GST_FLOW_OK)
     goto done;
 
-  if (GST_VIDEO_CODEC_FRAME_IS_SYNC_POINT (frame) && priv->force_key_unit.head)
+  GST_OBJECT_LOCK (encoder);
+  force_key_unit_present = priv->force_key_unit.head != NULL;
+  GST_OBJECT_UNLOCK (encoder);
+
+  if (GST_VIDEO_CODEC_FRAME_IS_SYNC_POINT (frame) && force_key_unit_present)
     gst_video_encoder_send_key_unit_unlocked (encoder, frame, &send_headers);
 
   /* Push pending events only for the first subframe ie segment event.
