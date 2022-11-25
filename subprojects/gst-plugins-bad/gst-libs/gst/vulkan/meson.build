@@ -108,7 +108,28 @@ if ['ios', 'darwin'].contains(host_system)
   #   retrieving the metal device from the VkDevice) which is currently waiting
   #   on implementing a proper Metal extension for Vulkan
   #   https://github.com/KhronosGroup/MoltenVK/issues/492
-  vulkan_dep = cc.find_library('MoltenVK', required : get_option('vulkan'))
+
+  # 1. Download and install the Vulkan SDK for macOS:
+  #   https://vulkan.lunarg.com/sdk/home#mac
+  # 2. Set a shell environment variable to point to the SDK:
+  #   `export VK_SDK_PATH="/path/to/VulkanSDK/1.3.231.1"`
+  vulkan_root = run_command(python3, '-c', 'import os; print(os.environ.get("VK_SDK_PATH"))', check: false).stdout().strip()
+
+  if vulkan_root != '' and vulkan_root != 'None'
+    molten_vk_root = join_paths(vulkan_root, 'MoltenVK')
+    platform_dir = host_system == 'ios' ? 'ios-arm64' : 'macos-arm64_x86_64'
+    vulkan_lib_dir = join_paths(molten_vk_root, 'MoltenVK.xcframework', platform_dir)
+    vulkan_inc_dir = join_paths(molten_vk_root, 'include')
+    vulkan_lib = cc.find_library('MoltenVK', dirs: vulkan_lib_dir,
+                                 required : get_option('vulkan'))
+    has_vulkan_header = cc.has_header('vulkan/vulkan_core.h',
+                                      include_directories: include_directories(vulkan_inc_dir))
+    vulkan_dep = declare_dependency(include_directories: include_directories(vulkan_inc_dir),
+                                    dependencies: vulkan_lib,
+                                    link_args: ['-lc++'])
+  else
+    subdir_done()
+  endif
 elif host_system == 'windows'
   vulkan_root = run_command(python3, '-c', 'import os; print(os.environ.get("VK_SDK_PATH"))', check: false).stdout().strip()
   if vulkan_root != '' and vulkan_root != 'None'
@@ -138,7 +159,7 @@ else
   endif
 endif
 
-if host_system != 'windows'
+if not ['ios', 'darwin', 'windows'].contains(host_system)
   has_vulkan_header = cc.has_header('vulkan/vulkan_core.h')
 endif
 
@@ -201,41 +222,60 @@ if ['darwin', 'ios'].contains(host_system)
 
   vulkan_objc_args += ['-fobjc-arc']
 
-  foundation_dep = dependency('appleframeworks', modules : ['Foundation'], required : get_option('vulkan'))
-  quartzcore_dep = dependency('appleframeworks', modules : ['QuartzCore'], required : get_option('vulkan'))
-  corefoundation_dep = dependency('appleframeworks', modules : ['CoreFoundation'], required : get_option('vulkan'))
-  if foundation_dep.found() and quartzcore_dep.found() and corefoundation_dep.found()
-    optional_deps += [foundation_dep, corefoundation_dep, quartzcore_dep]
-  endif
+  apple_deps = [
+    dependency('appleframeworks', modules : ['Foundation'], required : get_option('vulkan')),
+    dependency('appleframeworks', modules : ['QuartzCore'], required : get_option('vulkan')),
+    dependency('appleframeworks', modules : ['CoreFoundation'], required : get_option('vulkan')),
+    dependency('appleframeworks', modules : ['Metal'], required : get_option('vulkan')),
+    dependency('appleframeworks', modules : ['IOSurface'], required : get_option('vulkan')),
+  ]
+
+  foreach dep : apple_deps
+    if dep.found()
+      optional_deps += [dep]
+    endif
+  endforeach
 endif
 
 if host_system == 'darwin'
   cocoa_dep = dependency('appleframeworks', modules : ['Cocoa'], required : get_option('vulkan'))
 
-  if cocoa_dep.found() and cc.has_header('vulkan/vulkan_macos.h', dependencies : vulkan_dep)
+  if cocoa_dep.found() and cc.has_header('vulkan/vulkan_macos.h', include_directories: include_directories(vulkan_inc_dir))
     vulkan_priv_sources += files(
       'cocoa/gstvkdisplay_cocoa.m',
       'cocoa/gstvkwindow_cocoa.m',
     )
-    optional_deps += [cocoa_dep]
     vulkan_windowing = true
     vulkan_conf.set('GST_VULKAN_HAVE_WINDOW_COCOA', 1)
     enabled_vulkan_winsys += ['cocoa']
+
+    iokit_dep = dependency('appleframeworks', modules : ['IOKit'], required : get_option('vulkan'))
+    if cocoa_dep.found()
+      optional_deps += [iokit_dep]
+    endif
+
+    optional_deps += [cocoa_dep]
   endif
 endif
 
 if host_system == 'ios'
   uikit_dep = dependency('appleframeworks', modules : ['UIKit'], required : get_option('vulkan'))
 
-  if uikit_dep.found() and cc.has_header('vulkan/vulkan_ios.h', dependencies : vulkan_dep)
+  if uikit_dep.found() and cc.has_header('vulkan/vulkan_ios.h', include_directories: include_directories(vulkan_inc_dir))
     vulkan_priv_sources += files(
       'ios/gstvkdisplay_ios.m',
       'ios/gstvkwindow_ios.m',
     )
-    optional_deps += [uikit_dep]
     vulkan_windowing = true
     vulkan_conf.set('GST_VULKAN_HAVE_WINDOW_IOS', 1)
     enabled_vulkan_winsys += ['ios']
+
+    coregraphics_dep = dependency('appleframeworks', modules : ['CoreGraphics'], required : get_option('vulkan'))
+    if coregraphics_dep.found()
+      optional_deps += [coregraphics_dep]
+    endif
+
+    optional_deps += [uikit_dep]
   endif
 endif
 
