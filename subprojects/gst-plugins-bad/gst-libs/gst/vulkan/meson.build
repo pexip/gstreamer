@@ -248,12 +248,19 @@ if host_system == 'darwin'
 
   vulkan_objc_args += ['-fobjc-arc']
 
-  foundation_dep = dependency('appleframeworks', modules : ['Foundation'], required : vulkan_opt)
-  quartzcore_dep = dependency('appleframeworks', modules : ['QuartzCore'], required : vulkan_opt)
-  corefoundation_dep = dependency('appleframeworks', modules : ['CoreFoundation'], required : vulkan_opt)
-  if foundation_dep.found() and quartzcore_dep.found() and corefoundation_dep.found()
-    optional_deps += [foundation_dep, corefoundation_dep, quartzcore_dep]
-  endif
+  apple_deps = [
+    dependency('appleframeworks', modules : ['Foundation'], required : vulkan_opt),
+    dependency('appleframeworks', modules : ['QuartzCore'], required : vulkan_opt),
+    dependency('appleframeworks', modules : ['CoreFoundation'], required : vulkan_opt),
+    dependency('appleframeworks', modules : ['Metal'], required : vulkan_opt),
+    dependency('appleframeworks', modules : ['IOSurface'], required : vulkan_opt),
+  ]
+
+  foreach dep : apple_deps
+    if dep.found()
+      optional_deps += [dep]
+    endif
+  endforeach
 endif
 
 if subsystem == 'macos'
@@ -264,10 +271,16 @@ if subsystem == 'macos'
       'cocoa/gstvkdisplay_cocoa.m',
       'cocoa/gstvkwindow_cocoa.m',
     )
-    optional_deps += [cocoa_dep]
     vulkan_windowing = true
     vulkan_conf.set('GST_VULKAN_HAVE_WINDOW_COCOA', 1)
     enabled_vulkan_winsys += ['cocoa']
+
+    iokit_dep = dependency('appleframeworks', modules : ['IOKit'], required : get_option('vulkan'))
+    if cocoa_dep.found()
+      optional_deps += [iokit_dep]
+    endif
+
+    optional_deps += [cocoa_dep]
   endif
 elif host_system == 'darwin'
   uikit_dep = dependency('appleframeworks', modules : ['UIKit', 'IOSurface', 'CoreGraphics', 'Metal'], required : vulkan_opt)
@@ -277,10 +290,16 @@ elif host_system == 'darwin'
       'ios/gstvkdisplay_ios.m',
       'ios/gstvkwindow_ios.m',
     )
-    optional_deps += [uikit_dep]
     vulkan_windowing = true
     vulkan_conf.set('GST_VULKAN_HAVE_WINDOW_IOS', 1)
     enabled_vulkan_winsys += ['ios']
+
+    coregraphics_dep = dependency('appleframeworks', modules : ['CoreGraphics'], required : get_option('vulkan'))
+    if coregraphics_dep.found()
+      optional_deps += [coregraphics_dep]
+    endif
+
+    optional_deps += [uikit_dep]
   endif
 endif
 
