@@ -542,7 +542,6 @@ gst_sctp_association_send_data (GstSctpAssociation * self, const guint8 * buf,
     }
   }
   remote_addr = get_sctp_socket_address (self, self->remote_port);
-  g_mutex_unlock (&self->association_mutex);
 
   /* TODO: We probably want to split too large chunks into multiple packets
    * and only set the SCTP_EOR flag on the last one. Firefox is using 0x4000
@@ -571,6 +570,9 @@ gst_sctp_association_send_data (GstSctpAssociation * self, const guint8 * buf,
       usrsctp_sendv (self->sctp_ass_sock, buf, length,
       (struct sockaddr *) &remote_addr, 1, (void *) &spa,
       (socklen_t) sizeof (struct sctp_sendv_spa), SCTP_SENDV_SPA, 0);
+
+  g_mutex_unlock (&self->association_mutex);
+
   if (bytes_sent < 0) {
     if (errno == EAGAIN || errno == EWOULDBLOCK) {
       bytes_sent = 0;
