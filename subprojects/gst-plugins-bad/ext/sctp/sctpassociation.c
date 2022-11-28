@@ -599,19 +599,27 @@ gst_sctp_association_reset_stream (GstSctpAssociation * self, guint16 stream_id)
   struct sctp_reset_streams *srs;
   socklen_t length;
 
+  g_mutex_lock (&self->association_mutex);
+
+  if (self->state != GST_SCTP_ASSOCIATION_STATE_CONNECTED) {
+    /* only allow resets on connected streams */
+    g_mutex_unlock (&self->association_mutex);
+    return;
+  }
+
   length = (socklen_t) (sizeof (struct sctp_reset_streams) + sizeof (guint16));
   srs = (struct sctp_reset_streams *) g_malloc0 (length);
   srs->srs_flags = SCTP_STREAM_RESET_OUTGOING;
   srs->srs_number_streams = 1;
   srs->srs_stream_list[0] = stream_id;
-
   srs->srs_assoc_id = self->sctp_assoc_id;
-  if (self->state == GST_SCTP_ASSOCIATION_STATE_CONNECTED) {
-    if (usrsctp_setsockopt (self->sctp_ass_sock, IPPROTO_SCTP,
-            SCTP_RESET_STREAMS, srs, length) < 0) {
-      GST_INFO_OBJECT (self, "Resetting stream id=%u failed", stream_id);
-    }
+
+  if (usrsctp_setsockopt (self->sctp_ass_sock, IPPROTO_SCTP,
+          SCTP_RESET_STREAMS, srs, length) < 0) {
+    GST_WARNING_OBJECT (self, "Resetting stream id=%u failed", stream_id);
   }
+
+  g_mutex_unlock (&self->association_mutex);
 
   g_free (srs);
 }
