@@ -133,10 +133,10 @@ static void handle_message (GstSctpAssociation * self, guint8 * data,
     guint32 datalen, guint16 stream_id, guint32 ppid);
 
 static void maybe_set_state_to_ready (GstSctpAssociation * self);
-static void gst_sctp_association_change_state_unlocked (GstSctpAssociation * self,
+static void gst_sctp_association_change_state_unlocked (GstSctpAssociation *
+    self, GstSctpAssociationState new_state);
+static void gst_sctp_association_change_state (GstSctpAssociation * self,
     GstSctpAssociationState new_state);
-static gboolean gst_sctp_association_change_state (GstSctpAssociation * self,
-    GstSctpAssociationState new_state, gboolean lock);
 
 static void
 gst_sctp_association_class_init (GstSctpAssociationClass * klass)
@@ -300,7 +300,8 @@ maybe_set_state_to_ready (GstSctpAssociation * self)
   if ((self->state == GST_SCTP_ASSOCIATION_STATE_NEW) &&
       (self->local_port != 0 && self->remote_port != 0)
       && (self->packet_out_cb != NULL) && (self->packet_received_cb != NULL)) {
-    gst_sctp_association_change_state_unlocked (self, GST_SCTP_ASSOCIATION_STATE_READY);
+    gst_sctp_association_change_state_unlocked (self,
+        GST_SCTP_ASSOCIATION_STATE_READY);
   }
   g_mutex_unlock (&self->association_mutex);
 }
@@ -981,7 +982,7 @@ handle_notification (GstSctpAssociation * self,
     case SCTP_SHUTDOWN_EVENT:
       GST_DEBUG_OBJECT (self, "Event: SCTP_SHUTDOWN_EVENT");
       gst_sctp_association_change_state (self,
-          GST_SCTP_ASSOCIATION_STATE_DISCONNECTING, TRUE);
+          GST_SCTP_ASSOCIATION_STATE_DISCONNECTING);
       break;
     case SCTP_ADAPTATION_INDICATION:
       GST_DEBUG_OBJECT (self, "Event: SCTP_ADAPTATION_INDICATION");
@@ -1100,7 +1101,8 @@ handle_association_changed (GstSctpAssociation * self,
       break;
     case SCTP_CANT_STR_ASSOC:
       GST_WARNING_OBJECT (self, "SCTP event SCTP_CANT_STR_ASSOC received");
-      gst_sctp_association_change_state (self, GST_SCTP_ASSOCIATION_STATE_ERROR, TRUE);
+      gst_sctp_association_change_state (self,
+          GST_SCTP_ASSOCIATION_STATE_ERROR);
       break;
   }
 }
@@ -1145,39 +1147,29 @@ handle_message (GstSctpAssociation * self, guint8 * data, guint32 datalen,
 static void
 gst_sctp_association_change_state_unlocked (GstSctpAssociation * self,
     GstSctpAssociationState new_state)
- {
-  /* Association mutex is held on entry */
-  gboolean notify = gst_sctp_association_change_state (self, new_state, FALSE);
+{
+  gboolean notify = FALSE;
+
+  if (self->state != new_state
+      && self->state != GST_SCTP_ASSOCIATION_STATE_ERROR) {
+    self->state = new_state;
+    notify = TRUE;
+  }
+
+  /* Unlock the mutex to emit the property change event to avoid deadlock
+   * if the client calls back into this object from its event handler. */
   if (notify) {
-    /* Unlock the mutex to emit the property change event to avoid deadlock
-    * if the client calls back into this object from its event handler. */
     g_mutex_unlock (&self->association_mutex);
     g_object_notify_by_pspec (G_OBJECT (self), properties[PROP_STATE]);
     g_mutex_lock (&self->association_mutex);
   }
 }
 
-/* Returns TRUE if lock==FALSE and notification is needed later.
- * Takes the mutex shortly if lock==TRUE! */
-static gboolean
+static void
 gst_sctp_association_change_state (GstSctpAssociation * self,
-    GstSctpAssociationState new_state, gboolean lock)
+    GstSctpAssociationState new_state)
 {
-  if (lock)
-    g_mutex_lock (&self->association_mutex);
-  if (self->state != new_state
-      && self->state != GST_SCTP_ASSOCIATION_STATE_ERROR) {
-    self->state = new_state;
-    if (lock) {
-      g_mutex_unlock (&self->association_mutex);
-      g_object_notify_by_pspec (G_OBJECT (self), properties[PROP_STATE]);
-      return FALSE;
-    } else {
-      return TRUE;
-    }
-  } else {
-    if (lock)
-      g_mutex_unlock (&self->association_mutex);
-    return FALSE;
-  }
+  g_mutex_lock (&self->association_mutex);
+  gst_sctp_association_change_state_unlocked (self, new_state);
+  g_mutex_unlock (&self->association_mutex);
 }
