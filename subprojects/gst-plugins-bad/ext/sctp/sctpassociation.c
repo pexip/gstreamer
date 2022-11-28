@@ -187,8 +187,7 @@ gst_sctp_association_class_init (GstSctpAssociationClass * klass)
   properties[PROP_AGGRESSIVE_HEARTBEAT] =
       g_param_spec_boolean ("aggressive-heartbeat", "Aggressive heartbeat",
       "When set to TRUE, set the heartbeat interval to 10ms and the assoc "
-      "rtx max to 1.",
-      FALSE, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS);
+      "rtx max to 1.", FALSE, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS);
 
   g_object_class_install_properties (gobject_class, NUM_PROPERTIES, properties);
 }
@@ -399,7 +398,7 @@ gst_sctp_association_get (guint32 association_id)
 
   association =
       g_hash_table_lookup (associations_by_id,
-          GUINT_TO_POINTER (association_id));
+      GUINT_TO_POINTER (association_id));
   if (!association) {
     association =
         g_object_new (GST_SCTP_TYPE_ASSOCIATION, "association-id",
@@ -609,7 +608,7 @@ gst_sctp_association_reset_stream (GstSctpAssociation * self, guint16 stream_id)
   srs->srs_assoc_id = self->sctp_assoc_id;
   if (self->state == GST_SCTP_ASSOCIATION_STATE_CONNECTED) {
     if (usrsctp_setsockopt (self->sctp_ass_sock, IPPROTO_SCTP,
-        SCTP_RESET_STREAMS, srs, length) < 0) {
+            SCTP_RESET_STREAMS, srs, length) < 0) {
       GST_INFO_OBJECT (self, "Resetting stream id=%u failed", stream_id);
     }
   }
@@ -666,7 +665,6 @@ gst_sctp_association_disconnect_unlocked (GstSctpAssociation * self,
   }
 
   /* Fall through to ensure the transition to disconnected occurs */
-
   if (self->state == GST_SCTP_ASSOCIATION_STATE_DISCONNECTING) {
     force_close_unlocked (self, FALSE);
     gst_sctp_association_change_state_unlocked (self,
@@ -1032,7 +1030,7 @@ _apply_aggressive_heartbeat_unlocked (GstSctpAssociation * self)
   assoc_params.sasoc_assoc_id = self->sctp_assoc_id;
   assoc_params.sasoc_asocmaxrxt = 1;
   if (usrsctp_setsockopt (self->sctp_ass_sock, IPPROTO_SCTP,
-      SCTP_ASSOCINFO, &assoc_params, sizeof (assoc_params))) {
+          SCTP_ASSOCINFO, &assoc_params, sizeof (assoc_params))) {
     GST_WARNING_OBJECT (self, "Could not set SCTP_ASSOCINFO");
   }
 
@@ -1042,34 +1040,36 @@ _apply_aggressive_heartbeat_unlocked (GstSctpAssociation * self)
   peer_addr_params.spp_flags = SPP_HB_ENABLE;
   peer_addr_params.spp_hbinterval = 10;
   if (usrsctp_setsockopt (self->sctp_ass_sock, IPPROTO_SCTP,
-      SCTP_PEER_ADDR_PARAMS, &peer_addr_params, sizeof (peer_addr_params))) {
+          SCTP_PEER_ADDR_PARAMS, &peer_addr_params,
+          sizeof (peer_addr_params))) {
     GST_WARNING_OBJECT (self, "Could not set SCTP_PEER_ADDR_PARAMS");
   }
 }
 
 static void
 handle_sctp_comm_up (GstSctpAssociation * self,
-    const struct sctp_assoc_change * sac)
+    const struct sctp_assoc_change *sac)
 {
   GST_INFO_OBJECT (self, "SCTP_COMM_UP");
   g_mutex_lock (&self->association_mutex);
-    if (self->state == GST_SCTP_ASSOCIATION_STATE_CONNECTING) {
-      self->sctp_assoc_id = sac->sac_assoc_id;
-      _apply_aggressive_heartbeat_unlocked (self);
-      gst_sctp_association_change_state_unlocked (self,
-          GST_SCTP_ASSOCIATION_STATE_CONNECTED);
-      GST_INFO_OBJECT (self, "SCTP association connected!");
-    } else if (self->state == GST_SCTP_ASSOCIATION_STATE_CONNECTED) {
-      GST_INFO_OBJECT (self, "SCTP association already open");
-    } else {
-      GST_WARNING_OBJECT (self, "SCTP association in unexpected state: %d", self->state);
-    }
+  if (self->state == GST_SCTP_ASSOCIATION_STATE_CONNECTING) {
+    self->sctp_assoc_id = sac->sac_assoc_id;
+    _apply_aggressive_heartbeat_unlocked (self);
+    gst_sctp_association_change_state_unlocked (self,
+        GST_SCTP_ASSOCIATION_STATE_CONNECTED);
+    GST_INFO_OBJECT (self, "SCTP association connected!");
+  } else if (self->state == GST_SCTP_ASSOCIATION_STATE_CONNECTED) {
+    GST_INFO_OBJECT (self, "SCTP association already open");
+  } else {
+    GST_WARNING_OBJECT (self, "SCTP association in unexpected state: %d",
+        self->state);
+  }
   g_mutex_unlock (&self->association_mutex);
 }
 
 static void
 handle_sctp_comm_lost_or_shutdown (GstSctpAssociation * self,
-    const struct sctp_assoc_change * sac)
+    const struct sctp_assoc_change *sac)
 {
   GST_INFO_OBJECT (self, "SCTP event %s received",
       sac->sac_state == SCTP_COMM_LOST ?
