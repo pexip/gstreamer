@@ -102,7 +102,6 @@ static GParamSpec *properties[NUM_PROPERTIES];
 G_LOCK_DEFINE_STATIC (associations_lock);
 static GHashTable *associations_by_id = NULL;
 static GHashTable *ids_by_association = NULL;
-static guint32 number_of_associations = 0;
 
 /* Interface implementations */
 static void gst_sctp_association_finalize (GObject * object);
@@ -209,8 +208,6 @@ gst_usrsctp_debug (const gchar * format, ...)
 static void
 gst_sctp_association_init (GstSctpAssociation * self)
 {
-  number_of_associations++;
-
   self->local_port = DEFAULT_LOCAL_SCTP_PORT;
   self->remote_port = DEFAULT_REMOTE_SCTP_PORT;
   self->sctp_ass_sock = NULL;
@@ -234,8 +231,6 @@ gst_sctp_association_finalize (GObject * object)
   g_hash_table_remove (associations_by_id,
       GUINT_TO_POINTER (self->association_id));
   g_hash_table_remove (ids_by_association, self);
-
-  number_of_associations--;
 
   g_mutex_clear (&self->association_mutex);
 
@@ -384,9 +379,6 @@ gst_sctp_association_get (guint32 association_id)
   GST_DEBUG_CATEGORY_INIT (gst_sctp_debug_category,
       "sctplib", 0, "debug category for messages from usrsctp");
 
-  if (number_of_associations == 0)
-    gst_sctp_association_usrsctp_init ();
-
   if (!associations_by_id) {
     g_assert (ids_by_association == NULL);
 
@@ -394,6 +386,8 @@ gst_sctp_association_get (guint32 association_id)
         g_hash_table_new_full (g_direct_hash, g_direct_equal, NULL, NULL);
     ids_by_association =
         g_hash_table_new_full (g_direct_hash, g_direct_equal, NULL, NULL);
+
+    gst_sctp_association_usrsctp_init ();
   }
 
   association =
@@ -420,13 +414,13 @@ gst_sctp_association_unref (GstSctpAssociation * self)
   G_LOCK (associations_lock);
   g_object_unref (self);
 
-  if (number_of_associations == 0) {
-    usrsctp_finish ();
-
+  if (g_hash_table_size (associations_by_id) == 0) {
     g_hash_table_destroy (associations_by_id);
     g_hash_table_destroy (ids_by_association);
     associations_by_id = NULL;
     ids_by_association = NULL;
+
+    usrsctp_finish ();
   }
   G_UNLOCK (associations_lock);
 }
