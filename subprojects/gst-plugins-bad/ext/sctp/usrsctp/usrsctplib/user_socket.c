@@ -1880,6 +1880,8 @@ soconnect(struct socket *so, struct sockaddr *nam)
 	 */
 	if (so->so_state & (SS_ISCONNECTED|SS_ISCONNECTING) && (error = sodisconnect(so))) {
 		error = EISCONN;
+	} else if (nam == NULL){
+		return EINVAL;
 	} else {
 		/*
 		 * Prevent accumulated error from previous connection from
