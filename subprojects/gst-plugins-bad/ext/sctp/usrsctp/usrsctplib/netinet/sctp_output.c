@@ -7385,6 +7385,10 @@ sctp_sendall(struct sctp_inpcb *inp, struct uio *uio, struct mbuf *m,
 	int ret;
 	struct sctp_copy_all *ca;
 
+	if (!uio) {
+		return (EFAULT);
+	}
+
 	if (inp->sctp_flags & SCTP_PCB_FLAGS_SND_ITERATOR_UP) {
 		/* There is another. */
 		return (EBUSY);
