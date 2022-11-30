@@ -27,8 +27,8 @@
 
 #include "gstrtputils.h"
 
-GST_DEBUG_CATEGORY_EXTERN (rtp_session_debug);
-#define GST_CAT_DEFAULT rtp_session_debug
+GST_DEBUG_CATEGORY (rtp_twcc_debug);
+#define GST_CAT_DEFAULT rtp_twcc_debug
 
 #define WEIGHT(a, b, w) (((a) * (w)) + ((b) * (1.0 - (w))))
 
@@ -562,6 +562,8 @@ rtp_twcc_manager_class_init (RTPTWCCManagerClass * klass)
 {
   GObjectClass *gobject_class = (GObjectClass *) klass;
   gobject_class->finalize = rtp_twcc_manager_finalize;
+
+  GST_DEBUG_CATEGORY_INIT (rtp_twcc_debug, "rtptwcc", 0, "RTP TWCC Manager");
 }
 
 RTPTWCCManager *
