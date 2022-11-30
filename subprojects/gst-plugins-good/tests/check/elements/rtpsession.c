@@ -4205,7 +4205,6 @@ GST_START_TEST (test_twcc_double_gap)
   };
 
   twcc_verify_packets_to_fci (h0, packets, exp_fci);
-
   twcc_verify_packets_to_packets (h1, h1, packets);
 
   session_harness_free (h0);
@@ -4266,6 +4265,52 @@ GST_START_TEST (test_twcc_recv_packets_reordered)
   gst_buffer_unref (buf);
 
   session_harness_free (h);
+}
+
+GST_END_TEST;
+
+GST_START_TEST (test_twcc_recv_packets_reordered_within_report_interval)
+{
+  SessionHarness *h0 = session_harness_new ();
+  SessionHarness *h1 = session_harness_new ();
+
+  /* a reordered seqence, all within the same report */
+  TWCCPacket packets[] = {
+    {3, 250 * GST_USECOND, FALSE}
+    ,
+    {1, 500 * GST_USECOND, FALSE}
+    ,
+    {2, 750 * GST_USECOND, FALSE}
+    ,
+    {4, 1000 * GST_USECOND, TRUE}
+    ,
+  };
+
+  /* we expect this to be handled gracefully */
+  guint8 exp_fci[] = {
+    0x00, 0x01,                 /* base sequence number: 1 */
+    0x00, 0x04,                 /* packet status count: 3 */
+    0x00, 0x00, 0x00,           /* reference time: 0 */
+    0x00,                       /* feedback packet count: 0 */
+    /* packet chunks: */
+    0xd6, 0x40,                 /* 11 - Status Vector Chunk, 2 bit
+                                   01 - Packet received, small delta
+                                   01 - Packet received, small delta
+                                   10 - Packet received, large or negative delta
+                                   01 - Packet received, small delta
+                                 */
+    0x02,                       /* + 500us - abs:  500us */
+    0x01,                       /* + 250us - abs:  750us */
+    0xff, 0xfe,                 /* - 500us - abs:  250us */
+    0x03,                       /* + 750us - abs: 1000us */
+    0x00,                       /* padding */
+  };
+
+  twcc_verify_packets_to_fci (h0, packets, exp_fci);
+  twcc_verify_packets_to_packets (h1, h1, packets);
+
+  session_harness_free (h0);
+  session_harness_free (h1);
 }
 
 GST_END_TEST;
@@ -5588,6 +5633,8 @@ rtpsession_suite (void)
   tcase_add_test (tc_chain, test_twcc_delta_ts_rounding);
   tcase_add_test (tc_chain, test_twcc_double_gap);
   tcase_add_test (tc_chain, test_twcc_recv_packets_reordered);
+  tcase_add_test (tc_chain,
+      test_twcc_recv_packets_reordered_within_report_interval);
   tcase_add_test (tc_chain, test_twcc_recv_late_packet_fb_pkt_count_wrap);
   tcase_add_test (tc_chain, test_twcc_recv_rtcp_reordered);
   tcase_add_test (tc_chain, test_twcc_no_exthdr_in_buffer);
