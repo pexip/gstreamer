@@ -469,7 +469,6 @@ struct _RTPTWCCManager
   GArray *recv_packets;
 
   guint64 fb_pkt_count;
-  gint32 last_seqnum;
 
   GArray *sent_packets;
   GArray *parsed_packets;
@@ -527,7 +526,6 @@ rtp_twcc_manager_init (RTPTWCCManager * twcc)
   twcc->stats_ctx_by_pt = g_hash_table_new_full (NULL, NULL,
       NULL, (GDestroyNotify) twcc_stats_ctx_free);
 
-  twcc->last_seqnum = -1;
   twcc->recv_media_ssrc = -1;
   twcc->recv_sender_ssrc = -1;
 
@@ -536,6 +534,8 @@ rtp_twcc_manager_init (RTPTWCCManager * twcc)
   twcc->feedback_interval = GST_CLOCK_TIME_NONE;
   twcc->next_feedback_send_time = GST_CLOCK_TIME_NONE;
   twcc->last_report_time = GST_CLOCK_TIME_NONE;
+
+
 }
 
 static void
@@ -1170,8 +1170,6 @@ rtp_twcc_manager_add_fci (RTPTWCCManager * twcc, GstRTCPPacket * packet)
   gint64 delta_ts_rounded;
   guint8 fb_pkt_count;
 
-  g_array_sort (twcc->recv_packets, _twcc_seqnum_sort);
-
   /* get first and last packet */
   first = &g_array_index (twcc->recv_packets, RecvPacket, 0);
   last =
@@ -1326,6 +1324,17 @@ _many_packets_some_lost (RTPTWCCManager * twcc, guint16 seqnum)
   return FALSE;
 }
 
+static gboolean
+_find_seqnum_in_recv_packets (RTPTWCCManager * twcc, guint16 seqnum)
+{
+  for (guint i = 0; i < twcc->recv_packets->len; i++) {
+    RecvPacket *pkt = &g_array_index (twcc->recv_packets, RecvPacket, i);
+    if (pkt->seqnum == seqnum)
+      return TRUE;
+  }
+  return FALSE;
+}
+
 gboolean
 rtp_twcc_manager_recv_packet (RTPTWCCManager * twcc, RTPPacketInfo * pinfo)
 {
@@ -1333,6 +1342,7 @@ rtp_twcc_manager_recv_packet (RTPTWCCManager * twcc, RTPPacketInfo * pinfo)
   RecvPacket packet;
   gint32 seqnum;
   gint diff;
+  gboolean reordered_packet = FALSE;
 
   seqnum = rtp_twcc_manager_get_recv_twcc_seqnum (twcc, pinfo);
   if (seqnum == -1)
@@ -1356,7 +1366,7 @@ rtp_twcc_manager_recv_packet (RTPTWCCManager * twcc, RTPPacketInfo * pinfo)
      it as a restart of a stream */
   diff = gst_rtp_buffer_compare_seqnum (twcc->expected_recv_seqnum, seqnum);
   if (twcc->fb_pkt_count > 0 && diff < 0) {
-    GST_INFO ("Received out of order packet (%u after %u), treating as lost",
+    GST_INFO ("Received out of order packet (#%u after #%u), treating as lost",
         seqnum, twcc->expected_recv_seqnum);
     return FALSE;
   }
@@ -1364,24 +1374,28 @@ rtp_twcc_manager_recv_packet (RTPTWCCManager * twcc, RTPPacketInfo * pinfo)
   if (twcc->recv_packets->len > 0) {
     RecvPacket *last = &g_array_index (twcc->recv_packets, RecvPacket,
         twcc->recv_packets->len - 1);
-
     diff = gst_rtp_buffer_compare_seqnum (last->seqnum, seqnum);
-    if (diff == 0) {
-      GST_INFO ("Received duplicate packet (%u), dropping", seqnum);
-      return FALSE;
-    }
-    if (diff < 0) {
-      GST_INFO ("Received a previous duplicate packet (%u), dropping", seqnum);
-      return FALSE;
+    if (diff <= 0) {
+      /* duplicate check */
+      if (_find_seqnum_in_recv_packets (twcc, seqnum)) {
+        GST_INFO ("Received duplicate packet (#%u), dropping", seqnum);
+        return FALSE;
+      }
+      /* if not duplicate, it is reordered */
+      GST_INFO ("Received a reordered packet (#%u)", seqnum);
+      reordered_packet = TRUE;
     }
   }
 
   /* store the packet for Transport-wide RTCP feedback message */
   recv_packet_init (&packet, seqnum, pinfo);
   g_array_append_val (twcc->recv_packets, packet);
-  twcc->last_seqnum = seqnum;
 
-  GST_LOG ("Receive: twcc-seqnum: %u, pt: %u, marker: %d, ts: %"
+  /* if we received a reordered packet, we need to sort the list */
+  if (reordered_packet)
+    g_array_sort (twcc->recv_packets, _twcc_seqnum_sort);
+
+  GST_LOG ("Receive: twcc-seqnum: #%u, pt: %u, marker: %d, ts: %"
       GST_TIME_FORMAT, seqnum, pinfo->pt, pinfo->marker,
       GST_TIME_ARGS (pinfo->arrival_time));
 
