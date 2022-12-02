@@ -1169,6 +1169,7 @@ rtp_twcc_manager_add_fci (RTPTWCCManager * twcc, GstRTCPPacket * packet)
   GstClockTimeDiff delta_ts;
   gint64 delta_ts_rounded;
   guint8 fb_pkt_count;
+  gboolean missing_packets = FALSE;
 
   /* get first and last packet */
   first = &g_array_index (twcc->recv_packets, RecvPacket, 0);
@@ -1218,6 +1219,9 @@ rtp_twcc_manager_add_fci (RTPTWCCManager * twcc, GstRTCPPacket * packet)
     }
     run_lenght_helper_update (&rlh, pkt);
 
+    if (pkt->missing_run > 0)
+      missing_packets = TRUE;
+
     GST_LOG ("pkt: #%u, ts: %" GST_TIME_FORMAT
         " ts_rounded: %" GST_TIME_FORMAT
         " delta_ts: %" GST_STIME_FORMAT
@@ -1257,7 +1261,17 @@ rtp_twcc_manager_add_fci (RTPTWCCManager * twcc, GstRTCPPacket * packet)
   GST_MEMDUMP ("full fci:", fci_data, fci_length);
 
   g_array_unref (packet_chunks);
-  g_array_set_size (twcc->recv_packets, 0);
+
+  /* If we have any missing packets in this report, keep the last packet around,
+     potentially reporting it several times.
+     This is mimicing Chrome WebRTC behavior. */
+  if (missing_packets) {
+    twcc->recv_packets =
+        g_array_remove_range (twcc->recv_packets, 0,
+        twcc->recv_packets->len - 1);
+  } else {
+    g_array_set_size (twcc->recv_packets, 0);
+  }
 }
 
 static void
@@ -1360,16 +1374,6 @@ rtp_twcc_manager_recv_packet (RTPTWCCManager * twcc, RTPPacketInfo * pinfo)
   /* we can have multiple ssrcs here, so just pick the first one */
   if (twcc->recv_media_ssrc == -1)
     twcc->recv_media_ssrc = pinfo->ssrc;
-
-  /* check if we are reordered, and treat it as lost if we already sent
-     a feedback msg with a higher seqnum. If the diff is huge, treat
-     it as a restart of a stream */
-  diff = gst_rtp_buffer_compare_seqnum (twcc->expected_recv_seqnum, seqnum);
-  if (twcc->fb_pkt_count > 0 && diff < 0) {
-    GST_INFO ("Received out of order packet (#%u after #%u), treating as lost",
-        seqnum, twcc->expected_recv_seqnum);
-    return FALSE;
-  }
 
   if (twcc->recv_packets->len > 0) {
     RecvPacket *last = &g_array_index (twcc->recv_packets, RecvPacket,

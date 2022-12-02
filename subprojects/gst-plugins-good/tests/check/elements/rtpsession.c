@@ -4216,53 +4216,71 @@ GST_END_TEST;
 GST_START_TEST (test_twcc_recv_packets_reordered)
 {
   SessionHarness *h = session_harness_new ();
-  GstBuffer *buf;
 
-  /* a reordered seqence, with marker-bits for #3 and #4 */
-  TWCCPacket packets[] = {
-    {1, 1 * 250 * GST_USECOND, FALSE}
-    ,
-    {3, 2 * 250 * GST_USECOND, TRUE}
-    ,
-    {2, 3 * 250 * GST_USECOND, FALSE}
-    ,
-    {4, 4 * 250 * GST_USECOND, TRUE}
-    ,
+  /* *INDENT-OFF* */
+  TWCCPacket packets0[] = {
+    { 1, 1 * 250 * GST_USECOND, FALSE},
+    { 2, 2 * 250 * GST_USECOND, FALSE},
+    { 3, 3 * 250 * GST_USECOND, FALSE},
+    { 4, 4 * 250 * GST_USECOND, FALSE},
+    {10, 5 * 250 * GST_USECOND, TRUE},
   };
 
-  /* first we expect #2 to be reported lost */
+  TWCCPacket packets1[] = {
+    { 5, 6 * 250 * GST_USECOND, FALSE},
+    { 6, 7 * 250 * GST_USECOND, FALSE},
+    { 7, 8 * 250 * GST_USECOND, FALSE},
+    { 8, 9 * 250 * GST_USECOND, TRUE},
+  };
+
+  TWCCPacket packets2[] = {
+    {  9, 10 * 250 * GST_USECOND, FALSE},
+    { 11, 11 * 250 * GST_USECOND, TRUE},
+  };
+  /* *INDENT-ON* */
+
+  /* this reports 1 to 4, then 5 to 9 missing, and then 10 */
   guint8 exp_fci0[] = {
     0x00, 0x01,                 /* base sequence number: 1 */
-    0x00, 0x03,                 /* packet status count: 3 */
+    0x00, 0x0a,                 /* packet status count: 10 */
     0x00, 0x00, 0x00,           /* reference time: 0 */
     0x00,                       /* feedback packet count: 0 */
     /* packet chunks: */
-    0xa8, 0x00,                 /* 1 0 1 0 1 0 0 0 | 0 0 0 0 0 0 0 0 */
-    0x01, 0x01,                 /* recv deltas, +1, +1 */
-  };
-
-  /* and then when 2 actually arrives, it is already reported lost,
-     so we will not re-report it, but drop it */
-  guint8 exp_fci1[] = {
-    0x00, 0x04,                 /* base sequence number: 4 */
-    0x00, 0x01,                 /* packet status count: 1 */
-    0x00, 0x00, 0x00,           /* reference time: 0 */
-    0x01,                       /* feedback packet count: 1 */
-    /* packet chunks: */
-    0x20, 0x01,                 /* 0 0 1 0 0 0 0 0 | 0 0 0 0 0 0 0 1 */
-    0x04,                       /* recv deltas, +4 */
+    0xbc, 0x10,
+    0x01, 0x01, 0x01, 0x01, 0x01,
     0x00,                       /* padding */
   };
 
-  twcc_push_packets (h, packets);
+  /* this reports 5 to 8, 9 missing and then 10 (again) */
+  guint8 exp_fci1[] = {
+    0x00, 0x05,                 /* base sequence number: 5 */
+    0x00, 0x06,                 /* packet status count: 6 */
+    0x00, 0x00, 0x00,           /* reference time: 0 */
+    0x01,                       /* feedback packet count: 1 */
+    /* packet chunks: */
+    0xd5, 0x48,
+    0x06,
+    0x01, 0x01, 0x01,
+    0xff, 0xfc,
+  };
 
-  buf = session_harness_produce_twcc (h);
-  twcc_verify_fci (buf, exp_fci0);
-  gst_buffer_unref (buf);
+  /* this reports 9, 10 (again!) and 11 */
+  guint8 exp_fci2[] = {
+    0x00, 0x09,                 /* base sequence number: 4 */
+    0x00, 0x03,                 /* packet status count: 3 */
+    0x00, 0x00, 0x00,           /* reference time: 0 */
+    0x02,                       /* feedback packet count: 2 */
+    /* packet chunks: */
+    0xd9, 0x00,
+    0x0a,
+    0xff, 0xfb,
+    0x06,
+    0x00, 0x00,                 /* padding */
+  };
 
-  buf = session_harness_produce_twcc (h);
-  twcc_verify_fci (buf, exp_fci1);
-  gst_buffer_unref (buf);
+  twcc_verify_packets_to_fci (h, packets0, exp_fci0);
+  twcc_verify_packets_to_fci (h, packets1, exp_fci1);
+  twcc_verify_packets_to_fci (h, packets2, exp_fci2);
 
   session_harness_free (h);
 }
@@ -4333,13 +4351,13 @@ GST_START_TEST (test_twcc_recv_late_packet_fb_pkt_count_wrap)
   };
 
   guint8 exp_fci1[] = {
-    0x01, 0x01,                 /* base sequence number: 257 */
+    0x00, 0xff,                 /* base sequence number: 255 */
     0x00, 0x01,                 /* packet status count: 1 */
-    0x00, 0x00, 0x01,           /* reference time: 1 */
+    0x00, 0x00, 0x00,           /* reference time: 0 */
     0x01,                       /* feedback packet count: 1 */
     /* packet chunks: */
     0x20, 0x01,                 /* 0 0 1 0 0 0 0 0 | 0 0 0 0 0 0 0 1 */
-    0x01,                       /* 1 recv-delta */
+    0xff,                       /* 1 recv-delta */
     0x00,                       /* padding */
   };
 
