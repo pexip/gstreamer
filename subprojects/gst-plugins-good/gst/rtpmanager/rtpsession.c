@@ -85,6 +85,8 @@ enum
 #define DEFAULT_RTCP_DISABLE_SR_TIMESTAMP FALSE
 #define DEFAULT_FAVOR_NEW            FALSE
 #define DEFAULT_TWCC_FEEDBACK_INTERVAL GST_CLOCK_TIME_NONE
+#define DEFAULT_TWCC_STATS_WINDOW_SIZE 300 * GST_MSECOND
+#define DEFAULT_TWCC_STATS_WINDOW_DELAY 200 * GST_MSECOND
 #define DEFAULT_STATS_NOTIFY_MIN_INTERVAL   0
 
 enum
@@ -115,6 +117,8 @@ enum
   PROP_RTCP_REDUCED_SIZE,
   PROP_RTCP_DISABLE_SR_TIMESTAMP,
   PROP_TWCC_FEEDBACK_INTERVAL,
+  PROP_TWCC_STATS_WINDOW_SIZE,
+  PROP_TWCC_STATS_WINDOW_DELAY,
   PROP_RTX_SSRC_MAP,
   PROP_LAST,
 };
@@ -743,6 +747,47 @@ rtp_session_class_init (RTPSessionClass * klass)
       "Map of SSRCs to their retransmission SSRCs",
       GST_TYPE_STRUCTURE, G_PARAM_WRITABLE | G_PARAM_STATIC_STRINGS);
 
+  /**
+   * RTPSession:twcc-stats-window-size:
+   *
+   * The window (in nanoseconds) to do the various stats calculations
+   * for TWCC, like average send and recv bitrate and packets lost and
+   * recovered in this window.
+   *
+   * Since: 1.22
+   */
+  properties[PROP_TWCC_STATS_WINDOW_SIZE] =
+      g_param_spec_uint64 ("twcc-stats-window-size",
+      "TWCC Stats Window Size",
+      "The size of the window to calculate stats on",
+      0, G_MAXUINT64, DEFAULT_TWCC_STATS_WINDOW_SIZE,
+      G_PARAM_READWRITE | G_PARAM_CONSTRUCT | G_PARAM_STATIC_STRINGS);
+
+  /**
+   * RTPSession:twcc-stats-window-delay:
+   *
+   * The delay (in nanoseconds) from the current time until the start
+   * of the stats window. This is in effect a "jitterbuffer latency" for the
+   * send-side, allowing effects such as reordering and recovery
+   * to affect the stats, potentially reporting a much prettier
+   * picture of the network conditions.
+   *
+   * As an example, if the current time was 50ms,
+   * this would be a window size of 20ms, and a window
+   * delay of 10ms:
+   *
+   * timeline (ms): 0    10    20    30    40    50
+   *        window:            [------------]
+   *
+   * Since: 1.22
+   */
+  properties[PROP_TWCC_STATS_WINDOW_DELAY] =
+      g_param_spec_uint64 ("twcc-stats-window-delay",
+      "TWCC Stats Window Delay",
+      "The delay before starting to calculate the windowed stats",
+      0, G_MAXUINT64, DEFAULT_TWCC_STATS_WINDOW_DELAY,
+      G_PARAM_READWRITE | G_PARAM_CONSTRUCT | G_PARAM_STATIC_STRINGS);
+
   g_object_class_install_properties (gobject_class, PROP_LAST, properties);
 
   klass->get_source_by_ssrc =
@@ -1059,6 +1104,14 @@ rtp_session_set_property (GObject * object, guint prop_id,
       rtp_twcc_manager_set_feedback_interval (sess->twcc,
           g_value_get_uint64 (value));
       break;
+    case PROP_TWCC_STATS_WINDOW_SIZE:
+      rtp_twcc_manager_set_stats_window_size (sess->twcc,
+          g_value_get_uint64 (value));
+      break;
+    case PROP_TWCC_STATS_WINDOW_DELAY:
+      rtp_twcc_manager_set_stats_window_delay (sess->twcc,
+          g_value_get_uint64 (value));
+      break;
     case PROP_RTX_SSRC_MAP:
       RTP_SESSION_LOCK (sess);
       if (sess->rtx_ssrc_map)
@@ -1161,6 +1214,14 @@ rtp_session_get_property (GObject * object, guint prop_id,
     case PROP_TWCC_FEEDBACK_INTERVAL:
       g_value_set_uint64 (value,
           rtp_twcc_manager_get_feedback_interval (sess->twcc));
+      break;
+    case PROP_TWCC_STATS_WINDOW_SIZE:
+      g_value_set_uint64 (value,
+          rtp_twcc_manager_get_stats_window_size (sess->twcc));
+      break;
+    case PROP_TWCC_STATS_WINDOW_DELAY:
+      g_value_set_uint64 (value,
+          rtp_twcc_manager_get_stats_window_delay (sess->twcc));
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
