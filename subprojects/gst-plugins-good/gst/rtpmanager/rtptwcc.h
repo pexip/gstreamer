@@ -70,4 +70,12 @@ GstStructure * rtp_twcc_manager_get_windowed_stats (RTPTWCCManager * twcc);
 void rtp_twcc_manager_set_callback (RTPTWCCManager * twcc, RTPTWCCManagerCaps cb,
     gpointer user_data);
 
+void rtp_twcc_manager_set_stats_window_size (RTPTWCCManager * twcc,
+    GstClockTime window_size);
+GstClockTime rtp_twcc_manager_get_stats_window_size (RTPTWCCManager * twcc);
+void rtp_twcc_manager_set_stats_window_delay (RTPTWCCManager * twcc,
+    GstClockTime delay);
+GstClockTime rtp_twcc_manager_get_stats_window_delay (RTPTWCCManager * twcc);
+
+
 #endif /* __RTP_TWCC_H__ */
