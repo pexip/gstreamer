@@ -1554,15 +1554,23 @@ gst_video_rate_transform_ip (GstBaseTransform * trans, GstBuffer * buffer)
 
   /* we need to have two buffers to compare */
   if (videorate->prevbuf == NULL || videorate->drop_only) {
-    /* We can calculate the duration of the buffer here if not given for
-     * reverse playback. We need this later */
-    if (videorate->segment.rate < 0.0 && !GST_BUFFER_DURATION_IS_VALID (buffer)) {
-      /* As we require valid timestamps all the time for reverse playback, we either
-       * have a valid last_ts or we're at the very first buffer. */
-      if (!GST_CLOCK_TIME_IS_VALID (last_ts))
-        GST_BUFFER_DURATION (buffer) = videorate->segment.stop - in_ts;
-      else
-        GST_BUFFER_DURATION (buffer) = last_ts - in_ts;
+    /* We can calculate the duration of the buffer here if not given */
+    if (!GST_BUFFER_DURATION_IS_VALID (buffer)) {
+      /* For reverse playback. We need this later */
+      if (videorate->segment.rate < 0.0) {
+        /* As we require valid timestamps all the time for reverse playback, we either
+         * have a valid last_ts or we're at the very first buffer. */
+        if (!GST_CLOCK_TIME_IS_VALID (last_ts))
+          GST_BUFFER_DURATION (buffer) = videorate->segment.stop - in_ts;
+        else
+          GST_BUFFER_DURATION (buffer) = last_ts - in_ts;
+      } else if (videorate->to_rate_numerator) {
+        GST_BUFFER_DURATION (buffer) = gst_util_uint64_scale (1,
+                videorate->to_rate_denominator * GST_SECOND,
+                videorate->to_rate_numerator);
+      } else {
+        goto invalid_buffer_duration;
+      }
     }
 
     gst_video_rate_swap_prev (videorate, buffer, intime);
@@ -1801,6 +1809,14 @@ invalid_buffer:
   {
     GST_WARNING_OBJECT (videorate,
         "Got buffer with GST_CLOCK_TIME_NONE timestamp, discarding it");
+    res = GST_BASE_TRANSFORM_FLOW_DROPPED;
+    goto done;
+  }
+
+invalid_buffer_duration:
+  {
+    GST_WARNING_OBJECT (videorate,
+        "Got first buffer with GST_CLOCK_TIME_NONE duration, discarding it");
     res = GST_BASE_TRANSFORM_FLOW_DROPPED;
     goto done;
   }
