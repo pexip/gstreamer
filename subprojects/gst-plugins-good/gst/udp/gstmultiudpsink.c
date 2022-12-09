@@ -719,14 +719,13 @@ _set_time_on_buffers (GstMultiUDPSink * sink, GstBuffer ** buffers,
     guint num_buffers)
 {
   GstClock *clock = GST_ELEMENT_CLOCK (sink);
-  GstClockTime base_time = GST_ELEMENT_CAST (sink)->base_time;
   GstClockTime now;
   guint i;
 
   if (clock == NULL)
     return;
 
-  now = gst_clock_get_time (clock) - base_time;
+  now = gst_clock_get_time (clock);
 
   for (i = 0; i < num_buffers; i++) {
     GstTxFeedbackMeta *meta = gst_buffer_get_tx_feedback_meta (buffers[i]);
