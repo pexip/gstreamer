@@ -197,7 +197,7 @@ validate_colorimetry (GstVideoInfo * info)
 
   if (GST_VIDEO_FORMAT_INFO_IS_YUV (finfo) &&
       info->colorimetry.matrix == GST_VIDEO_COLOR_MATRIX_UNKNOWN) {
-    GST_WARNING ("Need to specify a color matrix when using YUV format (%s)",
+    GST_INFO ("Need to specify a color matrix when using YUV format (%s)",
         finfo->name);
     return FALSE;
   }
@@ -513,7 +513,7 @@ gst_video_info_from_caps (GstVideoInfo * info, const GstCaps * caps)
       GST_WARNING ("unparsable colorimetry, using default");
       set_default_colorimetry (info);
     } else if (!validate_colorimetry (info)) {
-      GST_WARNING ("invalid colorimetry, using default");
+      GST_INFO ("invalid colorimetry, using default");
       set_default_colorimetry (info);
     } else {
       /* force RGB matrix for RGB formats */
