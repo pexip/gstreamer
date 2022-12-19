@@ -143,7 +143,7 @@ if have_sconn_len
 endif
 
 # Options
-if false
+if true 
     compile_args += ['-DINVARIANTS']
 endif
 if not gst_debug_disabled
