@@ -46,6 +46,8 @@ struct _GstSctpEnc
 {
   GstElement element;
 
+  GMutex association_mutex;
+
   GstPad *src_pad;
   GstFlowReturn src_ret;
   gboolean need_stream_start_caps, need_segment;
