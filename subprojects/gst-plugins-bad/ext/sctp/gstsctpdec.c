@@ -77,6 +77,10 @@ static GParamSpec *properties[NUM_PROPERTIES];
 #define MAX_GST_SCTP_ASSOCIATION_ID 65535
 #define MAX_STREAM_ID 65535
 
+#define GST_SCTP_DEC_GET_ASSOC_MUTEX(self) (&self->association_mutex)
+#define GST_SCTP_DEC_ASSOC_MUTEX_LOCK(self) (g_mutex_lock (GST_SCTP_DEC_GET_ASSOC_MUTEX (self)))
+#define GST_SCTP_DEC_ASSOC_MUTEX_UNLOCK(self) (g_mutex_unlock (GST_SCTP_DEC_GET_ASSOC_MUTEX (self)))
+
 GType gst_sctp_dec_pad_get_type (void);
 
 #define GST_TYPE_SCTP_DEC_PAD (gst_sctp_dec_pad_get_type())
@@ -233,9 +237,11 @@ gst_sctp_dec_class_init (GstSctpDecClass * klass)
 static void
 gst_sctp_dec_init (GstSctpDec * self)
 {
+  g_mutex_init (GST_SCTP_DEC_GET_ASSOC_MUTEX (self));
+
+  self->sctp_association = NULL;
   self->sctp_association_id = DEFAULT_GST_SCTP_ASSOCIATION_ID;
   self->local_sctp_port = DEFAULT_LOCAL_SCTP_PORT;
-
   self->flow_combiner = gst_flow_combiner_new ();
 
   self->sink_pad = gst_pad_new_from_static_template (&sink_template, "sink");
@@ -294,6 +300,8 @@ gst_sctp_dec_finalize (GObject * object)
   gst_flow_combiner_free (self->flow_combiner);
   self->flow_combiner = NULL;
 
+  g_mutex_clear (GST_SCTP_DEC_GET_ASSOC_MUTEX (self));
+
   G_OBJECT_CLASS (parent_class)->finalize (object);
 }
 
@@ -309,6 +317,13 @@ gst_sctp_dec_set_property (GObject * object, guint prop_id,
       break;
     case PROP_LOCAL_SCTP_PORT:
       self->local_sctp_port = g_value_get_uint (value);
+
+      GST_SCTP_DEC_ASSOC_MUTEX_LOCK (self);
+      if (self->sctp_association) {
+        g_object_set (self->sctp_association, "local-port",
+            self->local_sctp_port, NULL);
+      }
+      GST_SCTP_DEC_ASSOC_MUTEX_UNLOCK (self);
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (self, prop_id, pspec);
@@ -365,6 +380,7 @@ gst_sctp_dec_packet_chain (GstPad * pad, GstSctpDec * self, GstBuffer * buf)
 {
   GstFlowReturn flow_ret;
   GstMapInfo map;
+  GstSctpAssociation *sctp_association = NULL;
 
   GST_DEBUG_OBJECT (self, "Processing received buffer %" GST_PTR_FORMAT, buf);
 
@@ -374,10 +390,16 @@ gst_sctp_dec_packet_chain (GstPad * pad, GstSctpDec * self, GstBuffer * buf)
     return GST_FLOW_ERROR;
   }
 
-  if (self->sctp_association != NULL) {
-    gst_sctp_association_incoming_packet (self->sctp_association,
+  GST_SCTP_DEC_ASSOC_MUTEX_LOCK (self);
+  sctp_association = gst_sctp_association_ref (self->sctp_association);
+  GST_SCTP_DEC_ASSOC_MUTEX_UNLOCK (self);
+
+  if (sctp_association) {
+    gst_sctp_association_incoming_packet (sctp_association,
         (const guint8 *) map.data, (guint32) map.size);
+    gst_sctp_association_unref (sctp_association);
   }
+
   gst_buffer_unmap (buf, &map);
   gst_buffer_unref (buf);
 
@@ -507,6 +529,7 @@ configure_association (GstSctpDec * self)
 {
   gint state;
 
+  GST_SCTP_DEC_ASSOC_MUTEX_LOCK (self);
   self->sctp_association = gst_sctp_association_get (self->sctp_association_id);
   g_object_get (self->sctp_association, "state", &state, NULL);
 
@@ -515,6 +538,7 @@ configure_association (GstSctpDec * self)
         "Could not configure SCTP association. Association already in use!");
     gst_sctp_association_unref (self->sctp_association);
     self->sctp_association = NULL;
+    GST_SCTP_DEC_ASSOC_MUTEX_UNLOCK (self);
     return FALSE;
   }
 
@@ -526,11 +550,13 @@ configure_association (GstSctpDec * self)
       g_signal_connect_object (self->sctp_association, "association-restart",
       G_CALLBACK (on_gst_sctp_association_restart), self, 0);
 
-  g_object_bind_property (self, "local-sctp-port", self->sctp_association,
-      "local-port", G_BINDING_SYNC_CREATE);
+  g_object_set (self->sctp_association, "local-port", self->local_sctp_port,
+      NULL);
 
   gst_sctp_association_set_on_packet_received (self->sctp_association,
       on_receive, gst_object_ref (self), gst_object_unref);
+
+  GST_SCTP_DEC_ASSOC_MUTEX_UNLOCK (self);
 
   return TRUE;
 }
@@ -542,7 +568,7 @@ gst_sctp_dec_src_event (GstPad * pad, GstSctpDec * self, GstEvent * event)
     case GST_EVENT_RECONFIGURE:
     case GST_EVENT_FLUSH_STOP:{
       GstSctpDecPad *sctpdec_pad = GST_SCTP_DEC_PAD_CAST (pad);
-      
+
       gst_data_queue_set_flushing (sctpdec_pad->packet_queue, FALSE);
 
       return gst_pad_event_default (pad, GST_OBJECT (self), event);
@@ -624,12 +650,16 @@ get_pad_for_stream_id (GstSctpDec * self, guint16 stream_id)
     return new_pad;
   }
 
+  GST_SCTP_DEC_ASSOC_MUTEX_LOCK (self);
   if (!self->sctp_association) {
     GST_ERROR_OBJECT (self, "Attempt to get pad without a GstSctpAssociation");
+    GST_SCTP_DEC_ASSOC_MUTEX_UNLOCK (self);
     return NULL;
   }
 
   g_object_get (self->sctp_association, "state", &state, NULL);
+  GST_SCTP_DEC_ASSOC_MUTEX_UNLOCK (self);
+
   if (state != GST_SCTP_ASSOCIATION_STATE_CONNECTED) {
     GST_ERROR_OBJECT (self,
         "The SCTP association must be established before a new stream can be created");
@@ -750,34 +780,44 @@ on_receive (GstSctpAssociation * sctp_association, guint8 * buf,
 static void
 cleanup_association (GstSctpDec * self)
 {
-  if (self->sctp_association) {
-    gst_sctp_association_set_on_packet_received (self->sctp_association, NULL,
-        NULL, NULL);
-
-    if (self->signal_handler_association_restart != 0) {
-      g_signal_handler_disconnect (self->sctp_association,
-          self->signal_handler_association_restart);
-      self->signal_handler_association_restart = 0;
-    }
-
-    if (self->signal_handler_stream_reset != 0) {
-      g_signal_handler_disconnect (self->sctp_association,
-          self->signal_handler_stream_reset);
-      self->signal_handler_stream_reset = 0;
-    }
-    gst_sctp_association_force_close (self->sctp_association);
-
-    gst_sctp_association_unref (self->sctp_association);
-    self->sctp_association = NULL;
+  GST_SCTP_DEC_ASSOC_MUTEX_LOCK (self);
+  if (!self->sctp_association) {
+    GST_SCTP_DEC_ASSOC_MUTEX_UNLOCK (self);
+    return;
   }
+
+  if (self->signal_handler_association_restart != 0) {
+    g_signal_handler_disconnect (self->sctp_association,
+        self->signal_handler_association_restart);
+    self->signal_handler_association_restart = 0;
+  }
+
+  if (self->signal_handler_stream_reset != 0) {
+    g_signal_handler_disconnect (self->sctp_association,
+        self->signal_handler_stream_reset);
+    self->signal_handler_stream_reset = 0;
+  }
+
+  gst_sctp_association_set_on_packet_received (self->sctp_association, NULL,
+      NULL, NULL);
+  gst_sctp_association_force_close (self->sctp_association);
+  gst_sctp_association_unref (self->sctp_association);
+  self->sctp_association = NULL;
+  GST_SCTP_DEC_ASSOC_MUTEX_UNLOCK (self);
 }
 
 static void
 on_reset_stream (GstSctpDec * self, guint stream_id)
 {
-  if (self->sctp_association) {
-    gst_sctp_association_reset_stream (self->sctp_association, stream_id);
-    on_gst_sctp_association_stream_reset (self->sctp_association, stream_id,
-        self);
+  GstSctpAssociation *sctp_association = NULL;
+
+  GST_SCTP_DEC_ASSOC_MUTEX_LOCK (self);
+  sctp_association = gst_sctp_association_ref (self->sctp_association);
+  GST_SCTP_DEC_ASSOC_MUTEX_UNLOCK (self);
+
+  if (sctp_association) {
+    gst_sctp_association_reset_stream (sctp_association, stream_id);
+    on_gst_sctp_association_stream_reset (sctp_association, stream_id, self);
+    gst_sctp_association_unref (sctp_association);
   }
 }

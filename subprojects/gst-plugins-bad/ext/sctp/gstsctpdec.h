@@ -46,6 +46,8 @@ struct _GstSctpDec
 {
   GstElement element;
 
+  GMutex association_mutex;
+
   GstFlowCombiner *flow_combiner;
 
   GstPad *sink_pad;
