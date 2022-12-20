@@ -131,7 +131,7 @@ static void handle_stream_reset_event (GstSctpAssociation * self,
 static void handle_message (GstSctpAssociation * self, guint8 * data,
     guint32 datalen, guint16 stream_id, guint32 ppid);
 
-static void maybe_set_state_to_ready (GstSctpAssociation * self);
+static void maybe_set_state_to_ready_unlocked (GstSctpAssociation * self);
 static void gst_sctp_association_change_state_unlocked (GstSctpAssociation *
     self, GstSctpAssociationState new_state);
 static void gst_sctp_association_change_state (GstSctpAssociation * self,
@@ -277,9 +277,10 @@ gst_sctp_association_set_property (GObject * object, guint prop_id,
       break;
   }
 
-  g_mutex_unlock (&self->association_mutex);
   if (prop_id == PROP_LOCAL_PORT || prop_id == PROP_REMOTE_PORT)
-    maybe_set_state_to_ready (self);
+    maybe_set_state_to_ready_unlocked (self);
+
+  g_mutex_unlock (&self->association_mutex);
 
   return;
 
@@ -288,16 +289,14 @@ error:
 }
 
 static void
-maybe_set_state_to_ready (GstSctpAssociation * self)
+maybe_set_state_to_ready_unlocked (GstSctpAssociation * self)
 {
-  g_mutex_lock (&self->association_mutex);
   if ((self->state == GST_SCTP_ASSOCIATION_STATE_NEW) &&
       (self->local_port != 0 && self->remote_port != 0)
       && (self->packet_out_cb != NULL) && (self->packet_received_cb != NULL)) {
     gst_sctp_association_change_state_unlocked (self,
         GST_SCTP_ASSOCIATION_STATE_READY);
   }
-  g_mutex_unlock (&self->association_mutex);
 }
 
 static void
@@ -408,6 +407,17 @@ gst_sctp_association_get (guint32 association_id)
   return association;
 }
 
+GstSctpAssociation *
+gst_sctp_association_ref (GstSctpAssociation * self)
+{
+  GstSctpAssociation *ref = NULL;
+  G_LOCK (associations_lock);
+  if (self)
+    ref = g_object_ref (self);
+  G_UNLOCK (associations_lock);
+  return ref;
+}
+
 void
 gst_sctp_association_unref (GstSctpAssociation * self)
 {
@@ -479,9 +489,8 @@ gst_sctp_association_set_on_packet_out (GstSctpAssociation * self,
   self->packet_out_cb = packet_out_cb;
   self->packet_out_user_data = user_data;
   self->packet_out_destroy_notify = destroy_notify;
+  maybe_set_state_to_ready_unlocked (self);
   g_mutex_unlock (&self->association_mutex);
-
-  maybe_set_state_to_ready (self);
 }
 
 void
@@ -497,9 +506,8 @@ gst_sctp_association_set_on_packet_received (GstSctpAssociation * self,
   self->packet_received_cb = packet_received_cb;
   self->packet_received_user_data = user_data;
   self->packet_received_destroy_notify = destroy_notify;
+  maybe_set_state_to_ready_unlocked (self);
   g_mutex_unlock (&self->association_mutex);
-
-  maybe_set_state_to_ready (self);
 }
 
 void
@@ -1163,9 +1171,11 @@ gst_sctp_association_change_state_unlocked (GstSctpAssociation * self,
   /* Unlock the mutex to emit the property change event to avoid deadlock
    * if the client calls back into this object from its event handler. */
   if (notify) {
+    gst_sctp_association_ref (self);
     g_mutex_unlock (&self->association_mutex);
     g_object_notify_by_pspec (G_OBJECT (self), properties[PROP_STATE]);
     g_mutex_lock (&self->association_mutex);
+    gst_sctp_association_unref (self);
   }
 }
 
