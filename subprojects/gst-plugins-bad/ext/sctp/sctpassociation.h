@@ -106,6 +106,8 @@ struct _GstSctpAssociationClass
 GType gst_sctp_association_get_type (void);
 
 GstSctpAssociation *gst_sctp_association_get (guint32 association_id);
+
+GstSctpAssociation *gst_sctp_association_ref (GstSctpAssociation * self);
 void gst_sctp_association_unref (GstSctpAssociation * self);
 
 gboolean gst_sctp_association_start (GstSctpAssociation * self);
