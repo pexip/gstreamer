@@ -167,7 +167,7 @@ _structure_take_value_array (GstStructure * s,
 }
 
 static TWCCStatsCtx *
-twcc_stats_ctx_new ()
+twcc_stats_ctx_new (void)
 {
   TWCCStatsCtx *ctx = g_new0 (TWCCStatsCtx, 1);
 
