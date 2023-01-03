@@ -187,8 +187,9 @@ static GstClockTime
 twcc_stats_ctx_get_last_local_ts (TWCCStatsCtx * ctx)
 {
   GstClockTime ret = GST_CLOCK_TIME_NONE;
-  StatsPacket *pkt =
-      &g_array_index (ctx->packets, StatsPacket, ctx->packets->len - 1);
+  StatsPacket *pkt = NULL;
+  if (ctx->packets->len > 0)
+    pkt = &g_array_index (ctx->packets, StatsPacket, ctx->packets->len - 1);
   if (pkt)
     ret = pkt->local_ts;
   return ret;
