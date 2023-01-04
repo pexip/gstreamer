@@ -4449,6 +4449,7 @@ GST_START_TEST (test_twcc_reordering_send_recv)
      even though packets were heavily reordered */
   twcc_verify_stats (h_send, 512000, 512000, 16, 16, 0.0f, 0);
 
+  g_list_free (bufs);
   session_harness_free (h_send);
   session_harness_free (h_recv);
 }

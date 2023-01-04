@@ -1918,7 +1918,7 @@ GstStructure *
 rtp_twcc_manager_get_windowed_stats (RTPTWCCManager * twcc)
 {
   GstStructure *ret;
-  GValueArray *array = g_value_array_new (0);
+  GValueArray *array;
   GHashTableIter iter;
   gpointer key;
   gpointer value;
@@ -1929,6 +1929,7 @@ rtp_twcc_manager_get_windowed_stats (RTPTWCCManager * twcc)
   if (!GST_CLOCK_TIME_IS_VALID (last_ts))
     return twcc_stats_ctx_get_structure (twcc->stats_ctx);;
 
+  array = g_value_array_new (0);
   end_time = GST_CLOCK_DIFF (twcc->stats_window_delay, last_ts);
   start_time = end_time - twcc->stats_window_size;
 
