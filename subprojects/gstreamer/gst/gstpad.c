@@ -4416,10 +4416,6 @@ gst_pad_chain_data_unchecked (GstPad * pad, GstPadProbeType type, void *data)
     GST_TRACER_PAD_CHAIN_PRE (pad, data);
   }
 
-/* FIXME: PEXHACK BEGIN */
-  gint64 start, dur;
-/* FIXME: PEXHACK END */
-
   GST_PAD_STREAM_LOCK (pad);
 
   GST_OBJECT_LOCK (pad);
@@ -4471,19 +4467,7 @@ gst_pad_chain_data_unchecked (GstPad * pad, GstPadProbeType type, void *data)
         "calling chainfunction &%s with buffer %" GST_PTR_FORMAT,
         GST_DEBUG_FUNCPTR_NAME (chainfunc), GST_BUFFER (data));
 
-/* FIXME: PEXHACK BEGIN */
-    start = g_get_monotonic_time ();
-/* FIXME: PEXHACK END */
-
     ret = chainfunc (pad, parent, GST_BUFFER_CAST (data));
-
-/* FIXME: PEXHACK BEGIN */
-    dur = (g_get_monotonic_time () - start) / G_TIME_SPAN_MILLISECOND;
-    if (dur >= 100) {
-      GST_WARNING_OBJECT (pad, "Slow chainfunc (%s) %" G_GINT64_FORMAT "ms",
-          GST_DEBUG_FUNCPTR_NAME (chainfunc), dur);
-    }
-/* FIXME: PEXHACK END */
 
     GST_CAT_DEBUG_OBJECT (GST_CAT_SCHEDULING, pad,
         "called chainfunction &%s with buffer %p, returned %s",
@@ -4498,19 +4482,7 @@ gst_pad_chain_data_unchecked (GstPad * pad, GstPadProbeType type, void *data)
         "calling chainlistfunction &%s",
         GST_DEBUG_FUNCPTR_NAME (chainlistfunc));
 
-/* FIXME: PEXHACK BEGIN */
-    start = g_get_monotonic_time ();
-/* FIXME: PEXHACK END */
-
     ret = chainlistfunc (pad, parent, GST_BUFFER_LIST_CAST (data));
-
-/* FIXME: PEXHACK BEGIN */
-    dur = (g_get_monotonic_time () - start) / G_TIME_SPAN_MILLISECOND;
-    if (dur >= 100) {
-      GST_WARNING_OBJECT (pad, "Slow chainlistfunc (%s) %" G_GINT64_FORMAT "ms",
-          GST_DEBUG_FUNCPTR_NAME (chainlistfunc), dur);
-    }
-/* FIXME: PEXHACK END */
 
     GST_CAT_DEBUG_OBJECT (GST_CAT_SCHEDULING, pad,
         "called chainlistfunction &%s, returned %s",
