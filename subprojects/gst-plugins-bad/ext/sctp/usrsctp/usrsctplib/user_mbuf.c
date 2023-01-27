@@ -122,6 +122,7 @@ m_get(int how, short type)
 	/* Mbuf master zone, zone_mbuf, has already been
 	 * created in mbuf_initialize() */
 	mret = SCTP_ZONE_GET(zone_mbuf, struct mbuf);
+	memset(mret, 0, sizeof (struct mbuf));
 #if defined(SCTP_SIMPLE_ALLOCATOR)
 	mb_ctor_mbuf(mret, &mbuf_mb_args, 0);
 #endif
@@ -162,6 +163,7 @@ m_gethdr(int how, short type)
 	mbuf_mb_args.type = type;
 #endif
 	mret = SCTP_ZONE_GET(zone_mbuf, struct mbuf);
+	memset(mret, 0, sizeof (struct mbuf));
 #if defined(SCTP_SIMPLE_ALLOCATOR)
 	mb_ctor_mbuf(mret, &mbuf_mb_args, 0);
 #endif
