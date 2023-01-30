@@ -7,6 +7,7 @@
     _gst_*;
     g_*;
     glib_*;
+    nice_*;
   local:
     *;
 };
