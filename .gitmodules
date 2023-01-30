@@ -1,0 +1,3 @@
+[submodule "subprojects/libnice"]
+	path = subprojects/libnice
+	url = ssh://git@github.com/pexip/libnice.git
