@@ -40,7 +40,7 @@ if not cdata.has('HAVE_GETLINE')
 endif
 
 # FIXME: check that timer_create, timer_settime, timer_delete are in rt_lib
-if not rt_lib.found()
+if not rt_lib.found() or get_option('default_library') == 'static'
   libcheck_files += files(
     'libcompat/timer_create.c',
     'libcompat/timer_settime.c',
