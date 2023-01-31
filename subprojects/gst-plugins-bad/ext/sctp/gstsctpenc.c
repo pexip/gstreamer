@@ -333,7 +333,8 @@ gst_sctp_enc_dispose (GObject * object)
   gst_iterator_free (it);
   g_queue_clear (&self->pending_pads);
 
-  gst_pad_set_active (self->src_pad, FALSE);
+  if (self->src_pad)
+    gst_pad_set_active (self->src_pad, FALSE);
 
   G_OBJECT_CLASS (parent_class)->dispose (object);
 }
@@ -1046,14 +1047,18 @@ on_sctp_association_state_changed (GstSctpAssociation *
     case GST_SCTP_ASSOCIATION_STATE_CONNECTING:
       break;
     case GST_SCTP_ASSOCIATION_STATE_CONNECTED:
-      g_signal_emit (self, signals[SIGNAL_SCTP_ASSOCIATION_ESTABLISHED], 0,
-          TRUE);
+      if (self) {
+        g_signal_emit (self, signals[SIGNAL_SCTP_ASSOCIATION_ESTABLISHED], 0,
+            TRUE);
+      }
       break;
     case GST_SCTP_ASSOCIATION_STATE_DISCONNECTING:
       break;
     case GST_SCTP_ASSOCIATION_STATE_DISCONNECTED:
-      g_signal_emit (self, signals[SIGNAL_SCTP_ASSOCIATION_ESTABLISHED], 0,
-          FALSE);
+      if (self) {
+        g_signal_emit (self, signals[SIGNAL_SCTP_ASSOCIATION_ESTABLISHED], 0,
+            FALSE);
+      }
       break;
     case GST_SCTP_ASSOCIATION_STATE_ERROR:
       GST_ELEMENT_ERROR (self, RESOURCE, WRITE, (NULL),
