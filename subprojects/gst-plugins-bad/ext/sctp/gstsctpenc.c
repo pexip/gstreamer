@@ -333,9 +333,6 @@ gst_sctp_enc_dispose (GObject * object)
   gst_iterator_free (it);
   g_queue_clear (&self->pending_pads);
 
-  if (self->src_pad)
-    gst_pad_set_active (self->src_pad, FALSE);
-
   G_OBJECT_CLASS (parent_class)->dispose (object);
 }
 
