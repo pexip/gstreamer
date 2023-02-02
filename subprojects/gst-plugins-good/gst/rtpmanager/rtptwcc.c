@@ -1669,7 +1669,7 @@ static guint
 _parse_run_length_chunk (GstBitReader * reader, GArray * parsed_packets,
     guint16 seqnum_offset, guint remaining_packets)
 {
-  guint16 run_length;
+  guint16 run_length = 0;
   guint8 status_code;
   guint i;
 
