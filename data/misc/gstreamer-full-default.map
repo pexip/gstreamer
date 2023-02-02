@@ -8,6 +8,8 @@
     g_*;
     glib_*;
     nice_*;
+    stun_*;
+    candidate_*;
   local:
     *;
 };
