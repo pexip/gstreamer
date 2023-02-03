@@ -71,14 +71,6 @@ G_DEFINE_TYPE (GstSctpAssociation, gst_sctp_association, G_TYPE_OBJECT);
 
 enum
 {
-  SIGNAL_STREAM_RESET,
-  SIGNAL_ASSOC_RESTART,
-  LAST_SIGNAL
-};
-
-
-enum
-{
   PROP_0,
 
   PROP_ASSOCIATION_ID,
@@ -90,8 +82,6 @@ enum
 
   NUM_PROPERTIES
 };
-
-static guint signals[LAST_SIGNAL] = { 0 };
 
 static GParamSpec *properties[NUM_PROPERTIES];
 
@@ -147,17 +137,6 @@ gst_sctp_association_class_init (GstSctpAssociationClass * klass)
   gobject_class->finalize = gst_sctp_association_finalize;
   gobject_class->set_property = gst_sctp_association_set_property;
   gobject_class->get_property = gst_sctp_association_get_property;
-
-  signals[SIGNAL_STREAM_RESET] =
-      g_signal_new ("stream-reset", G_OBJECT_CLASS_TYPE (klass),
-      G_SIGNAL_RUN_FIRST, G_STRUCT_OFFSET (GstSctpAssociationClass,
-          on_sctp_stream_reset), NULL, NULL, NULL, G_TYPE_NONE, 1, G_TYPE_UINT);
-
-  signals[SIGNAL_ASSOC_RESTART] =
-      g_signal_new ("association-restart", G_OBJECT_CLASS_TYPE (klass),
-      G_SIGNAL_RUN_FIRST, G_STRUCT_OFFSET (GstSctpAssociationClass,
-          on_sctp_association_restart), NULL, NULL, g_cclosure_marshal_generic,
-      G_TYPE_NONE, 0);
 
   properties[PROP_ASSOCIATION_ID] = g_param_spec_uint ("association-id",
       "The SCTP association-id", "The SCTP association-id.", 0, G_MAXUSHORT,
@@ -291,9 +270,11 @@ error:
 static void
 maybe_set_state_to_ready_unlocked (GstSctpAssociation * self)
 {
-  if ((self->state == GST_SCTP_ASSOCIATION_STATE_NEW) &&
-      (self->local_port != 0 && self->remote_port != 0)
-      && (self->packet_out_cb != NULL) && (self->packet_received_cb != NULL)) {
+  if ((self->state == GST_SCTP_ASSOCIATION_STATE_NEW)
+      && (self->local_port != 0 && self->remote_port != 0)
+      && (self->encoder_ctx.packet_out_cb != NULL)
+      && (self->decoder_ctx.packet_received_cb != NULL)
+      && (self->encoder_ctx.state_change_cb != NULL)) {
     gst_sctp_association_change_state_unlocked (self,
         GST_SCTP_ASSOCIATION_STATE_READY);
   }
@@ -477,35 +458,43 @@ gst_sctp_association_start (GstSctpAssociation * self)
 }
 
 void
-gst_sctp_association_set_on_packet_out (GstSctpAssociation * self,
-    GstSctpAssociationPacketOutCb packet_out_cb, gpointer user_data,
-    GDestroyNotify destroy_notify)
+gst_sctp_association_set_encoder_ctx (GstSctpAssociation * self,
+    GstSctpAssociationEncoderCtx * ctx)
 {
   g_return_if_fail (GST_SCTP_IS_ASSOCIATION (self));
 
   g_mutex_lock (&self->association_mutex);
-  if (self->packet_out_destroy_notify)
-    self->packet_out_destroy_notify (self->packet_out_user_data);
-  self->packet_out_cb = packet_out_cb;
-  self->packet_out_user_data = user_data;
-  self->packet_out_destroy_notify = destroy_notify;
+
+  if (self->encoder_ctx.element)
+    gst_object_unref (self->encoder_ctx.element);
+
+  g_assert (ctx);
+  self->encoder_ctx = *ctx;
+
+  if (ctx->element)
+    self->encoder_ctx.element = gst_object_ref (ctx->element);
+
   maybe_set_state_to_ready_unlocked (self);
   g_mutex_unlock (&self->association_mutex);
 }
 
 void
-gst_sctp_association_set_on_packet_received (GstSctpAssociation * self,
-    GstSctpAssociationPacketReceivedCb packet_received_cb, gpointer user_data,
-    GDestroyNotify destroy_notify)
+gst_sctp_association_set_decoder_ctx (GstSctpAssociation * self,
+    GstSctpAssociationDecoderCtx * ctx)
 {
   g_return_if_fail (GST_SCTP_IS_ASSOCIATION (self));
 
   g_mutex_lock (&self->association_mutex);
-  if (self->packet_received_destroy_notify)
-    self->packet_received_destroy_notify (self->packet_received_user_data);
-  self->packet_received_cb = packet_received_cb;
-  self->packet_received_user_data = user_data;
-  self->packet_received_destroy_notify = destroy_notify;
+
+  if (self->decoder_ctx.element)
+    gst_object_unref (self->decoder_ctx.element);
+
+  g_assert (ctx);
+  self->decoder_ctx = *ctx;
+
+  if (ctx->element)
+    self->decoder_ctx.element = gst_object_ref (ctx->element);
+
   maybe_set_state_to_ready_unlocked (self);
   g_mutex_unlock (&self->association_mutex);
 }
@@ -928,8 +917,9 @@ sctp_packet_out (void *addr, void *buffer, size_t length, guint8 tos,
 {
   GstSctpAssociation *self = GST_SCTP_ASSOCIATION (addr);
 
-  if (association_is_valid (self) && self->packet_out_cb) {
-    self->packet_out_cb (self, buffer, length, self->packet_out_user_data);
+  if (association_is_valid (self) && self->encoder_ctx.packet_out_cb) {
+    self->encoder_ctx.packet_out_cb (self, buffer, length,
+        self->encoder_ctx.element);
   }
 
   return 0;
@@ -1093,6 +1083,51 @@ handle_sctp_comm_lost_or_shutdown (GstSctpAssociation * self,
 }
 
 static void
+gst_sctp_association_notify_restart (GstSctpAssociation * self)
+{
+  GstSctpAssociationRestartCb restart_cb;
+  gpointer user_data;
+
+  g_mutex_lock (&self->association_mutex);
+  restart_cb = self->decoder_ctx.restart_cb;
+  user_data = self->decoder_ctx.element;
+  if (user_data)
+    gst_object_ref (user_data);
+  g_mutex_unlock (&self->association_mutex);
+
+  if (restart_cb)
+    restart_cb (self, user_data);
+
+  g_mutex_lock (&self->association_mutex);
+  if (user_data)
+    gst_object_unref (user_data);
+  g_mutex_unlock (&self->association_mutex);
+}
+
+static void
+gst_sctp_association_notify_stream_reset (GstSctpAssociation * self,
+    guint16 stream_id)
+{
+  GstSctpAssociationStreamResetCb stream_reset_cb;
+  gpointer user_data;
+
+  g_mutex_lock (&self->association_mutex);
+  stream_reset_cb = self->decoder_ctx.stream_reset_cb;
+  user_data = self->decoder_ctx.element;
+  if (user_data)
+    gst_object_ref (user_data);
+  g_mutex_unlock (&self->association_mutex);
+
+  if (stream_reset_cb)
+    stream_reset_cb (self, stream_id, user_data);
+
+  g_mutex_lock (&self->association_mutex);
+  if (user_data)
+    gst_object_unref (user_data);
+  g_mutex_unlock (&self->association_mutex);
+}
+
+static void
 handle_association_changed (GstSctpAssociation * self,
     const struct sctp_assoc_change *sac)
 {
@@ -1105,7 +1140,7 @@ handle_association_changed (GstSctpAssociation * self,
       break;
     case SCTP_RESTART:
       GST_INFO_OBJECT (self, "SCTP event SCTP_RESTART received");
-      g_signal_emit (self, signals[SIGNAL_ASSOC_RESTART], 0);
+      gst_sctp_association_notify_restart (self);
       break;
     case SCTP_SHUTDOWN_COMP:
       /* Occurs if in TCP mode when the far end sends SHUTDOWN */
@@ -1130,7 +1165,7 @@ handle_stream_reset_event (GstSctpAssociation * self,
         sizeof (struct sctp_stream_reset_event)) / sizeof (uint16_t);
     for (i = 0; i < n; i++) {
       if (sr->strreset_flags & SCTP_STREAM_RESET_INCOMING_SSN) {
-        g_signal_emit (self, signals[SIGNAL_STREAM_RESET], 0,
+        gst_sctp_association_notify_stream_reset (self,
             sr->strreset_stream_list[i]);
       }
     }
@@ -1142,10 +1177,10 @@ handle_message (GstSctpAssociation * self, guint8 * data, guint32 datalen,
     guint16 stream_id, guint32 ppid)
 {
   g_mutex_lock (&self->association_mutex);
-  if (self->packet_received_cb) {
+  if (self->decoder_ctx.packet_received_cb) {
     /* It's the callbacks job to free the data correctly */
-    self->packet_received_cb (self, data, datalen, stream_id, ppid,
-        self->packet_received_user_data);
+    self->decoder_ctx.packet_received_cb (self, data, datalen, stream_id, ppid,
+        self->decoder_ctx.element);
   } else {
     /* We use this instead of a bare `free()` so that we use the `free` from
      * the C runtime that usrsctp was built with. This makes a difference on
@@ -1161,6 +1196,8 @@ gst_sctp_association_change_state_unlocked (GstSctpAssociation * self,
     GstSctpAssociationState new_state)
 {
   gboolean notify = FALSE;
+  GstSctpAssociationStateChangeCb callback = self->encoder_ctx.state_change_cb;
+  gpointer encoder = self->encoder_ctx.element;
 
   if (self->state != new_state
       && self->state != GST_SCTP_ASSOCIATION_STATE_ERROR) {
@@ -1168,15 +1205,28 @@ gst_sctp_association_change_state_unlocked (GstSctpAssociation * self,
     notify = TRUE;
   }
 
-  /* Unlock the mutex to emit the property change event to avoid deadlock
-   * if the client calls back into this object from its event handler. */
-  if (notify) {
-    gst_sctp_association_ref (self);
-    g_mutex_unlock (&self->association_mutex);
-    g_object_notify_by_pspec (G_OBJECT (self), properties[PROP_STATE]);
-    g_mutex_lock (&self->association_mutex);
-    gst_sctp_association_unref (self);
-  }
+  /* return immediately if we don't have to notify */
+  if (!notify)
+    return;
+
+  /* hold a ref on the association and the encoder, so we make sure they
+     outlives the callback execution */
+  gst_sctp_association_ref (self);
+  if (encoder)
+    gst_object_ref (encoder);
+
+  /* release the association mutex, so other calls can be done to the
+     association */
+  g_mutex_unlock (&self->association_mutex);
+
+  if (callback)
+    callback (self, new_state, encoder);
+
+  g_mutex_lock (&self->association_mutex);
+
+  if (encoder)
+    gst_object_unref (encoder);
+  gst_sctp_association_unref (self);
 }
 
 static void
