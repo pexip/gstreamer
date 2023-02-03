@@ -55,8 +55,6 @@ struct _GstSctpDec
   guint local_sctp_port;
 
   GstSctpAssociation *sctp_association;
-  gulong signal_handler_stream_reset;
-  gulong signal_handler_association_restart;
 };
 
 struct _GstSctpDecClass

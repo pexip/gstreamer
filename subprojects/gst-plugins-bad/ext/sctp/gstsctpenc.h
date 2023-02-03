@@ -60,8 +60,6 @@ struct _GstSctpEnc
   GstDataQueue *outbound_sctp_packet_queue;
 
   GQueue pending_pads;
-
-  gulong signal_handler_state_changed;
 };
 
 struct _GstSctpEncClass
