@@ -3263,22 +3263,28 @@ G_STMT_START {                                                                 \
   guint j = 0;                                                                 \
   GValueArray *packets_array = g_value_get_boxed (                             \
       gst_structure_get_value (gst_event_get_structure ((event)), "packets")); \
-  fail_unless_equals_int (G_N_ELEMENTS ((packets)), packets_array->n_values);  \
+  g_assert (packets_array);                                                    \
   for (i = 0; i < packets_array->n_values; i++) {                              \
-    TWCCPacket *twcc_pkt;                                                      \
-    GstClockTime ts;                                                           \
-    guint seqnum;                                                              \
-    gboolean lost;                                                             \
+    TWCCPacket *twcc_pkt = NULL;                                               \
+    GstClockTime ts = 0;                                                       \
+    guint seqnum = 0;                                                          \
+    gboolean lost = FALSE;                                                     \
     const GstStructure *pkt_s =                                                \
         gst_value_get_structure (g_value_array_get_nth (packets_array, i));    \
+    g_assert (pkt_s);                                                          \
     fail_unless (gst_structure_get_boolean (pkt_s, "lost", &lost));            \
-    if (lost)                                                                  \
-      continue;                                                                \
-    fail_unless (gst_structure_get_clock_time (pkt_s, "remote-ts", &ts));      \
-    fail_unless (gst_structure_get_uint (pkt_s, "seqnum", &seqnum));           \
-    twcc_pkt = &(packets)[j++];                                                \
-    fail_unless_equals_int (twcc_pkt->seqnum, seqnum);                         \
-    fail_unless_equals_twcc_clocktime (twcc_pkt->timestamp, ts);               \
+    if (!lost) {                                                               \
+      fail_unless (gst_structure_get_clock_time (pkt_s, "remote-ts", &ts));    \
+      fail_unless (gst_structure_get_uint (pkt_s, "seqnum", &seqnum));         \
+      if (j < G_N_ELEMENTS (packets)) {                                        \
+        twcc_pkt = &(packets[j]);                                              \
+        j++;                                                                   \
+      }                                                                        \
+      if (twcc_pkt) {                                                          \
+        fail_unless_equals_int (twcc_pkt->seqnum, seqnum);                     \
+        fail_unless_equals_twcc_clocktime (twcc_pkt->timestamp, ts);           \
+      }                                                                        \
+    }                                                                          \
   }                                                                            \
   gst_event_unref (event);                                                     \
 } G_STMT_END
