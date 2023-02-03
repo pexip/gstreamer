@@ -163,9 +163,9 @@ static void gst_sctp_data_srcpad_loop (GstPad * pad);
 static gboolean configure_association (GstSctpDec * self);
 static void cleanup_association (GstSctpDec * self);
 static void on_gst_sctp_association_stream_reset (GstSctpAssociation *
-    gst_sctp_association, guint16 stream_id, GstSctpDec * self);
+    gst_sctp_association, guint16 stream_id, gpointer user_data);
 static void on_gst_sctp_association_restart (GstSctpAssociation *
-    gst_sctp_association, GstSctpDec * self);
+    gst_sctp_association, gpointer user_data);
 static void on_receive (GstSctpAssociation * gst_sctp_association,
     guint8 * buf, gsize length, guint16 stream_id, guint ppid,
     gpointer user_data);
@@ -528,6 +528,7 @@ static gboolean
 configure_association (GstSctpDec * self)
 {
   gint state;
+  GstSctpAssociationDecoderCtx ctx;
 
   GST_SCTP_DEC_ASSOC_MUTEX_LOCK (self);
   self->sctp_association = gst_sctp_association_get (self->sctp_association_id);
@@ -542,19 +543,14 @@ configure_association (GstSctpDec * self)
     return FALSE;
   }
 
-  self->signal_handler_stream_reset =
-      g_signal_connect_object (self->sctp_association, "stream-reset",
-      G_CALLBACK (on_gst_sctp_association_stream_reset), self, 0);
-
-  self->signal_handler_association_restart =
-      g_signal_connect_object (self->sctp_association, "association-restart",
-      G_CALLBACK (on_gst_sctp_association_restart), self, 0);
-
   g_object_set (self->sctp_association, "local-port", self->local_sctp_port,
       NULL);
 
-  gst_sctp_association_set_on_packet_received (self->sctp_association,
-      on_receive, gst_object_ref (self), gst_object_unref);
+  ctx.element = self;
+  ctx.stream_reset_cb = on_gst_sctp_association_stream_reset;
+  ctx.restart_cb = on_gst_sctp_association_restart;
+  ctx.packet_received_cb = on_receive;
+  gst_sctp_association_set_decoder_ctx (self->sctp_association, &ctx);
 
   GST_SCTP_DEC_ASSOC_MUTEX_UNLOCK (self);
 
@@ -707,10 +703,11 @@ error_cleanup:
 
 static void
 on_gst_sctp_association_stream_reset (GstSctpAssociation * gst_sctp_association,
-    guint16 stream_id, GstSctpDec * self)
+    guint16 stream_id, gpointer user_data)
 {
   gchar *pad_name;
   GstPad *srcpad;
+  GstSctpDec *self = user_data;
 
   GST_DEBUG_OBJECT (self, "Stream %u reset", stream_id);
 
@@ -733,8 +730,9 @@ on_gst_sctp_association_stream_reset (GstSctpAssociation * gst_sctp_association,
 
 static void
 on_gst_sctp_association_restart (GstSctpAssociation * gst_sctp_association,
-    GstSctpDec * self)
+    gpointer user_data)
 {
+  GstSctpDec *self = user_data;
   (void) gst_sctp_association;
   g_signal_emit (self, signals[SIGNAL_ASSOC_RESTART], 0);
 }
@@ -786,26 +784,16 @@ on_receive (GstSctpAssociation * sctp_association, guint8 * buf,
 static void
 cleanup_association (GstSctpDec * self)
 {
+  GstSctpAssociationDecoderCtx ctx;
+
   GST_SCTP_DEC_ASSOC_MUTEX_LOCK (self);
   if (!self->sctp_association) {
     GST_SCTP_DEC_ASSOC_MUTEX_UNLOCK (self);
     return;
   }
-
-  if (self->signal_handler_association_restart != 0) {
-    g_signal_handler_disconnect (self->sctp_association,
-        self->signal_handler_association_restart);
-    self->signal_handler_association_restart = 0;
-  }
-
-  if (self->signal_handler_stream_reset != 0) {
-    g_signal_handler_disconnect (self->sctp_association,
-        self->signal_handler_stream_reset);
-    self->signal_handler_stream_reset = 0;
-  }
-
-  gst_sctp_association_set_on_packet_received (self->sctp_association, NULL,
-      NULL, NULL);
+  
+  memset (&ctx, 0, sizeof (GstSctpAssociationDecoderCtx));
+  gst_sctp_association_set_decoder_ctx (self->sctp_association, &ctx);
   gst_sctp_association_force_close (self->sctp_association);
   gst_sctp_association_unref (self->sctp_association);
   self->sctp_association = NULL;
