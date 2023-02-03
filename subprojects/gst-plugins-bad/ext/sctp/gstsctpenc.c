@@ -165,7 +165,7 @@ static gboolean
 gst_sctp_enc_src_activate_mode (GstPad * pad, GstObject * parent,
     GstPadMode mode, gboolean active);
 static void on_sctp_association_state_changed (GstSctpAssociation *
-    sctp_association, GParamSpec * pspec, GstSctpEnc * self);
+    sctp_association, GstSctpAssociationState state, gpointer user_data);
 
 static gboolean configure_association (GstSctpEnc * self);
 static void cleanup_association (GstSctpEnc * self);
@@ -998,6 +998,7 @@ static gboolean
 configure_association (GstSctpEnc * self)
 {
   gint state;
+  GstSctpAssociationEncoderCtx ctx;
 
   GST_SCTP_ENC_ASSOC_MUTEX_LOCK (self);
   self->sctp_association = gst_sctp_association_get (self->sctp_association_id);
@@ -1012,29 +1013,28 @@ configure_association (GstSctpEnc * self)
     return FALSE;
   }
 
-  self->signal_handler_state_changed =
-      g_signal_connect_object (self->sctp_association, "notify::state",
-      G_CALLBACK (on_sctp_association_state_changed), self, 0);
-
   g_object_set (self->sctp_association, "remote-port", self->remote_sctp_port,
       "use-sock-stream", self->use_sock_stream, "aggressive-heartbeat",
       self->aggressive_heartbeat, NULL);
 
-  gst_sctp_association_set_on_packet_out (self->sctp_association,
-      on_sctp_packet_out, gst_object_ref (self), gst_object_unref);
+  ctx.element = self;
+  ctx.state_change_cb = on_sctp_association_state_changed;
+  ctx.packet_out_cb = on_sctp_packet_out;
+  gst_sctp_association_set_encoder_ctx (self->sctp_association, &ctx);
+
   GST_SCTP_ENC_ASSOC_MUTEX_UNLOCK (self);
 
   return TRUE;
 }
 
 static void
-on_sctp_association_state_changed (GstSctpAssociation * sctp_association,
-    GParamSpec * pspec, GstSctpEnc * self)
+on_sctp_association_state_changed (GstSctpAssociation *
+    sctp_association, GstSctpAssociationState state, gpointer user_data)
 {
-  gint state;
+  GstSctpEnc *self = (GstSctpEnc *) user_data;
 
-  g_object_get (sctp_association, "state", &state, NULL);
-
+  /* we demand to have a valid encoder here */
+  g_assert (self);
   GST_DEBUG_OBJECT (self, "Association state changed to %d", state);
 
   switch (state) {
@@ -1116,20 +1116,16 @@ on_sctp_packet_out (GstSctpAssociation * _association, const guint8 * buf,
 static void
 cleanup_association (GstSctpEnc * self)
 {
+  GstSctpAssociationEncoderCtx ctx;
+
   GST_SCTP_ENC_ASSOC_MUTEX_LOCK (self);
   if (!self->sctp_association) {
     GST_SCTP_ENC_ASSOC_MUTEX_UNLOCK (self);
     return;
   }
 
-  if (self->signal_handler_state_changed != 0) {
-    g_signal_handler_disconnect (self->sctp_association,
-        self->signal_handler_state_changed);
-    self->signal_handler_state_changed = 0;
-  }
-
-  gst_sctp_association_set_on_packet_out (self->sctp_association, NULL, NULL,
-      NULL);
+  memset (&ctx, 0, sizeof (GstSctpAssociationEncoderCtx));
+  gst_sctp_association_set_encoder_ctx (self->sctp_association, &ctx);
   gst_sctp_association_force_close (self->sctp_association);
   gst_sctp_association_unref (self->sctp_association);
   self->sctp_association = NULL;
