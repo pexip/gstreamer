@@ -1577,11 +1577,11 @@ demuxer_pad_removed_cb (GstElement * element, GstPad * pad,
 
 /* helper function to lookup stuff in lists */
 static gboolean
-array_has_value (const gchar * values[], const gchar * value)
+array_has_value (const gchar * values[], gint nelems, const gchar * value)
 {
   gint i;
 
-  for (i = 0; values[i]; i++) {
+  for (i = 0; i < nelems && values[i]; i++) {
     if (g_str_has_prefix (value, values[i]))
       return TRUE;
   }
@@ -1589,11 +1589,11 @@ array_has_value (const gchar * values[], const gchar * value)
 }
 
 static gboolean
-array_has_uri_value (const gchar * values[], const gchar * value)
+array_has_uri_value (const gchar * values[], gint nelems, const gchar * value)
 {
   gint i;
 
-  for (i = 0; values[i]; i++) {
+  for (i = 0; i < nelems && values[i]; i++) {
     if (!g_ascii_strncasecmp (value, values[i], strlen (values[i])))
       return TRUE;
   }
@@ -1620,10 +1620,10 @@ static const gchar *adaptive_media[] = {
   "application/dash+xml", NULL
 };
 
-#define IS_STREAM_URI(uri)          (array_has_uri_value (stream_uris, uri))
-#define IS_QUEUE_URI(uri)           (array_has_uri_value (queue_uris, uri))
-#define IS_BLACKLISTED_URI(uri)     (array_has_uri_value (blacklisted_uris, uri))
-#define IS_ADAPTIVE_MEDIA(media)    (array_has_value (adaptive_media, media))
+#define IS_STREAM_URI(uri)          (array_has_uri_value (stream_uris, G_N_ELEMENTS(stream_uris), uri))
+#define IS_QUEUE_URI(uri)           (array_has_uri_value (queue_uris, G_N_ELEMENTS(queue_uris), uri))
+#define IS_BLACKLISTED_URI(uri)     (array_has_uri_value (blacklisted_uris, G_N_ELEMENTS(blacklisted_uris), uri))
+#define IS_ADAPTIVE_MEDIA(media)    (array_has_value (adaptive_media, G_N_ELEMENTS(adaptive_media), media))
 
 /*
  * Generate and configure a source element.

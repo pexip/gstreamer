@@ -3044,11 +3044,11 @@ gst_play_bin_handle_message (GstBin * bin, GstMessage * msg)
 
         if (gst_uri_is_valid (location)) {
           uri = g_strdup (location);
-        } else {
+        } else if (group) {
           uri = gst_uri_join_strings (group->uri, location);
         }
 
-        if (g_strcmp0 (uri, group->uri)) {
+        if (uri && group && g_strcmp0 (uri, group->uri)) {
           GST_PLAY_BIN_LOCK (playbin);
           if (playbin->next_group && playbin->next_group->valid) {
             GST_DEBUG_OBJECT (playbin,
