@@ -3361,7 +3361,7 @@ gst_decode_chain_get_current_group (GstDecodeChain * chain)
     for (iter = chain->next_groups; iter; iter = g_list_next (iter)) {
       GstDecodeGroup *next_group = iter->data;
 
-      if (!next_group->overrun && !next_group->no_more_pads) {
+      if (next_group && !next_group->overrun && !next_group->no_more_pads) {
         group = next_group;
         break;
       }
