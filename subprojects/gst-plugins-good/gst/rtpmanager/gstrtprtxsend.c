@@ -45,6 +45,7 @@
 #include <stdlib.h>
 
 #include "gstrtprtxsend.h"
+#include "rtpstats.h"
 
 GST_DEBUG_CATEGORY_STATIC (gst_rtp_rtx_send_debug);
 #define GST_CAT_DEFAULT gst_rtp_rtx_send_debug
@@ -59,6 +60,7 @@ GST_DEBUG_CATEGORY_STATIC (gst_rtp_rtx_send_debug);
 #define DEFAULT_MAX_KBPS         UNLIMITED_KBPS
 #define DEFAULT_MAX_BUCKET_SIZE  UNLIMITED_KBPS
 #define DEFAULT_STUFFING_KBPS    0
+#define DEFAULT_STUFFING_MAX_BURST_PACKETS 20
 
 enum
 {
@@ -73,6 +75,7 @@ enum
   PROP_MAX_KBPS,
   PROP_MAX_BUCKET_SIZE,
   PROP_STUFFING_KBPS,
+  PROP_STUFFING_MAX_BURST_PACKETS,
   PROP_LAST,
 };
 
@@ -216,6 +219,12 @@ ssrc_rtx_data_free (SSRCRtxData * data)
 {
   g_sequence_free (data->queue);
   g_free (data);
+}
+
+static gint
+get_buffer_bytes_size (GstBuffer * buffer)
+{
+  return gst_buffer_get_size (buffer) + UDP_IP_HEADER_OVERHEAD;
 }
 
 typedef enum
@@ -393,6 +402,21 @@ gst_rtp_rtx_send_class_init (GstRtpRtxSendClass * klass)
           "Use RTX to send stuffing packets to produce a near constant rate of "
           "total packets (media and stuffing) (0 = disabled)",
           0, G_MAXINT, DEFAULT_STUFFING_KBPS,
+          G_PARAM_READWRITE | G_PARAM_CONSTRUCT | G_PARAM_STATIC_STRINGS));
+
+  /**
+   * rtprtxsend:stuffing-max-burst-packets:
+   *
+   * The maximum amount of stuffing-packets to produce in a single burst.
+   *
+   * Since: 1.22
+   */
+  g_object_class_install_property (gobject_class,
+      PROP_STUFFING_MAX_BURST_PACKETS,
+      g_param_spec_int ("stuffing-max-burst-packets",
+          "Stuffing Max Burst Packets",
+          "The maximum amount of stuffing-packets to produce in a single burst",
+          0, G_MAXINT, DEFAULT_STUFFING_MAX_BURST_PACKETS,
           G_PARAM_READWRITE | G_PARAM_CONSTRUCT | G_PARAM_STATIC_STRINGS));
 
   gst_element_class_add_static_pad_template (gstelement_class, &src_factory);
@@ -843,7 +867,7 @@ gst_rtp_rtx_send_token_bucket (GstRtpRtxSend * rtx, GstBuffer * buf)
     return TRUE;
   }
 
-  tokens = gst_buffer_get_size (buf) * 8;
+  tokens = get_buffer_bytes_size (buf) * 8;
   token_bucket_add_tokens (&rtx->max_tb, gst_clock_get_time (clock));
   return token_bucket_take_tokens (&rtx->max_tb, tokens, FALSE);
 }
@@ -1165,126 +1189,143 @@ process_buffer (GstRtpRtxSend * rtx, GstBuffer * buffer)
   return data;
 }
 
-static gint
-get_buffer_payload_len (GstBuffer * buffer)
-{
-  gint length = gst_buffer_get_size (buffer) - MIN_RTP_HEADER_LEN;
-
-  if (GST_BUFFER_FLAG_IS_SET (buffer, GST_RTP_BUFFER_FLAG_RETRANSMISSION)) {
-    length -= RTX_OVERHEAD;
-  }
-
-  return length;
-}
-
 static GstFlowReturn
 gst_rtp_rtx_send_push (GstRtpRtxSend * rtx, GstBuffer * buffer)
 {
   GstFlowReturn ret;
-  token_bucket_take_tokens (&rtx->stuff_tb,
-      get_buffer_payload_len (buffer) * 8, TRUE);
+  guint buffer_size = get_buffer_bytes_size (buffer);
+  token_bucket_take_tokens (&rtx->stuff_tb, buffer_size * 8, TRUE);
 
   GST_OBJECT_UNLOCK (rtx);
+  GST_LOG_OBJECT (rtx,
+      "Pushing buffer %" GST_PTR_FORMAT " with network size: %u", buffer,
+      buffer_size);
   ret = gst_pad_push (rtx->srcpad, buffer);
   GST_OBJECT_LOCK (rtx);
 
   return ret;
 }
 
-static GSequenceIter *
-gst_rtp_rtx_send_get_initial_stuffing_buffer (GstRtpRtxSend * rtx,
-    SSRCRtxData * rtx_data, gboolean check_window)
+static guint
+gst_rtp_rtx_send_get_stuffing_buffers (GstRtpRtxSend * rtx,
+    SSRCRtxData * rtx_data, GSequenceIter ** start, GSequenceIter ** end)
 {
   GstClockTime running_time;
   GstClockTime window_size = 100 * GST_MSECOND;
 
   GSequenceIter *first = NULL;
   GSequenceIter *last = NULL;
+  GSequenceIter *current;
 
-  gint available_stuffing_bits = 0;
-  gint64 bucket_size = rtx->stuff_tb.bucket_size;
+  guint available_stuffing_bytes = 0;
+  guint bucket_size_bytes = (guint) (rtx->stuff_tb.bucket_size / 8);
+
+  if (g_sequence_is_empty (rtx_data->queue))
+    return 0;
 
   /* determine the first and last item on the queue to do stuffing with */
+  first = g_sequence_get_begin_iter (rtx_data->queue);
   last = g_sequence_get_end_iter (rtx_data->queue);
-  first = last;
 
   running_time =
       gst_clock_get_time (GST_ELEMENT_CLOCK (rtx)) -
       GST_ELEMENT_CAST (rtx)->base_time;
 
-  do {
-    BufferQueueItem *item = g_sequence_get (g_sequence_iter_prev (first));
-    gint buffer_bitsize = get_buffer_payload_len (item->buffer) * 8;
+  current = last;
+  while (current != first) {
+    BufferQueueItem *item = g_sequence_get (g_sequence_iter_prev (current));
+    /* the additional 2 bytes here is when turning this into a RTX buffer */
+    guint buffer_size = get_buffer_bytes_size (item->buffer) + 2;
+    GST_LOG_OBJECT (rtx, "Considering buffer #%u with size %u, total: %u",
+        item->seqnum, buffer_size, available_stuffing_bytes);
 
     /* stop here if we will exceed the bucket with this buffer */
-    if (available_stuffing_bits + buffer_bitsize > bucket_size)
+    if (available_stuffing_bytes + buffer_size > bucket_size_bytes)
       break;
 
-    /* stop here if the packet is "too old" */
-    if (check_window && GST_BUFFER_PTS_IS_VALID (item->buffer)
-        && ABS (GST_CLOCK_DIFF (GST_BUFFER_PTS (item->buffer),
-                running_time)) > window_size) {
+    /* stop here if the packet is "too old", but only if we already have a packet to push */
+    if (current != last && GST_BUFFER_PTS_IS_VALID (item->buffer) &&
+        GST_CLOCK_DIFF (GST_BUFFER_PTS (item->buffer),
+            running_time) > window_size) {
       break;
     }
 
-    available_stuffing_bits += buffer_bitsize;
-    first = g_sequence_iter_prev (first);
-  } while (first != g_sequence_get_begin_iter (rtx_data->queue));
+    current = g_sequence_iter_prev (current);
+    available_stuffing_bytes += buffer_size;
+  }
 
-  if (available_stuffing_bits)
-    return first;
+  /* we were unable to find any buffers */
+  if (current == last)
+    return 0;
 
-  /* not enough bits for stuffing */
-  return NULL;
+  *start = current;
+  *end = last;
+
+  return available_stuffing_bytes * 8;
 }
-
 
 static GstFlowReturn
 gst_rtp_rtx_send_push_stuffing (GstRtpRtxSend * rtx, SSRCRtxData * rtx_data)
 {
   GstFlowReturn ret = GST_FLOW_OK;
-
   GSequenceIter *first = NULL;
   GSequenceIter *last = NULL;
+  GSequenceIter *current;
+  guint available_stuffing_bits;
+  gint missing_stuffing_bytes;
+  guint stuffing_pushed = 0;
 
-  gint64 bucket_size = rtx->stuff_tb.bucket_size;
-
-  if (bucket_size <= 0)
+  if (rtx->stuff_tb.bucket_size <= 0) {
+    GST_DEBUG_OBJECT (rtx, "No room in bucket for stuffing");
     return GST_FLOW_OK;
-
-  /* double check the queue */
-  if (g_sequence_is_empty (rtx_data->queue))
-    return GST_FLOW_OK;
-
-  last = g_sequence_get_end_iter (rtx_data->queue);
-
-  /* check for the first buffer under the window */
-  first = gst_rtp_rtx_send_get_initial_stuffing_buffer (rtx, rtx_data, TRUE);
-  if (!first) {
-    /* if there is none, fallback to use the last ones */
-    first = gst_rtp_rtx_send_get_initial_stuffing_buffer (rtx, rtx_data, FALSE);
   }
+
+  available_stuffing_bits =
+      gst_rtp_rtx_send_get_stuffing_buffers (rtx, rtx_data, &first, &last);
 
   /* we cannot generate any stuffing, no bits */
-  if (!first)
+  if (!available_stuffing_bits) {
+    GST_DEBUG_OBJECT (rtx, "No available RTX packets to use for stuffing");
     return GST_FLOW_OK;
-
-  while (first != last) {
-    BufferQueueItem *item = g_sequence_get (first);
-    GstBuffer *rtx_buf = gst_rtp_rtx_buffer_new (rtx, item->buffer, 0);
-
-    GST_DEBUG_OBJECT (rtx, "Produce 1 stuffing packets with ssrc %X, "
-        "original buffer size %" G_GSIZE_FORMAT, rtx_data->rtx_ssrc,
-        gst_buffer_get_size (item->buffer));
-
-    ret = gst_rtp_rtx_send_push (rtx, rtx_buf);
-    first = g_sequence_iter_next (first);
   }
 
-  bucket_size = rtx->stuff_tb.bucket_size;
-  /* we still have some left over budget, call this once more */
-  if (bucket_size > 0 && ret == GST_FLOW_OK)
-    return gst_rtp_rtx_send_push_stuffing (rtx, rtx_data);
+  GST_DEBUG_OBJECT (rtx,
+      "About to produce up to %u bytes of stuffing using %u bytes of packet data",
+      (guint) (rtx->stuff_tb.bucket_size / 8), available_stuffing_bits / 8);
+
+  missing_stuffing_bytes =
+      MAX (0, (rtx->stuff_tb.bucket_size - (gint) available_stuffing_bits) / 8);
+
+  current = first;
+  while (ret == GST_FLOW_OK && (rtx->stuff_tb.bucket_size / 8) > 0
+      && stuffing_pushed < rtx->stuffing_max_burst_packets) {
+    GstBuffer *rtx_buf;
+    BufferQueueItem *item = g_sequence_get (current);
+    gsize bufsize = get_buffer_bytes_size (item->buffer) + 2;
+    guint8 padding = MIN (G_MAXUINT8, missing_stuffing_bytes);
+    if (padding && bufsize < 300) {     /* we only pad buffers less than 300 bytes in size */
+      missing_stuffing_bytes -= padding;
+      GST_LOG_OBJECT (rtx, "adding %u bytes of padding, still missing: %u",
+          padding, missing_stuffing_bytes);
+    }
+    rtx_buf = gst_rtp_rtx_buffer_new (rtx, item->buffer, padding);
+    ret = gst_rtp_rtx_send_push (rtx, rtx_buf);
+
+    GST_LOG_OBJECT (rtx,
+        "Pushed 1 stuffing packet with size %u - bucket_size=%d",
+        (guint) get_buffer_bytes_size (rtx_buf),
+        (gint) (rtx->stuff_tb.bucket_size / 8));
+    current = g_sequence_iter_next (current);
+
+    /* if we are at the end, start over */
+    if (current == last) {
+      current = first;
+      missing_stuffing_bytes =
+          MAX (0,
+          (rtx->stuff_tb.bucket_size - (gint) available_stuffing_bits) / 8);
+    }
+    stuffing_pushed++;
+  }
 
   return ret;
 }
@@ -1480,6 +1521,11 @@ gst_rtp_rtx_send_get_property (GObject * object,
       g_value_set_int (value, rtx->stuffing_kbps);
       GST_OBJECT_UNLOCK (rtx);
       break;
+    case PROP_STUFFING_MAX_BURST_PACKETS:
+      GST_OBJECT_LOCK (rtx);
+      g_value_set_int (value, rtx->stuffing_max_burst_packets);
+      GST_OBJECT_UNLOCK (rtx);
+      break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
       break;
@@ -1529,6 +1575,7 @@ gst_rtp_rtx_send_reset_max_bucket (GstRtpRtxSend * rtx,
 static void
 gst_rtp_rtx_send_reset_stuffing_bucket (GstRtpRtxSend * rtx, gint kbps)
 {
+  GST_INFO_OBJECT (rtx, "Setting stuffing to %u kbps", kbps);
   rtx->stuffing_kbps = kbps;
   token_bucket_init (&rtx->stuff_tb, kbps * 1000, kbps * 1000);
 }
@@ -1605,6 +1652,11 @@ gst_rtp_rtx_send_set_property (GObject * object,
         gint kbps = g_value_get_int (value);
         gst_rtp_rtx_send_reset_stuffing_bucket (rtx, kbps);
       }
+      GST_OBJECT_UNLOCK (rtx);
+      break;
+    case PROP_STUFFING_MAX_BURST_PACKETS:
+      GST_OBJECT_LOCK (rtx);
+      rtx->stuffing_max_burst_packets = g_value_get_int (value);
       GST_OBJECT_UNLOCK (rtx);
       break;
     default:
