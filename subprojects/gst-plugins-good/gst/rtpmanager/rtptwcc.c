@@ -830,7 +830,7 @@ sent_packet_init (SentPacket * packet, guint16 seqnum, RTPPacketInfo * pinfo,
 {
   packet->seqnum = seqnum;
   packet->local_ts = pinfo->current_time;
-  packet->size = gst_rtp_buffer_get_payload_len (rtp);
+  packet->size = pinfo->bytes + 12; /* the reported wireshark size */
   packet->pt = gst_rtp_buffer_get_payload_type (rtp);
   packet->remote_ts = GST_CLOCK_TIME_NONE;
   packet->socket_ts = GST_CLOCK_TIME_NONE;
@@ -930,8 +930,8 @@ _set_twcc_seqnum_data (RTPTWCCManager * twcc, RTPPacketInfo * pinfo,
   gst_buffer_add_tx_feedback_meta (pinfo->data, seqnum,
       GST_TX_FEEDBACK_CAST (twcc));
 
-  GST_LOG ("Send: twcc-seqnum: %u, pt: %u, marker: %d, len: %u, ts: %"
-      GST_TIME_FORMAT, seqnum, packet.pt, pinfo->marker, packet.size,
+  GST_LOG ("Send: twcc-seqnum: %u, seqnum: %u, pt: %u, marker: %d, size: %u, ts: %"
+      GST_TIME_FORMAT, packet.seqnum, pinfo->seqnum, packet.pt, pinfo->marker, packet.size,
       GST_TIME_ARGS (pinfo->current_time));
 }
 
