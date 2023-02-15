@@ -4438,7 +4438,7 @@ GST_START_TEST (test_twcc_reordering_send_recv)
   }
   buf = session_harness_produce_twcc (h_recv);
   session_harness_recv_rtcp (h_send, buf);
-  twcc_verify_stats (h_send, 512000, 512000, 2, 2, 0.0f, 0);
+  twcc_verify_stats (h_send, 532800, 532800, 2, 2, 0.0f, 0);
 
   /* now send enough buffers to get within our stats window */
   for (guint i = 12; i < 26; i++) {
@@ -4453,7 +4453,7 @@ GST_START_TEST (test_twcc_reordering_send_recv)
 
   /* we get stats for the first 16 packets, noticing no loss
      even though packets were heavily reordered */
-  twcc_verify_stats (h_send, 512000, 512000, 16, 16, 0.0f, 0);
+  twcc_verify_stats (h_send, 532800, 532800, 16, 16, 0.0f, 0);
 
   g_list_free (bufs);
   session_harness_free (h_send);
@@ -4656,7 +4656,7 @@ GST_START_TEST (test_twcc_send_and_recv)
     session_harness_recv_rtcp (h_send, buf);
 
     if (frame > 0)
-      twcc_verify_stats (h_send, TEST_BUF_BPS, TEST_BUF_BPS, num_slices + 1,
+      twcc_verify_stats (h_send, 532800, 532800, num_slices + 1,
           num_slices + 1, 0.0f, 0);
   }
 
@@ -5065,7 +5065,7 @@ GST_START_TEST (test_twcc_feedback_max_sent_packets)
   /* receive the feedback message and verify the packets in our window */
   session_harness_recv_rtcp (h,
       generate_twcc_feedback_rtcp (fci, sizeof (fci)));
-  twcc_verify_stats (h, 512000, 0, 51, 0, 100.0f, 0);
+  twcc_verify_stats (h, 532800, 0, 51, 0, 100.0f, 0);
 
   session_harness_free (h);
 }
