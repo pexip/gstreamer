@@ -74,7 +74,9 @@ enum
   PROP_QUEUE_SIZE,
   PROP_MAX_QUEUE_DELAY,
   PROP_ALLOW_REORDERING,
-  PROP_REPLACE_DROPPED_WITH_EMPTY
+  PROP_REPLACE_DROPPED_WITH_EMPTY,
+  PROP_THROTTLE_FREQUENCY,
+  PROP_THROTTLE_DELAY,
 };
 
 /* these numbers are nothing but wild guesses and don't reflect any reality */
@@ -91,6 +93,8 @@ enum
 #define DEFAULT_MAX_QUEUE_DELAY 50
 #define DEFAULT_ALLOW_REORDERING TRUE
 #define DEFAULT_REPLACE_DROPPED_WITH_EMPTY FALSE
+#define DEFAULT_THROTTLE_FREQUENCY 0
+#define DEFAULT_THROTTLE_DELAY 0
 
 static GstStaticPadTemplate gst_net_sim_sink_template =
 GST_STATIC_PAD_TEMPLATE ("sink",
@@ -448,11 +452,53 @@ gst_new_sim_get_delay_ms (GstNetSim * netsim)
   return delay_ms;
 }
 
+static gint
+gst_new_sim_get_throttle_ms (GstNetSim * netsim, GstClockTime now)
+{
+  gint ret = 0;
+  GstClockTime start_time;
+
+  /* we don't have a frequency or a delay, return 0 */
+  if (!netsim->throttle_frequency || !netsim->throttle_delay) {
+    return 0;
+  }
+
+  /* Invalid configuration */
+  if (netsim->throttle_delay / 1000 > netsim->throttle_frequency) {
+    GST_ERROR_OBJECT (netsim,
+        "throttle-delay larger than frequency not allowed!");
+    g_assert_not_reached ();
+  }
+
+  /* we are not valid yet, set it to now */
+  if (!GST_CLOCK_TIME_IS_VALID (netsim->throttle_end_time)) {
+    netsim->throttle_end_time = now;
+  }
+
+  /* we are past our end-time, move it forward */
+  if (now >= netsim->throttle_end_time) {
+    netsim->throttle_end_time += (netsim->throttle_frequency * GST_SECOND);
+  }
+
+  /* when the throttling should start */
+  start_time =
+      netsim->throttle_end_time - (netsim->throttle_delay * GST_MSECOND);
+
+  /* we are within the throttling window, delay all packets until throttle_end_time */
+  if (now >= start_time) {
+    ret = GST_TIME_AS_MSECONDS (netsim->throttle_end_time - now);
+  }
+
+  return ret;
+}
+
 static void
 gst_net_sim_queue_buffer (GstNetSim * netsim, GstBuffer * buf)
 {
   GstClockTime now = gst_clock_get_time (netsim->clock);
   gint delay_ms = gst_new_sim_get_delay_ms (netsim);
+  delay_ms += gst_new_sim_get_throttle_ms (netsim, now);
+
   NetSimBuffer *nsbuf = net_sim_buffer_new (buf, netsim->seqnum++,
       now, delay_ms * GST_MSECOND);
 
@@ -665,6 +711,12 @@ gst_net_sim_set_property (GObject * object,
     case PROP_REPLACE_DROPPED_WITH_EMPTY:
       netsim->replace_droppped_with_empty = g_value_get_boolean (value);
       break;
+    case PROP_THROTTLE_FREQUENCY:
+      netsim->throttle_frequency = g_value_get_int (value);
+      break;
+    case PROP_THROTTLE_DELAY:
+      netsim->throttle_delay = g_value_get_int (value);
+      break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
       break;
@@ -717,6 +769,12 @@ gst_net_sim_get_property (GObject * object,
     case PROP_REPLACE_DROPPED_WITH_EMPTY:
       g_value_set_boolean (value, netsim->replace_droppped_with_empty);
       break;
+    case PROP_THROTTLE_FREQUENCY:
+      g_value_set_int (value, netsim->throttle_frequency);
+      break;
+    case PROP_THROTTLE_DELAY:
+      g_value_set_int (value, netsim->throttle_delay);
+      break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
       break;
@@ -740,6 +798,7 @@ gst_net_sim_init (GstNetSim * netsim)
   g_cond_init (&netsim->cond);
   netsim->rand_seed = g_rand_new ();
   netsim->prev_time = GST_CLOCK_TIME_NONE;
+  netsim->throttle_end_time = GST_CLOCK_TIME_NONE;
 
   GST_OBJECT_FLAG_SET (netsim->sinkpad,
       GST_PAD_FLAG_PROXY_CAPS | GST_PAD_FLAG_PROXY_ALLOCATION);
@@ -918,6 +977,19 @@ gst_net_sim_class_init (GstNetSimClass * klass)
       g_param_spec_boolean ("allow-reordering", "Allow Reordering",
           "When delaying packets, are they allowed to be reordered or not",
           DEFAULT_ALLOW_REORDERING,
+          G_PARAM_READWRITE | G_PARAM_CONSTRUCT | G_PARAM_STATIC_STRINGS));
+
+
+  g_object_class_install_property (gobject_class, PROP_THROTTLE_FREQUENCY,
+      g_param_spec_int ("throttle-frequency", "Throttle Frequency (s)",
+          "How often (in seconds) a throttle should occur (0 = never)",
+          0, G_MAXINT, DEFAULT_THROTTLE_FREQUENCY,
+          G_PARAM_READWRITE | G_PARAM_CONSTRUCT | G_PARAM_STATIC_STRINGS));
+
+  g_object_class_install_property (gobject_class, PROP_THROTTLE_DELAY,
+      g_param_spec_int ("throttle-delay", "Throttle Delay (ms)",
+          "When a throttle occurs, for how long the packets should be held back",
+          0, G_MAXINT, DEFAULT_THROTTLE_DELAY,
           G_PARAM_READWRITE | G_PARAM_CONSTRUCT | G_PARAM_STATIC_STRINGS));
 
   GST_DEBUG_CATEGORY_INIT (netsim_debug, "netsim", 0, "Network simulator");

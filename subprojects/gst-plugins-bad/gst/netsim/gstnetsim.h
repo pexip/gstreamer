@@ -82,6 +82,7 @@ struct _GstNetSim
   guint seqnum;
   GCompareDataFunc compare_func;
   guint bits_in_queue;
+  GstClockTime throttle_end_time;
 
   /* properties */
   gint min_delay;
@@ -97,6 +98,8 @@ struct _GstNetSim
   gint max_queue_delay;
   gboolean allow_reordering;
   gboolean replace_droppped_with_empty;
+  gint throttle_frequency;
+  gint throttle_delay;
 };
 
 struct _GstNetSimClass
