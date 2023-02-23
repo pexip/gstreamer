@@ -262,6 +262,9 @@ struct _GstAudioDecoderPrivate
   /* context storage */
   GstAudioDecoderContext ctx;
 
+  /* the cached upstream latency */
+  GstClockTime us_latency;
+
   /* properties */
   GstClockTime latency;
   GstClockTime reported_min_latency;
@@ -965,7 +968,7 @@ gst_audio_decoder_setup (GstAudioDecoder * dec)
   gst_query_unref (query);
 
   /* normalize to bool */
-  dec->priv->agg = ! !res;
+  dec->priv->agg = !!res;
 }
 
 static GstFlowReturn
@@ -3060,6 +3063,9 @@ gst_audio_decoder_src_query_default (GstAudioDecoder * dec, GstQuery * query)
           max_latency = -1;
         else
           max_latency += dec->priv->ctx.max_latency;
+
+        /* store the upstream min latency */
+        dec->priv->us_latency = min_latency;
         GST_OBJECT_UNLOCK (dec);
 
         gst_query_set_latency (query, live, min_latency, max_latency);
@@ -3592,6 +3598,29 @@ gst_audio_decoder_get_min_latency (GstAudioDecoder * dec)
 
   return result;
 }
+
+/**
+ * gst_audio_decoder_get_upstream_latency:
+ * @dec: a #GstAudioDecoder
+ *
+ * Returns: the upstream latency.
+ *
+ * MT safe.
+ */
+GstClockTime
+gst_audio_decoder_get_upstream_latency (GstAudioDecoder * dec)
+{
+  GstClockTime result;
+
+  g_return_val_if_fail (GST_IS_AUDIO_DECODER (dec), FALSE);
+
+  GST_OBJECT_LOCK (dec);
+  result = dec->priv->us_latency;
+  GST_OBJECT_UNLOCK (dec);
+
+  return result;
+}
+
 
 /**
  * gst_audio_decoder_set_tolerance:
