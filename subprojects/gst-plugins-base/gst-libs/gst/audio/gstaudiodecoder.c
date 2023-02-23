@@ -264,6 +264,9 @@ struct _GstAudioDecoderPrivate
   /* context storage */
   GstAudioDecoderContext ctx;
 
+  /* the cached upstream latency */
+  GstClockTime us_latency;
+
   /* properties */
   GstClockTime latency;
   GstClockTime reported_min_latency;
@@ -272,12 +275,23 @@ struct _GstAudioDecoderPrivate
   gboolean drainable;
   gboolean needs_format;
 
+  /* dtx */
+  gboolean dtx_running;
+  GMutex dtx_lock;
+  GstClockID dtx_clock_id;
+  GstClockTime last_pts;
+  GstClockTime last_buffer_duration;
+
   /* pending serialized sink events, will be sent from finish_frame() */
   GList *pending_events;
 
   /* flags */
   gboolean use_default_pad_acceptcaps;
 };
+
+#define GST_AUDIO_DECODER_DTX_GET_LOCK(dec) (&dec->priv->dtx_lock)
+#define GST_AUDIO_DECODER_DTX_LOCK(dec)     (g_mutex_lock   (GST_AUDIO_DECODER_DTX_GET_LOCK (dec)))
+#define GST_AUDIO_DECODER_DTX_UNLOCK(dec)   (g_mutex_unlock (GST_AUDIO_DECODER_DTX_GET_LOCK (dec)))
 
 /* cached quark to avoid contention on the global quark table lock */
 #define META_TAG_AUDIO meta_tag_audio_quark
@@ -309,8 +323,11 @@ static GstFlowReturn gst_audio_decoder_chain (GstPad * pad, GstObject * parent,
     GstBuffer * buf);
 static gboolean gst_audio_decoder_src_query (GstPad * pad, GstObject * parent,
     GstQuery * query);
+static gboolean gst_audio_decoder_src_activate_mode (G_GNUC_UNUSED GstPad * pad,
+    GstObject * parent, GstPadMode mode, gboolean active);
 static gboolean gst_audio_decoder_sink_query (GstPad * pad, GstObject * parent,
     GstQuery * query);
+static void gst_audio_decoder_stop_dtx (GstAudioDecoder * dec);
 static void gst_audio_decoder_reset (GstAudioDecoder * dec, gboolean full);
 
 static gboolean gst_audio_decoder_decide_allocation_default (GstAudioDecoder *
@@ -495,6 +512,8 @@ gst_audio_decoder_init (GstAudioDecoder * dec, GstAudioDecoderClass * klass)
       GST_DEBUG_FUNCPTR (gst_audio_decoder_src_event));
   gst_pad_set_query_function (dec->srcpad,
       GST_DEBUG_FUNCPTR (gst_audio_decoder_src_query));
+  gst_pad_set_activatemode_function (dec->srcpad,
+      GST_DEBUG_FUNCPTR (gst_audio_decoder_src_activate_mode));
   gst_element_add_pad (GST_ELEMENT (dec), dec->srcpad);
   GST_DEBUG_OBJECT (dec, "srcpad created");
 
@@ -503,6 +522,7 @@ gst_audio_decoder_init (GstAudioDecoder * dec, GstAudioDecoderClass * klass)
   g_queue_init (&dec->priv->frames);
 
   g_rec_mutex_init (&dec->stream_lock);
+  g_mutex_init (GST_AUDIO_DECODER_DTX_GET_LOCK (dec));
 
   /* property default */
   dec->priv->latency = DEFAULT_LATENCY;
@@ -607,6 +627,7 @@ gst_audio_decoder_finalize (GObject * object)
   }
 
   g_rec_mutex_clear (&dec->stream_lock);
+  g_mutex_clear (GST_AUDIO_DECODER_DTX_GET_LOCK (dec));
 
   G_OBJECT_CLASS (parent_class)->finalize (object);
 }
@@ -1545,6 +1566,9 @@ gst_audio_decoder_finish_frame_or_subframe (GstAudioDecoder * dec,
         GST_FRAMES_TO_CLOCK_TIME (samples, ctx->info.rate);
   }
 
+  priv->last_pts = GST_BUFFER_PTS (buf);
+  priv->last_buffer_duration = GST_BUFFER_DURATION (buf);
+
   if (klass->transform_meta) {
     if (inbufs.length) {
       GList *l;
@@ -1669,6 +1693,124 @@ gst_audio_decoder_handle_frame (GstAudioDecoder * dec,
   }
 
   return klass->handle_frame (dec, buffer);
+}
+
+/* called with GST_AUDIO_DECODER_DTX_LOCK held */
+static void
+gst_audio_decoder_dtx_wait_unlocked (GstAudioDecoder * dec, GstClockTime time)
+{
+  GstClock *clock = GST_ELEMENT_CLOCK (dec);
+
+  if (!clock)
+    return;
+
+  dec->priv->dtx_clock_id = gst_clock_new_single_shot_id (clock, time);
+  GST_LOG_OBJECT (dec, "Waiting for %" GST_TIME_FORMAT, GST_TIME_ARGS (time));
+
+  GST_AUDIO_DECODER_DTX_UNLOCK (dec);
+  gst_clock_id_wait (dec->priv->dtx_clock_id, NULL);
+  GST_AUDIO_DECODER_DTX_LOCK (dec);
+
+  gst_clock_id_unref (dec->priv->dtx_clock_id);
+  dec->priv->dtx_clock_id = NULL;
+}
+
+static void
+gst_audio_decoder_dtx_task_func (gpointer user_data)
+{
+  GstAudioDecoder *dec = GST_AUDIO_DECODER_CAST (user_data);
+  GstAudioDecoderClass *klass = GST_AUDIO_DECODER_GET_CLASS (dec);
+  GstClockTime pts;
+  GstClockTime base_time;
+
+  base_time = gst_element_get_base_time (GST_ELEMENT (dec));
+  pts = dec->priv->last_pts;
+
+  if (!GST_CLOCK_TIME_IS_VALID (pts)) {
+    GST_WARNING_OBJECT (dec, "Last pts is invalid, can't start DTX");
+    gst_pad_pause_task (dec->srcpad);
+    return;
+  }
+
+  GST_AUDIO_DECODER_DTX_LOCK (dec);
+  while (dec->priv->dtx_running) {
+    GstFlowReturn ret;
+    GstBuffer *buf;
+
+    pts += dec->priv->us_latency;
+    pts += dec->priv->last_buffer_duration;
+
+
+    gst_audio_decoder_dtx_wait_unlocked (dec, base_time + pts);
+
+    if (!dec->priv->dtx_running)
+      break;
+
+    GST_DEBUG_OBJECT (dec,
+        "producing DTX packet with timestamp %" GST_TIME_FORMAT,
+        GST_TIME_ARGS (pts));
+
+    /* same is in handle_gap() we tell the subclass to conceal */
+    buf = gst_buffer_new ();
+    GST_BUFFER_PTS (buf) = pts;
+    GST_BUFFER_DURATION (buf) = dec->priv->last_buffer_duration;
+
+    GST_AUDIO_DECODER_DTX_UNLOCK (dec);
+    GST_AUDIO_DECODER_STREAM_LOCK (dec);
+
+    ret = gst_audio_decoder_handle_frame (dec, klass, buf);
+
+    GST_AUDIO_DECODER_STREAM_UNLOCK (dec);
+    GST_AUDIO_DECODER_DTX_LOCK (dec);
+
+    if (ret != GST_FLOW_OK)
+      break;
+  }
+  GST_AUDIO_DECODER_DTX_UNLOCK (dec);
+
+  gst_pad_pause_task (dec->srcpad);
+}
+
+/* called with GST_AUDIO_DECODER_DTX_LOCK held */
+static void
+gst_audio_decoder_start_dtx_unlocked (GstAudioDecoder * dec)
+{
+  if (dec->priv->dtx_running) {
+    GST_ERROR_OBJECT (dec, "Can't double start the DTX task!");
+    g_assert_not_reached ();
+    return;
+  }
+
+  GST_INFO_OBJECT (dec, "Starting DTX");
+  dec->priv->dtx_running = TRUE;
+
+  if (!gst_pad_start_task (dec->srcpad, gst_audio_decoder_dtx_task_func, dec,
+          NULL))
+    g_assert_not_reached ();
+}
+
+static void
+gst_audio_decoder_stop_dtx (GstAudioDecoder * dec)
+{
+  GST_AUDIO_DECODER_DTX_LOCK (dec);
+
+  if (!dec->priv->dtx_running) {
+    GST_AUDIO_DECODER_DTX_UNLOCK (dec);
+    return;
+  }
+
+  GST_INFO_OBJECT (dec, "Stopping DTX");
+  dec->priv->dtx_running = FALSE;
+
+  if (dec->priv->dtx_clock_id) {
+    gst_clock_id_unschedule (dec->priv->dtx_clock_id);
+    g_assert (dec->priv->dtx_clock_id);
+  }
+
+  GST_AUDIO_DECODER_DTX_UNLOCK (dec);
+
+  if (!gst_pad_stop_task (dec->srcpad))
+    g_assert_not_reached ();
 }
 
 /* maybe subclass configurable instead, but this allows for a whole lot of
@@ -2108,6 +2250,8 @@ gst_audio_decoder_chain (GstPad * pad, GstObject * parent, GstBuffer * buffer)
       GST_TIME_ARGS (GST_BUFFER_PTS (buffer)),
       GST_TIME_ARGS (GST_BUFFER_DURATION (buffer)));
 
+  gst_audio_decoder_stop_dtx (dec);
+
   GST_AUDIO_DECODER_STREAM_LOCK (dec);
 
   if (G_UNLIKELY (dec->priv->ctx.input_caps == NULL && dec->priv->needs_format))
@@ -2288,6 +2432,8 @@ gst_audio_decoder_handle_gap (GstAudioDecoder * dec, GstEvent * event)
   GstClockTime timestamp, duration;
   gboolean needs_reconfigure = FALSE;
 
+  gst_audio_decoder_stop_dtx (dec);
+
   /* Ensure we have caps first */
   GST_AUDIO_DECODER_STREAM_LOCK (dec);
   if (!GST_AUDIO_INFO_IS_VALID (&dec->priv->ctx.info)) {
@@ -2308,7 +2454,6 @@ gst_audio_decoder_handle_gap (GstAudioDecoder * dec, GstEvent * event)
       gst_pad_mark_reconfigure (dec->srcpad);
     }
   }
-  GST_AUDIO_DECODER_STREAM_UNLOCK (dec);
 
   gst_event_parse_gap (event, &timestamp, &duration);
 
@@ -2351,6 +2496,9 @@ gst_audio_decoder_handle_gap (GstAudioDecoder * dec, GstEvent * event)
       gst_event_unref (event);
     }
   }
+
+  GST_AUDIO_DECODER_STREAM_UNLOCK (dec);
+
   return ret;
 }
 
@@ -3076,6 +3224,9 @@ gst_audio_decoder_src_query_default (GstAudioDecoder * dec, GstQuery * query)
           max_latency = -1;
         else
           max_latency += dec->priv->ctx.max_latency;
+
+        /* store the upstream min latency */
+        dec->priv->us_latency = min_latency;
         GST_OBJECT_UNLOCK (dec);
 
         gst_query_set_latency (query, live, min_latency, max_latency);
@@ -3088,6 +3239,21 @@ gst_audio_decoder_src_query_default (GstAudioDecoder * dec, GstQuery * query)
   }
 
   return res;
+}
+
+static gboolean
+gst_audio_decoder_src_activate_mode (G_GNUC_UNUSED GstPad * pad,
+    GstObject * parent, GstPadMode mode, gboolean active)
+{
+  GstAudioDecoder *dec;
+
+  dec = GST_AUDIO_DECODER (parent);
+  GST_LOG_OBJECT (dec, "activate mode %d active %d", mode, active);
+
+  if (active == FALSE)
+    gst_audio_decoder_stop_dtx (dec);
+
+  return TRUE;
 }
 
 static gboolean
@@ -3117,6 +3283,8 @@ gst_audio_decoder_stop (GstAudioDecoder * dec)
   GST_DEBUG_OBJECT (dec, "gst_audio_decoder_stop");
 
   klass = GST_AUDIO_DECODER_GET_CLASS (dec);
+
+  gst_audio_decoder_stop_dtx (dec);
 
   if (klass->stop) {
     ret = klass->stop (dec);
@@ -3630,6 +3798,29 @@ gst_audio_decoder_get_min_latency (GstAudioDecoder * dec)
 }
 
 /**
+ * gst_audio_decoder_get_upstream_latency:
+ * @dec: a #GstAudioDecoder
+ *
+ * Returns: the upstream latency.
+ *
+ * MT safe.
+ */
+GstClockTime
+gst_audio_decoder_get_upstream_latency (GstAudioDecoder * dec)
+{
+  GstClockTime result;
+
+  g_return_val_if_fail (GST_IS_AUDIO_DECODER (dec), FALSE);
+
+  GST_OBJECT_LOCK (dec);
+  result = dec->priv->us_latency;
+  GST_OBJECT_UNLOCK (dec);
+
+  return result;
+}
+
+
+/**
  * gst_audio_decoder_set_tolerance:
  * @dec: a #GstAudioDecoder
  * @tolerance: new tolerance
@@ -3765,6 +3956,39 @@ gst_audio_decoder_get_needs_format (GstAudioDecoder * dec)
   GST_OBJECT_UNLOCK (dec);
 
   return result;
+}
+
+/**
+ * gst_audio_decoder_start_dtx:
+ * @dec: a #GstAudioDecoder
+ *
+ * Starts the DTX task. The audio decoder will spawn a task that will generate
+ * the silent buffers to cover the period of time we haven't received frames for.
+ *
+ * MT safe.
+ */
+void
+gst_audio_decoder_start_dtx (GstAudioDecoder * dec)
+{
+  g_return_if_fail (GST_IS_AUDIO_DECODER (dec));
+
+  GST_AUDIO_DECODER_DTX_LOCK (dec);
+  gst_audio_decoder_start_dtx_unlocked (dec);
+  GST_AUDIO_DECODER_DTX_UNLOCK (dec);
+}
+
+/**
+ * gst_audio_decoder_dtx_running:
+ * @dec: a #GstAudioDecoder
+ *
+ * Returns: TRUE if DTX has started on this decoder.
+ *
+ * MT safe.
+ */
+gboolean
+gst_audio_decoder_dtx_running (GstAudioDecoder * dec)
+{
+  return dec->priv->dtx_running;
 }
 
 /**
