@@ -435,6 +435,12 @@ GST_AUDIO_API
 gboolean          gst_audio_decoder_get_needs_format (GstAudioDecoder * dec);
 
 GST_AUDIO_API
+void              gst_audio_decoder_start_dtx (GstAudioDecoder * dec);
+
+GST_AUDIO_API
+gboolean          gst_audio_decoder_dtx_running (GstAudioDecoder * dec);
+
+GST_AUDIO_API
 void              gst_audio_decoder_get_allocator (GstAudioDecoder * dec,
                                                    GstAllocator ** allocator,
                                                    GstAllocationParams * params);
