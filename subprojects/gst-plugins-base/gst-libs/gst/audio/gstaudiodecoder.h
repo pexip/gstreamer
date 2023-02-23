@@ -414,6 +414,9 @@ GST_AUDIO_API
 GstClockTime      gst_audio_decoder_get_min_latency (GstAudioDecoder * dec);
 
 GST_AUDIO_API
+GstClockTime      gst_audio_decoder_get_upstream_latency (GstAudioDecoder * dec);
+
+GST_AUDIO_API
 void              gst_audio_decoder_set_tolerance   (GstAudioDecoder * dec,
                                                      GstClockTime      tolerance);
 
@@ -433,6 +436,12 @@ void              gst_audio_decoder_set_needs_format (GstAudioDecoder * dec,
 
 GST_AUDIO_API
 gboolean          gst_audio_decoder_get_needs_format (GstAudioDecoder * dec);
+
+GST_AUDIO_API
+void              gst_audio_decoder_start_dtx (GstAudioDecoder * dec);
+
+GST_AUDIO_API
+gboolean          gst_audio_decoder_dtx_running (GstAudioDecoder * dec);
 
 GST_AUDIO_API
 void              gst_audio_decoder_get_allocator (GstAudioDecoder * dec,
