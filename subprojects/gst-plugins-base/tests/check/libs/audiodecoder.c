@@ -1117,16 +1117,16 @@ GST_START_TEST (audiodecoder_plc_on_gap_event)
   pts = gst_util_uint64_scale_round (0, GST_SECOND, TEST_MSECS_PER_SAMPLE);
   gst_harness_push (h, create_test_buffer (0));
   buf = gst_harness_pull (h);
-  fail_unless_equals_int (pts, GST_BUFFER_PTS (buf));
-  fail_unless_equals_int (dur, GST_BUFFER_DURATION (buf));
+  fail_unless_equals_uint64 (pts, GST_BUFFER_PTS (buf));
+  fail_unless_equals_uint64 (dur, GST_BUFFER_DURATION (buf));
   fail_unless (GST_BUFFER_FLAG_IS_SET (buf, GST_BUFFER_FLAG_DISCONT));
   gst_buffer_unref (buf);
 
   pts = gst_util_uint64_scale_round (1, GST_SECOND, TEST_MSECS_PER_SAMPLE);
   gst_harness_push_event (h, gst_event_new_gap (pts, dur));
   buf = gst_harness_pull (h);
-  fail_unless_equals_int (pts, GST_BUFFER_PTS (buf));
-  fail_unless_equals_int (dur, GST_BUFFER_DURATION (buf));
+  fail_unless_equals_uint64 (pts, GST_BUFFER_PTS (buf));
+  fail_unless_equals_uint64 (dur, GST_BUFFER_DURATION (buf));
   fail_unless (!GST_BUFFER_FLAG_IS_SET (buf, GST_BUFFER_FLAG_DISCONT));
   gst_buffer_unref (buf);
 
@@ -1135,8 +1135,8 @@ GST_START_TEST (audiodecoder_plc_on_gap_event)
   GST_BUFFER_FLAG_SET (buf, GST_BUFFER_FLAG_DISCONT);
   gst_harness_push (h, buf);
   buf = gst_harness_pull (h);
-  fail_unless_equals_int (pts, GST_BUFFER_PTS (buf));
-  fail_unless_equals_int (dur, GST_BUFFER_DURATION (buf));
+  fail_unless_equals_uint64 (pts, GST_BUFFER_PTS (buf));
+  fail_unless_equals_uint64 (dur, GST_BUFFER_DURATION (buf));
   fail_unless (!GST_BUFFER_FLAG_IS_SET (buf, GST_BUFFER_FLAG_DISCONT));
   gst_buffer_unref (buf);
   gst_harness_teardown (h);
@@ -1160,8 +1160,8 @@ GST_START_TEST (audiodecoder_plc_on_gap_event_with_delay)
   pts0 = gst_util_uint64_scale_round (0, GST_SECOND, TEST_MSECS_PER_SAMPLE);;
   gst_harness_push (h, create_test_buffer (0));
   buf = gst_harness_pull (h);
-  fail_unless_equals_int (pts0, GST_BUFFER_PTS (buf));
-  fail_unless_equals_int (dur, GST_BUFFER_DURATION (buf));
+  fail_unless_equals_uint64 (pts0, GST_BUFFER_PTS (buf));
+  fail_unless_equals_uint64 (dur, GST_BUFFER_DURATION (buf));
   fail_unless (GST_BUFFER_FLAG_IS_SET (buf, GST_BUFFER_FLAG_DISCONT));
   gst_buffer_unref (buf);
 
@@ -1175,14 +1175,14 @@ GST_START_TEST (audiodecoder_plc_on_gap_event_with_delay)
   GST_BUFFER_FLAG_SET (buf, GST_BUFFER_FLAG_DISCONT);
   gst_harness_push (h, buf);
   buf = gst_harness_pull (h);
-  fail_unless_equals_int (pts0, GST_BUFFER_PTS (buf));
-  fail_unless_equals_int (dur, GST_BUFFER_DURATION (buf));
+  fail_unless_equals_uint64 (pts0, GST_BUFFER_PTS (buf));
+  fail_unless_equals_uint64 (dur, GST_BUFFER_DURATION (buf));
   fail_unless (!GST_BUFFER_FLAG_IS_SET (buf, GST_BUFFER_FLAG_DISCONT));
   gst_buffer_unref (buf);
 
   buf = gst_harness_pull (h);
-  fail_unless_equals_int (pts1, GST_BUFFER_PTS (buf));
-  fail_unless_equals_int (dur, GST_BUFFER_DURATION (buf));
+  fail_unless_equals_uint64 (pts1, GST_BUFFER_PTS (buf));
+  fail_unless_equals_uint64 (dur, GST_BUFFER_DURATION (buf));
   fail_unless (!GST_BUFFER_FLAG_IS_SET (buf, GST_BUFFER_FLAG_DISCONT));
   gst_buffer_unref (buf);
   gst_harness_teardown (h);
@@ -1209,8 +1209,8 @@ GST_START_TEST (audiodecoder_dtx)
 
     /* the DTX packet goes through */
     buf = gst_harness_pull (h);
-    fail_unless_equals_int (pts, GST_BUFFER_PTS (buf));
-    fail_unless_equals_int (dur, GST_BUFFER_DURATION (buf));
+    fail_unless_equals_uint64 (pts, GST_BUFFER_PTS (buf));
+    fail_unless_equals_uint64 (dur, GST_BUFFER_DURATION (buf));
     fail_unless_silent_buffer (buf);
 
     /* expect some silent buffers from the DTX thread */
@@ -1226,8 +1226,8 @@ GST_START_TEST (audiodecoder_dtx)
 
     /* that audio buffer goes through */
     buf = gst_harness_pull (h);
-    fail_unless_equals_int (pts, GST_BUFFER_PTS (buf));
-    fail_unless_equals_int (dur, GST_BUFFER_DURATION (buf));
+    fail_unless_equals_uint64 (pts, GST_BUFFER_PTS (buf));
+    fail_unless_equals_uint64 (dur, GST_BUFFER_DURATION (buf));
     gst_buffer_unref (buf);
 
     /* the decoder does not produce more packets */
@@ -1264,8 +1264,8 @@ GST_START_TEST (audiodecoder_lost_pkt_stops_dtx)
 
   /* the DTX packet goes through */
   buf = gst_harness_pull (h);
-  fail_unless_equals_int (pts, GST_BUFFER_PTS (buf));
-  fail_unless_equals_int (dur, GST_BUFFER_DURATION (buf));
+  fail_unless_equals_uint64 (pts, GST_BUFFER_PTS (buf));
+  fail_unless_equals_uint64 (dur, GST_BUFFER_DURATION (buf));
   fail_unless_silent_buffer (buf);
 
   /* lets receive 3 silent buffers */
@@ -1286,14 +1286,14 @@ GST_START_TEST (audiodecoder_lost_pkt_stops_dtx)
 
   /* expect a conceal buffer 4 is generated for the lost one */
   buf = gst_harness_pull (h);
-  fail_unless_equals_int (lost_pts, GST_BUFFER_PTS (buf));
-  fail_unless_equals_int (lost_dur, GST_BUFFER_DURATION (buf));
+  fail_unless_equals_uint64 (lost_pts, GST_BUFFER_PTS (buf));
+  fail_unless_equals_uint64 (lost_dur, GST_BUFFER_DURATION (buf));
   gst_buffer_unref (buf);
 
   /* and expect buffer 5  */
   buf = gst_harness_pull (h);
-  fail_unless_equals_int (pts, GST_BUFFER_PTS (buf));
-  fail_unless_equals_int (dur, GST_BUFFER_DURATION (buf));
+  fail_unless_equals_uint64 (pts, GST_BUFFER_PTS (buf));
+  fail_unless_equals_uint64 (dur, GST_BUFFER_DURATION (buf));
   gst_buffer_unref (buf);
 
   gst_harness_teardown (h);
