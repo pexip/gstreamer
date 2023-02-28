@@ -108,7 +108,8 @@ static gint bufcount = 0;
 static gint alloccount = 0;
 
 static GstFlowReturn
-chain_ok (GstPad * pad, GstObject * parent, GstBuffer * buffer)
+chain_ok (G_GNUC_UNUSED GstPad * pad, G_GNUC_UNUSED GstObject * parent,
+    GstBuffer * buffer)
 {
   bufcount++;
 
@@ -244,135 +245,6 @@ GST_START_TEST (test_funnel_eos)
 
 GST_END_TEST;
 
-guint nb_stream_start_event = 0;
-guint nb_caps_event = 0;
-guint nb_segment_event = 0;
-guint nb_gap_event = 0;
-
-static GstPadProbeReturn
-event_counter (GstObject * pad, GstPadProbeInfo * info, gpointer user_data)
-{
-  GstEvent *event = GST_PAD_PROBE_INFO_EVENT (info);
-
-  fail_unless (event != NULL);
-  fail_unless (GST_IS_EVENT (event));
-
-  switch (GST_EVENT_TYPE (event)) {
-    case GST_EVENT_STREAM_START:
-      ++nb_stream_start_event;
-      break;
-    case GST_EVENT_CAPS:
-      ++nb_caps_event;
-      break;
-    case GST_EVENT_SEGMENT:
-      ++nb_segment_event;
-      break;
-    case GST_EVENT_GAP:
-      ++nb_gap_event;
-      break;
-    default:
-      break;
-  }
-
-  return GST_PAD_PROBE_OK;
-}
-
-/*
- * Push GAP events into funnel to forward sticky events.
- * Funnel element should also treat GAP events likes buffers.
- * For example, funnel can be used for internal subtitle with streamiddemux. 
- *  +--------------------------------------------------------------------------+
- *  | playbin                               +--------------------------------+ |
- *  | +--------------+  +----------------+  | +------------+     playsink    | |
- *  | | uridecodebin |  | input-selector |  | | video-sink |                 | |
- *  | |              |  +----------------+  | +------------+                 | |
- *  | |              |                      |                                | |
- *  | |              |  +----------------+  | +------------+                 | |
- *  | |              |  | input-selector |  | | audio-sink |                 | |
- *  | |              |  +----------------+  | +------------+                 | |
- *  | |              |                      |                                | |
- *  | |              |  +----------------+  | +---------------+ +----------+ | |
- *  | |              |  | funnel         |  | | streamiddemux | | appsink0 | | |
- *  | +--------------+  +----------------+  | +---------------+ +----------+ | |
- *  |                                       |                   +----------+ | |
- *  |                                       |                   | appsinkn | | |
- *  |                                       |                   +----------+ | |
- *  |                                       +--------------------------------+ |
- *  +--------------------------------------------------------------------------+
- * If no data was received in funnel and then sticky events can be pending continuously. 
- * And streamiddemux only receive gap events continuously. 
- * Thus, pipeline can not be constructed completely.
- * For support it, need to handle GAP events likes buffers.
- */
-GST_START_TEST (test_funnel_gap_event)
-{
-  struct TestData td;
-  guint probe = 0;
-
-  setup_test_objects (&td, chain_ok);
-
-  nb_stream_start_event = 0;
-  nb_caps_event = 0;
-  nb_segment_event = 0;
-  nb_gap_event = 0;
-  bufcount = 0;
-
-  probe = gst_pad_add_probe (td.mysink, GST_PAD_PROBE_TYPE_EVENT_DOWNSTREAM,
-      (GstPadProbeCallback) event_counter, NULL, NULL);
-
-  /* push a gap event to srcpad1 to push sticky events */
-  fail_unless (gst_pad_push_event (td.mysrc1, gst_event_new_gap (0,
-              GST_SECOND)));
-
-  fail_unless (nb_stream_start_event == 1);
-  fail_unless (nb_caps_event == 1);
-  fail_unless (nb_segment_event == 1);
-  fail_unless (nb_gap_event == 1);
-
-  /* push a gap event to srcpad2 to push sticky events */
-  fail_unless (gst_pad_push_event (td.mysrc2, gst_event_new_gap (0,
-              GST_SECOND)));
-
-  fail_unless (nb_stream_start_event == 2);
-  fail_unless (nb_caps_event == 2);
-  fail_unless (nb_segment_event == 2);
-  fail_unless (nb_gap_event == 2);
-
-  /* push a gap event to srcpad2 */
-  fail_unless (gst_pad_push_event (td.mysrc2, gst_event_new_gap (0,
-              GST_SECOND)));
-
-  fail_unless (nb_stream_start_event == 2);
-  fail_unless (nb_caps_event == 2);
-  fail_unless (nb_segment_event == 2);
-  fail_unless (nb_gap_event == 3);
-
-  /* push a gap event to srcpad1 */
-  fail_unless (gst_pad_push_event (td.mysrc1, gst_event_new_gap (0,
-              GST_SECOND)));
-
-  fail_unless (nb_stream_start_event == 3);
-  fail_unless (nb_caps_event == 3);
-  fail_unless (nb_segment_event == 3);
-  fail_unless (nb_gap_event == 4);
-
-  /* push buffer */
-  fail_unless (gst_pad_push (td.mysrc1, gst_buffer_new ()) == GST_FLOW_OK);
-  fail_unless (gst_pad_push (td.mysrc2, gst_buffer_new ()) == GST_FLOW_OK);
-
-  fail_unless (nb_stream_start_event == 4);
-  fail_unless (nb_caps_event == 4);
-  fail_unless (nb_segment_event == 4);
-  fail_unless (nb_gap_event == 4);
-  fail_unless (bufcount == 2);
-
-  gst_pad_remove_probe (td.mysink, probe);
-
-  release_test_objects (&td);
-}
-
-GST_END_TEST;
-
 GST_START_TEST (test_funnel_stress)
 {
   GstHarness *h0 = gst_harness_new_with_padnames ("funnel", "sink_0", "src");
@@ -407,6 +279,194 @@ GST_START_TEST (test_funnel_stress)
 
 GST_END_TEST;
 
+GST_START_TEST (test_funnel_event_handling)
+{
+  GstHarness *h, *h0, *h1;
+  GstEvent *event;
+  GstCaps *mycaps0, *mycaps1, *caps;
+
+  h = gst_harness_new_with_padnames ("funnel", NULL, "src");
+
+  /* request a sinkpad, with some caps */
+  h0 = gst_harness_new_with_element (h->element, "sink_0", NULL);
+  mycaps0 = gst_caps_new_empty_simple ("mycaps0");
+  gst_harness_set_src_caps (h0, gst_caps_ref (mycaps0));
+
+  /* request a second sinkpad, also with caps */
+  h1 = gst_harness_new_with_element (h->element, "sink_1", NULL);
+  mycaps1 = gst_caps_new_empty_simple ("mycaps1");
+  gst_harness_set_src_caps (h1, gst_caps_ref (mycaps1));
+
+  /* push a buffer on the first pad */
+  fail_unless_equals_int (GST_FLOW_OK,
+      gst_harness_push (h0, gst_buffer_new ()));
+  gst_buffer_unref (gst_harness_pull (h));
+
+  /* verify stream-start */
+  event = gst_harness_pull_event (h);
+  fail_unless_equals_int (GST_EVENT_TYPE (event), GST_EVENT_STREAM_START);
+  gst_event_unref (event);
+
+  /* verify caps "mycaps0" */
+  event = gst_harness_pull_event (h);
+  fail_unless_equals_int (GST_EVENT_TYPE (event), GST_EVENT_CAPS);
+  gst_event_parse_caps (event, &caps);
+  gst_check_caps_equal (mycaps0, caps);
+  gst_caps_unref (caps);
+  gst_event_unref (event);
+
+  /* verify segment */
+  event = gst_harness_pull_event (h);
+  fail_unless_equals_int (GST_EVENT_TYPE (event), GST_EVENT_SEGMENT);
+  gst_event_unref (event);
+
+  /* verify a custom event pushed on second pad does not make it through,
+     since active pad is the first pad */
+  fail_unless (gst_harness_push_event (h1,
+          gst_event_new_custom (GST_EVENT_CUSTOM_DOWNSTREAM,
+              gst_structure_new_empty ("test"))));
+  fail_if (gst_harness_try_pull_event (h));
+
+  /* but same event on the first pad will make it through */
+  fail_unless (gst_harness_push_event (h0,
+          gst_event_new_custom (GST_EVENT_CUSTOM_DOWNSTREAM,
+              gst_structure_new_empty ("test"))));
+  gst_event_unref (gst_harness_pull_event (h));
+
+  /* push a buffer on the second pad */
+  fail_unless_equals_int (GST_FLOW_OK,
+      gst_harness_push (h1, gst_buffer_new ()));
+  gst_buffer_unref (gst_harness_pull (h));
+
+  /* verify stream-start */
+  event = gst_harness_pull_event (h);
+  fail_unless_equals_int (GST_EVENT_TYPE (event), GST_EVENT_STREAM_START);
+  gst_event_unref (event);
+
+  /* verify caps "mycaps1" */
+  event = gst_harness_pull_event (h);
+  fail_unless_equals_int (GST_EVENT_TYPE (event), GST_EVENT_CAPS);
+  gst_event_parse_caps (event, &caps);
+  gst_check_caps_equal (mycaps1, caps);
+  gst_caps_unref (caps);
+  gst_event_unref (event);
+
+  /* verify segment */
+  event = gst_harness_pull_event (h);
+  fail_unless_equals_int (GST_EVENT_TYPE (event), GST_EVENT_SEGMENT);
+  gst_event_unref (event);
+
+  /* verify a custom event pushed on first pad does not make it through,
+     since active pad is the second pad */
+  fail_unless (gst_harness_push_event (h0,
+          gst_event_new_custom (GST_EVENT_CUSTOM_DOWNSTREAM,
+              gst_structure_new_empty ("test"))));
+  fail_if (gst_harness_try_pull_event (h));
+
+  /* but same event on the second pad will make it through */
+  fail_unless (gst_harness_push_event (h1,
+          gst_event_new_custom (GST_EVENT_CUSTOM_DOWNSTREAM,
+              gst_structure_new_empty ("test"))));
+  gst_event_unref (gst_harness_pull_event (h));
+
+  gst_harness_teardown (h);
+  gst_harness_teardown (h0);
+  gst_harness_teardown (h1);
+}
+
+GST_END_TEST;
+
+GST_START_TEST (test_funnel_custom_sticky)
+{
+  GstHarness *h, *h0, *h1;
+  GstEvent *event;
+  const GstStructure *s;
+  const gchar *value = NULL;
+
+  h = gst_harness_new_with_padnames ("funnel", NULL, "src");
+
+  /* request a sinkpad, with some caps */
+  h0 = gst_harness_new_with_element (h->element, "sink_0", NULL);
+  gst_harness_set_src_caps_str (h0, "mycaps0");
+
+  /* request a second sinkpad, also with caps */
+  h1 = gst_harness_new_with_element (h->element, "sink_1", NULL);
+  gst_harness_set_src_caps_str (h1, "mycaps1");
+
+  while ((event = gst_harness_try_pull_event (h)))
+    gst_event_unref (event);
+
+  fail_unless (gst_harness_push_event (h0,
+          gst_event_new_custom (GST_EVENT_CUSTOM_DOWNSTREAM_STICKY,
+              gst_structure_new ("test", "key", G_TYPE_STRING, "value0",
+                  NULL))));
+
+  fail_unless (gst_harness_push_event (h1,
+          gst_event_new_custom (GST_EVENT_CUSTOM_DOWNSTREAM_STICKY,
+              gst_structure_new ("test", "key", G_TYPE_STRING, "value1",
+                  NULL))));
+
+  /* Send a buffer through first pad, expect the event to be the first one */
+  fail_unless_equals_int (GST_FLOW_OK,
+      gst_harness_push (h0, gst_buffer_new ()));
+  for (;;) {
+    event = gst_harness_pull_event (h);
+    if (GST_EVENT_TYPE (event) == GST_EVENT_CUSTOM_DOWNSTREAM_STICKY)
+      break;
+    gst_event_unref (event);
+  }
+  s = gst_event_get_structure (event);
+  fail_unless (s);
+  fail_unless (gst_structure_has_name (s, "test"));
+  value = gst_structure_get_string (s, "key");
+  fail_unless_equals_string (value, "value0");
+  gst_event_unref (event);
+  gst_buffer_unref (gst_harness_pull (h));
+
+  /* Send a buffer through second pad, expect the event to be the second one
+   */
+  fail_unless_equals_int (GST_FLOW_OK,
+      gst_harness_push (h1, gst_buffer_new ()));
+  for (;;) {
+    event = gst_harness_pull_event (h);
+    if (GST_EVENT_TYPE (event) == GST_EVENT_CUSTOM_DOWNSTREAM_STICKY)
+      break;
+    gst_event_unref (event);
+  }
+  s = gst_event_get_structure (event);
+  fail_unless (s);
+  fail_unless (gst_structure_has_name (s, "test"));
+  value = gst_structure_get_string (s, "key");
+  fail_unless_equals_string (value, "value1");
+  gst_event_unref (event);
+  gst_buffer_unref (gst_harness_pull (h));
+
+  /* Send a buffer through first pad, expect the event to again be the first
+   * one
+   */
+  fail_unless_equals_int (GST_FLOW_OK,
+      gst_harness_push (h0, gst_buffer_new ()));
+  for (;;) {
+    event = gst_harness_pull_event (h);
+    if (GST_EVENT_TYPE (event) == GST_EVENT_CUSTOM_DOWNSTREAM_STICKY)
+      break;
+    gst_event_unref (event);
+  }
+  s = gst_event_get_structure (event);
+  fail_unless (s);
+  fail_unless (gst_structure_has_name (s, "test"));
+  value = gst_structure_get_string (s, "key");
+  fail_unless_equals_string (value, "value0");
+  gst_event_unref (event);
+  gst_buffer_unref (gst_harness_pull (h));
+
+  gst_harness_teardown (h);
+  gst_harness_teardown (h0);
+  gst_harness_teardown (h1);
+}
+
+GST_END_TEST;
+
 
 static Suite *
 funnel_suite (void)
@@ -417,8 +477,9 @@ funnel_suite (void)
   tc_chain = tcase_create ("funnel simple");
   tcase_add_test (tc_chain, test_funnel_simple);
   tcase_add_test (tc_chain, test_funnel_eos);
-  tcase_add_test (tc_chain, test_funnel_gap_event);
   tcase_add_test (tc_chain, test_funnel_stress);
+  tcase_add_test (tc_chain, test_funnel_event_handling);
+  tcase_add_test (tc_chain, test_funnel_custom_sticky);
   suite_add_tcase (s, tc_chain);
 
   return s;
