@@ -32,6 +32,7 @@
 
 #include <gst/rtp/gstrtpbuffer.h>
 #include <gst/rtp/gstrtcpbuffer.h>
+#include <gst/net/gstnet.h>
 #include <gst/net/gstnetaddressmeta.h>
 #include <gst/video/video.h>
 
@@ -5259,6 +5260,65 @@ GST_START_TEST (test_twcc_feedback_interval_new_internal_source)
 
 GST_END_TEST;
 
+G_GNUC_NO_INSTRUMENT static void
+_count_warns_log_func (G_GNUC_UNUSED GstDebugCategory * category,
+    GstDebugLevel level,
+    G_GNUC_UNUSED const gchar * file,
+    G_GNUC_UNUSED const gchar * function,
+    G_GNUC_UNUSED gint line,
+    G_GNUC_UNUSED GObject * object,
+    G_GNUC_UNUSED GstDebugMessage * message, gpointer user_data)
+{
+  if (level == GST_LEVEL_WARNING) {
+    guint *logged_warnings = user_data;
+    (*logged_warnings)++;
+  }
+}
+
+GST_START_TEST (test_twcc_sent_packets_wrap)
+{
+  SessionHarness *h;
+  gint i;
+  guint logged_warnings = 0;
+  GstDebugLevel level = gst_debug_get_default_threshold ();
+
+  h = session_harness_new ();
+  session_harness_add_twcc_caps_for_pt (h, TEST_BUF_PT);
+
+  gst_debug_set_default_threshold (GST_LEVEL_WARNING);
+  gst_debug_add_log_function (_count_warns_log_func, &logged_warnings, NULL);
+
+  for (i = 0; i < 65536; i++) {
+    GstBuffer *buf;
+    GstTxFeedbackMeta *meta;
+    GstClockTime ts;
+    gboolean marker;
+
+    marker = (i == 65536 - 1);
+    buf = generate_twcc_send_buffer (i, marker);
+    ts = i * TEST_BUF_DURATION;
+
+    fail_unless_equals_int64 (session_harness_send_rtp (h, buf), GST_FLOW_OK);
+
+    buf = session_harness_pull_send_rtp (h);
+    meta = gst_buffer_get_tx_feedback_meta (buf);
+    fail_unless (meta);
+
+    gst_tx_feedback_meta_set_tx_time (meta, ts);
+    gst_buffer_unref (buf);
+  }
+
+  /* demand no warnings have been logged, means we have should have set all
+     sent packets "send" timestamps */
+  fail_unless_equals_uint64 (logged_warnings, 0);
+
+  session_harness_free (h);
+
+  gst_debug_set_default_threshold (level);
+}
+
+GST_END_TEST;
+
 GST_START_TEST (test_send_rtcp_instantly)
 {
   SessionHarness *h = session_harness_new ();
@@ -5800,6 +5860,7 @@ rtpsession_suite (void)
   tcase_add_test (tc_chain, test_twcc_non_twcc_pkts_does_not_mark_loss);
   tcase_add_test (tc_chain, test_twcc_non_twcc_pt_no_twcc_seqnum);
   tcase_add_test (tc_chain, test_twcc_overwrites_exthdr_seqnum_if_present);
+  tcase_add_test (tc_chain, test_twcc_sent_packets_wrap);
 
   tcase_add_test (tc_chain, test_send_rtcp_instantly);
   tcase_add_test (tc_chain, test_send_bye_signal);
