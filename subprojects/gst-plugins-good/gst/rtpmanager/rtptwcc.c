@@ -1632,7 +1632,7 @@ rtp_twcc_manager_tx_feedback (GstTxFeedback * parent, guint64 buffer_id,
   guint16 seqnum = (guint16) buffer_id;
   SentPacket *first = NULL;
   SentPacket *pkt = NULL;
-  guint idx;
+  gint idx;
 
   first = &g_array_index (twcc->sent_packets, SentPacket, 0);
   if (first == NULL) {
@@ -1641,14 +1641,18 @@ rtp_twcc_manager_tx_feedback (GstTxFeedback * parent, guint64 buffer_id,
   }
 
   idx = gst_rtp_buffer_compare_seqnum (first->seqnum, seqnum);
-
-  if (idx < twcc->sent_packets->len) {
+  if (idx < 0) {
+    pkt =
+        &g_array_index (twcc->sent_packets, SentPacket,
+        twcc->sent_packets->len - 1);
+  } else if (idx < twcc->sent_packets->len) {
     pkt = &g_array_index (twcc->sent_packets, SentPacket, idx);
-    if (pkt && pkt->seqnum == seqnum) {
-      pkt->socket_ts = ts;
-      GST_LOG ("packet #%u, setting socket-ts %" GST_TIME_FORMAT,
-          seqnum, GST_TIME_ARGS (ts));
-    }
+  }
+
+  if (pkt && pkt->seqnum == seqnum) {
+    pkt->socket_ts = ts;
+    GST_LOG ("packet #%u, setting socket-ts %" GST_TIME_FORMAT,
+        seqnum, GST_TIME_ARGS (ts));
   } else {
     GST_WARNING ("Unable to update send-time for twcc-seqnum #%u", seqnum);
   }
