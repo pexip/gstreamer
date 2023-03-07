@@ -548,8 +548,6 @@ struct _RTPTWCCManager
   GHashTable *ssrc_to_seqmap;
   GHashTable *pt_to_twcc_ext_id;
 
-  GstClockTime stats_window_size;
-  GstClockTime stats_window_delay;
   TWCCStatsCtx *stats_ctx;
   GHashTable *stats_ctx_by_pt;
 
@@ -830,7 +828,7 @@ sent_packet_init (SentPacket * packet, guint16 seqnum, RTPPacketInfo * pinfo,
 {
   packet->seqnum = seqnum;
   packet->local_ts = pinfo->current_time;
-  packet->size = pinfo->bytes + 12; /* the reported wireshark size */
+  packet->size = pinfo->bytes + 12;     /* the reported wireshark size */
   packet->pt = gst_rtp_buffer_get_payload_type (rtp);
   packet->remote_ts = GST_CLOCK_TIME_NONE;
   packet->socket_ts = GST_CLOCK_TIME_NONE;
@@ -930,9 +928,10 @@ _set_twcc_seqnum_data (RTPTWCCManager * twcc, RTPPacketInfo * pinfo,
   gst_buffer_add_tx_feedback_meta (pinfo->data, seqnum,
       GST_TX_FEEDBACK_CAST (twcc));
 
-  GST_LOG ("Send: twcc-seqnum: %u, seqnum: %u, pt: %u, marker: %d, size: %u, ts: %"
-      GST_TIME_FORMAT, packet.seqnum, pinfo->seqnum, packet.pt, pinfo->marker, packet.size,
-      GST_TIME_ARGS (pinfo->current_time));
+  GST_LOG
+      ("Send: twcc-seqnum: %u, seqnum: %u, pt: %u, marker: %d, size: %u, ts: %"
+      GST_TIME_FORMAT, packet.seqnum, pinfo->seqnum, packet.pt, pinfo->marker,
+      packet.size, GST_TIME_ARGS (pinfo->current_time));
 }
 
 static void
@@ -1918,8 +1917,11 @@ rtp_twcc_manager_parse_fci (RTPTWCCManager * twcc,
   return ret;
 }
 
+
+
 GstStructure *
-rtp_twcc_manager_get_windowed_stats (RTPTWCCManager * twcc)
+rtp_twcc_manager_get_windowed_stats (RTPTWCCManager * twcc,
+    GstClockTime stats_window_size, GstClockTime stats_window_delay)
 {
   GstStructure *ret;
   GValueArray *array;
@@ -1934,13 +1936,13 @@ rtp_twcc_manager_get_windowed_stats (RTPTWCCManager * twcc)
     return twcc_stats_ctx_get_structure (twcc->stats_ctx);;
 
   array = g_value_array_new (0);
-  end_time = GST_CLOCK_DIFF (twcc->stats_window_delay, last_ts);
-  start_time = end_time - twcc->stats_window_size;
+  end_time = GST_CLOCK_DIFF (stats_window_delay, last_ts);
+  start_time = end_time - stats_window_size;
 
   GST_DEBUG_OBJECT (twcc,
       "Calculating windowed stats for the window %" GST_STIME_FORMAT
       " starting from %" GST_STIME_FORMAT " to: %" GST_STIME_FORMAT,
-      GST_STIME_ARGS (twcc->stats_window_size), GST_STIME_ARGS (start_time),
+      GST_STIME_ARGS (stats_window_size), GST_STIME_ARGS (start_time),
       GST_STIME_ARGS (end_time));
 
   twcc_stats_ctx_calculate_windowed_stats (twcc->stats_ctx, start_time,
@@ -1971,34 +1973,4 @@ rtp_twcc_manager_set_callback (RTPTWCCManager * twcc, RTPTWCCManagerCaps cb,
 {
   twcc->caps_cb = cb;
   twcc->caps_ud = user_data;
-}
-
-void
-rtp_twcc_manager_set_stats_window_size (RTPTWCCManager * twcc,
-    GstClockTime size)
-{
-  GST_INFO_OBJECT (twcc, "Setting stats window size to %" GST_TIME_FORMAT,
-      GST_TIME_ARGS (size));
-  twcc->stats_window_size = size;
-}
-
-GstClockTime
-rtp_twcc_manager_get_stats_window_size (RTPTWCCManager * twcc)
-{
-  return twcc->stats_window_size;
-}
-
-void
-rtp_twcc_manager_set_stats_window_delay (RTPTWCCManager * twcc,
-    GstClockTime delay)
-{
-  GST_INFO_OBJECT (twcc, "Setting stats window delay to %" GST_TIME_FORMAT,
-      GST_TIME_ARGS (delay));
-  twcc->stats_window_delay = delay;
-}
-
-GstClockTime
-rtp_twcc_manager_get_stats_window_delay (RTPTWCCManager * twcc)
-{
-  return twcc->stats_window_delay;
 }
