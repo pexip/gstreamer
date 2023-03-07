@@ -342,6 +342,8 @@ struct _RTPSessionClass {
   /* action signals */
   RTPSource* (*get_source_by_ssrc) (RTPSession *sess, guint32 ssrc);
   void (*nack_probe)  (RTPSession *sess, guint ssrc, guint pct, GstClockTime duration);
+  GstStructure* (*get_twcc_windowed_stats) (RTPSession *sess,
+      GstClockTime stats_window_size, GstClockTime stats_window_delay);
 
   /* signals */
   void (*on_new_ssrc)       (RTPSession *sess, RTPSource *source);

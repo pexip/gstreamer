@@ -65,17 +65,10 @@ GstBuffer * rtp_twcc_manager_get_feedback (RTPTWCCManager * twcc,
 GstStructure * rtp_twcc_manager_parse_fci (RTPTWCCManager * twcc,
     guint8 * fci_data, guint fci_length, GstClockTime current_time);
 
-GstStructure * rtp_twcc_manager_get_windowed_stats (RTPTWCCManager * twcc);
+GstStructure * rtp_twcc_manager_get_windowed_stats (RTPTWCCManager * twcc,
+    GstClockTime stats_window_size, GstClockTime stats_window_delay);
 
-void rtp_twcc_manager_set_callback (RTPTWCCManager * twcc, RTPTWCCManagerCaps cb,
-    gpointer user_data);
-
-void rtp_twcc_manager_set_stats_window_size (RTPTWCCManager * twcc,
-    GstClockTime window_size);
-GstClockTime rtp_twcc_manager_get_stats_window_size (RTPTWCCManager * twcc);
-void rtp_twcc_manager_set_stats_window_delay (RTPTWCCManager * twcc,
-    GstClockTime delay);
-GstClockTime rtp_twcc_manager_get_stats_window_delay (RTPTWCCManager * twcc);
-
+void rtp_twcc_manager_set_callback (RTPTWCCManager * twcc,
+    RTPTWCCManagerCaps cb, gpointer user_data);
 
 #endif /* __RTP_TWCC_H__ */
