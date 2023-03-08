@@ -1819,11 +1819,11 @@ _aimage_to_gstbuffer (GstAHC2Src * self, AImage * image, GstBuffer * buffer)
   AImage_getPlanePixelStride (image, 1, &u_pixelstride);
   AImage_getPlanePixelStride (image, 2, &v_pixelstride);
 
-  if (y_stride != self->width) {
-    GST_ERROR_OBJECT (self,
-        "Assumption about AImage being stride=width broken!");
-    g_assert_not_reached ();
-  }
+  // if (y_stride != self->width) {
+  //   GST_ERROR_OBJECT (self,
+  //       "Assumption about AImage being stride (%u) = width (%u) broken!", y_stride, self->width);
+  //   g_assert_not_reached ();
+  // }
 
   wrapped_aimage = g_new0 (GstWrappedAImage, 1);
   wrapped_aimage->refcount = 1;
@@ -1844,14 +1844,35 @@ _aimage_to_gstbuffer (GstAHC2Src * self, AImage * image, GstBuffer * buffer)
   if (u_length == v_length &&   /* we have the same length */
       u_stride == v_stride &&   /* we have the same stride */
       ((u_data + 1 == v_data) || (v_data + 1 == u_data)) &&     /* v_data is basically pointing one pixel into u_data (or v.v), otherwise identical, expected for NV12/NV21 */
-      u_pixelstride == 2 && v_pixelstride == 2 &&       /* the packing you expect from inteleaved U/V/U/V in NV12 */
-      u_length == y_length / u_pixelstride - 1) {       /* when reading all the U pixels, you expect the length to be /2-1 */
+      u_pixelstride == 2 && v_pixelstride == 2// &&       /* the packing you expect from inteleaved U/V/U/V in NV12 */
+      // u_length == y_length / u_pixelstride - 1
+      ) {       /* when reading all the U pixels, you expect the length to be /2-1 */
+
+      gsize offset[GST_VIDEO_MAX_PLANES] = {0, 0, 0, 0};
+      gint stride[GST_VIDEO_MAX_PLANES] = {y_stride, u_stride/2, v_stride/2, 0};
+      GstVideoAlignment align;
+      gst_video_alignment_reset (&align);
+      align.padding_right = y_stride - self->width;
 
     uv_mem = gst_memory_new_wrapped (GST_MEMORY_FLAG_READONLY,
         u_data, y_length / 2, 0, y_length / 2,
         gst_wrapped_aimage_ref (wrapped_aimage),
         (GDestroyNotify) gst_wrapped_aimage_unref);
     gst_buffer_append_memory (buffer, uv_mem);
+    gst_video_meta_set_alignment( gst_buffer_add_video_meta_full (buffer,
+      GST_VIDEO_FRAME_FLAG_NONE, GST_VIDEO_FORMAT_NV12, self->width,
+      self->height, 3, offset,
+      stride), align);
+
+    GST_INFO_OBJECT (self,
+    "y_length=%d u_length=%d, v_length=%d, "
+    "y_stride=%d, u_stride=%d, v_stride=%d, "
+    "y_data=%p, u_data=%p, v_data=%p, "
+    "width=%d, height=%d, "
+    "u_pixelstride=%d, v_pixelstride=%d",
+    y_length, u_length, v_length, y_stride, u_stride, v_stride,
+    y_data, u_data, v_data, self->width, self->height,
+    u_pixelstride, v_pixelstride);
   } else {
     /* we need this assumption to be true for now! */
     GST_ERROR_OBJECT (self, "Not getting the NV12 memory-layout we expected: "
