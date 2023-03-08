@@ -1478,6 +1478,11 @@ gst_ahc2_src_camera_close (GstAHC2Src * self)
 {
   GST_DEBUG_OBJECT (self, "Closing Camera");
 
+  if (self->image_reader) {
+    AImageReader_setImageListener (self->image_reader, NULL);
+    g_clear_pointer (&self->image_reader, (GDestroyNotify) AImageReader_delete);
+  }
+
   g_clear_pointer (&self->capture_sout,
       (GDestroyNotify) ACaptureSessionOutput_free);
 
@@ -1819,12 +1824,6 @@ _aimage_to_gstbuffer (GstAHC2Src * self, AImage * image, GstBuffer * buffer)
   AImage_getPlanePixelStride (image, 1, &u_pixelstride);
   AImage_getPlanePixelStride (image, 2, &v_pixelstride);
 
-  if (y_stride != self->width) {
-    GST_ERROR_OBJECT (self,
-        "Assumption about AImage being stride=width broken!");
-    g_assert_not_reached ();
-  }
-
   wrapped_aimage = g_new0 (GstWrappedAImage, 1);
   wrapped_aimage->refcount = 1;
   wrapped_aimage->ahc2src = g_object_ref (self);
@@ -1837,28 +1836,49 @@ _aimage_to_gstbuffer (GstAHC2Src * self, AImage * image, GstBuffer * buffer)
       (GDestroyNotify) gst_wrapped_aimage_unref);
   gst_buffer_append_memory (buffer, y_mem);
 
-
   /* if all of this is true, we can safly assume a NV12 layout, where the
      whole memory for the UV plane is contained inside both u_data and v_data,
      with only 1 pixel moved */
   if (u_length == v_length &&   /* we have the same length */
       u_stride == v_stride &&   /* we have the same stride */
       ((u_data + 1 == v_data) || (v_data + 1 == u_data)) &&     /* v_data is basically pointing one pixel into u_data (or v.v), otherwise identical, expected for NV12/NV21 */
-      u_pixelstride == 2 && v_pixelstride == 2 &&       /* the packing you expect from inteleaved U/V/U/V in NV12 */
-      u_length == y_length / u_pixelstride - 1) {       /* when reading all the U pixels, you expect the length to be /2-1 */
+      u_pixelstride == 2 && v_pixelstride == 2) {       /* the packing you expect from inteleaved U/V/U/V in NV12 */
+
+    gsize offset[GST_VIDEO_MAX_PLANES] = { 0, y_length, 0, 0 };
+    gint stride[GST_VIDEO_MAX_PLANES] = { y_stride, u_stride, 0, 0 };
+    GstVideoAlignment align;
+    gst_video_alignment_reset (&align);
+    align.padding_right = y_stride - self->width;
 
     uv_mem = gst_memory_new_wrapped (GST_MEMORY_FLAG_READONLY,
         u_data, y_length / 2, 0, y_length / 2,
         gst_wrapped_aimage_ref (wrapped_aimage),
         (GDestroyNotify) gst_wrapped_aimage_unref);
     gst_buffer_append_memory (buffer, uv_mem);
+
+    gst_video_meta_set_alignment (gst_buffer_add_video_meta_full (buffer,
+            GST_VIDEO_FRAME_FLAG_NONE, GST_VIDEO_FORMAT_NV12, self->width,
+            self->height, 2, offset, stride), align);
+
+    GST_INFO_OBJECT (self,
+        "y_length=%d u_length=%d, v_length=%d, "
+        "y_stride=%d, u_stride=%d, v_stride=%d, "
+        "y_data=%p, u_data=%p, v_data=%p, "
+        "width=%d, height=%d, "
+        "u_pixelstride=%d, v_pixelstride=%d",
+        y_length, u_length, v_length, y_stride, u_stride, v_stride,
+        y_data, u_data, v_data, self->width, self->height,
+        u_pixelstride, v_pixelstride);
   } else {
     /* we need this assumption to be true for now! */
     GST_ERROR_OBJECT (self, "Not getting the NV12 memory-layout we expected: "
         "y_length=%d u_length=%d, v_length=%d, "
-        "u_stride=%d, v_stride=%d, u_data=%p, v_data=%p, "
+        "y_stride=%d, u_stride=%d, v_stride=%d, "
+        "y_data=%p, u_data=%p, v_data=%p, "
+        "width=%d, height=%d, "
         "u_pixelstride=%d, v_pixelstride=%d",
-        y_length, u_length, v_length, u_stride, v_stride, u_data, v_data,
+        y_length, u_length, v_length, y_stride, u_stride, v_stride,
+        y_data, u_data, v_data, self->width, self->height,
         u_pixelstride, v_pixelstride);
     g_assert_not_reached ();
   }
