@@ -108,8 +108,6 @@ subprojects = [
 if build_system == 'windows'
   subproject('win-flex-bison-binaries')
   subproject('win-nasm')
-elif build_system == 'darwin'
-  subproject('macos-bison-binary')
 endif
 
 orc_option = get_option('orc')
