@@ -380,10 +380,14 @@ struct _GstRtpJitterBufferPrivate
   guint32 seqnum_base;
   /* last output time */
   GstClockTime last_out_time;
-  /* last valid input timestamp and rtptime pair */
-  GstClockTime ips_pts;
   guint64 ips_rtptime;
+  /* current packet spacing */
   GstClockTime packet_spacing;
+  /* packet spacing calculated from the last received packet.
+   * Will update packet_spacing if we receive 2 consecutives packets with the
+   * same spacing. */
+  GstClockTime prev_packet_spacing;
+
   gint equidistant;
 
   GQueue gap_packets;
@@ -1877,6 +1881,11 @@ gst_jitter_buffer_sink_parse_caps (GstRtpJitterBuffer * jitterbuffer,
       gst_rtp_get_extmap_id_for_attribute (caps_struct,
       GST_RTP_HDREXT_BASE GST_RTP_HDREXT_NTP_64);
 
+  /* reset packet spacing */
+  priv->packet_spacing = 0;
+  priv->prev_packet_spacing = GST_CLOCK_TIME_NONE;
+  priv->ips_rtptime = -1;
+
   return TRUE;
 
   /* ERRORS */
@@ -1928,8 +1937,8 @@ gst_rtp_jitter_buffer_flush_stop (GstRtpJitterBuffer * jitterbuffer)
   priv->next_seqnum = -1;
   priv->seqnum_base = -1;
   priv->ips_rtptime = -1;
-  priv->ips_pts = GST_CLOCK_TIME_NONE;
   priv->packet_spacing = 0;
+  priv->prev_packet_spacing = GST_CLOCK_TIME_NONE;
   priv->next_in_seqnum = -1;
   priv->clock_rate = -1;
   priv->ntp64_ext_id = 0;
@@ -2736,42 +2745,38 @@ update_rtx_timers (GstRtpJitterBuffer * jitterbuffer, guint16 seqnum,
 }
 
 static void
-calculate_packet_spacing (GstRtpJitterBuffer * jitterbuffer, guint32 rtptime,
-    GstClockTime pts)
+calculate_packet_spacing (GstRtpJitterBuffer * jitterbuffer, guint32 rtptime)
 {
   GstRtpJitterBufferPrivate *priv = jitterbuffer->priv;
 
   /* we need consecutive seqnums with a different
    * rtptime to estimate the packet spacing. */
   if (priv->ips_rtptime != rtptime) {
-    /* rtptime changed, check pts diff */
-    if (priv->ips_pts != -1 && pts != -1 && pts > priv->ips_pts) {
-      GstClockTime new_packet_spacing = pts - priv->ips_pts;
-      GstClockTime old_packet_spacing = priv->packet_spacing;
+    /* rtptime changed */
+    if (priv->clock_rate > 0 && rtptime > priv->ips_rtptime) {
+      guint64 rtpdiff;
+      GstClockTime new_packet_spacing;
 
-      /* Biased towards bigger packet spacings to prevent
-       * too many unneeded retransmission requests for next
-       * packets that just arrive a little later than we would
-       * expect */
-      if (old_packet_spacing > new_packet_spacing)
-        priv->packet_spacing =
-            (new_packet_spacing + 3 * old_packet_spacing) / 4;
-      else if (old_packet_spacing > 0)
-        priv->packet_spacing =
-            (3 * new_packet_spacing + old_packet_spacing) / 4;
-      else
-        priv->packet_spacing = new_packet_spacing;
+      rtpdiff = rtptime - (guint32) priv->ips_rtptime;
+      new_packet_spacing =
+          gst_util_uint64_scale_int (rtpdiff, GST_SECOND, priv->clock_rate);
 
-      GST_DEBUG_OBJECT (jitterbuffer,
-          "new packet spacing %" GST_TIME_FORMAT
-          " old packet spacing %" GST_TIME_FORMAT
-          " combined to %" GST_TIME_FORMAT,
-          GST_TIME_ARGS (new_packet_spacing),
-          GST_TIME_ARGS (old_packet_spacing),
-          GST_TIME_ARGS (priv->packet_spacing));
+      if (new_packet_spacing != priv->packet_spacing) {
+        if (priv->prev_packet_spacing == new_packet_spacing
+            || !GST_CLOCK_TIME_IS_VALID (priv->prev_packet_spacing)) {
+          /* we received two consecutive packets with the same spacing, update */
+          GST_DEBUG_OBJECT (jitterbuffer,
+              "new packet spacing %" GST_TIME_FORMAT
+              " old packet spacing %" GST_TIME_FORMAT,
+              GST_TIME_ARGS (new_packet_spacing),
+              GST_TIME_ARGS (priv->packet_spacing));
+
+          priv->packet_spacing = new_packet_spacing;
+        }
+        priv->prev_packet_spacing = new_packet_spacing;
+      }
     }
     priv->ips_rtptime = rtptime;
-    priv->ips_pts = pts;
   }
 }
 
@@ -3339,13 +3344,10 @@ gst_rtp_jitter_buffer_reset (GstRtpJitterBuffer * jitterbuffer,
 
   /* reset spacing estimation when gap */
   priv->ips_rtptime = -1;
-  priv->ips_pts = GST_CLOCK_TIME_NONE;
 
   buffers = g_list_copy (priv->gap_packets.head);
   g_queue_clear (&priv->gap_packets);
 
-  priv->ips_rtptime = -1;
-  priv->ips_pts = GST_CLOCK_TIME_NONE;
   JBUF_UNLOCK (jitterbuffer->priv);
 
   for (l = buffers; l; l = l->next) {
@@ -3633,7 +3635,6 @@ gst_rtp_jitter_buffer_chain (GstPad * pad, GstObject * parent,
     do_next_seqnum = TRUE;
     /* take rtptime and pts to calculate packet spacing */
     priv->ips_rtptime = rtptime;
-    priv->ips_pts = pts;
 
   } else {
     gint gap;
@@ -3679,7 +3680,7 @@ gst_rtp_jitter_buffer_chain (GstPad * pad, GstObject * parent,
 
     if (G_LIKELY (gap == 0)) {
       /* packet is expected */
-      calculate_packet_spacing (jitterbuffer, rtptime, pts);
+      calculate_packet_spacing (jitterbuffer, rtptime);
       do_next_seqnum = TRUE;
     } else {
 
@@ -3707,7 +3708,6 @@ gst_rtp_jitter_buffer_chain (GstPad * pad, GstObject * parent,
 
       /* reset spacing estimation when gap */
       priv->ips_rtptime = -1;
-      priv->ips_pts = GST_CLOCK_TIME_NONE;
     }
   }
 

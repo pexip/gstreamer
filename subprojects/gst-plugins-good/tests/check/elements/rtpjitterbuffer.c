@@ -666,7 +666,7 @@ construct_deterministic_initial_state_full (GstHarness * h,
 
   g_assert (latency_ms % TEST_BUF_MS == 0);
 
-  gst_harness_set_src_caps (h, generate_caps ());
+  gst_harness_set_src_caps (h, caps);
   g_object_set (h->element, "latency", latency_ms, NULL);
 
   /* When the first packet arrives in the jitterbuffer, it will create a
@@ -2407,10 +2407,9 @@ GST_START_TEST (test_rtx_with_backwards_rtptime)
    * we need to advance the clock to the expected point
    */
   gst_harness_wait_for_clock_id_waits (h, 1, 1);
-  gst_harness_set_time (h, 6 * TEST_BUF_DURATION + 15 * GST_MSECOND);
+  gst_harness_set_time (h, 6 * TEST_BUF_DURATION);
   gst_harness_crank_single_clock_wait (h);
-  verify_rtx_event (h, 6, 5 * TEST_BUF_DURATION + 15 * GST_MSECOND,
-      20, 35 * GST_MSECOND);
+  verify_rtx_event (h, 6, 5 * TEST_BUF_DURATION, 20, 20 * GST_MSECOND);
 
   fail_unless (verify_jb_stats (h->element,
           gst_structure_new ("application/x-rtp-jitterbuffer-stats",
@@ -2936,6 +2935,78 @@ GST_START_TEST (test_big_gap_arrival_time)
   fail_unless_equals_int (0, gst_harness_events_in_queue (h));
 
   gst_harness_teardown (h);
+}
+
+GST_END_TEST;
+
+static void
+test_large_packet_spacing_event_pkt_pts (gboolean do_rtx)
+{
+  GstHarness *h = gst_harness_new ("rtpjitterbuffer");
+  gint i;
+  guint seqnum_org;
+  GstClockTime dts_base;
+  guint seqnum_base, expected_seqnum;
+  guint32 rtpts_base;
+  GstClockTime expected_ts;
+  const gint num_consecutive = 3;
+
+  g_object_set (h->element, "do-lost", TRUE, "do-retransmission", do_rtx, NULL);
+  seqnum_org = construct_deterministic_initial_state (h, 100);
+
+  /* packets start coming after 10 seconds */
+  dts_base = seqnum_org * 10 * GST_SECOND;
+  seqnum_base = seqnum_org;
+  rtpts_base = seqnum_base * TEST_RTP_TS_DURATION;
+
+  for (i = 0; i < num_consecutive; i++) {
+    fail_unless_equals_int (GST_FLOW_OK, gst_harness_push (h,
+            generate_test_buffer_full (dts_base + i * TEST_BUF_DURATION,
+                seqnum_base + i, rtpts_base + i * TEST_RTP_TS_DURATION)));
+  }
+
+  for (i = 0; i < num_consecutive; i++) {
+    GstBuffer *buf = gst_harness_pull (h);
+    guint expected_seqnum = seqnum_base + i;
+    fail_unless_equals_int (expected_seqnum, get_rtp_seq_num (buf));
+
+    expected_ts = dts_base + i * TEST_BUF_DURATION;
+    fail_unless_equals_int (expected_ts, GST_BUFFER_PTS (buf));
+    gst_buffer_unref (buf);
+  }
+
+  /* generate a gap of 1 */
+  fail_unless_equals_int (GST_FLOW_OK, gst_harness_push (h,
+          generate_test_buffer_full (dts_base +
+              num_consecutive * TEST_BUF_DURATION,
+              seqnum_base + num_consecutive + 1,
+              rtpts_base + num_consecutive * TEST_RTP_TS_DURATION)));
+
+  /* demand we generated a lost event or RTX request with the correct pts */
+  expected_seqnum = seqnum_base + num_consecutive;
+  expected_ts = dts_base + (num_consecutive * TEST_BUF_DURATION);
+  gst_harness_crank_single_clock_wait (h);
+  if (do_rtx) {
+    gst_harness_crank_single_clock_wait (h);
+    verify_rtx_event (h, expected_seqnum, expected_ts, 100, TEST_BUF_DURATION);
+  } else {
+    verify_lost_event (h, expected_seqnum, expected_ts, 0);
+  }
+
+  gst_harness_teardown (h);
+}
+
+GST_START_TEST (test_large_packet_spacing_lost_pkt_pts)
+{
+  test_large_packet_spacing_event_pkt_pts (FALSE);
+}
+
+GST_END_TEST;
+
+
+GST_START_TEST (test_large_packet_spacing_rtx)
+{
+  test_large_packet_spacing_event_pkt_pts (TRUE);
 }
 
 GST_END_TEST;
@@ -4137,6 +4208,8 @@ rtpjitterbuffer_suite (void)
   tcase_add_loop_test (tc_chain, test_big_gap_seqnum, 0,
       G_N_ELEMENTS (big_gap_testdata));
   tcase_add_test (tc_chain, test_big_gap_arrival_time);
+  tcase_add_test (tc_chain, test_large_packet_spacing_lost_pkt_pts);
+  tcase_add_test (tc_chain, test_large_packet_spacing_rtx);
   tcase_add_test (tc_chain, test_fill_queue);
 
   tcase_add_loop_test (tc_chain,
