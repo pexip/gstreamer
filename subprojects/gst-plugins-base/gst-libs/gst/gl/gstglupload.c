@@ -107,6 +107,8 @@ struct _GstGLUploadPrivate
   GstCaps *in_caps;
   GstCaps *out_caps;
 
+  GstVideoAlignment align;
+
   GstBuffer *outbuf;
 
   /* all method impl pointers */
@@ -1825,7 +1827,9 @@ static struct RawUploadFrame *
 _raw_upload_frame_new (struct RawUpload *raw, GstBuffer * buffer)
 {
   struct RawUploadFrame *frame;
+  GstVideoFrame *vframe;
   GstVideoInfo *info;
+  GstVideoMeta *vmeta;
   gint i;
 
   if (!buffer)
@@ -1833,13 +1837,17 @@ _raw_upload_frame_new (struct RawUpload *raw, GstBuffer * buffer)
 
   frame = g_new (struct RawUploadFrame, 1);
   frame->ref_count = 1;
+  vframe = &frame->frame;
 
-  if (!gst_video_frame_map (&frame->frame, &raw->upload->priv->in_info,
+  if (!gst_video_frame_map (vframe, &raw->upload->priv->in_info,
           buffer, GST_MAP_READ)) {
     g_free (frame);
     return NULL;
   }
 
+  vmeta = vframe->meta;
+  if (vmeta)
+    raw->upload->priv->align = vmeta->alignment;
   raw->upload->priv->in_info = frame->frame.info;
   info = &raw->upload->priv->in_info;
 
@@ -1957,7 +1965,7 @@ _raw_data_upload_accept (gpointer impl, GstBuffer * buffer, GstCaps * in_caps,
     gst_gl_allocation_params_free ((GstGLAllocationParams *) raw->params);
   if (!(raw->params =
           gst_gl_video_allocation_params_new_wrapped_data (raw->upload->context,
-              NULL, &raw->upload->priv->in_info, -1, NULL,
+              NULL, &raw->upload->priv->in_info, -1, &raw->upload->priv->align,
               GST_GL_TEXTURE_TARGET_2D, 0, NULL, raw->in_frame,
               (GDestroyNotify) _raw_upload_frame_unref)))
     return FALSE;
@@ -3000,6 +3008,7 @@ static void
 gst_gl_upload_init (GstGLUpload * upload)
 {
   upload->priv = gst_gl_upload_get_instance_private (upload);
+  gst_video_alignment_reset (&upload->priv->align);
 }
 
 /**
