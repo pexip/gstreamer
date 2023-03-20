@@ -113,7 +113,7 @@ _cleanup_shader (GstGLContext * context, GstGLShader * shader)
 }
 
 static void
-gst_gl_shader_finalize (GObject * object)
+gst_gl_shader_dispose (GObject * object)
 {
   GstGLShader *shader;
   GstGLShaderPrivate *priv;
@@ -134,7 +134,7 @@ gst_gl_shader_finalize (GObject * object)
     shader->context = NULL;
   }
 
-  G_OBJECT_CLASS (gst_gl_shader_parent_class)->finalize (object);
+  G_OBJECT_CLASS (gst_gl_shader_parent_class)->dispose (object);
 }
 
 static void
@@ -171,7 +171,7 @@ gst_gl_shader_class_init (GstGLShaderClass * klass)
   /* bind class methods .. */
   GObjectClass *obj_class = G_OBJECT_CLASS (klass);
 
-  obj_class->finalize = gst_gl_shader_finalize;
+  obj_class->dispose = gst_gl_shader_dispose;
   obj_class->set_property = gst_gl_shader_set_property;
   obj_class->get_property = gst_gl_shader_get_property;
 
@@ -755,7 +755,9 @@ gst_gl_shader_release_unlocked (GstGLShader * shader)
   priv->linked = FALSE;
   g_hash_table_remove_all (priv->uniform_locations);
 
+  GST_OBJECT_UNLOCK (shader);
   g_object_notify (G_OBJECT (shader), "linked");
+  GST_OBJECT_LOCK (shader);
 }
 
 /**
