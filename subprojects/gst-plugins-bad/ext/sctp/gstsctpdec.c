@@ -658,7 +658,8 @@ get_pad_for_stream_id (GstSctpDec * self, guint16 stream_id)
 
   if (state != GST_SCTP_ASSOCIATION_STATE_CONNECTED) {
     GST_ERROR_OBJECT (self,
-        "The SCTP association must be established before a new stream can be created");
+        "The SCTP association must be established before a new stream can be created (state: %d)",
+        state);
     return NULL;
   }
 
@@ -756,7 +757,9 @@ on_receive (GstSctpAssociation * sctp_association, guint8 * buf,
   GstBuffer *gstbuf;
 
   src_pad = get_pad_for_stream_id (self, stream_id);
-  g_assert (src_pad);
+  /* If we don't have a src_pad it could mean the association is disconnecting */
+  if (!src_pad)
+    return;
 
   GST_DEBUG_OBJECT (src_pad,
       "Received incoming packet of size %" G_GSIZE_FORMAT
