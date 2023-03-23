@@ -194,8 +194,6 @@ gst_sctp_association_init (GstSctpAssociation * self)
   self->use_sock_stream = TRUE;
 
   g_mutex_init (&self->association_mutex);
-
-  usrsctp_register_address ((void *) self);
 }
 
 static void
@@ -203,13 +201,13 @@ gst_sctp_association_finalize (GObject * object)
 {
   GstSctpAssociation *self = GST_SCTP_ASSOCIATION (object);
 
-  usrsctp_deregister_address ((void *) self);
-
   /* no need to hold the association_lock, it is held under
      gst_sctp_association_unref */
   g_hash_table_remove (associations_by_id,
       GUINT_TO_POINTER (self->association_id));
-  g_hash_table_remove (ids_by_association, self);
+
+  /* demand we are no longer registered */
+  g_assert (!g_hash_table_contains (ids_by_association, self));
 
   g_mutex_clear (&self->association_mutex);
 
@@ -346,6 +344,69 @@ gst_sctp_association_usrsctp_init (void)
 #endif
 }
 
+static void
+gst_sctp_association_usrsctp_deinit (void)
+{
+  /* usrsctp_finish could fail, so retry for 5 seconds */
+  gint ret;
+  for (gint i = 0; i < 50; ++i) {
+    ret = usrsctp_finish ();
+    if (ret == 0) {
+      GST_DEBUG ("usrsctp_finish() succeed");
+      break;
+    }
+
+    GST_DEBUG ("usrsctp_finish() failed and returned %d", ret);
+    g_usleep (100 * G_TIME_SPAN_MILLISECOND);
+  }
+
+  if (ret != 0) {
+    GST_WARNING ("usrsctp_finish() failed and returned %d", ret);
+  }
+}
+
+/*
+* Helper register/deregister functions to workaround bug sctplab/usrsctp#405
+*
+* The sctp socket can outlive the association, so we need to protect ourselves
+* against being called with an invalid reference of GstSctpAssociation.
+* To do so, only register/deregister when we create/close the socket in a
+* thread-safe way.
+*
+*/
+static void
+gst_sctp_association_register (GstSctpAssociation * self)
+{
+  G_LOCK (associations_lock);
+
+  /* demand we are not registering twice and we have a valid association_id */
+  g_assert (!g_hash_table_contains (ids_by_association, self));
+  g_assert (self->association_id != 0);
+
+  g_hash_table_insert (ids_by_association, self,
+      GUINT_TO_POINTER (self->association_id));
+
+  G_UNLOCK (associations_lock);
+
+  usrsctp_register_address ((void *) self);
+}
+
+static void
+gst_sctp_association_deregister (GstSctpAssociation * self)
+{
+  usrsctp_deregister_address ((void *) self);
+
+  G_LOCK (associations_lock);
+
+  /* demand we are not deregistering twice and we have a valid association_id */
+  g_assert (g_hash_table_contains (ids_by_association, self));
+  g_assert (self->association_id != 0);
+
+  g_hash_table_remove (ids_by_association, self);
+
+  G_UNLOCK (associations_lock);
+}
+
 /* Public functions */
 
 GstSctpAssociation *
@@ -379,8 +440,6 @@ gst_sctp_association_get (guint32 association_id)
         association_id, NULL);
     g_hash_table_insert (associations_by_id, GUINT_TO_POINTER (association_id),
         association);
-    g_hash_table_insert (ids_by_association, association,
-        GUINT_TO_POINTER (association_id));
   } else {
     g_object_ref (association);
   }
@@ -406,12 +465,15 @@ gst_sctp_association_unref (GstSctpAssociation * self)
   g_object_unref (self);
 
   if (g_hash_table_size (associations_by_id) == 0) {
+    /* demand all association have ben deregistered */
+    g_assert (g_hash_table_size (ids_by_association) == 0);
+
     g_hash_table_destroy (associations_by_id);
     g_hash_table_destroy (ids_by_association);
     associations_by_id = NULL;
     ids_by_association = NULL;
 
-    usrsctp_finish ();
+    gst_sctp_association_usrsctp_deinit ();
   }
   G_UNLOCK (associations_lock);
 }
@@ -629,9 +691,9 @@ static void
 force_close_unlocked (GstSctpAssociation * self, gboolean change_state)
 {
   if (self->sctp_ass_sock) {
-    struct socket *s = self->sctp_ass_sock;
+    usrsctp_close (self->sctp_ass_sock);
+    gst_sctp_association_deregister (self);
     self->sctp_ass_sock = NULL;
-    usrsctp_close (s);
   }
 
   self->sctp_assoc_id = 0;
@@ -793,6 +855,8 @@ create_sctp_socket (GstSctpAssociation * self)
     }
   }
 
+  gst_sctp_association_register (self);
+
   return sock;
 error:
   if (sock)
@@ -904,7 +968,8 @@ association_is_valid (GstSctpAssociation * self)
 
   G_LOCK (associations_lock);
 
-  valid = g_hash_table_contains (ids_by_association, self);
+  if (ids_by_association != NULL)
+    valid = g_hash_table_contains (ids_by_association, self);
 
   G_UNLOCK (associations_lock);
 
