@@ -379,9 +379,8 @@ gst_sctp_association_register (GstSctpAssociation * self)
 {
   G_LOCK (associations_lock);
 
-  /* demand we are not registering twice and we have a valid association_id */
+  /* demand we are not registering twice */
   g_assert (!g_hash_table_contains (ids_by_association, self));
-  g_assert (self->association_id != 0);
 
   g_hash_table_insert (ids_by_association, self,
       GUINT_TO_POINTER (self->association_id));
@@ -398,9 +397,8 @@ gst_sctp_association_deregister (GstSctpAssociation * self)
 
   G_LOCK (associations_lock);
 
-  /* demand we are not deregistering twice and we have a valid association_id */
+  /* demand we are not deregistering twice */
   g_assert (g_hash_table_contains (ids_by_association, self));
-  g_assert (self->association_id != 0);
 
   g_hash_table_remove (ids_by_association, self);
 
