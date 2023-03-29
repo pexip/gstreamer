@@ -4483,6 +4483,15 @@ gst_pad_chain_data_unchecked (GstPad * pad, GstPadProbeType type, void *data)
       GST_WARNING_OBJECT (pad, "Slow chainfunc (%s) %" G_GINT64_FORMAT "ms",
           GST_DEBUG_FUNCPTR_NAME (chainfunc), dur);
     }
+
+    if (pad->last_chain_time) {
+      gint64 delta = start - pad->last_chain_time;
+      if (delta > 100 * G_TIME_SPAN_MILLISECOND)
+          GST_ERROR_OBJECT (pad, "Too long since last chain!! %ums",
+              (guint)(delta / G_TIME_SPAN_MILLISECOND));
+    }
+    pad->last_chain_time = start;
+
 /* FIXME: PEXHACK END */
 
     GST_CAT_DEBUG_OBJECT (GST_CAT_SCHEDULING, pad,

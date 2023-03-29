@@ -797,6 +797,8 @@ struct _GstPad {
   gint				 num_probes;
   gint				 num_blocked;
 
+  gint64 last_chain_time;
+
   GstPadPrivate                 *priv;
 
   union {
