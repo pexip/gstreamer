@@ -1239,19 +1239,11 @@ static void
 handle_message (GstSctpAssociation * self, guint8 * data, guint32 datalen,
     guint16 stream_id, guint32 ppid)
 {
-  GstSctpAssociationPacketReceivedCb callback;
-  gpointer decoder;
-
   g_mutex_lock (&self->association_mutex);
-  callback = self->decoder_ctx.packet_received_cb;
-  decoder = self->decoder_ctx.element;
-  if (decoder)
-    gst_object_ref (decoder);
-  g_mutex_unlock (&self->association_mutex);
-
-  if (callback) {
+  if (self->decoder_ctx.packet_received_cb) {
     /* It's the callbacks job to free the data correctly */
-    callback (self, data, datalen, stream_id, ppid, decoder);
+    self->decoder_ctx.packet_received_cb (self, data, datalen, stream_id, ppid,
+        self->decoder_ctx.element);
   } else {
     /* We use this instead of a bare `free()` so that we use the `free` from
      * the C runtime that usrsctp was built with. This makes a difference on
@@ -1259,9 +1251,7 @@ handle_message (GstSctpAssociation * self, guint8 * data, guint32 datalen,
      * CRTs. */
     usrsctp_freedumpbuffer ((gchar *) data);
   }
-
-  if (decoder)
-    gst_object_unref (decoder);
+  g_mutex_unlock (&self->association_mutex);
 }
 
 static void
