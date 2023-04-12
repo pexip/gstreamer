@@ -94,7 +94,7 @@ static GstFlowReturn gst_amc_video_enc_finish (GstVideoEncoder * encoder);
 static GstFlowReturn gst_amc_video_enc_drain (GstAmcVideoEnc * self);
 
 #define BIT_RATE_DEFAULT (2 * 1024 * 1024)
-#define I_FRAME_INTERVAL_DEFAULT 0
+#define I_FRAME_INTERVAL_DEFAULT -1
 enum
 {
   PROP_0,
@@ -576,7 +576,7 @@ gst_amc_video_enc_set_property (GObject * object, guint prop_id,
 
       break;
     case PROP_I_FRAME_INTERVAL:
-      encoder->i_frame_int = g_value_get_uint (value);
+      encoder->i_frame_int = g_value_get_int (value);
       if (codec_active)
         goto wrong_state;
       break;
@@ -614,7 +614,7 @@ gst_amc_video_enc_get_property (GObject * object, guint prop_id,
       g_value_set_uint (value, encoder->bitrate);
       break;
     case PROP_I_FRAME_INTERVAL:
-      g_value_set_uint (value, encoder->i_frame_int);
+      g_value_set_int (value, encoder->i_frame_int);
       break;
     case PROP_I_FRAME_INTERVAL_FLOAT:
       g_value_set_float (value, encoder->i_frame_int);
@@ -664,10 +664,19 @@ gst_amc_video_enc_class_init (GstAmcVideoEncClass * klass)
           G_MAXINT, BIT_RATE_DEFAULT,
           dynamic_flag | G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 
+  /*
+     From developer.android.com:
+     A key describing the frequency of key frames expressed in seconds
+     between key frames.
+     This key is used by video encoders. A negative value means no key frames
+     are requested after the first frame.
+     A zero value means a stream containing all key frames is requested.
+   */
   g_object_class_install_property (gobject_class, PROP_I_FRAME_INTERVAL,
-      g_param_spec_uint ("i-frame-interval", "I-frame interval",
-          "The frequency of I frames expressed in seconds between I frames (0 for automatic)",
-          0, G_MAXINT, I_FRAME_INTERVAL_DEFAULT,
+      g_param_spec_int ("i-frame-interval", "I-frame interval",
+          "The frequency of I frames expressed in seconds between I frames "
+          "(-1 for never after first, 0 for every frame)",
+          -1, G_MAXINT, I_FRAME_INTERVAL_DEFAULT,
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 
   g_object_class_install_property (gobject_class, PROP_I_FRAME_INTERVAL_FLOAT,
