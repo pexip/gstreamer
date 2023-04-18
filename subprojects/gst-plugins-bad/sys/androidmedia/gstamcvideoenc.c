@@ -1018,6 +1018,10 @@ gst_amc_video_enc_handle_output_frame (GstAmcVideoEnc * self,
 
     if (frame) {
       frame->output_buffer = out_buf;
+      if (buffer_info->flags & BUFFER_FLAG_SYNC_FRAME) {
+        GST_DEBUG_OBJECT (self, "Frame is sync frame!");
+        GST_VIDEO_CODEC_FRAME_SET_SYNC_POINT (frame);
+      }
       flow_ret = gst_video_encoder_finish_frame (encoder, frame);
     } else {
       /* This sometimes happens at EOS or if the input is not properly framed,
