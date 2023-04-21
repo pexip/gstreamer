@@ -84,9 +84,10 @@ struct _GstRTPBaseDepayloadPrivate
   GstClockTime pts;
   GstClockTime dts;
   GstClockTime duration;
+  guint64 offset;
 
   GstClockTime ref_ts;
-
+  guint64 first_rtptime;
   guint32 last_ssrc;
   guint32 last_seqnum;
   guint32 last_rtptime;
@@ -452,6 +453,8 @@ gst_rtp_base_depayload_class_init (GstRTPBaseDepayloadClass * klass)
       "Base class for RTP Depayloaders");
 }
 
+#define RTPTIME_NONE G_MAXUINT64
+
 static void
 gst_rtp_base_depayload_init (GstRTPBaseDepayload * filter,
     GstRTPBaseDepayloadClass * klass)
@@ -493,6 +496,8 @@ gst_rtp_base_depayload_init (GstRTPBaseDepayload * filter,
   priv->pts = -1;
   priv->duration = -1;
   priv->ref_ts = -1;
+  priv->first_rtptime = RTPTIME_NONE;
+  priv->offset = GST_BUFFER_OFFSET_NONE;
   priv->source_info = DEFAULT_SOURCE_INFO;
   priv->ignore_gaps = DEFAULT_IGNORE_GAPS;
   priv->max_reorder = DEFAULT_MAX_REORDER;
@@ -827,6 +832,12 @@ gst_rtp_base_depayload_handle_buffer (GstRTPBaseDepayload * filter,
   ssrc = gst_rtp_buffer_get_ssrc (&rtp);
   seqnum = gst_rtp_buffer_get_seq (&rtp);
   rtptime = gst_rtp_buffer_get_timestamp (&rtp);
+
+  if (priv->first_rtptime == RTPTIME_NONE) {
+    // First buffer handled
+    priv->first_rtptime = rtptime;
+  }
+  priv->offset = rtptime - priv->first_rtptime;
 
   priv->last_seqnum = seqnum;
   priv->last_rtptime = rtptime;
@@ -1488,6 +1499,9 @@ gst_rtp_base_depayload_set_headers (GstRTPBaseDepayload * depayload,
     GST_BUFFER_DTS (buffer) = priv->dts;
   if (!GST_CLOCK_TIME_IS_VALID (duration))
     GST_BUFFER_DURATION (buffer) = priv->duration;
+  if (!GST_BUFFER_OFFSET_IS_VALID (buffer)) {
+    GST_BUFFER_OFFSET (buffer) = priv->offset;
+  }
 
   if (G_UNLIKELY (depayload->priv->discont)) {
     GST_LOG_OBJECT (depayload, "Marking DISCONT on output buffer");
@@ -1499,6 +1513,7 @@ gst_rtp_base_depayload_set_headers (GstRTPBaseDepayload * depayload,
   priv->pts = GST_CLOCK_TIME_NONE;
   priv->dts = GST_CLOCK_TIME_NONE;
   priv->duration = GST_CLOCK_TIME_NONE;
+  priv->offset = GST_BUFFER_OFFSET_NONE;
 
   if (priv->input_buffer) {
     if (priv->source_info)
@@ -1782,6 +1797,7 @@ gst_rtp_base_depayload_change_state (GstElement * element,
       if (priv->hdrext_delayed)
         gst_buffer_unref (priv->hdrext_delayed);
       gst_rtp_base_depayload_reset_hdrext_buffers (filter);
+      priv->first_rtptime = RTPTIME_NONE;
       break;
     case GST_STATE_CHANGE_PAUSED_TO_PLAYING:
       break;
