@@ -2084,6 +2084,35 @@ GST_START_TEST (rtp_base_depayload_hdr_ext_aggregate_flush)
 
 GST_END_TEST;
 
+GST_START_TEST (rtp_base_depayload_rtptime_buffer_offset)
+{
+  State *state;
+  state = create_depayloader ("application/x-rtp", NULL);
+  set_state (state, GST_STATE_PLAYING);
+  gint buf_idx = 0;
+
+  /* buffer offset should start at 0 */
+  push_rtp_buffer (state, "pts", buf_idx * GST_SECOND,
+      "rtptime", 1000, "seq", 0x4242 + buf_idx, NULL);
+  validate_buffer (buf_idx++, "offset", 0, NULL);
+
+  /* buffer offset should be the delta between this rtptime and first
+   * rtptime */
+  push_rtp_buffer (state, "pts", buf_idx * GST_SECOND,
+      "rtptime", 1500, "seq", 0x4242 + buf_idx, NULL);
+  validate_buffer (buf_idx++, "offset", 500, NULL);
+
+  /* buffer offset already set so should not be modified */
+  push_rtp_buffer (state, "pts", buf_idx * GST_SECOND,
+      "rtptime", 2000, "seq", 0x4242 + buf_idx, "offset", 5678, NULL);
+  validate_buffer (buf_idx++, "offset", 5678, NULL);
+
+  set_state (state, GST_STATE_NULL);
+  destroy_depayloader (state);
+}
+
+GST_END_TEST;
+
 static Suite *
 rtp_basepayloading_suite (void)
 {
@@ -2127,11 +2156,15 @@ rtp_basepayloading_suite (void)
   tcase_add_test (tc_chain, rtp_base_depayload_clear_extensions);
   tcase_add_test (tc_chain, rtp_base_depayload_multiple_exts);
   tcase_add_test (tc_chain, rtp_base_depayload_caps_request_ignored);
+
   tcase_add_test (tc_chain, rtp_base_depayload_hdr_ext_caps_change);
   tcase_add_test (tc_chain, rtp_base_depayload_hdr_ext_aggregate);
   tcase_add_test (tc_chain, rtp_base_depayload_hdr_ext_aggregate_drop);
   tcase_add_test (tc_chain, rtp_base_depayload_hdr_ext_aggregate_delayed);
   tcase_add_test (tc_chain, rtp_base_depayload_hdr_ext_aggregate_flush);
+
+  tcase_add_test (tc_chain, rtp_base_depayload_rtptime_buffer_offset);
+
   return s;
 }
 
