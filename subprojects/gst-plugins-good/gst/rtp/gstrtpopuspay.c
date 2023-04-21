@@ -328,6 +328,7 @@ gst_rtp_opus_pay_handle_buffer (GstRTPBasePayload * basepayload,
   GstRtpOPUSPay *self = GST_RTP_OPUS_PAY_CAST (basepayload);
   GstBuffer *outbuf;
   GstClockTime pts, dts, duration;
+  guint64 offset;
 
   /* DTX packets are zero-length frames, with a 1 or 2-bytes header */
   if (self->dtx && gst_buffer_get_size (buffer) <= 2) {
@@ -341,6 +342,7 @@ gst_rtp_opus_pay_handle_buffer (GstRTPBasePayload * basepayload,
   pts = GST_BUFFER_PTS (buffer);
   dts = GST_BUFFER_DTS (buffer);
   duration = GST_BUFFER_DURATION (buffer);
+  offset = GST_BUFFER_OFFSET (buffer);
 
   outbuf = gst_rtp_base_payload_allocate_output_buffer (basepayload, 0, 0, 0);
 
@@ -351,6 +353,7 @@ gst_rtp_opus_pay_handle_buffer (GstRTPBasePayload * basepayload,
   GST_BUFFER_PTS (outbuf) = pts;
   GST_BUFFER_DTS (outbuf) = dts;
   GST_BUFFER_DURATION (outbuf) = duration;
+  GST_BUFFER_OFFSET (outbuf) = offset;
 
   if (self->marker) {
     GstRTPBuffer rtp = GST_RTP_BUFFER_INIT;
