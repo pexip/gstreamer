@@ -362,19 +362,49 @@ GST_START_TEST (test_pay_continuous_picture_id_and_tl0picidx)
   buffer = gst_buffer_new_from_array (vp8_bitstream_payload);
   buffer = gst_harness_push_and_pull (h, buffer);
   fail_unless (gst_buffer_map (buffer, &map, GST_MAP_READ));
-  fail_unless_equals_int (map.size, packet_len_without_tl0picidx);
+  fail_unless_equals_uint64 (map.size, packet_len_without_tl0picidx);
   fail_unless_equals_int (map.data[picid_offset], 0x00);
+  gst_buffer_unmap (buffer, &map);
+  gst_buffer_unref (buffer);
+
+  /* Then, simulate a FLUSH of the encoder via a GST_EVENT_FLUSH_START followed
+   * by new data-flow; where eventually the GST_EVENT_FLUSH_STOP should
+   * increment the PictureID */
+  gst_harness_push_event (h, gst_event_new_flush_start ());
+  gst_harness_push_event (h, gst_event_new_flush_stop (FALSE));
+
+  gchar * events[] = {
+    "stream-start",
+    "caps",
+    "segment",
+    "flush-start",
+    "flush-stop",
+  };
+  for (guint i = 0; i < G_N_ELEMENTS (events); i++) {
+    GstEvent *event = gst_harness_pull_event (h);
+    fail_unless_equals_string (events[i], GST_EVENT_TYPE_NAME (event));
+    gst_event_unref (event);
+  }
+
+  GstSegment segment;
+  gst_segment_init (&segment, GST_FORMAT_TIME);
+  fail_unless (gst_pad_push_event (h->srcpad, gst_event_new_segment (&segment)));
+
+  buffer = gst_buffer_new_from_array (vp8_bitstream_payload);
+  buffer = gst_harness_push_and_pull (h, buffer);
+  fail_unless (gst_buffer_map (buffer, &map, GST_MAP_READ));
+  fail_unless_equals_uint64 (map.size, packet_len_without_tl0picidx);
+  fail_unless_equals_int (map.data[picid_offset], 0x02);
   gst_buffer_unmap (buffer, &map);
   gst_buffer_unref (buffer);
 
   /* Push a frame for temporal layer 0 with meta */
   buffer = gst_buffer_new_from_array (vp8_bitstream_payload);
   add_vp8_meta (buffer, TRUE, TRUE, 0, 0);
-
   buffer = gst_harness_push_and_pull (h, buffer);
   fail_unless (gst_buffer_map (buffer, &map, GST_MAP_READ));
-  fail_unless_equals_int (map.size, packet_len_with_tl0picidx);
-  fail_unless_equals_int (map.data[picid_offset], 0x01);
+  fail_unless_equals_uint64 (map.size, packet_len_with_tl0picidx);
+  fail_unless_equals_int (map.data[picid_offset], 0x03);
   fail_unless_equals_int (map.data[tl0picidx_offset], 0x00);
   gst_buffer_unmap (buffer, &map);
   gst_buffer_unref (buffer);
@@ -384,8 +414,8 @@ GST_START_TEST (test_pay_continuous_picture_id_and_tl0picidx)
   add_vp8_meta (buffer, TRUE, TRUE, 1, 0);
   buffer = gst_harness_push_and_pull (h, buffer);
   fail_unless (gst_buffer_map (buffer, &map, GST_MAP_READ));
-  fail_unless_equals_int (map.size, packet_len_with_tl0picidx);
-  fail_unless_equals_int (map.data[picid_offset], 0x02);
+  fail_unless_equals_uint64 (map.size, packet_len_with_tl0picidx);
+  fail_unless_equals_int (map.data[picid_offset], 0x04);
   fail_unless_equals_int (map.data[tl0picidx_offset], 0x00);
   gst_buffer_unmap (buffer, &map);
   gst_buffer_unref (buffer);
@@ -395,8 +425,8 @@ GST_START_TEST (test_pay_continuous_picture_id_and_tl0picidx)
   add_vp8_meta (buffer, TRUE, TRUE, 0, 1);
   buffer = gst_harness_push_and_pull (h, buffer);
   fail_unless (gst_buffer_map (buffer, &map, GST_MAP_READ));
-  fail_unless_equals_int (map.size, packet_len_with_tl0picidx);
-  fail_unless_equals_int (map.data[picid_offset], 0x03);
+  fail_unless_equals_uint64 (map.size, packet_len_with_tl0picidx);
+  fail_unless_equals_int (map.data[picid_offset], 0x05);
   fail_unless_equals_int (map.data[tl0picidx_offset], 0x01);
   gst_buffer_unmap (buffer, &map);
   gst_buffer_unref (buffer);
@@ -408,8 +438,8 @@ GST_START_TEST (test_pay_continuous_picture_id_and_tl0picidx)
   add_vp8_meta (buffer, TRUE, TRUE, 0, 0);
   buffer = gst_harness_push_and_pull (h, buffer);
   fail_unless (gst_buffer_map (buffer, &map, GST_MAP_READ));
-  fail_unless_equals_int (map.size, packet_len_with_tl0picidx);
-  fail_unless_equals_int (map.data[picid_offset], 0x04);
+  fail_unless_equals_uint64 (map.size, packet_len_with_tl0picidx);
+  fail_unless_equals_int (map.data[picid_offset], 0x06);
   fail_unless_equals_int (map.data[tl0picidx_offset], 0x02);
   gst_buffer_unmap (buffer, &map);
   gst_buffer_unref (buffer);
@@ -419,8 +449,8 @@ GST_START_TEST (test_pay_continuous_picture_id_and_tl0picidx)
   buffer = gst_buffer_new_from_array (vp8_bitstream_payload);
   buffer = gst_harness_push_and_pull (h, buffer);
   fail_unless (gst_buffer_map (buffer, &map, GST_MAP_READ));
-  fail_unless_equals_int (map.size, packet_len_with_tl0picidx);
-  fail_unless_equals_int (map.data[picid_offset], 0x05);
+  fail_unless_equals_uint64 (map.size, packet_len_with_tl0picidx);
+  fail_unless_equals_int (map.data[picid_offset], 0x07);
   fail_unless_equals_int (map.data[tl0picidx_offset], 0x03);
   gst_buffer_unmap (buffer, &map);
   gst_buffer_unref (buffer);
