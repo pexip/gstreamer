@@ -2,6 +2,7 @@
 
 import argparse
 import os
+import platform
 from string import Template
 
 TEMPLATE = Template('''
@@ -108,7 +109,7 @@ if __name__ == "__main__":
     giomodules_declaration = []
     giomodules_registration = []
 
-    if ',' in options.plugins or ':' in options.plugins:
+    if ',' in options.plugins or (platform.system() != 'Windows' and ':' in options.plugins):
         print("Only ';' is allowed in the list of plugins.")
         exit(1)
 
