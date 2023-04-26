@@ -5274,9 +5274,13 @@ out:
     goto empty_buffer;
 
   JBUF_LOCK (priv);
-  if (cname)
-    insert_cname_ssrc_mapping (jitterbuffer, cname, ssrc);
-
+  if (cname) {
+    if (g_utf8_validate (cname, -1, NULL)) {
+      insert_cname_ssrc_mapping (jitterbuffer, cname, ssrc);
+    } else {
+      GST_WARNING ("ignoring CNAME with non-utf8 data %s", cname);
+    }
+  }
   /* convert the RTP timestamp to our extended timestamp, using the same offset
    * we used in the jitterbuffer */
   ext_rtptime = priv->jbuf->ext_rtptime;
