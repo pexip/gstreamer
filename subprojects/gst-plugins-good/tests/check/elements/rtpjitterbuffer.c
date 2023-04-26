@@ -4144,6 +4144,38 @@ GST_START_TEST (test_latency_estimation_reaction_on_outlyer)
 
 GST_END_TEST;
 
+GST_START_TEST (test_rtcp_non_utf8_cname)
+{
+  GstHarness *h = gst_harness_new ("rtpjitterbuffer");
+  GstHarness *h_rtcp = gst_harness_new_with_element (h->element, "sink_rtcp", NULL);
+  GstRTCPBuffer rtcp = GST_RTCP_BUFFER_INIT;
+  GstRTCPPacket packet;
+  GstBuffer *rtcp_buf;
+  guint8 cname[] = { 0xf0, 0x28, 0x8c, 0x28, 0xf0, 0x28, 0x8c, 0x28, 0x00 };
+
+  gst_harness_set_src_caps (h, generate_caps ());
+  gst_harness_set_src_caps_str (h_rtcp, "application/x-rtcp");
+
+  /* push in a SDES with an non-utf8 cname */
+  rtcp_buf = gst_rtcp_buffer_new (1000);
+  fail_unless (gst_rtcp_buffer_map (rtcp_buf, GST_MAP_READWRITE, &rtcp));
+  fail_unless (gst_rtcp_buffer_add_packet (&rtcp, GST_RTCP_TYPE_SR, &packet));
+  gst_rtcp_packet_sr_set_sender_info (&packet, TEST_BUF_SSRC, 0, 0, 0, 0);
+  fail_unless (gst_rtcp_buffer_add_packet (&rtcp, GST_RTCP_TYPE_SDES,
+          &packet));
+  fail_unless (gst_rtcp_packet_sdes_add_item (&packet, TEST_BUF_SSRC));
+  fail_unless (gst_rtcp_packet_sdes_add_entry (&packet, GST_RTCP_SDES_CNAME,
+          sizeof (cname), cname));
+  gst_rtcp_buffer_unmap (&rtcp);
+  gst_harness_push (h_rtcp, rtcp_buf);
+
+  /* now push in a normal buffer, and don't explode */
+  gst_harness_push (h, generate_test_buffer (0));
+
+  gst_harness_teardown (h_rtcp);
+  gst_harness_teardown (h);
+}
+GST_END_TEST;
 
 static Suite *
 rtpjitterbuffer_suite (void)
@@ -4243,6 +4275,8 @@ rtpjitterbuffer_suite (void)
   tcase_add_test (tc_chain, test_latency_estimation_with_jitter);
   tcase_add_test (tc_chain, test_latency_estimation_increasing_delay);
   tcase_add_test (tc_chain, test_latency_estimation_reaction_on_outlyer);
+
+  tcase_add_test (tc_chain, test_rtcp_non_utf8_cname);
 
   return s;
 }
