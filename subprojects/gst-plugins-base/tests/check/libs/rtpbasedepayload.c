@@ -405,12 +405,15 @@ rtp_buffer_set_valist (GstBuffer * buf, const gchar * field, va_list var_args,
 
   while (field) {
     if (!g_strcmp0 (field, "pts")) {
+      fail_unless (!mapped);
       GstClockTime pts = va_arg (var_args, GstClockTime);
       GST_BUFFER_PTS (buf) = pts;
     } else if (!g_strcmp0 (field, "offset")) {
+      fail_unless (!mapped);
       guint64 offset = va_arg (var_args, guint64);
       GST_BUFFER_OFFSET (buf) = offset;
     } else if (!g_strcmp0 (field, "discont")) {
+      fail_unless (!mapped);
       gboolean discont = va_arg (var_args, gboolean);
       if (discont) {
         GST_BUFFER_FLAG_SET (buf, GST_BUFFER_FLAG_DISCONT);
@@ -1101,10 +1104,10 @@ GST_START_TEST (rtp_base_depayload_seq_discont_test)
       "rtptime", G_GUINT64_CONSTANT (0x1234), "seq", 1, NULL);
 
   push_rtp_buffer (state,
-      "extra-ref", TRUE,
       "pts", 2 * GST_SECOND,
       "rtptime", G_GUINT64_CONSTANT (0x1234) + DEFAULT_CLOCK_RATE / 2,
-      "seq", 33333, NULL);
+      "seq", 33333,
+      "extra-ref", TRUE, NULL);
 
   set_state (state, GST_STATE_NULL);
 
@@ -2093,22 +2096,18 @@ GST_START_TEST (rtp_base_depayload_rtptime_buffer_offset)
 
   /* buffer offset should start at 0 */
   push_rtp_buffer (state, "pts", buf_idx * GST_SECOND,
-      "rtptime", 1000, "seq", 0x4242 + buf_idx,
-      NULL);
+      "rtptime", 1000, "seq", 0x4242 + buf_idx, NULL);
   validate_buffer (buf_idx++, "offset", 0, NULL);
 
   /* buffer offset should be the delta between this rtptime and first
    * rtptime */
   push_rtp_buffer (state, "pts", buf_idx * GST_SECOND,
-      "rtptime", 1500, "seq", 0x4242 + buf_idx,
-      NULL);
+      "rtptime", 1500, "seq", 0x4242 + buf_idx, NULL);
   validate_buffer (buf_idx++, "offset", 500, NULL);
 
   /* buffer offset already set so should not be modified */
-  push_rtp_buffer (state, "pts", buf_idx * GST_SECOND,
-      "rtptime", 2000, "seq", 0x4242 + buf_idx,
-      "offset", 5678,
-      NULL);
+  push_rtp_buffer (state, "pts", buf_idx * GST_SECOND, "offset", 5678,
+      "rtptime", 2000, "seq", 0x4242 + buf_idx, NULL);
   validate_buffer (buf_idx++, "offset", 5678, NULL);
 
   set_state (state, GST_STATE_NULL);
