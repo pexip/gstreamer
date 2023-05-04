@@ -214,7 +214,7 @@ gboolean        gst_task_resume         (GstTask *task);
 GST_API
 gboolean        gst_task_join           (GstTask *task);
 
-GST_EXPORT
+GST_API
 void            gst_task_class_set_default_task_pool_type (GType type);
 
 G_DEFINE_AUTOPTR_CLEANUP_FUNC(GstTask, gst_object_unref)
