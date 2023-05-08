@@ -69,7 +69,7 @@ struct _GstNetSim
   GstPad *srcpad;
 
   GRand *rand_seed;
-  guint bucket_size;
+  gint bucket_size;
   NormalDistributionState delay_state;
   GstClockTime prev_time;
 
