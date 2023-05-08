@@ -116,10 +116,9 @@ typedef struct
 {
   GstBuffer *buf;
   guint size_bits;
+  guint seqnum;
   GstClockTime arrival_time;
   GstClockTime delay;
-  GstClockTime token_delay;
-  guint seqnum;
 } NetSimBuffer;
 
 static NetSimBuffer *
@@ -132,14 +131,13 @@ net_sim_buffer_new (GstBuffer * buf,
   nsbuf->seqnum = seqnum;
   nsbuf->arrival_time = arrival_time;
   nsbuf->delay = delay;
-  nsbuf->token_delay = 0;
   return nsbuf;
 }
 
 static GstClockTime
-net_sim_buffer_get_sync_time (NetSimBuffer * nsbuf)
+net_sim_buffer_get_push_time (NetSimBuffer * nsbuf)
 {
-  return nsbuf->arrival_time + nsbuf->delay + nsbuf->token_delay;
+  return nsbuf->arrival_time + nsbuf->delay;
 }
 
 static void
@@ -195,7 +193,8 @@ gst_net_sim_set_clock (GstElement * element, GstClock * clock)
   GST_NET_SIM_SIGNAL (netsim);
   GST_NET_SIM_UNLOCK (netsim);
 
-  return TRUE;
+  return GST_ELEMENT_CLASS (gst_net_sim_parent_class)->set_clock (element,
+      clock);
 }
 
 static gboolean
@@ -298,18 +297,21 @@ get_random_value_gamma (GRand * rand_seed, gint32 low, gint32 high,
   return round (x + low);
 }
 
-static gint
-gst_net_sim_get_tokens (GstNetSim * netsim, GstClockTime now)
+static void
+gst_net_sim_add_tokens (GstNetSim * netsim, GstClockTime now)
 {
   gint tokens = 0;
   GstClockTimeDiff elapsed_time = 0;
-  GstClockTimeDiff token_time;
-  guint max_bps;
+
+  if (netsim->max_kbps == -1 && netsim->max_bucket_size == -1)
+    return;
 
   /* check for umlimited kbps and fill up the bucket if that is the case,
    * if not, calculate the number of tokens to add based on the elapsed time */
-  if (netsim->max_kbps == -1)
-    return netsim->max_bucket_size * 1000 - netsim->bucket_size;
+  if (netsim->max_kbps == -1) {
+    netsim->bucket_size = netsim->max_bucket_size * 8;
+    return;
+  }
 
   /* get the elapsed time */
   if (GST_CLOCK_TIME_IS_VALID (netsim->prev_time)) {
@@ -323,47 +325,59 @@ gst_net_sim_get_tokens (GstNetSim * netsim, GstClockTime now)
   }
 
   /* calculate number of tokens and how much time is "spent" by these tokens */
-  max_bps = netsim->max_kbps * 1000;
-  tokens = gst_util_uint64_scale_int (elapsed_time, max_bps, GST_SECOND);
-  token_time = gst_util_uint64_scale_int (GST_SECOND, tokens, max_bps);
+  tokens =
+      gst_util_uint64_scale_int (elapsed_time, netsim->max_kbps * 1000,
+      GST_SECOND);
 
   GST_DEBUG_OBJECT (netsim,
-      "Elapsed time: %" GST_TIME_FORMAT " produces %u tokens (" "token-time: %"
-      GST_TIME_FORMAT ")", GST_TIME_ARGS (elapsed_time), tokens,
-      GST_TIME_ARGS (token_time));
+      "Elapsed time: %" GST_TIME_FORMAT " produces %u tokens",
+      GST_TIME_ARGS (elapsed_time), tokens);
 
-  /* increment the time with how much we spent in terms of whole tokens */
-  netsim->prev_time += token_time;
-  return tokens;
-}
-
-static guint
-gst_net_sim_get_missing_tokens (GstNetSim * netsim,
-    NetSimBuffer * nsbuf, GstClockTime now)
-{
-  gint tokens;
-
-  /* with an unlimited bucket-size, we have nothing to do */
-  if (netsim->max_bucket_size == -1)
-    return 0;
-
-  tokens = gst_net_sim_get_tokens (netsim, now);
+  netsim->prev_time = now;
 
   netsim->bucket_size =
-      MIN (netsim->max_bucket_size * 1000, netsim->bucket_size + tokens);
+      MIN (netsim->max_bucket_size * 8, netsim->bucket_size + tokens);
   GST_LOG_OBJECT (netsim, "Added %d tokens to bucket (contains %u tokens)",
       tokens, netsim->bucket_size);
+}
 
-  if (nsbuf->size_bits > netsim->bucket_size) {
-    GST_DEBUG_OBJECT (netsim, "Buffer size (%u) exeedes bucket size (%u)",
-        nsbuf->size_bits, netsim->bucket_size);
-    return nsbuf->size_bits - netsim->bucket_size;
-  }
+static GstClockTime
+gst_net_sim_get_missing_token_time (GstNetSim * netsim, NetSimBuffer * nsbuf)
+{
+  GstClockTimeDiff ret;
+  gint missing_tokens;
+  gint tokens = nsbuf->size_bits;
+
+  /* unlimited bits per second and unlimited bucket size
+     means tokens are always available */
+  if (netsim->max_kbps == -1 || netsim->max_bucket_size == -1)
+    return 0;
+
+  /* we we have room in our bucket, no need to wait */
+  if (netsim->bucket_size >= tokens)
+    return 0;
+
+  /* lets not divide by 0 */
+  if (netsim->max_kbps == 0)
+    return 0;
+
+  missing_tokens = tokens - netsim->bucket_size;
+  ret =
+      gst_util_uint64_scale (GST_SECOND, missing_tokens,
+      netsim->max_kbps * 1000);
+
+  return ret;
+}
+
+static void
+gst_net_sim_take_tokens (GstNetSim * netsim, NetSimBuffer * nsbuf)
+{
+  if (netsim->max_kbps == -1 || netsim->max_bucket_size == -1)
+    return;
 
   netsim->bucket_size -= nsbuf->size_bits;
-  GST_DEBUG_OBJECT (netsim, "Buffer taking %u tokens (%u left)",
+  GST_DEBUG_OBJECT (netsim, "Buffer taking %u tokens (%d left)",
       nsbuf->size_bits, netsim->bucket_size);
-  return 0;
 }
 
 static void
@@ -376,48 +390,70 @@ gst_net_sim_drop_nsbuf (GstNetSim * netsim)
   net_sim_buffer_free (nsbuf);
 }
 
+static void
+gst_net_sim_wait (GstNetSim * netsim, GstClockTime push_time)
+{
+  netsim->clock_id = gst_clock_new_single_shot_id (netsim->clock, push_time);
+
+  GST_DEBUG_OBJECT (netsim, "waiting for push_time: %" GST_TIME_FORMAT,
+      GST_TIME_ARGS (push_time));
+
+  GST_NET_SIM_UNLOCK (netsim);
+  gst_clock_id_wait (netsim->clock_id, NULL);
+  GST_NET_SIM_LOCK (netsim);
+
+  gst_clock_id_unref (netsim->clock_id);
+  netsim->clock_id = NULL;
+}
+
 /* must be called with GST_NET_SIM_LOCK */
 static GstFlowReturn
-gst_net_sim_push_unlocked (GstNetSim * netsim, GstClockTimeDiff jitter)
+gst_net_sim_push_unlocked (GstNetSim * netsim)
 {
   GstFlowReturn ret = GST_FLOW_OK;
   GstClockTime now = gst_clock_get_time (netsim->clock);
   NetSimBuffer *nsbuf = g_queue_peek_head (netsim->bqueue);
-  GstClockTime sync_time = net_sim_buffer_get_sync_time (nsbuf);
-  guint missing_tokens;
+  GstClockTime push_time = net_sim_buffer_get_push_time (nsbuf);
+  GstClockTime token_delay;
+
+  gst_net_sim_add_tokens (netsim, now);
 
   GST_DEBUG_OBJECT (netsim,
-      "now: %" GST_TIME_FORMAT " jitter %" GST_STIME_FORMAT
-      " netsim->max_delay %" GST_STIME_FORMAT, GST_TIME_ARGS (now),
-      GST_STIME_ARGS (jitter),
-      GST_STIME_ARGS (netsim->max_delay * GST_MSECOND));
+      "now: %" GST_TIME_FORMAT " netsim->max_delay %" GST_STIME_FORMAT,
+      GST_TIME_ARGS (now), GST_STIME_ARGS (netsim->max_delay * GST_MSECOND));
 
-  missing_tokens = gst_net_sim_get_missing_tokens (netsim, nsbuf, now);
-  if (missing_tokens > 0) {
-    GstClockTime token_delay = gst_util_uint64_scale_int (GST_SECOND,
-        missing_tokens, netsim->max_kbps * 1000);
-    GstClockTime new_synctime = now + token_delay;
-    GstClockTime delta = new_synctime - net_sim_buffer_get_sync_time (nsbuf);
-    nsbuf->token_delay += delta;
+  token_delay = gst_net_sim_get_missing_token_time (netsim, nsbuf);
+  if (token_delay > 0) {
+    GstClockTime deadline = now + token_delay;
+    GstClockTimeDiff delay = GST_CLOCK_DIFF (push_time, deadline);
 
-    GST_DEBUG_OBJECT (netsim,
-        "Missing %u tokens, delaying buffer #%u additional %" GST_TIME_FORMAT
-        " (total: %" GST_TIME_FORMAT ") for new sync_time: %" GST_TIME_FORMAT,
-        missing_tokens, nsbuf->seqnum, GST_TIME_ARGS (delta),
-        GST_TIME_ARGS (nsbuf->token_delay), GST_TIME_ARGS (sync_time));
-
-    if (nsbuf->token_delay > netsim->max_queue_delay * GST_MSECOND) {
+    /* if delay is too big, we drop */
+    if (delay > netsim->max_queue_delay * GST_MSECOND) {
+      GST_DEBUG_OBJECT (netsim,
+          "Delay %ums > max_queue_delay %ums, dropping buffer",
+          (guint) GST_TIME_AS_MSECONDS (delay), netsim->max_queue_delay);
       gst_net_sim_drop_nsbuf (netsim);
+      return GST_FLOW_OK;
+    } else {
+      /* if not, we wait until the deadline and then push */
+      GST_DEBUG_OBJECT (netsim,
+          "delaying buffer #%u an additional %" GST_TIME_FORMAT
+          "for new deadline: %" GST_TIME_FORMAT,
+          nsbuf->seqnum, GST_TIME_ARGS (token_delay), GST_TIME_ARGS (deadline));
+      push_time += token_delay;
     }
-  } else {
-    GST_DEBUG_OBJECT (netsim, "Pushing buffer #%u now", nsbuf->seqnum);
-    nsbuf = g_queue_pop_head (netsim->bqueue);
-    netsim->bits_in_queue -= nsbuf->size_bits;
-
-    GST_NET_SIM_UNLOCK (netsim);
-    ret = net_sim_buffer_push (nsbuf, netsim->srcpad);
-    GST_NET_SIM_LOCK (netsim);
   }
+
+  gst_net_sim_wait (netsim, push_time);
+
+  GST_DEBUG_OBJECT (netsim, "Pushing buffer #%u now", nsbuf->seqnum);
+  nsbuf = g_queue_pop_head (netsim->bqueue);
+  gst_net_sim_take_tokens (netsim, nsbuf);
+  netsim->bits_in_queue -= nsbuf->size_bits;
+
+  GST_NET_SIM_UNLOCK (netsim);
+  ret = net_sim_buffer_push (nsbuf, netsim->srcpad);
+  GST_NET_SIM_LOCK (netsim);
 
   return ret;
 }
@@ -495,7 +531,14 @@ gst_new_sim_get_throttle_ms (GstNetSim * netsim, GstClockTime now)
 static void
 gst_net_sim_queue_buffer (GstNetSim * netsim, GstBuffer * buf)
 {
-  GstClockTime now = gst_clock_get_time (netsim->clock);
+  GstClockTime now;
+
+  if (!netsim->clock) {
+    GST_WARNING_OBJECT (netsim, "No clock, dropping buffer");
+    return;
+  }
+
+  now = gst_clock_get_time (netsim->clock);
   gint delay_ms = gst_new_sim_get_delay_ms (netsim);
   delay_ms += gst_new_sim_get_throttle_ms (netsim, now);
 
@@ -506,7 +549,7 @@ gst_net_sim_queue_buffer (GstNetSim * netsim, GstBuffer * buf)
     GST_DEBUG_OBJECT (netsim, "Delaying buffer with %dms", delay_ms);
   }
 
-  GST_DEBUG_OBJECT (netsim, "queue_size: %u, bits_in_queue: %u, bufsize: %u",
+  GST_DEBUG_OBJECT (netsim, "queue_size: %d, bits_in_queue: %u, bufsize: %u",
       netsim->queue_size * 1000, netsim->bits_in_queue, nsbuf->size_bits);
 
   if (netsim->bits_in_queue > 0 &&
@@ -573,9 +616,6 @@ gst_net_sim_loop (gpointer data)
 {
   GstNetSim *netsim = GST_NET_SIM_CAST (data);
   GstFlowReturn ret;
-  NetSimBuffer *nsbuf;
-  GstClockTime sync_time;
-  GstClockTimeDiff jitter;
 
   GST_NET_SIM_LOCK (netsim);
   if (!gst_net_sim_wait_for_clock (netsim))
@@ -590,27 +630,13 @@ gst_net_sim_loop (gpointer data)
   if (!netsim->running)
     goto pause_task;
 
-  nsbuf = g_queue_peek_head (netsim->bqueue);
-  sync_time = net_sim_buffer_get_sync_time (nsbuf);
-  netsim->clock_id = gst_clock_new_single_shot_id (netsim->clock, sync_time);
-
-  GST_DEBUG_OBJECT (netsim, "Popped buf #%u with sync_time: %" GST_TIME_FORMAT,
-      nsbuf->seqnum, GST_TIME_ARGS (sync_time));
-
-  GST_NET_SIM_UNLOCK (netsim);
-  gst_clock_id_wait (netsim->clock_id, &jitter);
-  GST_NET_SIM_LOCK (netsim);
-
-  gst_clock_id_unref (netsim->clock_id);
-  netsim->clock_id = NULL;
-
-  if (!netsim->running) {
+  ret = gst_net_sim_push_unlocked (netsim);
+  if (ret != GST_FLOW_OK) {
+    GST_ERROR_OBJECT (netsim, "pausing task because flow: %d", ret);
     goto pause_task;
   }
 
-  ret = gst_net_sim_push_unlocked (netsim, jitter);
-  if (ret != GST_FLOW_OK) {
-    GST_ERROR_OBJECT (netsim, "pausing task because flow: %d", ret);
+  if (!netsim->running) {
     goto pause_task;
   }
 
@@ -693,7 +719,7 @@ gst_net_sim_set_property (GObject * object,
     case PROP_MAX_BUCKET_SIZE:
       netsim->max_bucket_size = g_value_get_int (value);
       if (netsim->max_bucket_size != -1)
-        netsim->bucket_size = netsim->max_bucket_size * 1000;
+        netsim->bucket_size = netsim->max_bucket_size * 8;
       break;
     case PROP_QUEUE_SIZE:
       netsim->queue_size = g_value_get_int (value);
@@ -925,13 +951,13 @@ gst_net_sim_class_init (GstNetSimClass * klass)
   /**
    * GstNetSim:max-bucket-size:
    *
-   * The size of the token bucket, related to burstiness resilience.
+   * The size of the token bucket in Bytes.
    *
    * Since: 1.14
    */
   g_object_class_install_property (gobject_class, PROP_MAX_BUCKET_SIZE,
-      g_param_spec_int ("max-bucket-size", "Maximum Bucket Size (Kb)",
-          "The size of the token bucket, related to burstiness resilience "
+      g_param_spec_int ("max-bucket-size", "Maximum Bucket Size (B)",
+          "The size of the token bucket, in bytes "
           "(-1 = unlimited)", -1, G_MAXINT, DEFAULT_MAX_BUCKET_SIZE,
           G_PARAM_READWRITE | G_PARAM_CONSTRUCT | G_PARAM_STATIC_STRINGS));
 
