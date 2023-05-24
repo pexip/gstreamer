@@ -41,6 +41,7 @@ GST_DEBUG_CATEGORY_STATIC (gst_rtp_vp9_pay_debug);
 
 #define DEFAULT_PICTURE_ID_MODE VP9_PAY_NO_PICTURE_ID
 #define DEFAULT_PICTURE_ID_OFFSET (-1)
+#define DEFAULT_PARSE_FRAMES TRUE
 
 enum
 {
@@ -48,6 +49,7 @@ enum
   PROP_PICTURE_ID,
   PROP_PICTURE_ID_MODE,
   PROP_PICTURE_ID_OFFSET,
+  PROP_PARSE_FRAMES,
 };
 
 #define GST_TYPE_RTP_VP9_PAY_PICTURE_ID_MODE (gst_rtp_vp9_pay_picture_id_mode_get_type())
@@ -135,6 +137,7 @@ gst_rtp_vp9_pay_init (GstRtpVP9Pay * obj)
 {
   obj->picture_id_mode = DEFAULT_PICTURE_ID_MODE;
   obj->picture_id_offset = DEFAULT_PICTURE_ID_OFFSET;
+  obj->parse_frames = DEFAULT_PARSE_FRAMES;
   gst_rtp_vp9_pay_picture_id_reset (obj);
 }
 
@@ -180,6 +183,12 @@ gst_rtp_vp9_pay_class_init (GstRtpVP9PayClass * gst_rtp_vp9_pay_class)
           -1, 0x7FFF, DEFAULT_PICTURE_ID_OFFSET,
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 
+  g_object_class_install_property (gobject_class, PROP_PARSE_FRAMES,
+      g_param_spec_boolean ("parse-frames", "Parse frames",
+      "Whether to parse/validate frame bitstreams",
+      DEFAULT_PARSE_FRAMES,
+      G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS | G_PARAM_CONSTRUCT_ONLY));
+
   gst_element_class_add_static_pad_template (element_class,
       &gst_rtp_vp9_pay_sink_template);
   gst_element_class_add_static_pad_template (element_class,
@@ -214,6 +223,9 @@ gst_rtp_vp9_pay_set_property (GObject * object,
       rtpvp9pay->picture_id_offset = g_value_get_int (value);
       gst_rtp_vp9_pay_picture_id_reset (rtpvp9pay);
       break;
+    case PROP_PARSE_FRAMES:
+      rtpvp9pay->parse_frames = g_value_get_boolean (value);
+      break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
       break;
@@ -235,6 +247,9 @@ gst_rtp_vp9_pay_get_property (GObject * object,
       break;
     case PROP_PICTURE_ID_OFFSET:
       g_value_set_int (value, rtpvp9pay->picture_id_offset);
+      break;
+    case PROP_PARSE_FRAMES:
+      g_value_set_boolean (value, rtpvp9pay->parse_frames);
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
@@ -458,9 +473,12 @@ gst_rtp_vp9_create_header_buffer (GstRtpVP9Pay * self,
       hdrlen, 0, 0);
   gst_rtp_buffer_map (out, GST_MAP_READWRITE, &rtpbuffer);
   p = gst_rtp_buffer_get_payload (&rtpbuffer);
+
+  /* Zero-initialise required first byte*/
   p[0] = 0x0;
 
   if (self->picture_id_mode != VP9_PAY_NO_PICTURE_ID) {
+    /* I=1 */
     p[0] |= 0x80;
     if (self->picture_id_mode == VP9_PAY_PICTURE_ID_7BITS) {
       /* M=0 */
@@ -473,13 +491,17 @@ gst_rtp_vp9_create_header_buffer (GstRtpVP9Pay * self,
   }
 
   if (!self->is_keyframe)
+    /* P=1 */
     p[0] |= 0x40;
   if (start)
+    /* B=1 */
     p[0] |= 0x08;
   if (mark)
+    /* E=1 */
     p[0] |= 0x04;
 
   if (self->is_keyframe && start) {
+    /* V=1 */
     p[0] |= 0x02;
     /* scalability structure, hard coded for now to be similar to chromium for
      * quick and dirty interop */
@@ -569,11 +591,16 @@ gst_rtp_vp9_pay_handle_buffer (GstRTPBasePayload * payload, GstBuffer * buffer)
   size = gst_buffer_get_size (buffer);
   delta_unit = GST_BUFFER_FLAG_IS_SET (buffer, GST_BUFFER_FLAG_DELTA_UNIT);
 
-  if (G_UNLIKELY (!gst_rtp_vp9_pay_parse_frame (self, buffer, size))) {
-    GST_ELEMENT_ERROR (self, STREAM, ENCODE, (NULL),
-        ("Failed to parse VP9 frame"));
-    return GST_FLOW_ERROR;
+  if (self->parse_frames) {
+    if (G_UNLIKELY (!gst_rtp_vp9_pay_parse_frame (self, buffer, size))) {
+      GST_ELEMENT_ERROR (self, STREAM, ENCODE, (NULL),
+          ("Failed to parse VP9 frame"));
+      return GST_FLOW_ERROR;
+    }
+  } else {
+    self->is_keyframe = !GST_BUFFER_FLAG_IS_SET (buffer, GST_BUFFER_FLAG_DELTA_UNIT);
   }
+
 
   mtu = GST_RTP_BASE_PAYLOAD_MTU (payload);
   vp9_hdr_len = gst_rtp_vp9_calc_header_len (self, TRUE);
