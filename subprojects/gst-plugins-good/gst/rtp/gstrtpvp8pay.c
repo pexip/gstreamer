@@ -311,6 +311,19 @@ gst_rtp_vp8_pay_parse_frame (GstRtpVP8Pay * self, GstBuffer * buffer,
 
   gst_bit_reader_init (&reader, data, size);
 
+  /* from RFC 6386 Section 9.1: Uncompressed data chunk
+   *
+   *  0                   1                   2
+   *  0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3
+   *  +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   *  |F|Vers.|S|            Partition size           |
+   *  +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   *  Frame type: 0 key-frame, 1 inter-frame
+   *  Version (0-3)
+   *  Show_frame
+   *  First partition size
+   *
+   */
   self->is_keyframe = keyframe = ((data[0] & 0x1) == 0);
   version = (data[0] >> 1) & 0x7;
 
@@ -330,6 +343,16 @@ gst_rtp_vp8_pay_parse_frame (GstRtpVP8Pay * self, GstBuffer * buffer,
     goto error;
 
   if (keyframe) {
+    /*
+     *  0                   1                   2                   3
+     *  0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
+     *  +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+     *  |                    0x9d012a                   | Scale & Width |
+     *  +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+     *  |               |         Scale & Height        |
+     *  +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+     *
+     */
     /* check start tag: 0x9d 0x01 0x2a */
     if (!gst_bit_reader_get_bits_uint8 (&reader, &tmp8, 8) || tmp8 != 0x9d)
       goto error;
@@ -340,7 +363,9 @@ gst_rtp_vp8_pay_parse_frame (GstRtpVP8Pay * self, GstBuffer * buffer,
     if (!gst_bit_reader_get_bits_uint8 (&reader, &tmp8, 8) || tmp8 != 0x2a)
       goto error;
 
-    /* Skip horizontal size code (16 bits) vertical size code (16 bits) */
+    /* Skip horizontal size code (16 bits) vertical size code (16 bits)
+     * (2 bits horizonal scaling << 14 | Width)
+     * (2 bits vertical scaling << 14 | Height) */
     if (!gst_bit_reader_skip (&reader, 32))
       goto error;
   }
