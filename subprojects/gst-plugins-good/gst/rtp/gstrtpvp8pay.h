@@ -57,7 +57,7 @@ struct _GstRtpVP8Pay
   GstRTPBasePayload parent;
   gboolean is_keyframe;
   gint n_partitions;
-  /* Treat frame header & tag & partition size block as the first partition,
+  /* Treat frame header & tag as the first partition,
    * folowed by max. 8 data partitions. last offset is the end of the buffer */
   guint partition_offset[10];
   guint partition_size[9];
