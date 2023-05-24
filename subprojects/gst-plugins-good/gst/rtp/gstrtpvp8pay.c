@@ -410,16 +410,18 @@ gst_rtp_vp8_pay_parse_frame (GstRtpVP8Pay * self, GstBuffer * buffer,
   pdata = data + partition0_size;
 
   /* Set up mapping */
+  guint partition_size[9];
+
   self->n_partitions = partitions + 1;
   self->partition_offset[0] = 0;
-  self->partition_size[0] = partition0_size + (partitions - 1) * 3;
+  partition_size[0] = partition0_size + (partitions - 1) * 3;
 
-  self->partition_offset[1] = self->partition_size[0];
+  self->partition_offset[1] = partition_size[0];
   for (i = 1; i < partitions; i++) {
     guint psize = (pdata[2] << 16 | pdata[1] << 8 | pdata[0]);
 
     pdata += 3;
-    self->partition_size[i] = psize;
+    partition_size[i] = psize;
     self->partition_offset[i + 1] = self->partition_offset[i] + psize;
   }
 
@@ -428,7 +430,7 @@ gst_rtp_vp8_pay_parse_frame (GstRtpVP8Pay * self, GstBuffer * buffer,
   if (self->partition_offset[i] >= size)
     goto error;
 
-  self->partition_size[i] = size - self->partition_offset[i];
+  partition_size[i] = size - self->partition_offset[i];
 
   self->partition_offset[i + 1] = size;
 
