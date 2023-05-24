@@ -324,7 +324,7 @@ gst_rtp_vp8_pay_parse_frame (GstRtpVP8Pay * self, GstBuffer * buffer,
    *  First partition size
    *
    */
-  self->is_keyframe = keyframe = ((data[0] & 0x1) == 0);
+  keyframe = ((data[0] & 0x1) == 0);
   version = (data[0] >> 1) & 0x7;
 
   if (G_UNLIKELY (version > 3)) {
