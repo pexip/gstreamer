@@ -41,13 +41,15 @@ GST_DEBUG_CATEGORY_STATIC (gst_rtp_vp8_pay_debug);
 
 #define DEFAULT_PICTURE_ID_MODE VP8_PAY_NO_PICTURE_ID
 #define DEFAULT_PICTURE_ID_OFFSET (-1)
+#define DEFAULT_PARSE_FRAMES TRUE
 
 enum
 {
   PROP_0,
   PROP_PICTURE_ID,
   PROP_PICTURE_ID_MODE,
-  PROP_PICTURE_ID_OFFSET
+  PROP_PICTURE_ID_OFFSET,
+  PROP_PARSE_FRAMES,
 };
 
 #define GST_TYPE_RTP_VP8_PAY_PICTURE_ID_MODE (gst_rtp_vp8_pay_picture_id_mode_get_type())
@@ -193,6 +195,12 @@ gst_rtp_vp8_pay_class_init (GstRtpVP8PayClass * gst_rtp_vp8_pay_class)
           GST_TYPE_RTP_VP8_PAY_PICTURE_ID_MODE, DEFAULT_PICTURE_ID_MODE,
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 
+  g_object_class_install_property (gobject_class, PROP_PARSE_FRAMES,
+      g_param_spec_boolean ("parse-frames", "Parse frames",
+      "Whether to parse/validate frame bitstreams",
+          DEFAULT_PARSE_FRAMES,
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS | G_PARAM_CONSTRUCT_ONLY));
+
   /**
    * rtpvp8pay:picture-id-offset:
    *
@@ -240,6 +248,9 @@ gst_rtp_vp8_pay_set_property (GObject * object,
       rtpvp8pay->picture_id_offset = g_value_get_int (value);
       gst_rtp_vp8_pay_picture_id_reset (rtpvp8pay);
       break;
+    case PROP_PARSE_FRAMES:
+      rtpvp8pay->parse_frames = g_value_get_boolean (value);
+      break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
       break;
@@ -261,6 +272,9 @@ gst_rtp_vp8_pay_get_property (GObject * object,
       break;
     case PROP_PICTURE_ID_OFFSET:
       g_value_set_int (value, rtpvp8pay->picture_id_offset);
+      break;
+    case PROP_PARSE_FRAMES:
+      g_value_set_boolean (value, rtpvp8pay->parse_frames);
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
@@ -676,10 +690,12 @@ gst_rtp_vp8_pay_handle_buffer (GstRTPBasePayload * payload, GstBuffer * buffer)
   meta = gst_buffer_get_custom_meta (buffer, "GstVP8Meta");
   delta_unit = GST_BUFFER_FLAG_IS_SET (buffer, GST_BUFFER_FLAG_DELTA_UNIT);
 
-  if (G_UNLIKELY (!gst_rtp_vp8_pay_parse_frame (self, buffer, size))) {
-    GST_ELEMENT_ERROR (self, STREAM, ENCODE, (NULL),
-        ("Failed to parse VP8 frame"));
-    return GST_FLOW_ERROR;
+  if (self->parse_frames) {
+    if (G_UNLIKELY (!gst_rtp_vp8_pay_parse_frame (self, buffer, size))) {
+      GST_ELEMENT_ERROR (self, STREAM, ENCODE, (NULL),
+          ("Failed to parse VP8 frame"));
+      return GST_FLOW_ERROR;
+    }
   }
 
   if (meta) {
