@@ -4189,7 +4189,7 @@ gst_debug_print_stack_trace (void)
     G_LOCK (win_print_mutex);
 #endif
 
-    g_print ("%s\n", trace);
+    g_printerr ("%s\n", trace);
 
 #ifdef G_OS_WIN32
     G_UNLOCK (win_print_mutex);
