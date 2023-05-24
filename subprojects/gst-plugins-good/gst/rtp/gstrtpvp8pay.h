@@ -1,4 +1,5 @@
 /*
+/*
  * gstrtpvp8pay.h - Header for GstRtpVP8Pay
  * Copyright (C) 2011 Sjoerd Simons <sjoerd@luon.net>
  *
@@ -55,6 +56,7 @@ struct _GstRtpVP8PayClass
 struct _GstRtpVP8Pay
 {
   GstRTPBasePayload parent;
+  gboolean parse_frames;
   gboolean is_keyframe;
   gint n_partitions;
   /* Treat frame header & tag as the first partition,
