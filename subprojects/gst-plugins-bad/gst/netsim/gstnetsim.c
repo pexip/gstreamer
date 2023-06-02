@@ -193,7 +193,8 @@ gst_net_sim_set_clock (GstElement * element, GstClock * clock)
   GST_NET_SIM_SIGNAL (netsim);
   GST_NET_SIM_UNLOCK (netsim);
 
-  return TRUE;
+  return GST_ELEMENT_CLASS (gst_net_sim_parent_class)->set_clock (element,
+      clock);
 }
 
 static gboolean
@@ -439,10 +440,11 @@ gst_net_sim_push_unlocked (GstNetSim * netsim)
           "delaying buffer #%u an additional %" GST_TIME_FORMAT
           "for new deadline: %" GST_TIME_FORMAT,
           nsbuf->seqnum, GST_TIME_ARGS (token_delay), GST_TIME_ARGS (deadline));
-
-      gst_net_sim_wait (netsim, deadline);
+      push_time += token_delay;
     }
   }
+
+  gst_net_sim_wait (netsim, push_time);
 
   GST_DEBUG_OBJECT (netsim, "Pushing buffer #%u now", nsbuf->seqnum);
   nsbuf = g_queue_pop_head (netsim->bqueue);
@@ -529,7 +531,14 @@ gst_new_sim_get_throttle_ms (GstNetSim * netsim, GstClockTime now)
 static void
 gst_net_sim_queue_buffer (GstNetSim * netsim, GstBuffer * buf)
 {
-  GstClockTime now = gst_clock_get_time (netsim->clock);
+  GstClockTime now;
+
+  if (!netsim->clock) {
+    GST_WARNING_OBJECT (netsim, "No clock, dropping buffer");
+    return;
+  }
+
+  now = gst_clock_get_time (netsim->clock);
   gint delay_ms = gst_new_sim_get_delay_ms (netsim);
   delay_ms += gst_new_sim_get_throttle_ms (netsim, now);
 
