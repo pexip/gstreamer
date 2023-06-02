@@ -1031,13 +1031,20 @@ gst_amc_video_enc_handle_output_frame (GstAmcVideoEnc * self,
     GST_BUFFER_PTS (out_buf) =
         gst_util_uint64_scale (buffer_info->presentation_time_us, GST_USECOND,
         1);
+    GST_BUFFER_DTS (out_buf) = GST_BUFFER_PTS (out_buf);
+
+    if (!(buffer_info->flags & BUFFER_FLAG_PARTIAL_FRAME)) {
+      GST_DEBUG_OBJECT (self, "Frame is complete");
+      GST_BUFFER_FLAG_SET (out_buf, GST_BUFFER_FLAG_MARKER);
+    }
 
     if (frame) {
       frame->output_buffer = out_buf;
-      if (buffer_info->flags & BUFFER_FLAG_SYNC_FRAME) {
+      if (buffer_info->flags & BUFFER_FLAG_KEY_FRAME) {
         GST_DEBUG_OBJECT (self, "Frame is sync frame!");
         GST_VIDEO_CODEC_FRAME_SET_SYNC_POINT (frame);
       }
+
       flow_ret = gst_video_encoder_finish_frame (encoder, frame);
     } else {
       /* This sometimes happens at EOS or if the input is not properly framed,
@@ -1313,7 +1320,7 @@ failed_release:
   }
 flushing:
   {
-    GST_WARNING_OBJECT (self, "Flushing -- stopping task");
+    GST_INFO_OBJECT (self, "Flushing -- stopping task");
     gst_pad_pause_task (GST_VIDEO_ENCODER_SRC_PAD (self));
     self->downstream_flow_ret = GST_FLOW_FLUSHING;
     GST_VIDEO_ENCODER_STREAM_UNLOCK (self);
@@ -1722,7 +1729,7 @@ again:
       GST_TIME_FORMAT, GST_TIME_ARGS (id->timestamp));
   if (GST_VIDEO_CODEC_FRAME_IS_SYNC_POINT (frame)) {
     GST_DEBUG_OBJECT (self, "Frame is sync point");
-    buffer_info.flags |= BUFFER_FLAG_SYNC_FRAME;
+    buffer_info.flags |= BUFFER_FLAG_KEY_FRAME;
   }
   gst_video_codec_frame_set_user_data (frame, id,
       (GDestroyNotify) buffer_identification_free);

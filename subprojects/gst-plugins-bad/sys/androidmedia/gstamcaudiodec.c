@@ -1179,7 +1179,7 @@ gst_amc_audio_dec_handle_frame (GstAudioDecoder * decoder, GstBuffer * inbuf)
 
     if (offset == 0) {
       if (!GST_BUFFER_FLAG_IS_SET (inbuf, GST_BUFFER_FLAG_DELTA_UNIT))
-        buffer_info.flags |= BUFFER_FLAG_SYNC_FRAME;
+        buffer_info.flags |= BUFFER_FLAG_KEY_FRAME;
     }
 
     offset += buffer_info.size;
