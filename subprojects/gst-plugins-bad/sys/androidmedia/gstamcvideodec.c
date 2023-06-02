@@ -1381,7 +1381,7 @@ retry:
       _find_nearest_frame (self,
       gst_util_uint64_scale (buffer_info.presentation_time_us, GST_USECOND, 1));
 
-  is_eos = ! !(buffer_info.flags & BUFFER_FLAG_END_OF_STREAM);
+  is_eos = !!(buffer_info.flags & BUFFER_FLAG_END_OF_STREAM);
 
   if (frame
       && (deadline =
@@ -2210,7 +2210,7 @@ gst_amc_video_dec_handle_frame (GstVideoDecoder * decoder,
       BufferIdentification *id =
           buffer_identification_new (timestamp + timestamp_offset);
       if (GST_VIDEO_CODEC_FRAME_IS_SYNC_POINT (frame))
-        buffer_info.flags |= BUFFER_FLAG_SYNC_FRAME;
+        buffer_info.flags |= BUFFER_FLAG_KEY_FRAME;
       gst_video_codec_frame_set_user_data (frame, id,
           (GDestroyNotify) buffer_identification_free);
     }
