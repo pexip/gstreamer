@@ -544,6 +544,7 @@ twcc_stats_ctx_add_packet (TWCCStatsCtx * ctx, StatsPacket * pkt)
 struct _RTPTWCCManager
 {
   GObject object;
+  GMutex recv_lock;
 
   GHashTable *ssrc_to_seqmap;
   GHashTable *pt_to_twcc_ext_id;
@@ -609,6 +610,7 @@ rtp_twcc_manager_init (RTPTWCCManager * twcc)
   twcc->recv_packets = g_array_new (FALSE, FALSE, sizeof (RecvPacket));
   twcc->sent_packets = g_array_new (FALSE, FALSE, sizeof (SentPacket));
   twcc->parsed_packets = g_array_new (FALSE, FALSE, sizeof (ParsedPacket));
+  g_mutex_init (&twcc->recv_lock);
 
   twcc->rtcp_buffers = g_queue_new ();
 
@@ -638,6 +640,7 @@ rtp_twcc_manager_finalize (GObject * object)
   g_array_unref (twcc->sent_packets);
   g_array_unref (twcc->parsed_packets);
   g_queue_free_full (twcc->rtcp_buffers, (GDestroyNotify) gst_buffer_unref);
+  g_mutex_clear (&twcc->recv_lock);
 
   g_hash_table_destroy (twcc->stats_ctx_by_pt);
   twcc_stats_ctx_free (twcc->stats_ctx);
@@ -1254,8 +1257,9 @@ rtp_twcc_write_chunks (GArray * packet_chunks,
   chunk_bit_writer_flush (&writer);
 }
 
+/* must be called with recv_lock */
 static void
-rtp_twcc_manager_add_fci (RTPTWCCManager * twcc, GstRTCPPacket * packet)
+rtp_twcc_manager_add_fci_unlocked (RTPTWCCManager * twcc, GstRTCPPacket * packet)
 {
   RecvPacket *first, *last, *prev;
   guint16 packet_count;
@@ -1307,7 +1311,9 @@ rtp_twcc_manager_add_fci (RTPTWCCManager * twcc, GstRTCPPacket * packet)
   prev = first;
   for (i = 0; i < twcc->recv_packets->len; i++) {
     RecvPacket *pkt = &g_array_index (twcc->recv_packets, RecvPacket, i);
-    if (i != 0) {
+    if (i == 0) {
+      pkt->missing_run = 0;
+    } else {
       pkt->missing_run = pkt->seqnum - prev->seqnum - 1;
     }
 
@@ -1381,8 +1387,9 @@ rtp_twcc_manager_add_fci (RTPTWCCManager * twcc, GstRTCPPacket * packet)
   }
 }
 
+/* must be called with the recv_lock */
 static void
-rtp_twcc_manager_create_feedback (RTPTWCCManager * twcc)
+rtp_twcc_manager_create_feedback_unlocked (RTPTWCCManager * twcc)
 {
   GstBuffer *buf;
   GstRTCPBuffer rtcp = GST_RTCP_BUFFER_INIT;
@@ -1399,7 +1406,7 @@ rtp_twcc_manager_create_feedback (RTPTWCCManager * twcc)
     gst_rtcp_packet_fb_set_sender_ssrc (&packet, twcc->recv_sender_ssrc);
   gst_rtcp_packet_fb_set_media_ssrc (&packet, twcc->recv_media_ssrc);
 
-  rtp_twcc_manager_add_fci (twcc, &packet);
+  rtp_twcc_manager_add_fci_unlocked (twcc, &packet);
 
   gst_rtcp_buffer_unmap (&rtcp);
 
@@ -1469,12 +1476,14 @@ rtp_twcc_manager_recv_packet (RTPTWCCManager * twcc, RTPPacketInfo * pinfo)
   if (seqnum == -1)
     return FALSE;
 
+  g_mutex_lock (&twcc->recv_lock);
+
   /* if this packet would exceed the capacity of our MTU, we create a feedback
      with the current packets, and start over with this one */
   if (_exceeds_max_packets (twcc, seqnum)) {
     GST_INFO ("twcc-seqnum: %u would overflow max packets: %u, create feedback"
         " with current packets", seqnum, twcc->max_packets_per_rtcp);
-    rtp_twcc_manager_create_feedback (twcc);
+    rtp_twcc_manager_create_feedback_unlocked (twcc);
     send_feedback = TRUE;
   }
 
@@ -1490,6 +1499,7 @@ rtp_twcc_manager_recv_packet (RTPTWCCManager * twcc, RTPPacketInfo * pinfo)
       /* duplicate check */
       if (_find_seqnum_in_recv_packets (twcc, seqnum)) {
         GST_INFO ("Received duplicate packet (#%u), dropping", seqnum);
+        g_mutex_unlock (&twcc->recv_lock);
         return FALSE;
       }
       /* if not duplicate, it is reordered */
@@ -1516,11 +1526,13 @@ rtp_twcc_manager_recv_packet (RTPTWCCManager * twcc, RTPPacketInfo * pinfo)
   /* Create feedback, if sending based on marker bit */
   if (!GST_CLOCK_TIME_IS_VALID (twcc->feedback_interval) &&
       (pinfo->marker || _many_packets_some_lost (twcc, seqnum))) {
-    rtp_twcc_manager_create_feedback (twcc);
+    rtp_twcc_manager_create_feedback_unlocked (twcc);
     send_feedback = TRUE;
 
     twcc->packet_count_no_marker = 0;
   }
+
+  g_mutex_unlock (&twcc->recv_lock);
 
   return send_feedback;
 }
@@ -1555,8 +1567,11 @@ rtp_twcc_manager_get_feedback (RTPTWCCManager * twcc, guint sender_ssrc,
       twcc->next_feedback_send_time += twcc->feedback_interval;
 
     /* Generate feedback, if there is some to send */
-    if (twcc->recv_packets->len > 0)
-      rtp_twcc_manager_create_feedback (twcc);
+    if (twcc->recv_packets->len > 0) {
+      g_mutex_lock (&twcc->recv_lock);
+      rtp_twcc_manager_create_feedback_unlocked (twcc);
+      g_mutex_unlock (&twcc->recv_lock);
+    }
   }
 
   buf = g_queue_pop_head (twcc->rtcp_buffers);
