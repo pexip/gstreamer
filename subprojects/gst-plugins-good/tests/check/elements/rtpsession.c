@@ -192,10 +192,10 @@ generate_rtx_buffer (guint rtx_seqnum, GstBuffer * buffer)
   return new_buffer;
 }
 
-static gint16
+static gint32
 read_twcc_seqnum (GstBuffer * buf, guint8 twcc_ext_id)
 {
-  gint16 twcc_seqnum;
+  guint16 twcc_seqnum;
   gpointer ext_data;
   guint ext_size;
   GstRTPBuffer rtp = GST_RTP_BUFFER_INIT;
@@ -3942,6 +3942,64 @@ GST_START_TEST (test_twcc_duplicate_previous_seqnums)
 
 GST_END_TEST;
 
+GST_START_TEST (test_twcc_missing_packet_duplicates_last)
+{
+  SessionHarness *h = session_harness_new ();
+  GstBuffer *buf;
+
+  /* Verify the behavior that if we have had a packetloss in the
+     previous report, we start the next report with the last packet
+     of the previous report */
+
+  /* first we have a gap of 12 packets */
+  TWCCPacket packets0[] = {
+    {10, 0 * 250 * GST_USECOND, FALSE},
+    {22, 1 * 250 * GST_USECOND, TRUE},
+  };
+
+  /* and then two "normal" ones */
+  TWCCPacket packets1[] = {
+    {23, 2 * 250 * GST_USECOND, FALSE},
+    {24, 3 * 250 * GST_USECOND, TRUE},
+  };
+
+  guint8 exp_fci0[] = {
+    0x00, 0x0a,                 /* base sequence number: 10 */
+    0x00, 0x0d,                 /* packet status count: 13 */
+    0x00, 0x00, 0x00,           /* reference time: 0 ms */
+    0x00,                       /* feedback packet count: 0 */
+    /* packet chunks: */
+    0xa0, 0x02,                 /* */
+    0x00, 0x01,                 /* recv deltas: +0, +1 */
+  };
+
+  guint8 exp_fci1[] = {
+    0x00, 0x16,                 /* base sequence number: 22 */
+    0x00, 0x03,                 /* packet status count: 3 */
+    0x00, 0x00, 0x00,           /* reference time: 0 ms */
+    0x01,                       /* feedback packet count: 1 */
+    /* packet chunks: */
+    0x20, 0x03,                 /*  */
+    0x01, 0x01, 0x01,           /* recv deltas: +1, +1, +1 */
+    0x00, 0x00, 0x00,           /* padding */
+  };
+
+  twcc_push_packets (h, packets0);
+  buf = session_harness_produce_twcc (h);
+  twcc_verify_fci (buf, exp_fci0);
+  gst_buffer_unref (buf);
+
+  twcc_push_packets (h, packets1);
+  buf = session_harness_produce_twcc (h);
+  twcc_verify_fci (buf, exp_fci1);
+  gst_buffer_unref (buf);
+
+  session_harness_free (h);
+}
+
+GST_END_TEST;
+
+
 GST_START_TEST (test_twcc_multiple_markers)
 {
   SessionHarness *h = session_harness_new ();
@@ -5027,14 +5085,14 @@ test_twcc_stats_rtx_recovery (gboolean rtx_arrive, gdouble recovery_pct)
 
 GST_START_TEST (test_twcc_stats_rtx_recover_lost)
 {
-  test_twcc_stats_rtx_recovery (TRUE, 100);
+  test_twcc_stats_rtx_recovery (TRUE, 100.0);
 }
 
 GST_END_TEST;
 
 GST_START_TEST (test_twcc_stats_no_rtx_no_recover)
 {
-  test_twcc_stats_rtx_recovery (FALSE, 0);
+  test_twcc_stats_rtx_recovery (FALSE, 0.0);
 }
 
 GST_END_TEST;
@@ -5078,7 +5136,7 @@ GST_START_TEST (test_twcc_feedback_max_sent_packets)
       generate_twcc_feedback_rtcp (fci, sizeof (fci)));
   twcc_stats = session_harness_get_twcc_stats_full (h,
       1000 * GST_MSECOND, 40 * GST_MSECOND);
-  twcc_verify_stats (twcc_stats, 532800, 0, 24, 0, 100.0f, 0);
+  twcc_verify_stats (twcc_stats, 532800, 0, 51, 0, 100.0f, 0);
   gst_structure_free (twcc_stats);
 
   session_harness_free (h);
@@ -5850,6 +5908,7 @@ rtpsession_suite (void)
   tcase_add_test (tc_chain, test_twcc_double_packets);
   tcase_add_test (tc_chain, test_twcc_duplicate_seqnums);
   tcase_add_test (tc_chain, test_twcc_duplicate_previous_seqnums);
+  tcase_add_test (tc_chain, test_twcc_missing_packet_duplicates_last);
   tcase_add_test (tc_chain, test_twcc_multiple_markers);
   tcase_add_test (tc_chain, test_twcc_no_marker_and_gaps);
   tcase_add_test (tc_chain, test_twcc_bad_rtcp);
