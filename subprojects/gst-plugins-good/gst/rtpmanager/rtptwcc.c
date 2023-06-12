@@ -197,10 +197,10 @@ twcc_stats_ctx_get_last_local_ts (TWCCStatsCtx * ctx)
 
 static gboolean
 _get_stats_packets_window (GArray * array,
-    GstClockTimeDiff start_time, GstClockTimeDiff end_time, guint * packets)
+    GstClockTimeDiff start_time, GstClockTimeDiff end_time,
+    guint * start_idx, guint * num_packets)
 {
   gboolean ret = FALSE;
-  guint start_idx = 0;
   guint end_idx = 0;
   guint i;
 
@@ -211,36 +211,42 @@ _get_stats_packets_window (GArray * array,
 
   for (i = 0; i < array->len; i++) {
     StatsPacket *pkt = &g_array_index (array, StatsPacket, i);
-    if (GST_CLOCK_TIME_IS_VALID (pkt->local_ts)) {
+    if (GST_CLOCK_TIME_IS_VALID (pkt->remote_ts)) {
       GstClockTimeDiff offset = GST_CLOCK_DIFF (pkt->local_ts, start_time);
-      start_idx = i;
+      *start_idx = i;
       /* positive number here means it is older than our start time */
       if (offset > 0) {
         GST_LOG ("Packet #%u is too old: %"
             GST_TIME_FORMAT, pkt->seqnum, GST_TIME_ARGS (pkt->local_ts));
       } else {
+        GST_LOG ("Setting first packet in our window to #%u: %"
+            GST_TIME_FORMAT, pkt->seqnum, GST_TIME_ARGS (pkt->local_ts));
+        ret = TRUE;
         break;
       }
     }
   }
 
-  /* if we have found a start_idx, and it is not the first packet, trim
-     the start of the stats array to the start_idx */
-  if (start_idx > 0) {
-    g_array_remove_range (array, 0, start_idx);
+  /* jump out early if we could not find a start_idx */
+  if (!ret) {
+    return FALSE;
   }
 
-  for (i = 0; i < array->len; i++) {
+  ret = FALSE;
+  for (i = 0; i < array->len - *start_idx - 1; i++) {
     guint idx = array->len - 1 - i;
     StatsPacket *pkt = &g_array_index (array, StatsPacket, idx);
-    if (GST_CLOCK_TIME_IS_VALID (pkt->local_ts)) {
+    if (GST_CLOCK_TIME_IS_VALID (pkt->remote_ts)) {
       GstClockTimeDiff offset = GST_CLOCK_DIFF (pkt->local_ts, end_time);
       if (offset >= 0) {
-        GST_DEBUG ("Setting last packet in our window to #%u: %"
+        GST_LOG ("Setting last packet in our window to #%u: %"
             GST_TIME_FORMAT, pkt->seqnum, GST_TIME_ARGS (pkt->local_ts));
         end_idx = idx;
         ret = TRUE;
         break;
+      } else {
+        GST_LOG ("Packet #%u is too new: %"
+            GST_TIME_FORMAT, pkt->seqnum, GST_TIME_ARGS (pkt->local_ts));
       }
     }
   }
@@ -250,8 +256,7 @@ _get_stats_packets_window (GArray * array,
     return FALSE;
   }
 
-  /* the amount of packets */
-  *packets = end_idx + 1;
+  *num_packets = end_idx - *start_idx + 1;
 
   return ret;
 }
@@ -261,10 +266,14 @@ twcc_stats_ctx_calculate_windowed_stats (TWCCStatsCtx * ctx,
     GstClockTimeDiff start_time, GstClockTimeDiff end_time)
 {
   GArray *packets = ctx->packets;
+  guint start_idx;
   guint packets_sent = 0;
   guint packets_recv = 0;
   guint packets_recovered = 0;
   guint packets_lost = 0;
+
+  /* FIXME: property ? */
+  guint max_stats_packets = 1000;
 
   guint i;
   guint bits_sent = 0;
@@ -287,17 +296,20 @@ twcc_stats_ctx_calculate_windowed_stats (TWCCStatsCtx * ctx,
   ctx->recovery_pct = -1.0;
 
   gboolean ret =
-      _get_stats_packets_window (packets, start_time, end_time, &packets_sent);
+      _get_stats_packets_window (packets, start_time, end_time, &start_idx,
+      &packets_sent);
   if (!ret || packets_sent < 2) {
     GST_INFO ("Not enough packets to fill our window yet!");
     return FALSE;
   }
 
   for (i = 0; i < packets_sent; i++) {
-    StatsPacket *pkt = &g_array_index (packets, StatsPacket, i);
-    GST_LOG ("%u: pkt #%u, pt: %u, size: %u, arrived: %s",
-        i, pkt->seqnum, pkt->pt, pkt->size * 8,
-        GST_CLOCK_TIME_IS_VALID (pkt->remote_ts) ? "YES :)" : "NO :(");
+    StatsPacket *pkt = &g_array_index (packets, StatsPacket, i + start_idx);
+    GST_LOG ("STATS WINDOW: %u/%u: pkt #%u, pt: %u, size: %u, arrived: %s, "
+        "local-ts: %" GST_TIME_FORMAT ", remote-ts %" GST_TIME_FORMAT,
+        i + 1, packets_sent, pkt->seqnum, pkt->pt, pkt->size * 8,
+        GST_CLOCK_TIME_IS_VALID (pkt->remote_ts) ? "YES" : "NO",
+        GST_TIME_ARGS (pkt->local_ts), GST_TIME_ARGS (pkt->remote_ts));
 
     if (GST_CLOCK_TIME_IS_VALID (pkt->local_ts)) {
       /* don't count the bits for the first packet in the window */
@@ -365,13 +377,19 @@ twcc_stats_ctx_calculate_windowed_stats (TWCCStatsCtx * ctx,
         gst_util_uint64_scale (bits_recv, GST_SECOND, remote_duration);
   }
 
-  GST_DEBUG ("Got stats: bits_sent: %u, bits_recv: %u, packets_sent = %u, "
-      "packets_recv: %u, packetlost_pct = %f, recovery_pct = %f"
-      "sent_bitrate = %u, " "recv_bitrate = %u, delta-delta-avg = %"
-      GST_STIME_FORMAT, bits_sent, bits_recv, packets_sent,
-      packets_recv, ctx->packet_loss_pct, ctx->recovery_pct,
-      ctx->bitrate_sent, ctx->bitrate_recv,
+  GST_INFO ("Got stats: bits_sent: %u, bits_recv: %u, packets_sent = %u, "
+      "packets_recv: %u, packetlost_pct = %f, recovery_pct = %f, "
+      "local_duration=%" GST_TIME_FORMAT ", remote_duration=%" GST_TIME_FORMAT
+      ", " "sent_bitrate = %u, " "recv_bitrate = %u, delta-delta-avg = %"
+      GST_STIME_FORMAT, bits_sent, bits_recv, packets_sent, packets_recv,
+      ctx->packet_loss_pct, ctx->recovery_pct, GST_TIME_ARGS (local_duration),
+      GST_TIME_ARGS (remote_duration), ctx->bitrate_sent, ctx->bitrate_recv,
       GST_STIME_ARGS (ctx->avg_delta_of_delta));
+
+  /* trim the stats array down to max packets */
+  if (packets->len > max_stats_packets) {
+    g_array_remove_range (packets, 0, packets->len - max_stats_packets);
+  }
 
   return TRUE;
 }
@@ -1259,7 +1277,8 @@ rtp_twcc_write_chunks (GArray * packet_chunks,
 
 /* must be called with recv_lock */
 static void
-rtp_twcc_manager_add_fci_unlocked (RTPTWCCManager * twcc, GstRTCPPacket * packet)
+rtp_twcc_manager_add_fci_unlocked (RTPTWCCManager * twcc,
+    GstRTCPPacket * packet)
 {
   RecvPacket *first, *last, *prev;
   guint16 packet_count;
