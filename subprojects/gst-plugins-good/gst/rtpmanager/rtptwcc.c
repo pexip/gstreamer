@@ -143,6 +143,7 @@ typedef struct
   gdouble packet_loss_pct;
   gdouble recovery_pct;
   gint64 avg_delta_of_delta;
+  gdouble delta_of_delta_growth;
 } TWCCStatsCtx;
 
 static void
@@ -278,8 +279,13 @@ twcc_stats_ctx_calculate_windowed_stats (TWCCStatsCtx * ctx,
   guint i;
   guint bits_sent = 0;
   guint bits_recv = 0;
+
   GstClockTimeDiff delta_delta_sum = 0;
   guint delta_delta_count = 0;
+  GstClockTimeDiff first_delta_delta_sum = 0;
+  guint first_delta_delta_count = 0;
+  GstClockTimeDiff last_delta_delta_sum = 0;
+  guint last_delta_delta_count = 0;
 
   StatsPacket *first_local_pkt = NULL;
   StatsPacket *last_local_pkt = NULL;
@@ -291,6 +297,7 @@ twcc_stats_ctx_calculate_windowed_stats (TWCCStatsCtx * ctx,
 
   ctx->packet_loss_pct = 0.0;
   ctx->avg_delta_of_delta = 0;
+  ctx->delta_of_delta_growth = 0.0;
   ctx->bitrate_sent = 0;
   ctx->bitrate_recv = 0;
   ctx->recovery_pct = -1.0;
@@ -341,6 +348,13 @@ twcc_stats_ctx_calculate_windowed_stats (TWCCStatsCtx * ctx,
     if (GST_CLOCK_STIME_IS_VALID (pkt->delta_delta)) {
       delta_delta_sum += pkt->delta_delta;
       delta_delta_count++;
+      if (i < packets_sent / 2) {
+        first_delta_delta_sum += pkt->delta_delta;
+        first_delta_delta_count++;
+      } else {
+        last_delta_delta_sum += pkt->delta_delta;
+        last_delta_delta_count++;
+      }
     }
   }
 
@@ -368,6 +382,17 @@ twcc_stats_ctx_calculate_windowed_stats (TWCCStatsCtx * ctx,
     ctx->avg_delta_of_delta = delta_delta_sum / delta_delta_count;
   }
 
+  if (first_delta_delta_count && last_delta_delta_count) {
+    GstClockTimeDiff first_avg =
+        first_delta_delta_sum / first_delta_delta_count;
+    GstClockTimeDiff last_avg = last_delta_delta_sum / last_delta_delta_count;
+
+    /* filter out very small numbers */
+    first_avg = MAX (first_avg, 100 * GST_USECOND);
+    last_avg = MAX (last_avg, 100 * GST_USECOND);
+    ctx->delta_of_delta_growth = (double) last_avg / (double) first_avg;
+  }
+
   if (local_duration > 0) {
     ctx->bitrate_sent =
         gst_util_uint64_scale (bits_sent, GST_SECOND, local_duration);
@@ -378,13 +403,14 @@ twcc_stats_ctx_calculate_windowed_stats (TWCCStatsCtx * ctx,
   }
 
   GST_INFO ("Got stats: bits_sent: %u, bits_recv: %u, packets_sent = %u, "
-      "packets_recv: %u, packetlost_pct = %f, recovery_pct = %f, "
+      "packets_recv: %u, packetlost_pct = %lf, recovery_pct = %lf, "
       "local_duration=%" GST_TIME_FORMAT ", remote_duration=%" GST_TIME_FORMAT
       ", " "sent_bitrate = %u, " "recv_bitrate = %u, delta-delta-avg = %"
-      GST_STIME_FORMAT, bits_sent, bits_recv, packets_sent, packets_recv,
-      ctx->packet_loss_pct, ctx->recovery_pct, GST_TIME_ARGS (local_duration),
-      GST_TIME_ARGS (remote_duration), ctx->bitrate_sent, ctx->bitrate_recv,
-      GST_STIME_ARGS (ctx->avg_delta_of_delta));
+      GST_STIME_FORMAT ", delta-delta-growth=%lf", bits_sent, bits_recv,
+      packets_sent, packets_recv, ctx->packet_loss_pct, ctx->recovery_pct,
+      GST_TIME_ARGS (local_duration), GST_TIME_ARGS (remote_duration),
+      ctx->bitrate_sent, ctx->bitrate_recv,
+      GST_STIME_ARGS (ctx->avg_delta_of_delta), ctx->delta_of_delta_growth);
 
   /* trim the stats array down to max packets */
   if (packets->len > max_stats_packets) {
@@ -404,7 +430,8 @@ twcc_stats_ctx_get_structure (TWCCStatsCtx * ctx)
       "bitrate-recv", G_TYPE_UINT, ctx->bitrate_recv,
       "packet-loss-pct", G_TYPE_DOUBLE, ctx->packet_loss_pct,
       "recovery-pct", G_TYPE_DOUBLE, ctx->recovery_pct,
-      "avg-delta-of-delta", G_TYPE_INT64, ctx->avg_delta_of_delta, NULL);
+      "avg-delta-of-delta", G_TYPE_INT64, ctx->avg_delta_of_delta,
+      "delta-of-delta-growth", G_TYPE_DOUBLE, ctx->delta_of_delta_growth, NULL);
 }
 
 
@@ -1950,8 +1977,6 @@ rtp_twcc_manager_parse_fci (RTPTWCCManager * twcc,
 
   return ret;
 }
-
-
 
 GstStructure *
 rtp_twcc_manager_get_windowed_stats (RTPTWCCManager * twcc,
