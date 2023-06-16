@@ -212,7 +212,7 @@ _get_stats_packets_window (GArray * array,
 
   for (i = 0; i < array->len; i++) {
     StatsPacket *pkt = &g_array_index (array, StatsPacket, i);
-    if (GST_CLOCK_TIME_IS_VALID (pkt->remote_ts)) {
+    if (GST_CLOCK_TIME_IS_VALID (pkt->local_ts)) {
       GstClockTimeDiff offset = GST_CLOCK_DIFF (pkt->local_ts, start_time);
       *start_idx = i;
       /* positive number here means it is older than our start time */
@@ -237,7 +237,7 @@ _get_stats_packets_window (GArray * array,
   for (i = 0; i < array->len - *start_idx - 1; i++) {
     guint idx = array->len - 1 - i;
     StatsPacket *pkt = &g_array_index (array, StatsPacket, idx);
-    if (GST_CLOCK_TIME_IS_VALID (pkt->remote_ts)) {
+    if (GST_CLOCK_TIME_IS_VALID (pkt->local_ts)) {
       GstClockTimeDiff offset = GST_CLOCK_DIFF (pkt->local_ts, end_time);
       if (offset >= 0) {
         GST_LOG ("Setting last packet in our window to #%u: %"
@@ -558,7 +558,7 @@ twcc_stats_ctx_add_packet (TWCCStatsCtx * ctx, StatsPacket * pkt)
   /* first a quick check to see if we are going forward in seqnum,
      in which case we simply append */
   if (last == NULL || pkt->seqnum > last->seqnum) {
-    GST_DEBUG ("Appending #%u to stats packets", pkt->seqnum);
+    GST_LOG ("Appending #%u to stats packets", pkt->seqnum);
     g_array_append_val (ctx->packets, *pkt);
     /* and update the stats for this packet */
     _update_stats_for_packet_idx (ctx->packets, ctx->packets->len - 1);

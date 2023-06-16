@@ -192,10 +192,10 @@ generate_rtx_buffer (guint rtx_seqnum, GstBuffer * buffer)
   return new_buffer;
 }
 
-static gint16
+static gint32
 read_twcc_seqnum (GstBuffer * buf, guint8 twcc_ext_id)
 {
-  gint16 twcc_seqnum;
+  guint16 twcc_seqnum;
   gpointer ext_data;
   guint ext_size;
   GstRTPBuffer rtp = GST_RTP_BUFFER_INIT;
@@ -5085,14 +5085,14 @@ test_twcc_stats_rtx_recovery (gboolean rtx_arrive, gdouble recovery_pct)
 
 GST_START_TEST (test_twcc_stats_rtx_recover_lost)
 {
-  test_twcc_stats_rtx_recovery (TRUE, 100);
+  test_twcc_stats_rtx_recovery (TRUE, 100.0);
 }
 
 GST_END_TEST;
 
 GST_START_TEST (test_twcc_stats_no_rtx_no_recover)
 {
-  test_twcc_stats_rtx_recovery (FALSE, 0);
+  test_twcc_stats_rtx_recovery (FALSE, 0.0);
 }
 
 GST_END_TEST;
@@ -5136,7 +5136,7 @@ GST_START_TEST (test_twcc_feedback_max_sent_packets)
       generate_twcc_feedback_rtcp (fci, sizeof (fci)));
   twcc_stats = session_harness_get_twcc_stats_full (h,
       1000 * GST_MSECOND, 40 * GST_MSECOND);
-  twcc_verify_stats (twcc_stats, 532800, 0, 24, 0, 100.0f, 0);
+  twcc_verify_stats (twcc_stats, 532800, 0, 51, 0, 100.0f, 0);
   gst_structure_free (twcc_stats);
 
   session_harness_free (h);
