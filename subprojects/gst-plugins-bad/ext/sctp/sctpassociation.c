@@ -704,26 +704,11 @@ force_close_unlocked (GstSctpAssociation * self, gboolean change_state)
 }
 
 static void
-gst_sctp_association_disconnect_unlocked (GstSctpAssociation * self,
-    gboolean try_shutdown)
+gst_sctp_association_disconnect_unlocked (GstSctpAssociation * self)
 {
   if (self->state == GST_SCTP_ASSOCIATION_STATE_CONNECTED) {
     gst_sctp_association_change_state_unlocked (self,
         GST_SCTP_ASSOCIATION_STATE_DISCONNECTING);
-
-    if (try_shutdown && self->use_sock_stream && self->sctp_ass_sock) {
-      GST_INFO_OBJECT (self, "SCTP association shutting down");
-      self->shutdown = FALSE;
-      if (usrsctp_shutdown (self->sctp_ass_sock, SHUT_RDWR) == 0) {
-        /* wait for shutdown to complete */
-        guint cs_to_wait = 100; /* 1s */
-        while (!self->shutdown && cs_to_wait > 0) {
-          g_usleep (G_USEC_PER_SEC / 100);
-          cs_to_wait--;
-        }
-        self->shutdown = FALSE;
-      }
-    }
   }
 
   /* Fall through to ensure the transition to disconnected occurs */
@@ -739,7 +724,7 @@ void
 gst_sctp_association_disconnect (GstSctpAssociation * self)
 {
   g_mutex_lock (&self->association_mutex);
-  gst_sctp_association_disconnect_unlocked (self, TRUE);
+  gst_sctp_association_disconnect_unlocked (self);
   g_mutex_unlock (&self->association_mutex);
 }
 
@@ -1008,7 +993,6 @@ receive_cb (struct socket *sock, union sctp_sockstore addr, void *data,
   if (!data) {
     /* This is a notification that socket shutdown is complete */
     GST_INFO_OBJECT (self, "Received shutdown complete notification");
-    self->shutdown = TRUE;
   } else {
     if (flags & MSG_NOTIFICATION) {
       handle_notification (self, (const union sctp_notification *) data,
@@ -1148,7 +1132,7 @@ handle_sctp_comm_lost_or_shutdown (GstSctpAssociation * self,
       sac->sac_state == SCTP_COMM_LOST ?
       "SCTP_COMM_LOST" : "SCTP_SHUTDOWN_COMP");
 
-  gst_sctp_association_disconnect_unlocked (self, FALSE);
+  gst_sctp_association_disconnect_unlocked (self);
 }
 
 static void

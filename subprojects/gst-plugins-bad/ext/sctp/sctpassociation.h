@@ -104,7 +104,6 @@ struct _GstSctpAssociation
   gboolean use_sock_stream;
   gboolean aggressive_heartbeat;
   struct socket *sctp_ass_sock;
-  gboolean shutdown;
 
   GMutex association_mutex;
 
