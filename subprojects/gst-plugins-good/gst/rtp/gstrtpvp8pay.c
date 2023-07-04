@@ -667,10 +667,12 @@ gst_rtp_vp8_payload_next (GstRtpVP8Pay * self, GstBufferList * list,
   if (available > remaining)
     available = remaining;
 
-  if (self->temporal_scalability_fields_present && meta) {
+  if ((self->temporal_scalability_fields_present && meta) || !self->parse_frames) {
     /* If meta is present, then we have no partition offset information,
      * so always emit PID 0 and set the start bit for the first packet
-     * of a frame only (c.f. RFC7741 $4.4)
+     * of a frame only (c.f. RFC7741 $4.4). Or, when we want to avoid parsing
+     * the bitstream as currently partition information is only present in
+     * the VP8 frame itself.
      */
     partition = 0;
     start = (offset == 0);
