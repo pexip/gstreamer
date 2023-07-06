@@ -683,7 +683,7 @@ GST_API
 void            gst_event_parse_latency         (GstEvent *event, GstClockTime *latency);
 
 /* latency-changed event */
-GST_API
+GST_EXPORT
 GstEvent*       gst_event_new_latency_changed   (void) G_GNUC_MALLOC;
 
 /* step event */
