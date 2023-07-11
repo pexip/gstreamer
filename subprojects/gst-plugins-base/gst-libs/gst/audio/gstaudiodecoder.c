@@ -262,9 +262,6 @@ struct _GstAudioDecoderPrivate
   /* context storage */
   GstAudioDecoderContext ctx;
 
-  /* the cached upstream latency */
-  GstClockTime us_latency;
-
   /* properties */
   GstClockTime latency;
   GstClockTime reported_min_latency;
@@ -1720,9 +1717,7 @@ gst_audio_decoder_dtx_task_func (gpointer user_data)
     GstFlowReturn ret;
     GstBuffer *buf;
 
-    pts += dec->priv->us_latency;
     pts += dec->priv->last_buffer_duration;
-
 
     gst_audio_decoder_dtx_wait_unlocked (dec, base_time + pts);
 
@@ -3209,8 +3204,6 @@ gst_audio_decoder_src_query_default (GstAudioDecoder * dec, GstQuery * query)
         else
           max_latency += dec->priv->ctx.max_latency;
 
-        /* store the upstream min latency */
-        dec->priv->us_latency = min_latency;
         GST_OBJECT_UNLOCK (dec);
 
         gst_query_set_latency (query, live, min_latency, max_latency);
@@ -3760,29 +3753,6 @@ gst_audio_decoder_get_min_latency (GstAudioDecoder * dec)
 
   return result;
 }
-
-/**
- * gst_audio_decoder_get_upstream_latency:
- * @dec: a #GstAudioDecoder
- *
- * Returns: the upstream latency.
- *
- * MT safe.
- */
-GstClockTime
-gst_audio_decoder_get_upstream_latency (GstAudioDecoder * dec)
-{
-  GstClockTime result;
-
-  g_return_val_if_fail (GST_IS_AUDIO_DECODER (dec), FALSE);
-
-  GST_OBJECT_LOCK (dec);
-  result = dec->priv->us_latency;
-  GST_OBJECT_UNLOCK (dec);
-
-  return result;
-}
-
 
 /**
  * gst_audio_decoder_set_tolerance:
