@@ -303,13 +303,15 @@ fail_unless_silent_buffer (GstBuffer * buf)
 }
 
 static void
-fail_unless_silent_buffers (GstHarness * h, gint count)
+fail_unless_silent_buffers (GstHarness * h, gint count, GstClockTime pts)
 {
   for (gint i = 0; i < count; i++) {
     GstBuffer *buf;
 
     gst_harness_crank_single_clock_wait (h);
     buf = gst_harness_pull (h);
+    pts += GST_BUFFER_DURATION (buf);
+    fail_unless_equals_uint64 (pts, GST_BUFFER_PTS (buf));
     fail_unless_silent_buffer (buf);
   }
 }
@@ -1214,9 +1216,10 @@ GST_START_TEST (audiodecoder_dtx)
     fail_unless_silent_buffer (buf);
 
     /* expect some silent buffers from the DTX thread */
-    fail_unless_silent_buffers (h, 2);
+    fail_unless_silent_buffers (h, 2, pts);
     /* advance two packets */
     pkt += 2;
+    pts += 2 * dur;
 
     /* and audio buffer arrives, the decoder should stop DTX */
     buf = create_test_buffer (pkt++);
@@ -1239,14 +1242,8 @@ GST_START_TEST (audiodecoder_dtx)
 
 GST_END_TEST;
 
-static const int audiodecoder_lost_pkt_stops_dtx_latencies[] = {
-  0, 10, 20, 50, 100, 300, 500, 600,
-};
-
 GST_START_TEST (audiodecoder_lost_pkt_stops_dtx)
 {
-  gint latency_ms = audiodecoder_lost_pkt_stops_dtx_latencies[__i__];
-  GstClockTime upstream_latency = latency_ms * GST_MSECOND;
   GstClockTime pts, dur;
   GstClockTime lost_pts, lost_dur;
   GstBuffer *buf;
@@ -1254,7 +1251,6 @@ GST_START_TEST (audiodecoder_lost_pkt_stops_dtx)
 
   gst_audio_decoder_set_plc_aware (GST_AUDIO_DECODER (h->element), TRUE);
   gst_audio_decoder_set_plc (GST_AUDIO_DECODER (h->element), TRUE);
-  gst_harness_set_upstream_latency (h, upstream_latency);
 
   /* start with DTX in */
   buf = create_dtx_buffer (0);
@@ -1268,8 +1264,8 @@ GST_START_TEST (audiodecoder_lost_pkt_stops_dtx)
   fail_unless_equals_uint64 (dur, GST_BUFFER_DURATION (buf));
   fail_unless_silent_buffer (buf);
 
-  /* lets receive 3 silent buffers */
-  fail_unless_silent_buffers (h, 3);
+  /* lets receive 5 silent buffers */
+  fail_unless_silent_buffers (h, 5, pts);
 
   /* buffer 4 is lost, dtx should be stopped now */
   buf = create_test_buffer (4);
@@ -1372,8 +1368,7 @@ gst_audiodecoder_suite (void)
 
   suite_add_tcase (s, tc = tcase_create ("dtx"));
   tcase_add_test (tc, audiodecoder_dtx);
-  tcase_add_loop_test (tc, audiodecoder_lost_pkt_stops_dtx, 0,
-      G_N_ELEMENTS (audiodecoder_lost_pkt_stops_dtx_latencies));
+  tcase_add_test (tc, audiodecoder_lost_pkt_stops_dtx);
   tcase_add_test (tc, audiodecoder_dtx_stress_push);
 
   return s;
