@@ -691,7 +691,7 @@ gst_amc_video_enc_class_init (GstAmcVideoEncClass * klass)
       g_param_spec_float ("i-frame-interval-float", "I-frame interval",
           "The frequency of I frames expressed in seconds between I frames (0 for automatic). "
           "Fractional intervals work on Android >= 25",
-          0, G_MAXFLOAT, I_FRAME_INTERVAL_DEFAULT,
+          -1, G_MAXFLOAT, I_FRAME_INTERVAL_DEFAULT,
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 }
 
