@@ -63,6 +63,9 @@ __FBSDID("$FreeBSD$");
 #define SCTP_INP_INFO_TRYLOCK() 1
 #define SCTP_INP_INFO_RUNLOCK()
 #define SCTP_INP_INFO_WUNLOCK()
+#define SCTP_INP_INFO_LOCK_ASSERT()
+#define SCTP_INP_INFO_RLOCK_ASSERT()
+#define SCTP_INP_INFO_WLOCK_ASSERT()
 
 #define SCTP_WQ_ADDR_INIT()
 #define SCTP_WQ_ADDR_DESTROY()
@@ -110,11 +113,6 @@ __FBSDID("$FreeBSD$");
 
 #define SCTP_ASOC_CREATE_LOCK_CONTENDED(_inp) (0) /* Don't know if this is possible */
 
-
-#define SCTP_TCB_SEND_LOCK_INIT(_tcb)
-#define SCTP_TCB_SEND_LOCK_DESTROY(_tcb)
-#define SCTP_TCB_SEND_LOCK(_tcb)
-#define SCTP_TCB_SEND_UNLOCK(_tcb)
 
 #define SCTP_INP_INCR_REF(_inp)
 #define SCTP_INP_DECR_REF(_inp)

@@ -1,3 +1,17 @@
+# Project definition
+#project('usrsctplib', 'c',
+#    version: '0.9.5.0',
+#    default_options: [
+#        'c_std=c99',
+#        'warning_level=2',
+#    ],
+#    meson_version: '>=0.49.0')
+
+# Shared library API and ABI versions
+# Notice: shared library version must be in X.Y.Z format only
+soversion_full = '2.0.0'
+soversion_short = '2'
+
 # Set compiler warning flags
 compiler = meson.get_compiler('c')
 if compiler.get_argument_syntax() == 'msvc'
@@ -15,6 +29,7 @@ if compiler.get_argument_syntax() == 'msvc'
     ])
 else
     compiler_args = compiler.get_supported_arguments([
+        '-pedantic',
         '-Wfloat-equal',
         '-Wshadow',
         '-Wpointer-arith',
@@ -109,6 +124,11 @@ if have_sys_types and have_netinet_in and have_netinet_ip and have_netinet_ip_ic
     compile_args += ['-DHAVE_NETINET_IP_ICMP_H']
 endif
 
+# Feature: net/route
+if compiler.has_header('net/route.h')
+    compile_args += ['-DHAVE_NET_ROUTE_H']
+endif
+
 # Feature: stdatomic
 if compiler.has_header('stdatomic.h')
     compile_args += ['-DHAVE_STDATOMIC_H']
@@ -144,21 +164,17 @@ endif
 
 # Options
 if true 
-    compile_args += ['-DINVARIANTS']
+    compile_args += '-DINVARIANTS'
 endif
 if not gst_debug_disabled
-    compile_args += ['-DSCTP_DEBUG']
+    compile_args += '-DSCTP_DEBUG'
 endif
-# We do not need the socket API in GStreamer since we will wrap inside a
-# DTLS packet anyway, because we use SCTP for WebRTC data channels.
-if false
-    compile_args += ['-DINET']
+if true
+    compile_args += '-DINET'
 endif
-if false
-    compile_args += ['-DINET6']
+if true
+    compile_args += '-DINET6'
 endif
-
-compile_args += ['-DSCTP_STDINT_INCLUDE=<stdint.h>']
 
 # Library
 subdir('usrsctplib')
@@ -167,8 +183,8 @@ subdir('usrsctplib')
 usrsctp_static = static_library('usrsctp-static', sources,
     c_args: compile_args,
     dependencies: dependencies,
-    include_directories: include_dirs,
     override_options: ['werror=false'],
+    include_directories: include_dirs,
     install: false)
 
 # Declare dependency
