@@ -661,9 +661,11 @@ gst_amc_jni_initialize_java_vm (void)
     return FALSE;
   }
 
-  if (!load_java_module (NULL)) {
-    if (!load_java_module ("libdvm"))
-      return FALSE;
+  if (!load_java_module ("libart")) {
+    if (!load_java_module (NULL)) {
+      if (!load_java_module ("libdvm"))
+        return FALSE;
+    }
   }
 
   n_vms = 0;
@@ -684,7 +686,7 @@ gst_amc_jni_initialize_java_vm (void)
     options[2].optionString = "-Xcheck:jni";
     options[3].optionString = "-Xdebug";
 
-    vm_args.version = JNI_VERSION_1_4;
+    vm_args.version = JNI_VERSION_1_6;
     vm_args.options = options;
     vm_args.nOptions = 4;
     vm_args.ignoreUnrecognized = JNI_TRUE;

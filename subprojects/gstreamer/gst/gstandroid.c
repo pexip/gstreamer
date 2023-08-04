@@ -559,7 +559,7 @@ JNI_OnLoad (JavaVM * vm, void *reserved)
 {
   JNIEnv *env = NULL;
 
-  if ((*vm)->GetEnv (vm, (void **) &env, JNI_VERSION_1_4) != JNI_OK) {
+  if ((*vm)->GetEnv (vm, (void **) &env, JNI_VERSION_1_6) != JNI_OK) {
     __android_log_print (ANDROID_LOG_ERROR, "GStreamer",
         "Could not retrieve JNIEnv");
     return 0;
@@ -582,7 +582,7 @@ JNI_OnLoad (JavaVM * vm, void *reserved)
   /* Remember Java VM */
   _java_vm = vm;
 
-  return JNI_VERSION_1_4;
+  return JNI_VERSION_1_6;
 }
 
 void
@@ -590,7 +590,7 @@ JNI_OnUnload (JavaVM * vm, void *reversed)
 {
   JNIEnv *env = NULL;
 
-  if ((*vm)->GetEnv (vm, (void **) &env, JNI_VERSION_1_4) != JNI_OK) {
+  if ((*vm)->GetEnv (vm, (void **) &env, JNI_VERSION_1_6) != JNI_OK) {
     __android_log_print (ANDROID_LOG_ERROR, "GStreamer",
         "Could not retrieve JNIEnv");
     return;
