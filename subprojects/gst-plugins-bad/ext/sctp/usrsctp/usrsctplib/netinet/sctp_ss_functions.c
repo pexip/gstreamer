@@ -30,7 +30,7 @@
 
 #if defined(__FreeBSD__) && !defined(__Userspace__)
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
+__FBSDID("$FreeBSD: head/sys/netinet/sctp_ss_functions.c 362173 2020-06-14 09:50:00Z tuexen $");
 #endif
 
 #include <netinet/sctp_pcb.h>
@@ -40,26 +40,28 @@ __FBSDID("$FreeBSD$");
 
 /*
  * Default simple round-robin algorithm.
- * Just iterates the streams in the order they appear.
+ * Just interates the streams in the order they appear.
  */
 
 static void
 sctp_ss_default_add(struct sctp_tcb *, struct sctp_association *,
                     struct sctp_stream_out *,
-                    struct sctp_stream_queue_pending *);
+                    struct sctp_stream_queue_pending *, int);
 
 static void
 sctp_ss_default_remove(struct sctp_tcb *, struct sctp_association *,
                        struct sctp_stream_out *,
-                       struct sctp_stream_queue_pending *);
+                       struct sctp_stream_queue_pending *, int);
 
 static void
-sctp_ss_default_init(struct sctp_tcb *stcb, struct sctp_association *asoc)
+sctp_ss_default_init(struct sctp_tcb *stcb, struct sctp_association *asoc,
+                     int holds_lock)
 {
 	uint16_t i;
 
-	SCTP_TCB_LOCK_ASSERT(stcb);
-
+	if (holds_lock == 0) {
+		SCTP_TCB_SEND_LOCK(stcb);
+	}
 	asoc->ss_data.locked_on_sending = NULL;
 	asoc->ss_data.last_out_stream = NULL;
 	TAILQ_INIT(&asoc->ss_data.out.wheel);
@@ -69,37 +71,42 @@ sctp_ss_default_init(struct sctp_tcb *stcb, struct sctp_association *asoc)
 	 * been changed. We need to add all stream queues
 	 * to the wheel.
 	 */
-	for (i = 0; i < asoc->streamoutcnt; i++) {
-		stcb->asoc.ss_functions.sctp_ss_add_to_stream(stcb, asoc,
-		                                              &asoc->strmout[i],
-		                                              NULL);
+	for (i = 0; i < stcb->asoc.streamoutcnt; i++) {
+		stcb->asoc.ss_functions.sctp_ss_add_to_stream(stcb, &stcb->asoc,
+		                                              &stcb->asoc.strmout[i],
+		                                              NULL, 1);
+	}
+	if (holds_lock == 0) {
+		SCTP_TCB_SEND_UNLOCK(stcb);
 	}
 	return;
 }
 
 static void
 sctp_ss_default_clear(struct sctp_tcb *stcb, struct sctp_association *asoc,
-                      bool clear_values SCTP_UNUSED)
+                      int clear_values SCTP_UNUSED, int holds_lock)
 {
-	SCTP_TCB_LOCK_ASSERT(stcb);
-
+	if (holds_lock == 0) {
+		SCTP_TCB_SEND_LOCK(stcb);
+	}
 	while (!TAILQ_EMPTY(&asoc->ss_data.out.wheel)) {
 		struct sctp_stream_out *strq;
 
 		strq = TAILQ_FIRST(&asoc->ss_data.out.wheel);
-		KASSERT(strq->ss_params.scheduled, ("strq %p not scheduled", (void *)strq));
-		TAILQ_REMOVE(&asoc->ss_data.out.wheel, strq, ss_params.ss.rr.next_spoke);
-		strq->ss_params.scheduled = false;
+		TAILQ_REMOVE(&asoc->ss_data.out.wheel, strq, ss_params.rr.next_spoke);
+		strq->ss_params.rr.next_spoke.tqe_next = NULL;
+		strq->ss_params.rr.next_spoke.tqe_prev = NULL;
 	}
 	asoc->ss_data.last_out_stream = NULL;
+	if (holds_lock == 0) {
+		SCTP_TCB_SEND_UNLOCK(stcb);
+	}
 	return;
 }
 
 static void
 sctp_ss_default_init_stream(struct sctp_tcb *stcb, struct sctp_stream_out *strq, struct sctp_stream_out *with_strq)
 {
-	SCTP_TCB_LOCK_ASSERT(stcb);
-
 	if (with_strq != NULL) {
 		if (stcb->asoc.ss_data.locked_on_sending == with_strq) {
 			stcb->asoc.ss_data.locked_on_sending = strq;
@@ -108,63 +115,76 @@ sctp_ss_default_init_stream(struct sctp_tcb *stcb, struct sctp_stream_out *strq,
 			stcb->asoc.ss_data.last_out_stream = strq;
 		}
 	}
-	strq->ss_params.scheduled = false;
+	strq->ss_params.rr.next_spoke.tqe_next = NULL;
+	strq->ss_params.rr.next_spoke.tqe_prev = NULL;
 	return;
 }
 
 static void
 sctp_ss_default_add(struct sctp_tcb *stcb, struct sctp_association *asoc,
                     struct sctp_stream_out *strq,
-                    struct sctp_stream_queue_pending *sp SCTP_UNUSED)
+                    struct sctp_stream_queue_pending *sp SCTP_UNUSED, int holds_lock)
 {
-	SCTP_TCB_LOCK_ASSERT(stcb);
-
+	if (holds_lock == 0) {
+		SCTP_TCB_SEND_LOCK(stcb);
+	}
 	/* Add to wheel if not already on it and stream queue not empty */
-	if (!TAILQ_EMPTY(&strq->outqueue) && !strq->ss_params.scheduled) {
+	if (!TAILQ_EMPTY(&strq->outqueue) &&
+	    (strq->ss_params.rr.next_spoke.tqe_next == NULL) &&
+	    (strq->ss_params.rr.next_spoke.tqe_prev == NULL)) {
 		TAILQ_INSERT_TAIL(&asoc->ss_data.out.wheel,
-		                  strq, ss_params.ss.rr.next_spoke);
-		strq->ss_params.scheduled = true;
+		                  strq, ss_params.rr.next_spoke);
+	}
+	if (holds_lock == 0) {
+		SCTP_TCB_SEND_UNLOCK(stcb);
 	}
 	return;
 }
 
-static bool
+static int
 sctp_ss_default_is_empty(struct sctp_tcb *stcb SCTP_UNUSED, struct sctp_association *asoc)
 {
-	SCTP_TCB_LOCK_ASSERT(stcb);
-
-	return (TAILQ_EMPTY(&asoc->ss_data.out.wheel));
+	if (TAILQ_EMPTY(&asoc->ss_data.out.wheel)) {
+		return (1);
+	} else {
+		return (0);
+	}
 }
 
 static void
 sctp_ss_default_remove(struct sctp_tcb *stcb, struct sctp_association *asoc,
                        struct sctp_stream_out *strq,
-                       struct sctp_stream_queue_pending *sp SCTP_UNUSED)
+                       struct sctp_stream_queue_pending *sp SCTP_UNUSED, int holds_lock)
 {
-	SCTP_TCB_LOCK_ASSERT(stcb);
-
+	if (holds_lock == 0) {
+		SCTP_TCB_SEND_LOCK(stcb);
+	}
 	/* Remove from wheel if stream queue is empty and actually is on the wheel */
-	if (TAILQ_EMPTY(&strq->outqueue) && strq->ss_params.scheduled) {
+	if (TAILQ_EMPTY(&strq->outqueue) &&
+	    (strq->ss_params.rr.next_spoke.tqe_next != NULL ||
+	    strq->ss_params.rr.next_spoke.tqe_prev != NULL)) {
 		if (asoc->ss_data.last_out_stream == strq) {
 			asoc->ss_data.last_out_stream = TAILQ_PREV(asoc->ss_data.last_out_stream,
-			                                           sctpwheel_listhead,
-			                                           ss_params.ss.rr.next_spoke);
+			                                   sctpwheel_listhead,
+			                                   ss_params.rr.next_spoke);
 			if (asoc->ss_data.last_out_stream == NULL) {
 				asoc->ss_data.last_out_stream = TAILQ_LAST(&asoc->ss_data.out.wheel,
-				                                           sctpwheel_listhead);
+				                                   sctpwheel_listhead);
 			}
 			if (asoc->ss_data.last_out_stream == strq) {
 				asoc->ss_data.last_out_stream = NULL;
 			}
 		}
-		if (asoc->ss_data.locked_on_sending == strq) {
-			asoc->ss_data.locked_on_sending = NULL;
-		}
-		TAILQ_REMOVE(&asoc->ss_data.out.wheel, strq, ss_params.ss.rr.next_spoke);
-		strq->ss_params.scheduled = false;
+		TAILQ_REMOVE(&asoc->ss_data.out.wheel, strq, ss_params.rr.next_spoke);
+		strq->ss_params.rr.next_spoke.tqe_next = NULL;
+		strq->ss_params.rr.next_spoke.tqe_prev = NULL;
+	}
+	if (holds_lock == 0) {
+		SCTP_TCB_SEND_UNLOCK(stcb);
 	}
 	return;
 }
+
 
 static struct sctp_stream_out *
 sctp_ss_default_select(struct sctp_tcb *stcb SCTP_UNUSED, struct sctp_nets *net,
@@ -172,29 +192,20 @@ sctp_ss_default_select(struct sctp_tcb *stcb SCTP_UNUSED, struct sctp_nets *net,
 {
 	struct sctp_stream_out *strq, *strqt;
 
-	SCTP_TCB_LOCK_ASSERT(stcb);
-
-	if (asoc->ss_data.locked_on_sending != NULL) {
-		KASSERT(asoc->ss_data.locked_on_sending->ss_params.scheduled,
-		        ("locked_on_sending %p not scheduled",
-		         (void *)asoc->ss_data.locked_on_sending));
+	if (asoc->ss_data.locked_on_sending) {
 		return (asoc->ss_data.locked_on_sending);
 	}
 	strqt = asoc->ss_data.last_out_stream;
-	KASSERT(strqt == NULL || strqt->ss_params.scheduled,
-	        ("last_out_stream %p not scheduled", (void *)strqt));
 default_again:
 	/* Find the next stream to use */
 	if (strqt == NULL) {
 		strq = TAILQ_FIRST(&asoc->ss_data.out.wheel);
 	} else {
-		strq = TAILQ_NEXT(strqt, ss_params.ss.rr.next_spoke);
+		strq = TAILQ_NEXT(strqt, ss_params.rr.next_spoke);
 		if (strq == NULL) {
 			strq = TAILQ_FIRST(&asoc->ss_data.out.wheel);
 		}
 	}
-	KASSERT(strq == NULL || strq->ss_params.scheduled,
-		("strq %p not scheduled", (void *)strq));
 
 	/* If CMT is off, we must validate that
 	 * the stream in question has the first
@@ -232,20 +243,16 @@ sctp_ss_default_scheduled(struct sctp_tcb *stcb,
 {
 	struct sctp_stream_queue_pending *sp;
 
-	KASSERT(strq != NULL, ("strq is NULL"));
-	KASSERT(strq->ss_params.scheduled, ("strq %p is not scheduled", (void *)strq));
-	SCTP_TCB_LOCK_ASSERT(stcb);
-
 	asoc->ss_data.last_out_stream = strq;
-	if (asoc->idata_supported == 0) {
+	if (stcb->asoc.idata_supported == 0) {
 		sp = TAILQ_FIRST(&strq->outqueue);
 		if ((sp != NULL) && (sp->some_taken == 1)) {
-			asoc->ss_data.locked_on_sending = strq;
+			stcb->asoc.ss_data.locked_on_sending = strq;
 		} else {
-			asoc->ss_data.locked_on_sending = NULL;
+			stcb->asoc.ss_data.locked_on_sending = NULL;
 		}
 	} else {
-		asoc->ss_data.locked_on_sending = NULL;
+		stcb->asoc.ss_data.locked_on_sending = NULL;
 	}
 	return;
 }
@@ -254,8 +261,6 @@ static void
 sctp_ss_default_packet_done(struct sctp_tcb *stcb SCTP_UNUSED, struct sctp_nets *net SCTP_UNUSED,
                             struct sctp_association *asoc SCTP_UNUSED)
 {
-	SCTP_TCB_LOCK_ASSERT(stcb);
-
 	/* Nothing to be done here */
 	return;
 }
@@ -264,8 +269,6 @@ static int
 sctp_ss_default_get_value(struct sctp_tcb *stcb SCTP_UNUSED, struct sctp_association *asoc SCTP_UNUSED,
                           struct sctp_stream_out *strq SCTP_UNUSED, uint16_t *value SCTP_UNUSED)
 {
-	SCTP_TCB_LOCK_ASSERT(stcb);
-
 	/* Nothing to be done here */
 	return (-1);
 }
@@ -274,77 +277,76 @@ static int
 sctp_ss_default_set_value(struct sctp_tcb *stcb SCTP_UNUSED, struct sctp_association *asoc SCTP_UNUSED,
                           struct sctp_stream_out *strq SCTP_UNUSED, uint16_t value SCTP_UNUSED)
 {
-	SCTP_TCB_LOCK_ASSERT(stcb);
-
 	/* Nothing to be done here */
 	return (-1);
 }
 
-static bool
+static int
 sctp_ss_default_is_user_msgs_incomplete(struct sctp_tcb *stcb SCTP_UNUSED, struct sctp_association *asoc)
 {
 	struct sctp_stream_out *strq;
 	struct sctp_stream_queue_pending *sp;
 
-	SCTP_TCB_LOCK_ASSERT(stcb);
-
 	if (asoc->stream_queue_cnt != 1) {
-		return (false);
+		return (0);
 	}
 	strq = asoc->ss_data.locked_on_sending;
 	if (strq == NULL) {
-		return (false);
+		return (0);
 	}
 	sp = TAILQ_FIRST(&strq->outqueue);
 	if (sp == NULL) {
-		return (false);
+		return (0);
 	}
-	return (sp->msg_is_complete == 0);
+	return (!sp->msg_is_complete);
 }
 
 /*
  * Real round-robin algorithm.
- * Always iterates the streams in ascending order.
+ * Always interates the streams in ascending order.
  */
 static void
 sctp_ss_rr_add(struct sctp_tcb *stcb, struct sctp_association *asoc,
                struct sctp_stream_out *strq,
-               struct sctp_stream_queue_pending *sp SCTP_UNUSED)
+               struct sctp_stream_queue_pending *sp SCTP_UNUSED, int holds_lock)
 {
 	struct sctp_stream_out *strqt;
 
-	SCTP_TCB_LOCK_ASSERT(stcb);
-
-	if (!TAILQ_EMPTY(&strq->outqueue) && !strq->ss_params.scheduled) {
+	if (holds_lock == 0) {
+		SCTP_TCB_SEND_LOCK(stcb);
+	}
+	if (!TAILQ_EMPTY(&strq->outqueue) &&
+	    (strq->ss_params.rr.next_spoke.tqe_next == NULL) &&
+	    (strq->ss_params.rr.next_spoke.tqe_prev == NULL)) {
 		if (TAILQ_EMPTY(&asoc->ss_data.out.wheel)) {
-			TAILQ_INSERT_HEAD(&asoc->ss_data.out.wheel, strq, ss_params.ss.rr.next_spoke);
+			TAILQ_INSERT_HEAD(&asoc->ss_data.out.wheel, strq, ss_params.rr.next_spoke);
 		} else {
 			strqt = TAILQ_FIRST(&asoc->ss_data.out.wheel);
 			while (strqt != NULL && (strqt->sid < strq->sid)) {
-				strqt = TAILQ_NEXT(strqt, ss_params.ss.rr.next_spoke);
+				strqt = TAILQ_NEXT(strqt, ss_params.rr.next_spoke);
 			}
 			if (strqt != NULL) {
-				TAILQ_INSERT_BEFORE(strqt, strq, ss_params.ss.rr.next_spoke);
+				TAILQ_INSERT_BEFORE(strqt, strq, ss_params.rr.next_spoke);
 			} else {
-				TAILQ_INSERT_TAIL(&asoc->ss_data.out.wheel, strq, ss_params.ss.rr.next_spoke);
+				TAILQ_INSERT_TAIL(&asoc->ss_data.out.wheel, strq, ss_params.rr.next_spoke);
 			}
 		}
-		strq->ss_params.scheduled = true;
+	}
+	if (holds_lock == 0) {
+		SCTP_TCB_SEND_UNLOCK(stcb);
 	}
 	return;
 }
 
 /*
  * Real round-robin per packet algorithm.
- * Always iterates the streams in ascending order and
+ * Always interates the streams in ascending order and
  * only fills messages of the same stream in a packet.
  */
 static struct sctp_stream_out *
 sctp_ss_rrp_select(struct sctp_tcb *stcb SCTP_UNUSED, struct sctp_nets *net SCTP_UNUSED,
                    struct sctp_association *asoc)
 {
-	SCTP_TCB_LOCK_ASSERT(stcb);
-
 	return (asoc->ss_data.last_out_stream);
 }
 
@@ -354,23 +356,17 @@ sctp_ss_rrp_packet_done(struct sctp_tcb *stcb SCTP_UNUSED, struct sctp_nets *net
 {
 	struct sctp_stream_out *strq, *strqt;
 
-	SCTP_TCB_LOCK_ASSERT(stcb);
-
 	strqt = asoc->ss_data.last_out_stream;
-	KASSERT(strqt == NULL || strqt->ss_params.scheduled,
-	        ("last_out_stream %p not scheduled", (void *)strqt));
 rrp_again:
 	/* Find the next stream to use */
 	if (strqt == NULL) {
 		strq = TAILQ_FIRST(&asoc->ss_data.out.wheel);
 	} else {
-		strq = TAILQ_NEXT(strqt, ss_params.ss.rr.next_spoke);
+		strq = TAILQ_NEXT(strqt, ss_params.rr.next_spoke);
 		if (strq == NULL) {
 			strq = TAILQ_FIRST(&asoc->ss_data.out.wheel);
 		}
 	}
-	KASSERT(strq == NULL || strq->ss_params.scheduled,
-	        ("strq %p not scheduled", (void *)strq));
 
 	/* If CMT is off, we must validate that
 	 * the stream in question has the first
@@ -400,36 +396,40 @@ rrp_again:
 	return;
 }
 
+
 /*
  * Priority algorithm.
  * Always prefers streams based on their priority id.
  */
 static void
 sctp_ss_prio_clear(struct sctp_tcb *stcb, struct sctp_association *asoc,
-                   bool clear_values)
+                   int clear_values, int holds_lock)
 {
-	SCTP_TCB_LOCK_ASSERT(stcb);
-
+	if (holds_lock == 0) {
+		SCTP_TCB_SEND_LOCK(stcb);
+	}
 	while (!TAILQ_EMPTY(&asoc->ss_data.out.wheel)) {
 		struct sctp_stream_out *strq;
 
 		strq = TAILQ_FIRST(&asoc->ss_data.out.wheel);
-		KASSERT(strq->ss_params.scheduled, ("strq %p not scheduled", (void *)strq));
 		if (clear_values) {
-			strq->ss_params.ss.prio.priority = 0;
+			strq->ss_params.prio.priority = 0;
 		}
-		TAILQ_REMOVE(&asoc->ss_data.out.wheel, strq, ss_params.ss.prio.next_spoke);
-		strq->ss_params.scheduled = false;
+		TAILQ_REMOVE(&asoc->ss_data.out.wheel, strq, ss_params.prio.next_spoke);
+		strq->ss_params.prio.next_spoke.tqe_next = NULL;
+		strq->ss_params.prio.next_spoke.tqe_prev = NULL;
+
 	}
 	asoc->ss_data.last_out_stream = NULL;
+	if (holds_lock == 0) {
+		SCTP_TCB_SEND_UNLOCK(stcb);
+	}
 	return;
 }
 
 static void
 sctp_ss_prio_init_stream(struct sctp_tcb *stcb, struct sctp_stream_out *strq, struct sctp_stream_out *with_strq)
 {
-	SCTP_TCB_LOCK_ASSERT(stcb);
-
 	if (with_strq != NULL) {
 		if (stcb->asoc.ss_data.locked_on_sending == with_strq) {
 			stcb->asoc.ss_data.locked_on_sending = strq;
@@ -438,68 +438,79 @@ sctp_ss_prio_init_stream(struct sctp_tcb *stcb, struct sctp_stream_out *strq, st
 			stcb->asoc.ss_data.last_out_stream = strq;
 		}
 	}
-	strq->ss_params.scheduled = false;
+	strq->ss_params.prio.next_spoke.tqe_next = NULL;
+	strq->ss_params.prio.next_spoke.tqe_prev = NULL;
 	if (with_strq != NULL) {
-		strq->ss_params.ss.prio.priority = with_strq->ss_params.ss.prio.priority;
+		strq->ss_params.prio.priority = with_strq->ss_params.prio.priority;
 	} else {
-		strq->ss_params.ss.prio.priority = 0;
+		strq->ss_params.prio.priority = 0;
 	}
 	return;
 }
 
 static void
 sctp_ss_prio_add(struct sctp_tcb *stcb, struct sctp_association *asoc,
-                 struct sctp_stream_out *strq, struct sctp_stream_queue_pending *sp SCTP_UNUSED)
+                 struct sctp_stream_out *strq, struct sctp_stream_queue_pending *sp SCTP_UNUSED,
+                 int holds_lock)
 {
 	struct sctp_stream_out *strqt;
 
-	SCTP_TCB_LOCK_ASSERT(stcb);
-
+	if (holds_lock == 0) {
+		SCTP_TCB_SEND_LOCK(stcb);
+	}
 	/* Add to wheel if not already on it and stream queue not empty */
-	if (!TAILQ_EMPTY(&strq->outqueue) && !strq->ss_params.scheduled) {
+	if (!TAILQ_EMPTY(&strq->outqueue) &&
+	    (strq->ss_params.prio.next_spoke.tqe_next == NULL) &&
+	    (strq->ss_params.prio.next_spoke.tqe_prev == NULL)) {
 		if (TAILQ_EMPTY(&asoc->ss_data.out.wheel)) {
-			TAILQ_INSERT_HEAD(&asoc->ss_data.out.wheel, strq, ss_params.ss.prio.next_spoke);
+			TAILQ_INSERT_HEAD(&asoc->ss_data.out.wheel, strq, ss_params.prio.next_spoke);
 		} else {
 			strqt = TAILQ_FIRST(&asoc->ss_data.out.wheel);
-			while (strqt != NULL && strqt->ss_params.ss.prio.priority < strq->ss_params.ss.prio.priority) {
-				strqt = TAILQ_NEXT(strqt, ss_params.ss.prio.next_spoke);
+			while (strqt != NULL && strqt->ss_params.prio.priority < strq->ss_params.prio.priority) {
+				strqt = TAILQ_NEXT(strqt, ss_params.prio.next_spoke);
 			}
 			if (strqt != NULL) {
-				TAILQ_INSERT_BEFORE(strqt, strq, ss_params.ss.prio.next_spoke);
+				TAILQ_INSERT_BEFORE(strqt, strq, ss_params.prio.next_spoke);
 			} else {
-				TAILQ_INSERT_TAIL(&asoc->ss_data.out.wheel, strq, ss_params.ss.prio.next_spoke);
+				TAILQ_INSERT_TAIL(&asoc->ss_data.out.wheel, strq, ss_params.prio.next_spoke);
 			}
 		}
-		strq->ss_params.scheduled = true;
+	}
+	if (holds_lock == 0) {
+		SCTP_TCB_SEND_UNLOCK(stcb);
 	}
 	return;
 }
 
 static void
 sctp_ss_prio_remove(struct sctp_tcb *stcb, struct sctp_association *asoc,
-                    struct sctp_stream_out *strq, struct sctp_stream_queue_pending *sp SCTP_UNUSED)
+                    struct sctp_stream_out *strq, struct sctp_stream_queue_pending *sp SCTP_UNUSED,
+                    int holds_lock)
 {
-	SCTP_TCB_LOCK_ASSERT(stcb);
-
+	if (holds_lock == 0) {
+		SCTP_TCB_SEND_LOCK(stcb);
+	}
 	/* Remove from wheel if stream queue is empty and actually is on the wheel */
-	if (TAILQ_EMPTY(&strq->outqueue) && strq->ss_params.scheduled) {
+	if (TAILQ_EMPTY(&strq->outqueue) &&
+	    (strq->ss_params.prio.next_spoke.tqe_next != NULL ||
+	    strq->ss_params.prio.next_spoke.tqe_prev != NULL)) {
 		if (asoc->ss_data.last_out_stream == strq) {
-			asoc->ss_data.last_out_stream = TAILQ_PREV(asoc->ss_data.last_out_stream,
-			                                           sctpwheel_listhead,
-			                                           ss_params.ss.prio.next_spoke);
+			asoc->ss_data.last_out_stream = TAILQ_PREV(asoc->ss_data.last_out_stream, sctpwheel_listhead,
+			                                   ss_params.prio.next_spoke);
 			if (asoc->ss_data.last_out_stream == NULL) {
 				asoc->ss_data.last_out_stream = TAILQ_LAST(&asoc->ss_data.out.wheel,
-				                                           sctpwheel_listhead);
+				                                   sctpwheel_listhead);
 			}
 			if (asoc->ss_data.last_out_stream == strq) {
 				asoc->ss_data.last_out_stream = NULL;
 			}
 		}
-		if (asoc->ss_data.locked_on_sending == strq) {
-			asoc->ss_data.locked_on_sending = NULL;
-		}
-		TAILQ_REMOVE(&asoc->ss_data.out.wheel, strq, ss_params.ss.prio.next_spoke);
-		strq->ss_params.scheduled = false;
+		TAILQ_REMOVE(&asoc->ss_data.out.wheel, strq, ss_params.prio.next_spoke);
+		strq->ss_params.prio.next_spoke.tqe_next = NULL;
+		strq->ss_params.prio.next_spoke.tqe_prev = NULL;
+	}
+	if (holds_lock == 0) {
+		SCTP_TCB_SEND_UNLOCK(stcb);
 	}
 	return;
 }
@@ -510,32 +521,23 @@ sctp_ss_prio_select(struct sctp_tcb *stcb SCTP_UNUSED, struct sctp_nets *net,
 {
 	struct sctp_stream_out *strq, *strqt, *strqn;
 
-	SCTP_TCB_LOCK_ASSERT(stcb);
-
-	if (asoc->ss_data.locked_on_sending != NULL) {
-		KASSERT(asoc->ss_data.locked_on_sending->ss_params.scheduled,
-		        ("locked_on_sending %p not scheduled",
-		         (void *)asoc->ss_data.locked_on_sending));
+	if (asoc->ss_data.locked_on_sending) {
 		return (asoc->ss_data.locked_on_sending);
 	}
 	strqt = asoc->ss_data.last_out_stream;
-	KASSERT(strqt == NULL || strqt->ss_params.scheduled,
-	        ("last_out_stream %p not scheduled", (void *)strqt));
 prio_again:
 	/* Find the next stream to use */
 	if (strqt == NULL) {
 		strq = TAILQ_FIRST(&asoc->ss_data.out.wheel);
 	} else {
-		strqn = TAILQ_NEXT(strqt, ss_params.ss.prio.next_spoke);
+		strqn = TAILQ_NEXT(strqt, ss_params.prio.next_spoke);
 		if (strqn != NULL &&
-		    strqn->ss_params.ss.prio.priority == strqt->ss_params.ss.prio.priority) {
+		    strqn->ss_params.prio.priority == strqt->ss_params.prio.priority) {
 			strq = strqn;
 		} else {
 			strq = TAILQ_FIRST(&asoc->ss_data.out.wheel);
 		}
 	}
-	KASSERT(strq == NULL || strq->ss_params.scheduled,
-	        ("strq %p not scheduled", (void *)strq));
 
 	/* If CMT is off, we must validate that
 	 * the stream in question has the first
@@ -568,12 +570,10 @@ static int
 sctp_ss_prio_get_value(struct sctp_tcb *stcb SCTP_UNUSED, struct sctp_association *asoc SCTP_UNUSED,
                        struct sctp_stream_out *strq, uint16_t *value)
 {
-	SCTP_TCB_LOCK_ASSERT(stcb);
-
 	if (strq == NULL) {
 		return (-1);
 	}
-	*value = strq->ss_params.ss.prio.priority;
+	*value = strq->ss_params.prio.priority;
 	return (1);
 }
 
@@ -581,47 +581,47 @@ static int
 sctp_ss_prio_set_value(struct sctp_tcb *stcb, struct sctp_association *asoc,
                        struct sctp_stream_out *strq, uint16_t value)
 {
-	SCTP_TCB_LOCK_ASSERT(stcb);
-
 	if (strq == NULL) {
 		return (-1);
 	}
-	strq->ss_params.ss.prio.priority = value;
-	sctp_ss_prio_remove(stcb, asoc, strq, NULL);
-	sctp_ss_prio_add(stcb, asoc, strq, NULL);
+	strq->ss_params.prio.priority = value;
+	sctp_ss_prio_remove(stcb, asoc, strq, NULL, 1);
+	sctp_ss_prio_add(stcb, asoc, strq, NULL, 1);
 	return (1);
 }
 
 /*
  * Fair bandwidth algorithm.
- * Maintains an equal throughput per stream.
+ * Maintains an equal troughput per stream.
  */
 static void
 sctp_ss_fb_clear(struct sctp_tcb *stcb, struct sctp_association *asoc,
-                 bool clear_values)
+                   int clear_values, int holds_lock)
 {
-	SCTP_TCB_LOCK_ASSERT(stcb);
-
+	if (holds_lock == 0) {
+		SCTP_TCB_SEND_LOCK(stcb);
+	}
 	while (!TAILQ_EMPTY(&asoc->ss_data.out.wheel)) {
 		struct sctp_stream_out *strq;
 
 		strq = TAILQ_FIRST(&asoc->ss_data.out.wheel);
-		KASSERT(strq->ss_params.scheduled, ("strq %p not scheduled", (void *)strq));
 		if (clear_values) {
-			strq->ss_params.ss.fb.rounds = -1;
+			strq->ss_params.fb.rounds = -1;
 		}
-		TAILQ_REMOVE(&asoc->ss_data.out.wheel, strq, ss_params.ss.fb.next_spoke);
-		strq->ss_params.scheduled = false;
+		TAILQ_REMOVE(&asoc->ss_data.out.wheel, strq, ss_params.fb.next_spoke);
+		strq->ss_params.fb.next_spoke.tqe_next = NULL;
+		strq->ss_params.fb.next_spoke.tqe_prev = NULL;
 	}
 	asoc->ss_data.last_out_stream = NULL;
+	if (holds_lock == 0) {
+		SCTP_TCB_SEND_UNLOCK(stcb);
+	}
 	return;
 }
 
 static void
 sctp_ss_fb_init_stream(struct sctp_tcb *stcb, struct sctp_stream_out *strq, struct sctp_stream_out *with_strq)
 {
-	SCTP_TCB_LOCK_ASSERT(stcb);
-
 	if (with_strq != NULL) {
 		if (stcb->asoc.ss_data.locked_on_sending == with_strq) {
 			stcb->asoc.ss_data.locked_on_sending = strq;
@@ -630,55 +630,66 @@ sctp_ss_fb_init_stream(struct sctp_tcb *stcb, struct sctp_stream_out *strq, stru
 			stcb->asoc.ss_data.last_out_stream = strq;
 		}
 	}
-	strq->ss_params.scheduled = false;
+	strq->ss_params.fb.next_spoke.tqe_next = NULL;
+	strq->ss_params.fb.next_spoke.tqe_prev = NULL;
 	if (with_strq != NULL) {
-		strq->ss_params.ss.fb.rounds = with_strq->ss_params.ss.fb.rounds;
+		strq->ss_params.fb.rounds = with_strq->ss_params.fb.rounds;
 	} else {
-		strq->ss_params.ss.fb.rounds = -1;
+		strq->ss_params.fb.rounds = -1;
 	}
 	return;
 }
 
 static void
 sctp_ss_fb_add(struct sctp_tcb *stcb, struct sctp_association *asoc,
-               struct sctp_stream_out *strq, struct sctp_stream_queue_pending *sp SCTP_UNUSED)
+               struct sctp_stream_out *strq, struct sctp_stream_queue_pending *sp SCTP_UNUSED,
+               int holds_lock)
 {
-	SCTP_TCB_LOCK_ASSERT(stcb);
-
-	if (!TAILQ_EMPTY(&strq->outqueue) && !strq->ss_params.scheduled) {
-		if (strq->ss_params.ss.fb.rounds < 0)
-			strq->ss_params.ss.fb.rounds = TAILQ_FIRST(&strq->outqueue)->length;
-		TAILQ_INSERT_TAIL(&asoc->ss_data.out.wheel, strq, ss_params.ss.fb.next_spoke);
-		strq->ss_params.scheduled = true;
+	if (holds_lock == 0) {
+		SCTP_TCB_SEND_LOCK(stcb);
+	}
+	if (!TAILQ_EMPTY(&strq->outqueue) &&
+	    (strq->ss_params.fb.next_spoke.tqe_next == NULL) &&
+	    (strq->ss_params.fb.next_spoke.tqe_prev == NULL)) {
+		if (strq->ss_params.fb.rounds < 0)
+			strq->ss_params.fb.rounds = TAILQ_FIRST(&strq->outqueue)->length;
+		TAILQ_INSERT_TAIL(&asoc->ss_data.out.wheel, strq, ss_params.fb.next_spoke);
+	}
+	if (holds_lock == 0) {
+		SCTP_TCB_SEND_UNLOCK(stcb);
 	}
 	return;
 }
 
 static void
 sctp_ss_fb_remove(struct sctp_tcb *stcb, struct sctp_association *asoc,
-                  struct sctp_stream_out *strq, struct sctp_stream_queue_pending *sp SCTP_UNUSED)
+                  struct sctp_stream_out *strq, struct sctp_stream_queue_pending *sp SCTP_UNUSED,
+                  int holds_lock)
 {
-	SCTP_TCB_LOCK_ASSERT(stcb);
-
+	if (holds_lock == 0) {
+		SCTP_TCB_SEND_LOCK(stcb);
+	}
 	/* Remove from wheel if stream queue is empty and actually is on the wheel */
-	if (TAILQ_EMPTY(&strq->outqueue) && strq->ss_params.scheduled) {
+	if (TAILQ_EMPTY(&strq->outqueue) &&
+	    (strq->ss_params.fb.next_spoke.tqe_next != NULL ||
+	    strq->ss_params.fb.next_spoke.tqe_prev != NULL)) {
 		if (asoc->ss_data.last_out_stream == strq) {
-			asoc->ss_data.last_out_stream = TAILQ_PREV(asoc->ss_data.last_out_stream,
-			                                           sctpwheel_listhead,
-			                                           ss_params.ss.fb.next_spoke);
+			asoc->ss_data.last_out_stream = TAILQ_PREV(asoc->ss_data.last_out_stream, sctpwheel_listhead,
+			                                   ss_params.fb.next_spoke);
 			if (asoc->ss_data.last_out_stream == NULL) {
 				asoc->ss_data.last_out_stream = TAILQ_LAST(&asoc->ss_data.out.wheel,
-				                                           sctpwheel_listhead);
+				                                   sctpwheel_listhead);
 			}
 			if (asoc->ss_data.last_out_stream == strq) {
 				asoc->ss_data.last_out_stream = NULL;
 			}
 		}
-		if (asoc->ss_data.locked_on_sending == strq) {
-			asoc->ss_data.locked_on_sending = NULL;
-		}
-		TAILQ_REMOVE(&asoc->ss_data.out.wheel, strq, ss_params.ss.fb.next_spoke);
-		strq->ss_params.scheduled = false;
+		TAILQ_REMOVE(&asoc->ss_data.out.wheel, strq, ss_params.fb.next_spoke);
+		strq->ss_params.fb.next_spoke.tqe_next = NULL;
+		strq->ss_params.fb.next_spoke.tqe_prev = NULL;
+	}
+	if (holds_lock == 0) {
+		SCTP_TCB_SEND_UNLOCK(stcb);
 	}
 	return;
 }
@@ -689,19 +700,14 @@ sctp_ss_fb_select(struct sctp_tcb *stcb SCTP_UNUSED, struct sctp_nets *net,
 {
 	struct sctp_stream_out *strq = NULL, *strqt;
 
-	SCTP_TCB_LOCK_ASSERT(stcb);
-
-	if (asoc->ss_data.locked_on_sending != NULL) {
-		KASSERT(asoc->ss_data.locked_on_sending->ss_params.scheduled,
-		        ("locked_on_sending %p not scheduled",
-		         (void *)asoc->ss_data.locked_on_sending));
+	if (asoc->ss_data.locked_on_sending) {
 		return (asoc->ss_data.locked_on_sending);
 	}
 	if (asoc->ss_data.last_out_stream == NULL ||
 	    TAILQ_FIRST(&asoc->ss_data.out.wheel) == TAILQ_LAST(&asoc->ss_data.out.wheel, sctpwheel_listhead)) {
 		strqt = TAILQ_FIRST(&asoc->ss_data.out.wheel);
 	} else {
-		strqt = TAILQ_NEXT(asoc->ss_data.last_out_stream, ss_params.ss.fb.next_spoke);
+		strqt = TAILQ_NEXT(asoc->ss_data.last_out_stream, ss_params.fb.next_spoke);
 	}
 	do {
 		if ((strqt != NULL) &&
@@ -710,14 +716,13 @@ sctp_ss_fb_select(struct sctp_tcb *stcb SCTP_UNUSED, struct sctp_nets *net,
 		      (net == NULL || (TAILQ_FIRST(&strqt->outqueue) && TAILQ_FIRST(&strqt->outqueue)->net == NULL) ||
 		       (net != NULL && TAILQ_FIRST(&strqt->outqueue) && TAILQ_FIRST(&strqt->outqueue)->net != NULL &&
 		        TAILQ_FIRST(&strqt->outqueue)->net == net))))) {
-			if ((strqt->ss_params.ss.fb.rounds >= 0) &&
-			    ((strq == NULL) ||
-			     (strqt->ss_params.ss.fb.rounds < strq->ss_params.ss.fb.rounds))) {
+			if ((strqt->ss_params.fb.rounds >= 0) && (strq == NULL ||
+				strqt->ss_params.fb.rounds < strq->ss_params.fb.rounds)) {
 				strq = strqt;
 			}
 		}
 		if (strqt != NULL) {
-			strqt = TAILQ_NEXT(strqt, ss_params.ss.fb.next_spoke);
+			strqt = TAILQ_NEXT(strqt, ss_params.fb.next_spoke);
 		} else {
 			strqt = TAILQ_FIRST(&asoc->ss_data.out.wheel);
 		}
@@ -734,28 +739,26 @@ sctp_ss_fb_scheduled(struct sctp_tcb *stcb, struct sctp_nets *net SCTP_UNUSED,
 	struct sctp_stream_out *strqt;
 	int subtract;
 
-	SCTP_TCB_LOCK_ASSERT(stcb);
-
-	if (asoc->idata_supported == 0) {
+	if (stcb->asoc.idata_supported == 0) {
 		sp = TAILQ_FIRST(&strq->outqueue);
 		if ((sp != NULL) && (sp->some_taken == 1)) {
-			asoc->ss_data.locked_on_sending = strq;
+			stcb->asoc.ss_data.locked_on_sending = strq;
 		} else {
-			asoc->ss_data.locked_on_sending = NULL;
+			stcb->asoc.ss_data.locked_on_sending = NULL;
 		}
 	} else {
-		asoc->ss_data.locked_on_sending = NULL;
+		stcb->asoc.ss_data.locked_on_sending = NULL;
 	}
-	subtract = strq->ss_params.ss.fb.rounds;
-	TAILQ_FOREACH(strqt, &asoc->ss_data.out.wheel, ss_params.ss.fb.next_spoke) {
-		strqt->ss_params.ss.fb.rounds -= subtract;
-		if (strqt->ss_params.ss.fb.rounds < 0)
-			strqt->ss_params.ss.fb.rounds = 0;
+	subtract = strq->ss_params.fb.rounds;
+	TAILQ_FOREACH(strqt, &asoc->ss_data.out.wheel, ss_params.fb.next_spoke) {
+		strqt->ss_params.fb.rounds -= subtract;
+		if (strqt->ss_params.fb.rounds < 0)
+			strqt->ss_params.fb.rounds = 0;
 	}
 	if (TAILQ_FIRST(&strq->outqueue)) {
-		strq->ss_params.ss.fb.rounds = TAILQ_FIRST(&strq->outqueue)->length;
+		strq->ss_params.fb.rounds = TAILQ_FIRST(&strq->outqueue)->length;
 	} else {
-		strq->ss_params.ss.fb.rounds = -1;
+		strq->ss_params.fb.rounds = -1;
 	}
 	asoc->ss_data.last_out_stream = strq;
 	return;
@@ -768,17 +771,19 @@ sctp_ss_fb_scheduled(struct sctp_tcb *stcb, struct sctp_nets *net SCTP_UNUSED,
 static void
 sctp_ss_fcfs_add(struct sctp_tcb *stcb, struct sctp_association *asoc,
                  struct sctp_stream_out *strq SCTP_UNUSED,
-                 struct sctp_stream_queue_pending *sp);
+                 struct sctp_stream_queue_pending *sp, int holds_lock);
 
 static void
-sctp_ss_fcfs_init(struct sctp_tcb *stcb, struct sctp_association *asoc)
+sctp_ss_fcfs_init(struct sctp_tcb *stcb, struct sctp_association *asoc,
+                  int holds_lock)
 {
 	uint32_t x, n = 0, add_more = 1;
 	struct sctp_stream_queue_pending *sp;
 	uint16_t i;
 
-	SCTP_TCB_LOCK_ASSERT(stcb);
-
+	if (holds_lock == 0) {
+		SCTP_TCB_SEND_LOCK(stcb);
+	}
 	TAILQ_INIT(&asoc->ss_data.out.list);
 	/*
 	 * If there is data in the stream queues already,
@@ -789,8 +794,8 @@ sctp_ss_fcfs_init(struct sctp_tcb *stcb, struct sctp_association *asoc)
 	 */
 	while (add_more) {
 		add_more = 0;
-		for (i = 0; i < asoc->streamoutcnt; i++) {
-			sp = TAILQ_FIRST(&asoc->strmout[i].outqueue);
+		for (i = 0; i < stcb->asoc.streamoutcnt; i++) {
+			sp = TAILQ_FIRST(&stcb->asoc.strmout[i].outqueue);
 			x = 0;
 			/* Find n. message in current stream queue */
 			while (sp != NULL && x < n) {
@@ -798,38 +803,44 @@ sctp_ss_fcfs_init(struct sctp_tcb *stcb, struct sctp_association *asoc)
 				x++;
 			}
 			if (sp != NULL) {
-				sctp_ss_fcfs_add(stcb, asoc, &asoc->strmout[i], sp);
+				sctp_ss_fcfs_add(stcb, &stcb->asoc, &stcb->asoc.strmout[i], sp, 1);
 				add_more = 1;
 			}
 		}
 		n++;
+	}
+	if (holds_lock == 0) {
+		SCTP_TCB_SEND_UNLOCK(stcb);
 	}
 	return;
 }
 
 static void
 sctp_ss_fcfs_clear(struct sctp_tcb *stcb, struct sctp_association *asoc,
-                   bool clear_values SCTP_UNUSED)
+                   int clear_values, int holds_lock)
 {
 	struct sctp_stream_queue_pending *sp;
 
-	SCTP_TCB_LOCK_ASSERT(stcb);
-
-	while (!TAILQ_EMPTY(&asoc->ss_data.out.list)) {
-		sp = TAILQ_FIRST(&asoc->ss_data.out.list);
-		KASSERT(sp->scheduled, ("sp %p not scheduled", (void *)sp));
-		TAILQ_REMOVE(&asoc->ss_data.out.list, sp, ss_next);
-		sp->scheduled = false;
+	if (clear_values) {
+		if (holds_lock == 0) {
+			SCTP_TCB_SEND_LOCK(stcb);
+		}
+		while (!TAILQ_EMPTY(&asoc->ss_data.out.list)) {
+			sp = TAILQ_FIRST(&asoc->ss_data.out.list);
+			TAILQ_REMOVE(&asoc->ss_data.out.list, sp, ss_next);
+			sp->ss_next.tqe_next = NULL;
+			sp->ss_next.tqe_prev = NULL;
+		}
+		if (holds_lock == 0) {
+			SCTP_TCB_SEND_UNLOCK(stcb);
+		}
 	}
-	asoc->ss_data.last_out_stream = NULL;
 	return;
 }
 
 static void
 sctp_ss_fcfs_init_stream(struct sctp_tcb *stcb, struct sctp_stream_out *strq, struct sctp_stream_out *with_strq)
 {
-	SCTP_TCB_LOCK_ASSERT(stcb);
-
 	if (with_strq != NULL) {
 		if (stcb->asoc.ss_data.locked_on_sending == with_strq) {
 			stcb->asoc.ss_data.locked_on_sending = strq;
@@ -838,43 +849,60 @@ sctp_ss_fcfs_init_stream(struct sctp_tcb *stcb, struct sctp_stream_out *strq, st
 			stcb->asoc.ss_data.last_out_stream = strq;
 		}
 	}
-	strq->ss_params.scheduled = false;
+	strq->ss_params.fb.next_spoke.tqe_next = NULL;
+	strq->ss_params.fb.next_spoke.tqe_prev = NULL;
 	return;
 }
 
 static void
 sctp_ss_fcfs_add(struct sctp_tcb *stcb, struct sctp_association *asoc,
-                 struct sctp_stream_out *strq SCTP_UNUSED, struct sctp_stream_queue_pending *sp)
+                 struct sctp_stream_out *strq SCTP_UNUSED, struct sctp_stream_queue_pending *sp,
+                 int holds_lock)
 {
-	SCTP_TCB_LOCK_ASSERT(stcb);
-
-	if (!sp->scheduled) {
+	if (holds_lock == 0) {
+		SCTP_TCB_SEND_LOCK(stcb);
+	}
+	if (sp && (sp->ss_next.tqe_next == NULL) &&
+	    (sp->ss_next.tqe_prev == NULL)) {
 		TAILQ_INSERT_TAIL(&asoc->ss_data.out.list, sp, ss_next);
-		sp->scheduled = true;
+	}
+	if (holds_lock == 0) {
+		SCTP_TCB_SEND_UNLOCK(stcb);
 	}
 	return;
 }
 
-static bool
+static int
 sctp_ss_fcfs_is_empty(struct sctp_tcb *stcb SCTP_UNUSED, struct sctp_association *asoc)
 {
-	SCTP_TCB_LOCK_ASSERT(stcb);
-
-	return (TAILQ_EMPTY(&asoc->ss_data.out.list));
+	if (TAILQ_EMPTY(&asoc->ss_data.out.list)) {
+		return (1);
+	} else {
+		return (0);
+	}
 }
 
 static void
 sctp_ss_fcfs_remove(struct sctp_tcb *stcb, struct sctp_association *asoc,
-                    struct sctp_stream_out *strq SCTP_UNUSED, struct sctp_stream_queue_pending *sp)
+                    struct sctp_stream_out *strq SCTP_UNUSED, struct sctp_stream_queue_pending *sp,
+                    int holds_lock)
 {
-	SCTP_TCB_LOCK_ASSERT(stcb);
-
-	if (sp->scheduled) {
+	if (holds_lock == 0) {
+		SCTP_TCB_SEND_LOCK(stcb);
+	}
+	if (sp &&
+	    ((sp->ss_next.tqe_next != NULL) ||
+	     (sp->ss_next.tqe_prev != NULL))) {
 		TAILQ_REMOVE(&asoc->ss_data.out.list, sp, ss_next);
-		sp->scheduled = false;
+		sp->ss_next.tqe_next = NULL;
+		sp->ss_next.tqe_prev = NULL;
+	}
+	if (holds_lock == 0) {
+		SCTP_TCB_SEND_UNLOCK(stcb);
 	}
 	return;
 }
+
 
 static struct sctp_stream_out *
 sctp_ss_fcfs_select(struct sctp_tcb *stcb SCTP_UNUSED, struct sctp_nets *net,
@@ -882,8 +910,6 @@ sctp_ss_fcfs_select(struct sctp_tcb *stcb SCTP_UNUSED, struct sctp_nets *net,
 {
 	struct sctp_stream_out *strq;
 	struct sctp_stream_queue_pending *sp;
-
-	SCTP_TCB_LOCK_ASSERT(stcb);
 
 	if (asoc->ss_data.locked_on_sending) {
 		return (asoc->ss_data.locked_on_sending);
@@ -920,30 +946,6 @@ default_again:
 	return (strq);
 }
 
-static void
-sctp_ss_fcfs_scheduled(struct sctp_tcb *stcb,
-                       struct sctp_nets *net SCTP_UNUSED,
-                       struct sctp_association *asoc,
-                       struct sctp_stream_out *strq,
-                       int moved_how_much SCTP_UNUSED)
-{
-	struct sctp_stream_queue_pending *sp;
-
-	KASSERT(strq != NULL, ("strq is NULL"));
-	asoc->ss_data.last_out_stream = strq;
-	if (asoc->idata_supported == 0) {
-		sp = TAILQ_FIRST(&strq->outqueue);
-		if ((sp != NULL) && (sp->some_taken == 1)) {
-			asoc->ss_data.locked_on_sending = strq;
-		} else {
-			asoc->ss_data.locked_on_sending = NULL;
-		}
-	} else {
-		asoc->ss_data.locked_on_sending = NULL;
-	}
-	return;
-}
-
 const struct sctp_ss_functions sctp_ss_functions[] = {
 /* SCTP_SS_DEFAULT */
 {
@@ -975,7 +977,7 @@ const struct sctp_ss_functions sctp_ss_functions[] = {
 	.sctp_ss_is_user_msgs_incomplete = sctp_ss_default_is_user_msgs_incomplete
 #endif
 },
-/* SCTP_SS_RR */
+/* SCTP_SS_ROUND_ROBIN */
 {
 #if defined(_WIN32)
 	sctp_ss_default_init,
@@ -1005,7 +1007,7 @@ const struct sctp_ss_functions sctp_ss_functions[] = {
 	.sctp_ss_is_user_msgs_incomplete = sctp_ss_default_is_user_msgs_incomplete
 #endif
 },
-/* SCTP_SS_RR_PKT */
+/* SCTP_SS_ROUND_ROBIN_PACKET */
 {
 #if defined(_WIN32)
 	sctp_ss_default_init,
@@ -1035,7 +1037,7 @@ const struct sctp_ss_functions sctp_ss_functions[] = {
 	.sctp_ss_is_user_msgs_incomplete = sctp_ss_default_is_user_msgs_incomplete
 #endif
 },
-/* SCTP_SS_PRIO */
+/* SCTP_SS_PRIORITY */
 {
 #if defined(_WIN32)
 	sctp_ss_default_init,
@@ -1065,7 +1067,7 @@ const struct sctp_ss_functions sctp_ss_functions[] = {
 	.sctp_ss_is_user_msgs_incomplete = sctp_ss_default_is_user_msgs_incomplete
 #endif
 },
-/* SCTP_SS_FB */
+/* SCTP_SS_FAIR_BANDWITH */
 {
 #if defined(_WIN32)
 	sctp_ss_default_init,
@@ -1095,7 +1097,7 @@ const struct sctp_ss_functions sctp_ss_functions[] = {
 	.sctp_ss_is_user_msgs_incomplete = sctp_ss_default_is_user_msgs_incomplete
 #endif
 },
-/* SCTP_SS_FCFS */
+/* SCTP_SS_FIRST_COME */
 {
 #if defined(_WIN32)
 	sctp_ss_fcfs_init,
@@ -1105,7 +1107,7 @@ const struct sctp_ss_functions sctp_ss_functions[] = {
 	sctp_ss_fcfs_is_empty,
 	sctp_ss_fcfs_remove,
 	sctp_ss_fcfs_select,
-	sctp_ss_fcfs_scheduled,
+	sctp_ss_default_scheduled,
 	sctp_ss_default_packet_done,
 	sctp_ss_default_get_value,
 	sctp_ss_default_set_value,
@@ -1118,7 +1120,7 @@ const struct sctp_ss_functions sctp_ss_functions[] = {
 	.sctp_ss_is_empty = sctp_ss_fcfs_is_empty,
 	.sctp_ss_remove_from_stream = sctp_ss_fcfs_remove,
 	.sctp_ss_select_stream = sctp_ss_fcfs_select,
-	.sctp_ss_scheduled = sctp_ss_fcfs_scheduled,
+	.sctp_ss_scheduled = sctp_ss_default_scheduled,
 	.sctp_ss_packet_done = sctp_ss_default_packet_done,
 	.sctp_ss_get_value = sctp_ss_default_get_value,
 	.sctp_ss_set_value = sctp_ss_default_set_value,

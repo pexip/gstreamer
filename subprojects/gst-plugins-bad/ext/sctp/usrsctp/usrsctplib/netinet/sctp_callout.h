@@ -35,8 +35,6 @@
 __FBSDID("$FreeBSD$");
 #endif
 
-#include <stdint.h>
-
 #ifndef _NETINET_SCTP_CALLOUT_
 #define _NETINET_SCTP_CALLOUT_
 

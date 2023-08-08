@@ -34,7 +34,7 @@
 
 #if defined(__FreeBSD__) && !defined(__Userspace__)
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
+__FBSDID("$FreeBSD: head/sys/netinet/sctp_uio.h 362473 2020-06-21 23:12:56Z tuexen $");
 #endif
 
 #ifndef _NETINET_SCTP_UIO_H_
@@ -45,6 +45,7 @@ __FBSDID("$FreeBSD$");
 #define _KERNEL
 #endif
 #endif
+
 #if !defined(_WIN32)
 #if !defined(_KERNEL)
 #include <stdint.h>
@@ -127,6 +128,7 @@ struct sctp_initmsg {
  * The assoc up needs a verfid
  * all sendrcvinfo's need a verfid for SENDING only.
  */
+
 
 #define SCTP_ALIGN_RESV_PAD 92
 #define SCTP_ALIGN_RESV_PAD_SHORT 76
@@ -439,6 +441,7 @@ struct sctp_setadaption {
 	uint32_t ssb_adaption_ind;
 };
 
+
 /*
  * Partial Delivery API event
  */
@@ -454,6 +457,7 @@ struct sctp_pdapi_event {
 
 /* indication values */
 #define SCTP_PARTIAL_DELIVERY_ABORTED	0x0001
+
 
 /*
  * authentication key event
@@ -474,12 +478,14 @@ struct sctp_authkey_event {
 #define SCTP_AUTH_NO_AUTH	0x0002
 #define SCTP_AUTH_FREE_KEY	0x0003
 
+
 struct sctp_sender_dry_event {
 	uint16_t sender_dry_type;
 	uint16_t sender_dry_flags;
 	uint32_t sender_dry_length;
 	sctp_assoc_t sender_dry_assoc_id;
 };
+
 
 /*
  * Stream reset event - subscribe to SCTP_STREAM_RESET_EVENT
@@ -527,6 +533,7 @@ struct sctp_stream_change_event {
 
 #define SCTP_STREAM_CHANGE_DENIED	0x0004
 #define SCTP_STREAM_CHANGE_FAILED	0x0008
+
 
 /* SCTP notification event */
 struct sctp_tlv {
@@ -809,10 +816,6 @@ struct sctp_get_nonce_values {
 	uint32_t gn_peers_tag;
 	uint32_t gn_local_tag;
 };
-
-/* Values for SCTP_ACCEPT_ZERO_CHECKSUM */
-#define SCTP_EDMID_NONE             0
-#define SCTP_EDMID_LOWER_LAYER_DTLS 1
 
 /* Debugging logs */
 struct sctp_str_log {
@@ -1108,10 +1111,8 @@ struct sctpstat {
 	uint32_t  sctps_send_burst_avoid; /* Unused */
 	uint32_t  sctps_send_cwnd_avoid;  /* Send cwnd full  avoidance, already max burst inflight to net */
 	uint32_t  sctps_fwdtsn_map_over;  /* number of map array over-runs via fwd-tsn's */
-	uint32_t  sctps_queue_upd_ecne;   /* Number of times we queued or updated an ECN chunk on send queue */
-	uint32_t  sctps_recvzerocrc;      /* Number of accepted packets with zero CRC */
-	uint32_t  sctps_sendzerocrc;      /* Number of packets sent with zero CRC */
-	uint32_t  sctps_reserved[29];     /* Future ABI compat - remove int's from here when adding new */
+	uint32_t  sctps_queue_upd_ecne;  /* Number of times we queued or updated an ECN chunk on send queue */
+	uint32_t  sctps_reserved[31];     /* Future ABI compat - remove int's from here when adding new */
 };
 
 #define SCTP_STAT_INCR(_x) SCTP_STAT_INCR_BY(_x,1)
@@ -1135,6 +1136,7 @@ struct sctpstat {
 #define SCTP_STAT_DECR_COUNTER32(_x) SCTP_STAT_DECR(_x)
 #define SCTP_STAT_DECR_COUNTER64(_x) SCTP_STAT_DECR(_x)
 #define SCTP_STAT_DECR_GAUGE32(_x) SCTP_STAT_DECR(_x)
+
 
 /***********************************/
 /* And something for us old timers */
@@ -1168,6 +1170,7 @@ struct sctpstat {
 #endif
 #endif
 /***********************************/
+
 
 struct xsctp_inpcb {
 	uint32_t last;
@@ -1283,7 +1286,7 @@ int
 sctp_lower_sosend(struct socket *so,
     struct sockaddr *addr,
     struct uio *uio,
-    struct mbuf *top,
+    struct mbuf *i_pak,
     struct mbuf *control,
     int flags,
     struct sctp_sndrcvinfo *srcv

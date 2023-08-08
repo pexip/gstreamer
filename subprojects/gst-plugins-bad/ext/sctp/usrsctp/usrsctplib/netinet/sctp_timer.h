@@ -34,7 +34,7 @@
 
 #if defined(__FreeBSD__) && !defined(__Userspace__)
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
+__FBSDID("$FreeBSD: head/sys/netinet/sctp_timer.h 359195 2020-03-21 16:12:19Z tuexen $");
 #endif
 
 #ifndef _NETINET_SCTP_TIMER_H_
@@ -99,5 +99,6 @@ void sctp_slowtimo(void);
 void sctp_gc(struct inpcbinfo *);
 #endif
 #endif
+
 #endif
 #endif
