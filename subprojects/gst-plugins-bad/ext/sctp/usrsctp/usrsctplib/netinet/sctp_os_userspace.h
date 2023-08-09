@@ -561,6 +561,22 @@ MALLOC_DECLARE(SCTP_M_SOCKOPT);
 
 #if defined(SCTP_LOCAL_TRACE_BUF)
 
+#ifndef get_cyclecount
+static uint64_t 
+get_cyclecount()
+{
+  struct timespec ts;
+  int ret;
+
+  ret = clock_gettime (CLOCK_MONOTONIC, &ts);
+
+  if (ret == 0)
+  	return 0;
+
+  return (((uint64_t) ts.tv_sec) * 1000000) + (ts.tv_nsec / 1000);
+}
+#endif
+
 #define SCTP_GET_CYCLECOUNT get_cyclecount()
 #define SCTP_CTR6 sctp_log_trace
 

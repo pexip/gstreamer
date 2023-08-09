@@ -147,7 +147,7 @@ if true
     compile_args += ['-DINVARIANTS']
 endif
 if not gst_debug_disabled
-    compile_args += ['-DSCTP_DEBUG']
+    compile_args += ['-DSCTP_DEBUG', '-DSCTP_LOG_CLOSING', '-DSCTP_LOCAL_TRACE_BUF']
 endif
 # We do not need the socket API in GStreamer since we will wrap inside a
 # DTLS packet anyway, because we use SCTP for WebRTC data channels.
