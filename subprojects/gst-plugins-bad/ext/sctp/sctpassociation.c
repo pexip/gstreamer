@@ -124,8 +124,6 @@ static void handle_message (GstSctpAssociation * self, guint8 * data,
 static void maybe_set_state_to_ready_unlocked (GstSctpAssociation * self);
 static void gst_sctp_association_change_state_unlocked (GstSctpAssociation *
     self, GstSctpAssociationState new_state);
-static void gst_sctp_association_change_state (GstSctpAssociation * self,
-    GstSctpAssociationState new_state);
 
 static void
 gst_sctp_association_class_init (GstSctpAssociationClass * klass)
@@ -563,7 +561,10 @@ void
 gst_sctp_association_incoming_packet (GstSctpAssociation * self,
     const guint8 * buf, guint32 length)
 {
-  usrsctp_conninput ((void *) self, (const void *) buf, (size_t) length, 0);
+  g_mutex_lock (&self->association_mutex);
+  if (self->sctp_ass_sock)
+    usrsctp_conninput ((void *) self, (const void *) buf, (size_t) length, 0);
+  g_mutex_unlock (&self->association_mutex);
 }
 
 GstFlowReturn
@@ -998,6 +999,12 @@ receive_cb (struct socket *sock, union sctp_sockstore addr, void *data,
     return 1;
   }
 
+
+  /* If we acquire the lock here it means this is the SCTP timer thread, if
+     the thread has already acquired the lock, its coming from
+     gst_sctp_association_incoming_packet()  */
+  gboolean acquired_lock = g_mutex_trylock (&self->association_mutex);
+
   if (!data) {
     /* This is a notification that socket shutdown is complete */
     GST_INFO_OBJECT (self, "Received shutdown complete notification");
@@ -1017,6 +1024,9 @@ receive_cb (struct socket *sock, union sctp_sockstore addr, void *data,
           ntohl (rcv_info.rcv_ppid));
     }
   }
+
+  if (acquired_lock)
+    g_mutex_unlock (&self->association_mutex);
 
   return 1;
 }
@@ -1044,7 +1054,7 @@ handle_notification (GstSctpAssociation * self,
       break;
     case SCTP_SHUTDOWN_EVENT:
       GST_DEBUG_OBJECT (self, "Event: SCTP_SHUTDOWN_EVENT");
-      gst_sctp_association_change_state (self,
+      gst_sctp_association_change_state_unlocked (self,
           GST_SCTP_ASSOCIATION_STATE_DISCONNECTING);
       break;
     case SCTP_ADAPTATION_INDICATION:
@@ -1116,7 +1126,6 @@ handle_sctp_comm_up (GstSctpAssociation * self,
     const struct sctp_assoc_change *sac)
 {
   GST_INFO_OBJECT (self, "SCTP_COMM_UP");
-  g_mutex_lock (&self->association_mutex);
   if (self->state == GST_SCTP_ASSOCIATION_STATE_CONNECTING) {
     self->sctp_assoc_id = sac->sac_assoc_id;
     _apply_aggressive_heartbeat_unlocked (self);
@@ -1129,7 +1138,6 @@ handle_sctp_comm_up (GstSctpAssociation * self,
     GST_WARNING_OBJECT (self, "SCTP association in unexpected state: %d",
         self->state);
   }
-  g_mutex_unlock (&self->association_mutex);
 }
 
 static void
@@ -1140,9 +1148,7 @@ handle_sctp_comm_lost_or_shutdown (GstSctpAssociation * self,
       sac->sac_state == SCTP_COMM_LOST ?
       "SCTP_COMM_LOST" : "SCTP_SHUTDOWN_COMP");
 
-  g_mutex_lock (&self->association_mutex);
   gst_sctp_association_disconnect_unlocked (self, FALSE);
-  g_mutex_unlock (&self->association_mutex);
 }
 
 static void
@@ -1151,20 +1157,16 @@ gst_sctp_association_notify_restart (GstSctpAssociation * self)
   GstSctpAssociationRestartCb restart_cb;
   gpointer user_data;
 
-  g_mutex_lock (&self->association_mutex);
   restart_cb = self->decoder_ctx.restart_cb;
   user_data = self->decoder_ctx.element;
   if (user_data)
     gst_object_ref (user_data);
-  g_mutex_unlock (&self->association_mutex);
 
   if (restart_cb)
     restart_cb (self, user_data);
 
-  g_mutex_lock (&self->association_mutex);
   if (user_data)
     gst_object_unref (user_data);
-  g_mutex_unlock (&self->association_mutex);
 }
 
 static void
@@ -1174,20 +1176,16 @@ gst_sctp_association_notify_stream_reset (GstSctpAssociation * self,
   GstSctpAssociationStreamResetCb stream_reset_cb;
   gpointer user_data;
 
-  g_mutex_lock (&self->association_mutex);
   stream_reset_cb = self->decoder_ctx.stream_reset_cb;
   user_data = self->decoder_ctx.element;
   if (user_data)
     gst_object_ref (user_data);
-  g_mutex_unlock (&self->association_mutex);
 
   if (stream_reset_cb)
     stream_reset_cb (self, stream_id, user_data);
 
-  g_mutex_lock (&self->association_mutex);
   if (user_data)
     gst_object_unref (user_data);
-  g_mutex_unlock (&self->association_mutex);
 }
 
 static void
@@ -1211,7 +1209,7 @@ handle_association_changed (GstSctpAssociation * self,
       break;
     case SCTP_CANT_STR_ASSOC:
       GST_WARNING_OBJECT (self, "SCTP event SCTP_CANT_STR_ASSOC received");
-      gst_sctp_association_change_state (self,
+      gst_sctp_association_change_state_unlocked (self,
           GST_SCTP_ASSOCIATION_STATE_ERROR);
       break;
   }
@@ -1239,7 +1237,6 @@ static void
 handle_message (GstSctpAssociation * self, guint8 * data, guint32 datalen,
     guint16 stream_id, guint32 ppid)
 {
-  g_mutex_lock (&self->association_mutex);
   if (self->decoder_ctx.packet_received_cb) {
     /* It's the callbacks job to free the data correctly */
     self->decoder_ctx.packet_received_cb (self, data, datalen, stream_id, ppid,
@@ -1251,7 +1248,6 @@ handle_message (GstSctpAssociation * self, guint8 * data, guint32 datalen,
      * CRTs. */
     usrsctp_freedumpbuffer ((gchar *) data);
   }
-  g_mutex_unlock (&self->association_mutex);
 }
 
 static void
@@ -1290,13 +1286,4 @@ gst_sctp_association_change_state_unlocked (GstSctpAssociation * self,
   if (encoder)
     gst_object_unref (encoder);
   gst_sctp_association_unref (self);
-}
-
-static void
-gst_sctp_association_change_state (GstSctpAssociation * self,
-    GstSctpAssociationState new_state)
-{
-  g_mutex_lock (&self->association_mutex);
-  gst_sctp_association_change_state_unlocked (self, new_state);
-  g_mutex_unlock (&self->association_mutex);
 }
