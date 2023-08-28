@@ -425,10 +425,10 @@ gst_rtp_vp9_calc_header_len (GstRtpVP9Pay * self, gboolean start)
     /* FIXME: Only for the first packet in the key frame */
     if (self->parse_frames) {
       /* Y=1, account for width and height octets */
-      len += 8;
+      len += 8 - 3;
     } else {
       /* Y=0 */
-      len += 4;
+      len += 4 - 3;
     }
   }
 
@@ -534,11 +534,11 @@ gst_rtp_vp9_create_header_buffer (GstRtpVP9Pay * self,
       p[off++] = self->height >> 8;
       p[off++] = self->height & 0xFF;
     } else {
-      p[off++] = 0x08;                /* N_S=0, Y=0 G=1 */
+      p[off++] = 0x00;                /* N_S=0, Y=0 G=0 */
     }
-    p[off++] = 0x01;                  /* N_G=1 */
-    p[off++] = 0x04;                  /* T=0 U=0 R=1 */
-    p[off++] = 0x01;                  /* P_DIFF=1 */
+    // p[off++] = 0x01;                  /* N_G=1 */
+    // p[off++] = 0x04;                  /* T=0 U=0 R=1 */
+    // p[off++] = 0x01;                  /* P_DIFF=1 */
   }
 
   g_assert_cmpint (off, ==, hdrlen);
