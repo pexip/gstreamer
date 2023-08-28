@@ -639,11 +639,30 @@ gst_rtp_vp9_pay_sink_event (GstRTPBasePayload * payload, GstEvent * event)
   GstRtpVP9Pay *self = GST_RTP_VP9_PAY (payload);
   GstEventType event_type = GST_EVENT_TYPE (event);
 
-  if (event_type == GST_EVENT_GAP || event_type == GST_EVENT_FLUSH_START) {
-    gint picture_id = self->picture_id;
-    gst_rtp_vp9_pay_picture_id_increment (self);
-    GST_DEBUG_OBJECT (payload, "Incrementing picture ID on %s event %d -> %d",
-        GST_EVENT_TYPE_NAME (event), picture_id, self->picture_id);
+  switch (event_type) {
+    case GST_EVENT_GAP:
+    case GST_EVENT_FLUSH_START:
+    {
+      gint picture_id = self->picture_id;
+      gst_rtp_vp9_pay_picture_id_increment (self);
+      GST_DEBUG_OBJECT (payload, "Incrementing picture ID on %s event %d -> %d",
+          GST_EVENT_TYPE_NAME (event), picture_id, self->picture_id);
+    }
+      break;
+    case GST_EVENT_CAPS:
+    {
+      GstCaps * caps = NULL;
+      GstStructure * s = NULL;
+      gst_event_parse_caps (event, &caps);
+      s = gst_caps_get_structure (caps, 0);
+      gint width, height;
+      if (gst_structure_get_int (s, "width", &width)
+          && gst_structure_get_int (s, "height", &height)) {
+        self->width = width;
+        self->height = height;
+      }
+    }
+      break;
   }
 
   return GST_RTP_BASE_PAYLOAD_CLASS (gst_rtp_vp9_pay_parent_class)->sink_event
