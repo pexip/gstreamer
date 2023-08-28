@@ -63,6 +63,7 @@ struct _GstRtpVP9Pay
   gint picture_id_offset;
   gint picture_id;
   gboolean parse_frames;
+  gboolean add_ss;
 };
 
 GType gst_rtp_vp9_pay_get_type (void);

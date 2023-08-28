@@ -43,6 +43,7 @@ GST_DEBUG_CATEGORY_STATIC (gst_rtp_vp9_pay_debug);
 #define DEFAULT_PICTURE_ID_MODE VP9_PAY_NO_PICTURE_ID
 #define DEFAULT_PICTURE_ID_OFFSET (-1)
 #define DEFAULT_PARSE_FRAMES TRUE
+#define DEFAULT_ADD_SS TRUE
 
 enum
 {
@@ -51,6 +52,7 @@ enum
   PROP_PICTURE_ID_MODE,
   PROP_PICTURE_ID_OFFSET,
   PROP_PARSE_FRAMES,
+  PROP_ADD_SS,
 };
 
 #define GST_TYPE_RTP_VP9_PAY_PICTURE_ID_MODE (gst_rtp_vp9_pay_picture_id_mode_get_type())
@@ -139,6 +141,7 @@ gst_rtp_vp9_pay_init (GstRtpVP9Pay * obj)
   obj->picture_id_mode = DEFAULT_PICTURE_ID_MODE;
   obj->picture_id_offset = DEFAULT_PICTURE_ID_OFFSET;
   obj->parse_frames = DEFAULT_PARSE_FRAMES;
+  obj->add_ss = DEFAULT_ADD_SS;
   gst_rtp_vp9_pay_picture_id_reset (obj);
 }
 
@@ -190,6 +193,12 @@ gst_rtp_vp9_pay_class_init (GstRtpVP9PayClass * gst_rtp_vp9_pay_class)
       DEFAULT_PARSE_FRAMES,
       G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS | G_PARAM_CONSTRUCT_ONLY));
 
+  g_object_class_install_property (gobject_class, PROP_ADD_SS,
+      g_param_spec_boolean ("add-ss", "Add Scalability Structure (SS)",
+      "Whether to add (hardcoded) scalability structure information",
+      DEFAULT_ADD_SS,
+      G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS | G_PARAM_CONSTRUCT_ONLY));
+
   gst_element_class_add_static_pad_template (element_class,
       &gst_rtp_vp9_pay_sink_template);
   gst_element_class_add_static_pad_template (element_class,
@@ -227,6 +236,9 @@ gst_rtp_vp9_pay_set_property (GObject * object,
     case PROP_PARSE_FRAMES:
       rtpvp9pay->parse_frames = g_value_get_boolean (value);
       break;
+    case PROP_ADD_SS:
+      rtpvp9pay->add_ss = g_value_get_boolean (value);
+      break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
       break;
@@ -251,6 +263,9 @@ gst_rtp_vp9_pay_get_property (GObject * object,
       break;
     case PROP_PARSE_FRAMES:
       g_value_set_boolean (value, rtpvp9pay->parse_frames);
+      break;
+    case PROP_ADD_SS:
+      g_value_set_boolean (value, rtpvp9pay->add_ss);
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
@@ -403,7 +418,7 @@ gst_rtp_vp9_calc_header_len (GstRtpVP9Pay * self, gboolean start)
   /* Assume non-flexible mode */
   /* Assume L-bit not set, no L header */
 
-  if (self->is_keyframe && start) {
+  if (self->add_ss && self->is_keyframe && start) {
     /* Assume V-bit set */
     /* FIXME: SS depends on layers and prediction structure */
     /* For now assume 1 spatial and 1 temporal layer. */
@@ -507,7 +522,7 @@ gst_rtp_vp9_create_header_buffer (GstRtpVP9Pay * self,
     /* E=1 */
     p[0] |= 0x04;
 
-  if (self->is_keyframe && start) {
+  if (self->add_ss && self->is_keyframe && start) {
     /* V=1 */
     p[0] |= 0x02;
     /* scalability structure, hard coded for now to be similar to chromium for
