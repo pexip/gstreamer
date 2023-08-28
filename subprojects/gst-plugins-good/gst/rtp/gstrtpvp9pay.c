@@ -423,7 +423,13 @@ gst_rtp_vp9_calc_header_len (GstRtpVP9Pay * self, gboolean start)
     /* FIXME: SS depends on layers and prediction structure */
     /* For now assume 1 spatial and 1 temporal layer. */
     /* FIXME: Only for the first packet in the key frame */
-    len += 8;
+    if (self->parse_frames) {
+      /* Y=1, account for width and height octets */
+      len += 8;
+    } else {
+      /* Y=0 */
+      len += 4;
+    }
   }
 
   return len;
@@ -521,14 +527,18 @@ gst_rtp_vp9_create_header_buffer (GstRtpVP9Pay * self,
     p[0] |= 0x02;
     /* scalability structure, hard coded for now to be similar to chromium for
      * quick and dirty interop */
-    p[off++] = 0x18;            /* N_S=0 Y=1 G=1 */
-    p[off++] = self->width >> 8;
-    p[off++] = self->width & 0xFF;
-    p[off++] = self->height >> 8;
-    p[off++] = self->height & 0xFF;
-    p[off++] = 0x01;            /* N_G=1 */
-    p[off++] = 0x04;            /* T=0, U=0, R=1 */
-    p[off++] = 0x01;            /* P_DIFF=1 */
+    if (self->parse_frames) {
+      p[off++] = 0x18;                /* N_S=0 Y=1 G=1 */
+      p[off++] = self->width >> 8;
+      p[off++] = self->width & 0xFF;
+      p[off++] = self->height >> 8;
+      p[off++] = self->height & 0xFF;
+    } else {
+      p[off++] = 0x08;                /* N_S=0, Y=0 G=1 */
+    }
+    p[off++] = 0x01;                  /* N_G=1 */
+    p[off++] = 0x04;                  /* T=0 U=0 R=1 */
+    p[off++] = 0x01;                  /* P_DIFF=1 */
   }
 
   g_assert_cmpint (off, ==, hdrlen);
