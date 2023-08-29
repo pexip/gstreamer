@@ -1763,11 +1763,7 @@ gst_vtenc_encode_frame (GstVTEnc * self, GstVideoCodecFrame * frame)
   vt_status = VTCompressionSessionEncodeFrame (self->session,
       pbuf, ts, duration, frame_props,
       GINT_TO_POINTER (frame->system_frame_number), NULL);
-  GST_VIDEO_ENCODER_STREAM_LOCK (self);
-
-  gst_video_codec_frame_unref (frame);
-  CVPixelBufferRelease (pbuf);
-
+ 
   if (vt_status == kVTInvalidSessionErr) {
     GST_WARNING_OBJECT (self, "Invalid compression session, resetting.");
     gst_vtenc_reset_session (self);
@@ -1777,6 +1773,11 @@ gst_vtenc_encode_frame (GstVTEnc * self, GstVideoCodecFrame * frame)
   } else if (vt_status != noErr) {
     GST_WARNING_OBJECT (self, "VTCompressionSessionEncodeFrame returned %d", (int) vt_status);
   }
+
+  GST_VIDEO_ENCODER_STREAM_LOCK (self);
+
+  gst_video_codec_frame_unref (frame);
+  CVPixelBufferRelease (pbuf);
 
   renegotiated = FALSE;
   while ((outframe = g_async_queue_try_pop (self->cur_outframes))) {
