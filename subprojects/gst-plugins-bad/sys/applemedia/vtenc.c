@@ -931,6 +931,13 @@ gst_vtenc_is_negotiated (GstVTEnc * self)
   return self->negotiated_width != 0;
 }
 
+static void
+gst_vtenc_reset_session (GstVTEnc * self)
+{
+  gst_vtenc_destroy_session (self, &self->session);
+  self->session = gst_vtenc_create_session (self);
+}
+
 /*
  * When the image is opaque but the output ProRes format has an alpha
  * component (4 component, 32 bits per pixel), Apple requires that we signal
@@ -1758,14 +1765,18 @@ gst_vtenc_encode_frame (GstVTEnc * self, GstVideoCodecFrame * frame)
       GINT_TO_POINTER (frame->system_frame_number), NULL);
   GST_VIDEO_ENCODER_STREAM_LOCK (self);
 
-  if (vt_status != noErr) {
-    GST_WARNING_OBJECT (self, "VTCompressionSessionEncodeFrame returned %d",
-        (int) vt_status);
-  }
-
   gst_video_codec_frame_unref (frame);
-
   CVPixelBufferRelease (pbuf);
+
+  if (vt_status == kVTInvalidSessionErr) {
+    GST_WARNING_OBJECT (self, "Invalid compression session, resetting.");
+    gst_vtenc_reset_session (self);
+  } else if (vt_status == kVTVideoEncoderMalfunctionErr) {
+    GST_WARNING_OBJECT (self, "Invalid compression session, resetting.");
+    gst_vtenc_reset_session (self);
+  } else if (vt_status != noErr) {
+    GST_WARNING_OBJECT (self, "VTCompressionSessionEncodeFrame returned %d", (int) vt_status);
+  }
 
   renegotiated = FALSE;
   while ((outframe = g_async_queue_try_pop (self->cur_outframes))) {
