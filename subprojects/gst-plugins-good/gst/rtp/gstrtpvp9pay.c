@@ -633,6 +633,30 @@ gst_rtp_vp9_pay_handle_buffer (GstRTPBasePayload * payload, GstBuffer * buffer)
   return ret;
 }
 
+static void
+gst_rtp_vp9_pay_set_resolution_from_event (GstRtpVP9Pay * self,
+    const GstEvent * event)
+{
+  GstCaps * caps = NULL;
+  GstStructure * s = NULL;
+
+  gst_event_parse_caps (event, &caps);
+  s = gst_caps_get_structure (caps, 0);
+
+  gint width = 0, height = 0;
+  if (gst_structure_get_int (s, "width", &width)
+      && gst_structure_get_int (s, "height", &height)
+      && width > 0 && height > 0) {
+    GST_INFO_OBJECT (self, "Parsed resolution from caps: %dx%d -> %dx%d",
+        self->width, self->height, width, height);
+    self->width = width;
+    self->height = height;
+  } else {
+    GST_INFO_OBJECT (self, "Failed to parse resolution from caps: "
+        "%dx%d -/-> %dx%d",self->width, self->height, width, height);
+  }
+}
+
 static gboolean
 gst_rtp_vp9_pay_sink_event (GstRTPBasePayload * payload, GstEvent * event)
 {
@@ -640,10 +664,12 @@ gst_rtp_vp9_pay_sink_event (GstRTPBasePayload * payload, GstEvent * event)
   GstEventType event_type = GST_EVENT_TYPE (event);
 
   if (event_type == GST_EVENT_GAP || event_type == GST_EVENT_FLUSH_START) {
-    gint picture_id = self->picture_id;
-    gst_rtp_vp9_pay_picture_id_increment (self);
-    GST_DEBUG_OBJECT (payload, "Incrementing picture ID on %s event %d -> %d",
-        GST_EVENT_TYPE_NAME (event), picture_id, self->picture_id);
+      gint picture_id = self->picture_id;
+      gst_rtp_vp9_pay_picture_id_increment (self);
+      GST_DEBUG_OBJECT (payload, "Incrementing picture ID on %s event %d -> %d",
+          GST_EVENT_TYPE_NAME (event), picture_id, self->picture_id);
+  } else if (event_type == GST_EVENT_CAPS && !self->parse_frames) {
+      gst_rtp_vp9_pay_set_resolution_from_event (self, event);
   }
 
   return GST_RTP_BASE_PAYLOAD_CLASS (gst_rtp_vp9_pay_parent_class)->sink_event
