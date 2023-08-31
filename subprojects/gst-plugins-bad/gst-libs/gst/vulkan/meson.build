@@ -88,6 +88,7 @@ has_vulkan_header = false
 vulkan_dep = dependency('', required: false)
 vulkan_inc_dir = ''
 enabled_vulkan_winsys = []
+is_ios_simulator = host_system == 'ios' and meson.get_external_property('needs_exe_wrapper')
 
 vulkan_conf = configuration_data()
 vulkan_conf_options = [
@@ -120,7 +121,15 @@ if ['ios', 'darwin'].contains(host_system)
 
   if vulkan_root != '' and vulkan_root != 'None'
     molten_vk_root = join_paths(vulkan_root, 'MoltenVK')
-    platform_dir = host_system == 'ios' ? 'ios-arm64' : 'macos-arm64_x86_64'
+
+    if is_ios_simulator
+      platform_dir = 'ios-arm64_x86_64-simulator'
+    elif host_system == 'ios'
+      platform_dir = 'ios-arm64'
+    else
+      platform_dir = 'macos-arm64_x86_64'
+    endif
+
     vulkan_lib_dir = join_paths(molten_vk_root, 'MoltenVK.xcframework', platform_dir)
     vulkan_inc_dir = join_paths(molten_vk_root, 'include')
     vulkan_lib = cc.find_library('MoltenVK', dirs: vulkan_lib_dir,
