@@ -88,7 +88,7 @@ has_vulkan_header = false
 vulkan_dep = dependency('', required: false)
 vulkan_inc_dir = ''
 enabled_vulkan_winsys = []
-is_ios_simulator = host_system == 'ios' and meson.get_external_property('needs_exe_wrapper')
+is_ios_simulator = host_system == 'ios' and meson.get_external_property('needs_exe_wrapper', false)
 
 vulkan_conf = configuration_data()
 vulkan_conf_options = [
