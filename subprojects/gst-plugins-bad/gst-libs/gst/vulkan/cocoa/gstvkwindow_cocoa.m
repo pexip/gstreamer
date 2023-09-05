@@ -62,6 +62,7 @@ struct _GstVulkanWindowCocoaPrivate
 {
   gpointer internal_win_id;
   gpointer internal_view;
+  gpointer external_view;
 
   gint preferred_width;
   gint preferred_height;
@@ -80,6 +81,8 @@ static gboolean gst_vulkan_window_cocoa_get_presentation_support (GstVulkanWindo
 static gboolean gst_vulkan_window_cocoa_open (GstVulkanWindow * window,
     GError ** error);
 static void gst_vulkan_window_cocoa_close (GstVulkanWindow * window);
+static void gst_vulkan_window_cocoa_set_window_handle (GstVulkanWindow * window,
+    guintptr window_handle);
 
 static void
 gst_vulkan_window_cocoa_finalize (GObject * object)
@@ -100,6 +103,7 @@ gst_vulkan_window_cocoa_class_init (GstVulkanWindowCocoaClass * klass)
   window_class->get_surface = gst_vulkan_window_cocoa_get_surface;
   window_class->get_presentation_support =
       gst_vulkan_window_cocoa_get_presentation_support;
+  window_class->set_window_handle = gst_vulkan_window_cocoa_set_window_handle;
 }
 
 static void
@@ -154,9 +158,14 @@ gst_vulkan_window_cocoa_show (GstVulkanWindow * window)
   GstVulkanWindowCocoa *window_cocoa = GST_VULKAN_WINDOW_COCOA (window);
   GstVulkanWindowCocoaPrivate *priv = GET_PRIV (window_cocoa);
 
-  if (!priv->visible)
-    _gst_vk_invoke_on_main ((GstVulkanWindowFunc) _show_window,
-        gst_object_ref (window), (GDestroyNotify) gst_object_unref);
+  if (!priv->visible) {
+    if (priv->external_view) {
+      gst_vulkan_window_cocoa_set_window_handle (window, (guintptr) priv->external_view);
+    } else {
+      _gst_vk_invoke_on_main ((GstVulkanWindowFunc) _show_window,
+          gst_object_ref (window), (GDestroyNotify) gst_object_unref);
+    }
+  }
 }
 
 static void
@@ -190,6 +199,10 @@ _create_window (GstVulkanWindowCocoa * window_cocoa)
 
   priv->internal_win_id = (__bridge_retained gpointer)internal_win_id;
   priv->internal_view = (__bridge_retained gpointer)view;
+
+  if (priv->external_view)
+    gst_vulkan_window_cocoa_set_window_handle (GST_VULKAN_WINDOW (window_cocoa),
+        (guintptr) priv->external_view);
 
   gst_vulkan_window_cocoa_show (GST_VULKAN_WINDOW (window_cocoa));
 }
@@ -243,6 +256,49 @@ gst_vulkan_window_cocoa_get_presentation_support (GstVulkanWindow * window,
     GstVulkanDevice * device, guint32 queue_family_idx)
 {
   return TRUE;
+}
+
+static void gst_vulkan_window_cocoa_set_window_handle (GstVulkanWindow * window,
+    guintptr handle)
+{
+  GST_ERROR("set_window_handle !!!! window_handle : %p", handle);
+
+  GstVulkanWindowCocoa *window_cocoa;
+  GstVulkanWindowCocoaPrivate *priv;
+
+  window_cocoa = GST_VULKAN_WINDOW_COCOA (window);
+  priv = GET_PRIV(window_cocoa);
+
+  if (priv->internal_win_id) {
+    if (handle) {
+      priv->external_view = (gpointer)handle;
+      priv->visible = TRUE;
+    } else {
+      /* bring back our internal window */
+      priv->external_view = 0;
+      priv->visible = FALSE;
+    }
+
+    dispatch_async (dispatch_get_main_queue (), ^{
+      GstVulkanNSWindow *internal_win_id =
+          (__bridge GstVulkanNSWindow *)priv->internal_win_id;
+      NSView *external_view =
+          (__bridge NSView *)priv->external_view;
+      NSView *view = (__bridge NSView *)priv->internal_view;
+
+      [internal_win_id orderOut:internal_win_id];
+
+      [external_view addSubview: view];
+
+      [external_view setAutoresizesSubviews: YES];
+      [view setFrame: [external_view bounds]];
+      [view setAutoresizingMask: NSViewWidthSizable|NSViewHeightSizable];
+    });
+  } else {
+    /* no internal window yet so delay it to the next drawing */
+    priv->external_view = (gpointer)handle;
+    priv->visible = FALSE;
+  }
 }
 
 static gboolean
