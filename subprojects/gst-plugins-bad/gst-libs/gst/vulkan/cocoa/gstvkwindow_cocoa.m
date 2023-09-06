@@ -258,7 +258,29 @@ gst_vulkan_window_cocoa_get_presentation_support (GstVulkanWindow * window,
   return TRUE;
 }
 
-static void gst_vulkan_window_cocoa_set_window_handle (GstVulkanWindow * window,
+static void
+_gst_vulkan_window_cocoa_insert_internal_win (gpointer data)
+{
+  GstVulkanWindowCocoa *window_cocoa;
+  GstVulkanWindowCocoaPrivate *priv;
+
+  window_cocoa = (GstVulkanWindowCocoa*) data;
+  priv = GET_PRIV(window_cocoa);
+
+  GstVulkanNSWindow *internal_win_id = (__bridge GstVulkanNSWindow *)priv->internal_win_id;
+  NSView *external_view = (__bridge NSView *)priv->external_view;
+  NSView *view = (__bridge NSView *)priv->internal_view;
+
+  [internal_win_id orderOut:internal_win_id];
+  [external_view addSubview: view];
+
+  [external_view setAutoresizesSubviews: YES];
+  [view setFrame: [external_view bounds]];
+  [view setAutoresizingMask: NSViewWidthSizable|NSViewHeightSizable];
+}
+
+static void
+gst_vulkan_window_cocoa_set_window_handle (GstVulkanWindow * window,
     guintptr handle)
 {
   GstVulkanWindowCocoa *window_cocoa;
@@ -277,21 +299,9 @@ static void gst_vulkan_window_cocoa_set_window_handle (GstVulkanWindow * window,
       priv->visible = FALSE;
     }
 
-    dispatch_async (dispatch_get_main_queue (), ^{
-      GstVulkanNSWindow *internal_win_id =
-          (__bridge GstVulkanNSWindow *)priv->internal_win_id;
-      NSView *external_view =
-          (__bridge NSView *)priv->external_view;
-      NSView *view = (__bridge NSView *)priv->internal_view;
+    _gst_vulkan_cocoa_invoke_on_main ((GstVulkanWindowFunc) _gst_vulkan_window_cocoa_insert_internal_win,
+      gst_object_ref (window), (GDestroyNotify) gst_object_unref);
 
-      [internal_win_id orderOut:internal_win_id];
-
-      [external_view addSubview: view];
-
-      [external_view setAutoresizesSubviews: YES];
-      [view setFrame: [external_view bounds]];
-      [view setAutoresizingMask: NSViewWidthSizable|NSViewHeightSizable];
-    });
   } else {
     /* no internal window yet so delay it to the next drawing */
     priv->external_view = (gpointer)handle;
