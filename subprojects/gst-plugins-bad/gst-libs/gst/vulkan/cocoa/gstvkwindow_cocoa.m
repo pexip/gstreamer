@@ -261,8 +261,6 @@ gst_vulkan_window_cocoa_get_presentation_support (GstVulkanWindow * window,
 static void gst_vulkan_window_cocoa_set_window_handle (GstVulkanWindow * window,
     guintptr handle)
 {
-  GST_ERROR("set_window_handle !!!! window_handle : %p", handle);
-
   GstVulkanWindowCocoa *window_cocoa;
   GstVulkanWindowCocoaPrivate *priv;
 
