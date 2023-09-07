@@ -218,19 +218,83 @@ gst_vulkan_window_cocoa_create_window (GstVulkanWindowCocoa * window_cocoa)
   return TRUE;
 }
 
-static VkSurfaceKHR
-gst_vulkan_window_cocoa_get_surface (GstVulkanWindow * window, GError ** error)
+typedef struct 
 {
+  VkResult result;
+  VkSurfaceKHR surface;
+  VkMacOSSurfaceCreateInfoMVK * info;
+  GstVulkanWindow * window;
+
+  GMutex mutex;
+  GCond cond;
+  gboolean called;
+} GstVulkanCococa_CreateMacOSSurfaceCtx;
+
+static void
+_gst_vulkan_cocoa_wait_for_createmacossurface (GstVulkanCococa_CreateMacOSSurfaceCtx * ctx)
+{
+  g_mutex_lock (&ctx->mutex);
+  while (!ctx->called)
+    g_cond_wait(&ctx->cond, &ctx->mutex);
+  g_mutex_unlock (&ctx->mutex);
+
+  g_mutex_clear (&ctx->mutex);
+  g_cond_clear (&ctx->cond);
+}
+
+static void
+_gst_vulkan_cocoa_create_macos_surface_on_main_thread (gpointer data) 
+{
+  GstVulkanCococa_CreateMacOSSurfaceCtx * ctx = data;
+  GstVulkanWindow *window = ctx->window;
+  GstVulkanWindowCocoa *window_cocoa = GST_VULKAN_WINDOW_COCOA (window);
+
+  ctx->result =
+      window_cocoa->CreateMacOSSurface (window->display->instance->instance, ctx->info,
+      NULL, &ctx->surface);
+
+  g_mutex_lock (&ctx->mutex);
+  ctx->called = TRUE;
+  g_cond_signal (&ctx->cond);
+  g_mutex_unlock (&ctx->mutex);
+}
+
+static VkResult
+_gst_vulkan_cocoa_create_macos_surface (GstVulkanWindow *window, VkSurfaceKHR * surface)
+{
+  VkResult err;
+  VkMacOSSurfaceCreateInfoMVK info = { 0, };
+
   GstVulkanWindowCocoa *window_cocoa = GST_VULKAN_WINDOW_COCOA (window);
   GstVulkanWindowCocoaPrivate *priv = GET_PRIV (window_cocoa);
-  VkMacOSSurfaceCreateInfoMVK info = { 0, };
-  VkSurfaceKHR ret;
-  VkResult err;
+
+  GstVulkanCococa_CreateMacOSSurfaceCtx ctx;
 
   info.sType = VK_STRUCTURE_TYPE_MACOS_SURFACE_CREATE_INFO_MVK;
   info.pNext = NULL;
   info.flags = 0;
   info.pView = priv->internal_view;
+
+  memset(&ctx, 0, sizeof(GstVulkanCococa_CreateMacOSSurfaceCtx));
+  g_mutex_init (&ctx.mutex);
+  g_cond_init (&ctx.cond);
+  ctx.info = &info;
+  ctx.window = window;
+
+  _gst_vulkan_cocoa_invoke_on_main ((GstVulkanWindowFunc) _gst_vulkan_cocoa_create_macos_surface_on_main_thread, &ctx, NULL);
+  _gst_vulkan_cocoa_wait_for_createmacossurface (&ctx);
+
+  *surface = ctx.surface;
+
+  return ctx.result;
+}
+
+static VkSurfaceKHR
+gst_vulkan_window_cocoa_get_surface (GstVulkanWindow * window, GError ** error)
+{
+  GstVulkanWindowCocoa *window_cocoa = GST_VULKAN_WINDOW_COCOA (window);
+  VkSurfaceKHR ret;
+  VkResult err;
 
   if (!window_cocoa->CreateMacOSSurface)
     window_cocoa->CreateMacOSSurface =
@@ -242,9 +306,7 @@ gst_vulkan_window_cocoa_get_surface (GstVulkanWindow * window, GError ** error)
     return VK_NULL_HANDLE;
   }
 
-  err =
-      window_cocoa->CreateMacOSSurface (window->display->instance->instance, &info,
-      NULL, &ret);
+  err = _gst_vulkan_cocoa_create_macos_surface (window, &ret);
   if (gst_vulkan_error_to_g_error (err, error, "vkCreateMacOSSurfaceMVK") < 0)
     return VK_NULL_HANDLE;
 
