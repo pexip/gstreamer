@@ -106,18 +106,6 @@ enum
 
 static guint gst_vulkan_window_signals[LAST_SIGNAL] = { 0 };
 
-static gboolean
-_accum_logical_and (GSignalInvocationHint * ihint, GValue * return_accu,
-    const GValue * handler_return, gpointer data)
-{
-  gboolean val = g_value_get_boolean (handler_return);
-  gboolean val2 = g_value_get_boolean (return_accu);
-
-  g_value_set_boolean (return_accu, val && val2);
-
-  return TRUE;
-}
-
 GQuark
 gst_vulkan_window_error_quark (void)
 {
@@ -196,7 +184,7 @@ gst_vulkan_window_class_init (GstVulkanWindowClass * klass)
 
   gst_vulkan_window_signals[SIGNAL_CLOSE] =
       g_signal_new ("close", G_TYPE_FROM_CLASS (klass), G_SIGNAL_RUN_LAST, 0,
-      (GSignalAccumulator) _accum_logical_and, NULL, NULL, G_TYPE_BOOLEAN, 0);
+      NULL, NULL, NULL, G_TYPE_NONE, 0);
 
   gst_vulkan_window_signals[SIGNAL_DRAW] =
       g_signal_new ("draw", G_TYPE_FROM_CLASS (klass), G_SIGNAL_RUN_LAST, 0,
@@ -412,16 +400,14 @@ void
 gst_vulkan_window_close (GstVulkanWindow * window)
 {
   GstVulkanWindowClass *klass;
-  gboolean to_close;
 
   g_return_if_fail (GST_IS_VULKAN_WINDOW (window));
   klass = GST_VULKAN_WINDOW_GET_CLASS (window);
   g_return_if_fail (klass->close != NULL);
 
-  g_signal_emit (window, gst_vulkan_window_signals[SIGNAL_CLOSE], 0, &to_close);
+  g_signal_emit (window, gst_vulkan_window_signals[SIGNAL_CLOSE], 0);
 
-  if (to_close)
-    klass->close (window);
+  klass->close (window);
 }
 
 /**
