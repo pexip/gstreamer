@@ -386,7 +386,7 @@ static void
 _close_window (gpointer * data)
 {
   GstVulkanWindowCocoa *window_cocoa = GST_VULKAN_WINDOW_COCOA (data);
-  GstVulkanWindow *window = GST_VULKAN_WINDOW (window_cocoa);
+  GstVulkanWindow *window = GST_VULKAN_WINDOW (window_cocoa)  ;
   GstVulkanWindowCocoaPrivate *priv = GET_PRIV (window_cocoa);
   GstVulkanNSWindow *internal_win_id =
       (__bridge GstVulkanNSWindow *) priv->internal_win_id;
@@ -394,9 +394,12 @@ _close_window (gpointer * data)
   gst_vulkan_window_cocoa_hide (window);
 
   [[internal_win_id contentView] removeFromSuperview];
+  [internal_win_id close];
+
   CFBridgingRelease (priv->internal_win_id);
-  priv->internal_win_id = NULL;
   CFBridgingRelease (priv->internal_view);
+
+  priv->internal_win_id = NULL;
   priv->internal_view = NULL;
 }
 
