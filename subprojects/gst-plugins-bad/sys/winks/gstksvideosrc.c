@@ -129,8 +129,6 @@ static void gst_ks_video_src_get_property (GObject * object, guint prop_id,
 static void gst_ks_video_src_set_property (GObject * object, guint prop_id,
     const GValue * value, GParamSpec * pspec);
 
-G_GNUC_UNUSED static GArray
-    * gst_ks_video_src_get_device_name_values (GstKsVideoSrc * self);
 static void gst_ks_video_src_reset (GstKsVideoSrc * self);
 
 static GstStateChangeReturn gst_ks_video_src_change_state (GstElement * element,
@@ -381,35 +379,6 @@ gst_ks_video_src_apply_driver_quirks (GstKsVideoSrc * self)
   }
 }
 
-/*FIXME: when we have a devices API replacement */
-G_GNUC_UNUSED static GArray *
-gst_ks_video_src_get_device_name_values (GstKsVideoSrc * self)
-{
-  GList *devices, *cur;
-  GArray *array = g_array_new (TRUE, TRUE, sizeof (GValue));
-
-  devices = ks_enumerate_devices (&KSCATEGORY_VIDEO, &KSCATEGORY_CAPTURE);
-  if (devices == NULL)
-    return array;
-
-  devices = ks_video_device_list_sort_cameras_first (devices);
-
-  for (cur = devices; cur != NULL; cur = cur->next) {
-    GValue value = { 0, };
-    KsDeviceEntry *entry = cur->data;
-
-    g_value_init (&value, G_TYPE_STRING);
-    g_value_set_string (&value, entry->name);
-    g_array_append_val (array, value);
-    g_value_unset (&value);
-
-    ks_device_entry_free (entry);
-  }
-
-  g_list_free (devices);
-  return array;
-}
-
 static gboolean
 gst_ks_video_src_open_device (GstKsVideoSrc * self)
 {
@@ -422,8 +391,6 @@ gst_ks_video_src_open_device (GstKsVideoSrc * self)
   devices = ks_enumerate_devices (&KSCATEGORY_VIDEO, &KSCATEGORY_CAPTURE);
   if (devices == NULL)
     goto error_no_devices;
-
-  devices = ks_video_device_list_sort_cameras_first (devices);
 
   for (cur = devices; cur != NULL; cur = cur->next) {
     KsDeviceEntry *entry = cur->data;

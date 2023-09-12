@@ -206,43 +206,6 @@ gst_ks_video_device_set_property (GObject * object, guint prop_id,
 }
 
 static void
-gst_ks_video_device_parse_win32_error (const gchar * func_name,
-    DWORD error_code, gulong * ret_error_code, gchar ** ret_error_str)
-{
-  if (ret_error_code != NULL)
-    *ret_error_code = error_code;
-
-  if (ret_error_str != NULL) {
-    GString *message;
-    gchar buf[1480];
-    DWORD result;
-
-    message = g_string_sized_new (1600);
-    g_string_append_printf (message, "%s returned ", func_name);
-
-    result =
-        FormatMessage (FORMAT_MESSAGE_FROM_SYSTEM |
-        FORMAT_MESSAGE_IGNORE_INSERTS, NULL, error_code, 0, buf, sizeof (buf),
-        NULL);
-    if (result != 0) {
-      g_string_append_printf (message, "0x%08x: %s", (guint) error_code,
-          g_strchomp (buf));
-    } else {
-      DWORD format_error_code = GetLastError ();
-
-      g_string_append_printf (message,
-          "<0x%08x (FormatMessage error code: %s)>", (guint) error_code,
-          (format_error_code == ERROR_MR_MID_NOT_FOUND)
-          ? "no system error message found"
-          : "failed to retrieve system error message");
-    }
-
-    *ret_error_str = message->str;
-    g_string_free (message, FALSE);
-  }
-}
-
-static void
 gst_ks_video_device_clear_buffers (GstKsVideoDevice * self)
 {
   GstKsVideoDevicePrivate *priv = GST_KS_VIDEO_DEVICE_GET_PRIVATE (self);
@@ -379,8 +342,13 @@ gst_ks_video_device_open (GstKsVideoDevice * self)
   priv->filter_handle = CreateFile (priv->dev_path,
       GENERIC_READ | GENERIC_WRITE, 0, NULL, OPEN_EXISTING,
       FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OVERLAPPED, NULL);
-  if (!ks_is_valid_handle (priv->filter_handle))
+  if (!ks_is_valid_handle (priv->filter_handle)) {
+    gchar *str;
+    ks_parse_win32_error ("CreateFile", GetLastError(), NULL, &str);
+    GST_ERROR ("%s", str);
+    g_free (str);
     goto error;
+  }
 
   /*
    * Query the filter for supported property sets.
@@ -649,7 +617,7 @@ error_create_pin:
   {
     gchar *str;
 
-    gst_ks_video_device_parse_win32_error ("KsCreatePin", ret, NULL, &str);
+    ks_parse_win32_error ("KsCreatePin", ret, NULL, &str);
     GST_ERROR ("%s", str);
     g_free (str);
 
@@ -744,8 +712,10 @@ gst_ks_video_device_set_caps (GstKsVideoDevice * self, GstCaps * caps)
     }
   }
 
-  if (media_type == NULL)
+  if (media_type == NULL) {
+    GST_ERROR ("media type no found!");
     goto error;
+  }
 
   s = gst_caps_get_structure (caps, 0);
   if (!gst_structure_get_int (s, "width", &width) ||
@@ -758,8 +728,10 @@ gst_ks_video_device_set_caps (GstKsVideoDevice * self, GstCaps * caps)
     }
   } else {
     if (!ks_video_fixate_media_type (media_type->range,
-            media_type->format, width, height, fps_n, fps_d))
+            media_type->format, width, height, fps_n, fps_d)) {
+      GST_ERROR ("Failed to fixate media type");
       goto error;
+    }
   }
 
   if (priv->cur_media_type != NULL) {
@@ -998,7 +970,7 @@ error_pick_buffer:
   }
 error_ioctl:
   {
-    gst_ks_video_device_parse_win32_error ("DeviceIoControl", GetLastError (),
+    ks_parse_win32_error ("DeviceIoControl", GetLastError (),
         error_code, error_str);
     return FALSE;
   }
@@ -1150,7 +1122,7 @@ error_timeout:
   }
 error_wait:
   {
-    gst_ks_video_device_parse_win32_error ("WaitForMultipleObjects",
+    ks_parse_win32_error ("WaitForMultipleObjects",
         GetLastError (), error_code, error_str);
 
     return GST_FLOW_ERROR;
@@ -1166,7 +1138,7 @@ error_cancel:
   }
 error_get_result:
   {
-    gst_ks_video_device_parse_win32_error ("GetOverlappedResult",
+    ks_parse_win32_error ("GetOverlappedResult",
         GetLastError (), error_code, error_str);
 
     return GST_FLOW_ERROR;

@@ -74,7 +74,7 @@ gst_ks_device_provider_init (GstKsDeviceProvider * self)
 }
 
 static GstDevice *
-new_video_source (const KsDeviceEntry * info)
+gst_device_from_ks_device_entry (const KsDeviceEntry * info)
 {
   GstCaps *caps;
   HANDLE filter_handle;
@@ -86,10 +86,17 @@ new_video_source (const KsDeviceEntry * info)
   caps = gst_caps_new_empty ();
 
   filter_handle = CreateFile (info->path,
-      GENERIC_READ | GENERIC_WRITE, 0, NULL, OPEN_EXISTING,
-      FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OVERLAPPED, NULL);
-  if (!ks_is_valid_handle (filter_handle))
+    GENERIC_READ | GENERIC_WRITE, 0, NULL, OPEN_EXISTING,
+    FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OVERLAPPED, NULL);
+  if (!ks_is_valid_handle (filter_handle)) {
+    gchar *str;
+    ks_parse_win32_error ("CreateFile", GetLastError(), NULL, &str);
+      GST_ERROR("Ivalid path: %s", info->path);
+    GST_ERROR ("%s", str);
+    g_free (str);
+
     goto error;
+  }
 
   media_types = ks_video_probe_filter_for_caps (filter_handle);
 
@@ -106,6 +113,7 @@ new_video_source (const KsDeviceEntry * info)
 
   return gst_ks_device_new (info->index, info->name,
       caps, info->path, GST_KS_DEVICE_TYPE_VIDEO_SOURCE);
+
 error:
   gst_caps_unref (caps);
   return NULL;
@@ -114,25 +122,23 @@ error:
 static GList *
 gst_ks_device_provider_probe (GstDeviceProvider * provider)
 {
-  /*GstKsDeviceProvider *self = GST_KS_DEVICE_PROVIDER (provider); */
   GList *devices, *cur;
   GList *result;
 
   result = NULL;
-
   devices = ks_enumerate_devices (&KSCATEGORY_VIDEO, &KSCATEGORY_CAPTURE);
-  if (devices == NULL)
+  if (devices == NULL) {
+    GST_WARNING_OBJECT (provider, "No devices found");
     return result;
-
-  devices = ks_video_device_list_sort_cameras_first (devices);
+  }
 
   for (cur = devices; cur != NULL; cur = cur->next) {
-    GstDevice *source;
+    GstDevice *device;
     KsDeviceEntry *entry = cur->data;
 
-    source = new_video_source (entry);
-    if (source)
-      result = g_list_prepend (result, gst_object_ref_sink (source));
+    device = gst_device_from_ks_device_entry (entry);
+    if (device)
+      result = g_list_prepend (result, gst_object_ref_sink (device));
 
     ks_device_entry_free (entry);
   }
@@ -356,7 +362,7 @@ msg_window_message_proc (HWND window_handle, UINT message,
 
             if ((source == NULL) &&
                 (g_ascii_strcasecmp (entry->path, bcdi->dbcc_name) == 0))
-              source = new_video_source (entry);        /* Or audio source, not implemented yet */
+              source = gst_device_from_ks_device_entry (entry);        /* Or audio source, not implemented yet */
 
             ks_device_entry_free (entry);
           }

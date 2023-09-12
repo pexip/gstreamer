@@ -524,3 +524,40 @@ ks_property_set_to_string (const GUID * guid)
 
   return ks_guid_to_string (guid);
 }
+
+void
+ks_parse_win32_error (const gchar * func_name,
+    DWORD error_code, gulong * ret_error_code, gchar ** ret_error_str)
+{
+  if (ret_error_code != NULL)
+    *ret_error_code = error_code;
+
+  if (ret_error_str != NULL) {
+    GString *message;
+    gchar buf[1480];
+    DWORD result;
+
+    message = g_string_sized_new (1600);
+    g_string_append_printf (message, "%s returned ", func_name);
+
+    result =
+        FormatMessage (FORMAT_MESSAGE_FROM_SYSTEM |
+        FORMAT_MESSAGE_IGNORE_INSERTS, NULL, error_code, 0, buf, sizeof (buf),
+        NULL);
+    if (result != 0) {
+      g_string_append_printf (message, "0x%08x: %s", (guint) error_code,
+          g_strchomp (buf));
+    } else {
+      DWORD format_error_code = GetLastError ();
+
+      g_string_append_printf (message,
+          "<0x%08x (FormatMessage error code: %s)>", (guint) error_code,
+          (format_error_code == ERROR_MR_MID_NOT_FOUND)
+          ? "no system error message found"
+          : "failed to retrieve system error message");
+    }
+
+    *ret_error_str = message->str;
+    g_string_free (message, FALSE);
+  }
+}

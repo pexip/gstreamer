@@ -58,6 +58,9 @@ const gchar * ks_state_to_string (KSSTATE state);
 gchar * ks_options_flags_to_string (gulong flags);
 gchar * ks_property_set_to_string (const GUID * guid);
 
+void ks_parse_win32_error (const gchar * func_name,
+  DWORD error_code, gulong * ret_error_code, gchar ** ret_error_str);
+
 G_END_DECLS
 
 #endif /* __KSHELPERS_H__ */
