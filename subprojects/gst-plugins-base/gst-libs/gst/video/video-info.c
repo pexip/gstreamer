@@ -905,14 +905,14 @@ fill_planes (GstVideoInfo * info, gsize plane_size[GST_VIDEO_MAX_PLANES])
       break;
     case GST_VIDEO_FORMAT_I420:
     case GST_VIDEO_FORMAT_YV12:        /* same as I420, but plane 1+2 swapped */
-      info->stride[0] = GST_ROUND_UP_4 (width);
-      info->stride[1] = GST_ROUND_UP_4 (GST_ROUND_UP_2 (width) / 2);
+      info->stride[0] = GST_ROUND_UP_16 (width);
+      info->stride[1] = GST_ROUND_UP_16 (GST_ROUND_UP_2 (width) / 2);
       info->stride[2] = info->stride[1];
       info->offset[0] = 0;
-      info->offset[1] = info->stride[0] * GST_ROUND_UP_2 (height);
-      cr_h = GST_ROUND_UP_2 (height) / 2;
+      info->offset[1] = info->stride[0] * GST_ROUND_UP_16 (height); // Round up 16 due to Luma makroblock size
+      cr_h = GST_ROUND_UP_8 (height) / 2;
       if (GST_VIDEO_INFO_IS_INTERLACED (info))
-        cr_h = GST_ROUND_UP_2 (cr_h);
+        cr_h = GST_ROUND_UP_8 (cr_h);
       info->offset[2] = info->offset[1] + info->stride[1] * cr_h;
       info->size = info->offset[2] + info->stride[2] * cr_h;
       break;
