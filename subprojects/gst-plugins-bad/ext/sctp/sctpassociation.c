@@ -329,6 +329,21 @@ gst_sctp_association_usrsctp_init (void)
    */
   usrsctp_sysctl_set_sctp_default_frag_interleave (2);
 
+  // Enable the Partial Reliability extension
+  usrsctp_sysctl_set_sctp_pr_enable (1);
+
+  // Disable the NR-SACK extension (not standardised)
+  usrsctp_sysctl_set_sctp_nrsack_enable (0);
+
+  // Disable the Packet Drop Report extension (not standardised)
+  usrsctp_sysctl_set_sctp_pktdrop_enable (0);
+
+  // Disable the Address Reconfiguration extension
+  usrsctp_sysctl_set_sctp_asconf_enable (0);
+
+  // Disable the Authentication extension
+  usrsctp_sysctl_set_sctp_auth_enable (0);
+
   usrsctp_sysctl_set_sctp_nr_outgoing_streams_default
       (DEFAULT_NUMBER_OF_SCTP_STREAMS);
 
