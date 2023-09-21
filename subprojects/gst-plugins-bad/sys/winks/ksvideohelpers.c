@@ -440,6 +440,13 @@ ks_video_probe_filter_for_caps (HANDLE filter_handle)
               entry = NULL;
             }
 
+            /* some drivers will not provide any sample_size for certains formats, so ignore them */
+            if (entry->sample_size == 0) {
+              GST_DEBUG("ignoring empty sample_size format");
+              ks_video_media_type_free (entry);
+              entry = NULL;
+            }
+
             if (entry != NULL) {
               g_assert (entry->sample_size != 0);
 
