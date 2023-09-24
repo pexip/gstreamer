@@ -1,5 +1,7 @@
 /*
  * Copyright (c) 2015, Collabora Ltd.
+ * Copyright (c) 2023, Pexip AS
+ *  @author: Tulio Beloqui <tulio@pexip.com>
  *
  * Redistribution and use in source and binary forms, with or without modification,
  * are permitted provided that the following conditions are met:
@@ -28,7 +30,8 @@
 
 #include <glib-object.h>
 #include <gst/gst.h>
-#include <usrsctp.h>
+
+#include "dcsctp/sctpsocket.h"
 
 G_BEGIN_DECLS
 
@@ -64,8 +67,7 @@ typedef enum
   GST_SCTP_ASSOCIATION_PARTIAL_RELIABILITY_RTX = 0x0003
 } GstSctpAssociationPartialReliability;
 
-typedef void (*GstSctpAssociationPacketOutCb) (GstSctpAssociation *
-    sctp_association, const guint8 * data, gsize length, gpointer user_data);
+typedef void (*GstSctpAssociationPacketOutCb) (const guint8 * data, gsize length, gpointer user_data);
 typedef void (*GstSctpAssociationStateChangeCb) (GstSctpAssociation *
     sctp_association, GstSctpAssociationState state, gpointer user_data);
 
@@ -76,15 +78,12 @@ struct _GstSctpAssociationEncoderCtx
   GstSctpAssociationPacketOutCb packet_out_cb;
 };
 
-typedef void (*GstSctpAssociationPacketReceivedCb) (GstSctpAssociation *
-    sctp_association, guint8 * data, gsize length, guint16 stream_id,
-    guint ppid, gpointer user_data);
+typedef void (*GstSctpAssociationPacketReceivedCb) (const guint8 * data, gsize length,
+    guint16 stream_id, guint ppid, gpointer user_data);
 
-typedef void (*GstSctpAssociationStreamResetCb)(GstSctpAssociation *
-    sctp_association, guint16 stream_id, gpointer user_data);
+typedef void (*GstSctpAssociationStreamResetCb)(guint16 stream_id, gpointer user_data);
 
-typedef void (*GstSctpAssociationRestartCb)(GstSctpAssociation *
-    sctp_association, gpointer user_data);
+typedef void (*GstSctpAssociationRestartCb)(gpointer user_data);
 
 struct _GstSctpAssociationDecoderCtx 
 {
@@ -93,6 +92,16 @@ struct _GstSctpAssociationDecoderCtx
   GstSctpAssociationStreamResetCb stream_reset_cb;
   GstSctpAssociationRestartCb restart_cb;
 };
+
+typedef struct
+{
+  // True when the local connection has initiated the reset.
+  gboolean closure_initiated;
+  // True when the local connection received OnIncomingStreamsReset
+  gboolean incoming_reset_done;
+  // True when the local connection received OnStreamsResetPerformed
+  gboolean outgoing_reset_done;
+} GstSctpStreamState;
 
 struct _GstSctpAssociation
 {
@@ -103,13 +112,16 @@ struct _GstSctpAssociation
   guint16 remote_port;
   gboolean use_sock_stream;
   gboolean aggressive_heartbeat;
-  struct socket *sctp_ass_sock;
+  SctpSocket * socket;
 
-  GMutex association_mutex;
+  GRecMutex association_mutex;
 
   GstSctpAssociationState state;
+  GHashTable * stream_id_to_state;
 
-  guint32 sctp_assoc_id;
+  GMainContext *main_context;
+
+  GHashTable * pending_source_ids;
 
   GstSctpAssociationEncoderCtx encoder_ctx;
   GstSctpAssociationDecoderCtx decoder_ctx;
@@ -122,12 +134,7 @@ struct _GstSctpAssociationClass
 
 GType gst_sctp_association_get_type (void);
 
-GstSctpAssociation *gst_sctp_association_get (guint32 association_id);
-
-GstSctpAssociation *gst_sctp_association_ref (GstSctpAssociation * self);
-void gst_sctp_association_unref (GstSctpAssociation * self);
-
-gboolean gst_sctp_association_start (GstSctpAssociation * self);
+gboolean gst_sctp_association_connect (GstSctpAssociation * self);
 
 void gst_sctp_association_set_encoder_ctx (GstSctpAssociation * self, 
     GstSctpAssociationEncoderCtx * ctx);
