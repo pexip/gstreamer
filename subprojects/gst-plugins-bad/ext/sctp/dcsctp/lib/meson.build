@@ -1,31 +1,3 @@
-/ api:array_view
-/ rtc_base:strong_alias
-/
-/  absl_deps = [ '/third_party/abseil-cpp/absl/types:optional' ]
-/  '/third_party/abseil-cpp/absl/strings',
-/  '/third_party/abseil-cpp/absl/strings:strings',
-/  '/third_party/abseil-cpp/absl/algorithm:container',
-/   '/third_party/abseil-cpp/absl/memory',
-/  '../../../api:array_view',
-/  '../../../api/task_queue:task_queue',
-/   '../../../rtc_base:checks',
-/  '../../../rtc_base:strong_alias',
-/   ':types', -> ????
-/  ':socket',
-/  ':types',
-/  '../socket:dcsctp_socket',
-/  '../../../rtc_base:logging',
-/  '../../../rtc_base:stringutils',
-/  '../../../rtc_base:rtc_numerics',
-/   bounded_io
-/  '/third_party/crc32c',
-/  '../common:internal_types',
-/  '../common:math',
-/  '../common:str_join',
-/  '../public:types',
-/  '../common:sequence_numbers',
-/  '/third_party/abseil-cpp/absl/functional:bind_front',
-
 dsctp_headers = [
   'public/dcsctp_message.h',
   'public/dcsctp_options.h',
@@ -156,3 +128,4 @@ dcsctp_sources = [
   'tx/retransmission_queue.cc',
 ]
 
+install_headers(dcsctp_headers, subdir : 'dcsctp')
