@@ -3,3 +3,4 @@ if get_option('sctp').disabled()
 endif
 
 subdir('usrsctp')
+subdir('dcsctp')
