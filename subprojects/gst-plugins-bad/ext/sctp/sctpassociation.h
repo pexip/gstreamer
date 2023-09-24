@@ -1,5 +1,7 @@
 /*
  * Copyright (c) 2015, Collabora Ltd.
+ * Copyright (c) 2023, Pexip AS
+ *  @author: Tulio Beloqui <tulio@pexip.com>
  *
  * Redistribution and use in source and binary forms, with or without modification,
  * are permitted provided that the following conditions are met:
@@ -28,9 +30,8 @@
 
 #include <glib-object.h>
 #include <gst/gst.h>
-#define INET
-#define INET6
-#include <usrsctp.h>
+
+#include "dcsctp/sctpsocket.h"
 
 G_BEGIN_DECLS
 
@@ -43,6 +44,9 @@ G_BEGIN_DECLS
 
 typedef struct _GstSctpAssociation GstSctpAssociation;
 typedef struct _GstSctpAssociationClass GstSctpAssociationClass;
+
+typedef struct _GstSctpAssociationEncoderCtx GstSctpAssociationEncoderCtx;
+typedef struct _GstSctpAssociationDecoderCtx GstSctpAssociationDecoderCtx;
 
 typedef enum
 {
@@ -63,11 +67,41 @@ typedef enum
   GST_SCTP_ASSOCIATION_PARTIAL_RELIABILITY_RTX = 0x0003
 } GstSctpAssociationPartialReliability;
 
-typedef void (*GstSctpAssociationPacketReceivedCb) (GstSctpAssociation *
-    sctp_association, guint8 * data, gsize length, guint16 stream_id,
-    guint ppid, gpointer user_data);
-typedef void (*GstSctpAssociationPacketOutCb) (GstSctpAssociation *
-    sctp_association, const guint8 * data, gsize length, gpointer user_data);
+typedef void (*GstSctpAssociationPacketOutCb) (const guint8 * data, gsize length, gpointer user_data);
+typedef void (*GstSctpAssociationStateChangeCb) (GstSctpAssociation *
+    sctp_association, GstSctpAssociationState state, gpointer user_data);
+
+struct _GstSctpAssociationEncoderCtx 
+{
+  gpointer element;
+  GstSctpAssociationStateChangeCb state_change_cb;
+  GstSctpAssociationPacketOutCb packet_out_cb;
+};
+
+typedef void (*GstSctpAssociationPacketReceivedCb) (const guint8 * data, gsize length,
+    guint16 stream_id, guint ppid, gpointer user_data);
+
+typedef void (*GstSctpAssociationStreamResetCb)(guint16 stream_id, gpointer user_data);
+
+typedef void (*GstSctpAssociationRestartCb)(gpointer user_data);
+
+struct _GstSctpAssociationDecoderCtx 
+{
+  gpointer element;
+  GstSctpAssociationPacketReceivedCb packet_received_cb;
+  GstSctpAssociationStreamResetCb stream_reset_cb;
+  GstSctpAssociationRestartCb restart_cb;
+};
+
+typedef struct
+{
+  // True when the local connection has initiated the reset.
+  gboolean closure_initiated;
+  // True when the local connection received OnIncomingStreamsReset
+  gboolean incoming_reset_done;
+  // True when the local connection received OnStreamsResetPerformed
+  gboolean outgoing_reset_done;
+} GstSctpStreamState;
 
 struct _GstSctpAssociation
 {
@@ -77,38 +111,36 @@ struct _GstSctpAssociation
   guint16 local_port;
   guint16 remote_port;
   gboolean use_sock_stream;
-  struct socket *sctp_ass_sock;
+  gboolean aggressive_heartbeat;
+  SctpSocket * socket;
 
-  GMutex association_mutex;
+  GRecMutex association_mutex;
 
   GstSctpAssociationState state;
+  GHashTable * stream_id_to_state;
 
-  GstSctpAssociationPacketReceivedCb packet_received_cb;
-  gpointer packet_received_user_data;
-  GDestroyNotify packet_received_destroy_notify;
+  GMainContext *main_context;
 
-  GstSctpAssociationPacketOutCb packet_out_cb;
-  gpointer packet_out_user_data;
-  GDestroyNotify packet_out_destroy_notify;
+  GHashTable * pending_source_ids;
+
+  GstSctpAssociationEncoderCtx encoder_ctx;
+  GstSctpAssociationDecoderCtx decoder_ctx;
 };
 
 struct _GstSctpAssociationClass
 {
   GObjectClass parent_class;
-
-  void (*on_sctp_stream_reset) (GstSctpAssociation * sctp_association,
-      guint16 stream_id);
 };
 
 GType gst_sctp_association_get_type (void);
 
-GstSctpAssociation *gst_sctp_association_get (guint32 association_id);
+gboolean gst_sctp_association_connect (GstSctpAssociation * self);
 
-gboolean gst_sctp_association_start (GstSctpAssociation * self);
-void gst_sctp_association_set_on_packet_out (GstSctpAssociation * self,
-    GstSctpAssociationPacketOutCb packet_out_cb, gpointer user_data, GDestroyNotify destroy_notify);
-void gst_sctp_association_set_on_packet_received (GstSctpAssociation * self,
-    GstSctpAssociationPacketReceivedCb packet_received_cb, gpointer user_data, GDestroyNotify destroy_notify);
+void gst_sctp_association_set_encoder_ctx (GstSctpAssociation * self, 
+    GstSctpAssociationEncoderCtx * ctx);
+void gst_sctp_association_set_decoder_ctx (GstSctpAssociation * self,
+    GstSctpAssociationDecoderCtx * ctx);
+
 void gst_sctp_association_incoming_packet (GstSctpAssociation * self,
     const guint8 * buf, guint32 length);
 GstFlowReturn gst_sctp_association_send_data (GstSctpAssociation * self,
@@ -118,6 +150,7 @@ GstFlowReturn gst_sctp_association_send_data (GstSctpAssociation * self,
 void gst_sctp_association_reset_stream (GstSctpAssociation * self,
     guint16 stream_id);
 void gst_sctp_association_force_close (GstSctpAssociation * self);
+void gst_sctp_association_disconnect (GstSctpAssociation * self);
 
 G_END_DECLS
 
