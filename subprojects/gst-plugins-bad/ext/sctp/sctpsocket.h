@@ -116,8 +116,8 @@ typedef enum
 
 typedef SctpSocket_SendPacketStatus (*SctpSocket_SendPacket) (void * user_data, const uint8_t * data, size_t len); 
 typedef void (*SctpSocket_OnMessageReceived) (void * user_data, uint16_t stream_id, uint32_t ppid, const uint8_t * data, size_t len);
-typedef void (*SctpSocket_OnError) (void * user_data, SctpSocket_Error);
-typedef void (*SctpSocket_OnAborted) (void * user_data, SctpSocket_Error);
+typedef void (*SctpSocket_OnError) (void * user_data, SctpSocket_Error error);
+typedef void (*SctpSocket_OnAborted) (void * user_data, SctpSocket_Error error);
 typedef void (*SctpSocket_OnConnected) (void * user_data);
 typedef void (*SctpSocket_OnClosed) (void * user_data);
 typedef void (*SctpSocket_OnConnectionRestarted) (void * user_data);
@@ -156,6 +156,10 @@ void sctp_socket_free (SctpSocket * socket);
 
 // To be called when an incoming SCTP packet is to be processed.
 void sctp_socket_receive_packet (SctpSocket * socket, const uint8_t * data, size_t len);
+
+// Connects the socket. This is an asynchronous operation, and
+// `DcSctpSocketCallbacks::OnConnected` will be called on success.
+void sctp_socket_connect (SctpSocket * socket);
 
 // Gracefully shutdowns the socket and sends all outstanding data. This is an
 // asynchronous operation and `DcSctpSocketCallbacks::OnClosed` will be called

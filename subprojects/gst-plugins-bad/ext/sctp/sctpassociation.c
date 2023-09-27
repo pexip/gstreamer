@@ -414,6 +414,100 @@ gst_sctp_association_unref (GstSctpAssociation * self)
   G_UNLOCK (associations_lock);
 }
 
+static SctpSocket_SendPacketStatus
+gst_sctp_association_send_packet (void *user_data, const uint8_t * data,
+    size_t len)
+{
+  (void) user_data;
+  (void) data;
+  (void) len;
+}
+
+static void
+gst_sctp_association_on_message_received (void *user_data,
+    uint16_t stream_id, uint32_t ppid, const uint8_t * data, size_t len)
+{
+  (void) user_data;
+  (void) stream_id;
+  (void) ppid;
+  (void) data;
+  (void) len;
+}
+
+static void
+gst_sctp_association_on_error (void *user_data, SctpSocket_Error error)
+{
+  (void) user_data;
+  (void) error;
+}
+
+static void
+gst_sctp_association_on_aborted (void *user_data, SctpSocket_Error error)
+{
+  (void) user_data;
+  (void) error;
+}
+
+static void
+gst_sctp_association_on_connected (void *user_data)
+{
+  (void) user_data;
+}
+
+static void
+gst_sctp_association_on_closed (void *user_data)
+{
+  (void) user_data;
+}
+
+static void
+gst_sctp_association_on_connection_restarted (void *user_data)
+{
+  (void) user_data;
+}
+
+static void
+gst_sctp_association_on_streams_reset_failed (void *user_data,
+    const uint16_t * streams, size_t len)
+{
+  (void) user_data;
+  (void) streams;
+  (void) len;
+}
+
+static void
+gst_sctp_association_on_streams_reset_performed (void *user_data,
+    const uint16_t * streams, size_t len)
+{
+  (void) user_data;
+  (void) streams;
+  (void) len;
+}
+
+static void
+gst_sctp_association_on_incoming_streams_reset (void *user_data,
+    const uint16_t * streams, size_t len)
+{
+  (void) user_data;
+  (void) streams;
+  (void) len;
+}
+
+static void
+gst_sctp_association_on_buffered_amount_low (void *user_data,
+    uint16_t stream_id)
+{
+  (void) user_data;
+  (void) stream_id;
+
+}
+
+static void
+gst_sctp_association_on_total_buffered_amount_low (void *user_data)
+{
+  (void) user_data;
+}
+
 static gboolean
 gst_sctp_association_start_unlocked (GstSctpAssociation * self)
 {
@@ -423,26 +517,37 @@ gst_sctp_association_start_unlocked (GstSctpAssociation * self)
         "SCTP association is in wrong state and cannot be started");
     return FALSE;
   }
-  // if ((self->sctp_ass_sock = create_sctp_socket (self)) == NULL)
-  //   goto error;
 
-  /* TODO: Support both server and client role */
-  // if (!client_role_connect (self)) {
-  //   gst_sctp_association_change_state_unlocked (self,
-  //       GST_SCTP_ASSOCIATION_STATE_ERROR);
-  //   goto error;
-  // }
+  if (self->socket) {
+    GST_ERROR ("Socket should be NULL at this point");
+    g_assert_not_reached ();
+  }
+
+  SctpSocket_Callbacks callbacks = {
+    .send_packet = gst_sctp_association_send_packet,
+    .on_message_received = gst_sctp_association_on_message_received,
+    .on_error = gst_sctp_association_on_error,
+    .on_aborted = gst_sctp_association_on_aborted,
+    .on_connected = gst_sctp_association_on_connected,
+    .on_closed = gst_sctp_association_on_closed,
+    .on_connection_restarted = gst_sctp_association_on_connection_restarted,
+    .on_streams_reset_failed = gst_sctp_association_on_streams_reset_failed,
+    .on_streams_reset_performed =
+        gst_sctp_association_on_streams_reset_performed,
+    .on_incoming_streams_reset = gst_sctp_association_on_incoming_streams_reset,
+    .on_buffered_amount_low = gst_sctp_association_on_buffered_amount_low,
+    .on_total_buffered_amount_low =
+        gst_sctp_association_on_total_buffered_amount_low,
+    .user_data = self
+  };
+
+  self->socket = sctp_socket_new (&callbacks);
+  sctp_socket_connect (self->socket);
 
   gst_sctp_association_change_state_unlocked (self,
       GST_SCTP_ASSOCIATION_STATE_CONNECTING);
 
   return TRUE;
-// error:
-//   gst_sctp_association_change_state_unlocked (self,
-//       GST_SCTP_ASSOCIATION_STATE_ERROR);
-//   return FALSE;
-// configure_required:
-  // return FALSE;
 }
 
 gboolean

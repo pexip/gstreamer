@@ -29,6 +29,8 @@
 #include <glib-object.h>
 #include <gst/gst.h>
 
+#include "sctpsocket.h"
+
 G_BEGIN_DECLS
 
 #define GST_SCTP_TYPE_ASSOCIATION                  (gst_sctp_association_get_type ())
@@ -102,7 +104,7 @@ struct _GstSctpAssociation
   guint16 remote_port;
   gboolean use_sock_stream;
   gboolean aggressive_heartbeat;
-  // struct socket *sctp_ass_sock;
+  SctpSocket * socket;
 
   GMutex association_mutex;
 

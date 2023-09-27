@@ -6,11 +6,11 @@ subdir('dcsctp')
 
 sctp_sources = [
   'sctpsocket.cc',
+  'sctpassociation.c'
 #  'dcsctp_transport.cc',
 #  'gstsctpdec.c',
 #  'gstsctpenc.c',
 #  'gstsctpplugin.c',
-  'sctpassociation.c'
 ]
 
 sctp_platform_deps = []

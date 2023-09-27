@@ -43,6 +43,12 @@ sctp_socket_receive_packet (SctpSocket * socket, const uint8_t * data,
 }
 
 void
+sctp_socket_connect (SctpSocket * socket)
+{
+  (void) socket;
+}
+
+void
 sctp_socket_shutdown (SctpSocket * socket)
 {
   (void) socket;
