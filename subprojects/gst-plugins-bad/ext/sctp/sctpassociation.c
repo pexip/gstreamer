@@ -606,8 +606,15 @@ gst_sctp_association_incoming_packet (GstSctpAssociation * self,
     const guint8 * buf, guint32 length)
 {
   g_mutex_lock (&self->association_mutex);
-  // if (self->sctp_ass_sock)
-  //   usrsctp_conninput ((void *) self, (const void *) buf, (size_t) length, 0);
+
+  if (self->socket) {
+    sctp_socket_receive_packet (self->socket, (const uint8_t *) buf,
+        (size_t) length);
+  } else {
+    GST_WARNING ("Couldn't process buffer (%p with length %" G_GUINT32_FORMAT
+        "), missing socket");
+  }
+
   g_mutex_unlock (&self->association_mutex);
 }
 
