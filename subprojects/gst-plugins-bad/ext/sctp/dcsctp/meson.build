@@ -7,7 +7,7 @@ gst_dcsctp_sources = [
 ]
 
 gst_dcsctp_cargs = []
-gst_dcsctp_cppargs = []
+gst_dcsctp_cppargs = ['-std=c++17']
 gst_dcsctp_linkargs = []
 
 gst_dcsctp_lib = library('gstdcsctp',
@@ -15,6 +15,7 @@ gst_dcsctp_lib = library('gstdcsctp',
   c_args: gst_dcsctp_cargs,
   cpp_args: gst_dcsctp_cppargs,
   link_args: gst_dcsctp_linkargs,
+  dependencies: [dcsctp_dep],
   install: true,
   include_directories: [include_directories('.')])
 
