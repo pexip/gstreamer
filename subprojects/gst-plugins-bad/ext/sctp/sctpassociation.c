@@ -631,10 +631,7 @@ gst_sctp_association_send_data (GstSctpAssociation * self, const guint8 * buf,
   }
 
   /* TODO: check for stream id state */
-  if (!self->socket) {
-    GST_ERROR ("No socket!");
-    g_assert_not_reached ();
-  }
+  g_assert (self->socket);
 
   int32_t *lifetime = NULL;
   size_t *max_retransmissions = NULL;
@@ -648,7 +645,7 @@ gst_sctp_association_send_data (GstSctpAssociation * self, const guint8 * buf,
   }
 
   SctpSocket_SendStatus send_status =
-      sctp_socket_send (self->socket, buf, length, stream_id, ppid, ordered,
+      sctp_socket_send (self->socket, buf, length, stream_id, ppid, !ordered,
       lifetime, max_retransmissions);
   GST_ERROR ("send_status: %d", send_status);
 

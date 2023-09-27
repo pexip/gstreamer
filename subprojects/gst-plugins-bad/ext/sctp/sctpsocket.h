@@ -181,7 +181,7 @@ SctpSocket_State sctp_socket_state (SctpSocket * socket);
 // The association does not have to be established before calling this method.
 // If it's called before there is an established association, the message will
 // be queued.
-SctpSocket_SendStatus sctp_socket_send (SctpSocket * socket, const uint8_t * data, size_t len, uint16_t stream_id, uint32_t ppid, bool ordered, int32_t * lifetime, size_t * max_retransmissions);
+SctpSocket_SendStatus sctp_socket_send (SctpSocket * socket, const uint8_t * data, size_t len, uint16_t stream_id, uint32_t ppid, bool unordered, int32_t * lifetime, size_t * max_retransmissions);
 
 #ifdef __cplusplus
 }
