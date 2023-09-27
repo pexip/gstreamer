@@ -1,4 +1,22 @@
 dcsctp_sources = [
+  # rtc_base
+  'rtc_base/memory/aligned_malloc.cc',
+  'rtc_base/logging.cc',
+  'rtc_base/crc32.cc',
+  'rtc_base/checks.cc',
+  'rtc_base/platform_thread_types.cc',
+  'rtc_base/time_utils.cc',
+  'rtc_base/system_time.cc',
+  'rtc_base/string_encode.cc',
+  'rtc_base/string_utils.cc',
+  'rtc_base/strings/string_builder.cc',
+  'rtc_base/strings/string_format.cc',
+  'rtc_base/synchronization/sequence_checker_internal.cc',
+
+  # api
+  'api/task_queue/task_queue_base.cc',
+  'api/task_queue/pending_task_safety_flag.cc',
+
   # public
   'net/dcsctp/public/dcsctp_handover_state.cc',
   'net/dcsctp/public/dcsctp_socket_factory.cc',
@@ -82,9 +100,38 @@ dcsctp_sources = [
   'net/dcsctp/tx/retransmission_queue.cc',
 ]
 
-dcsctp_cargs = []
-dcsctp_cppargs = []
 dcsctp_linkargs = []
+dcsctp_cargs = []
+dcsctp_cppargs = [
+  '-std=c++17'
+]
+
+if host_system == 'windows'
+  dcsctp_cppargs += [
+    # fixes winsock redeclaration issue
+    '-DWIN32_LEAN_AND_MEAN',
+
+    '-DWEBRTC_WIN',
+  ]
+elif host_system == 'linux'
+  dcsctp_cppargs += [
+    '-DWEBRTC_LINUX',
+    '-DWEBRTC_POSIX',
+  ]
+
+  dcsctp_linkargs += [
+    '-lpthread',
+  ]
+else
+  dcsctp_cppargs += [
+    '-DWEBRTC_POSIX',
+  ]
+
+  dcsctp_linkargs += [
+    '-lpthread',
+  ]
+endif
+
 
 dcsctp_lib = library('dcsctp',
   dcsctp_sources,

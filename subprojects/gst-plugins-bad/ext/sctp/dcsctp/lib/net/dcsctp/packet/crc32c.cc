@@ -11,12 +11,12 @@
 
 #include <cstdint>
 
-#include "third_party/crc32c/src/include/crc32c/crc32c.h"
+#include "rtc_base/crc32.h"
 
 namespace dcsctp {
 
 uint32_t GenerateCrc32C(rtc::ArrayView<const uint8_t> data) {
-  uint32_t crc32c = crc32c_value(data.data(), data.size());
+  uint32_t crc32c = rtc::ComputeCrc32(data.data(), data.size());
 
   // Byte swapping for little endian byte order:
   uint8_t byte0 = crc32c;
