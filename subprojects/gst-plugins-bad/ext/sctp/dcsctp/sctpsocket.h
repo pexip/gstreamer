@@ -102,21 +102,14 @@ typedef enum
 
 } SctpSocket_SendPacketStatus;
 
-// typedef enum
-// {
-// 	DCSCTP_DATA_MSG_TYPE_TEXT,
-// 	DCSCTP_DATA_MSG_TYPE_BIN,
-// 	DCSCTP_DATA_MSG_TYPE_CTRL,
-// } DCSctp_DataMessageType;
-
-// typedef void (*SctpSocket_DataReceivedCallback)(void * user_data, int channel_id, DCSctp_DataMessageType type, const uint8_t * data, size_t len);
-// typedef void (*SctpSocket_ChannelClosingCallback)(void * user_data, int channel_id);
-// typedef void (*SctpSocket_ChannelClosedCallback)(void * user_data, int channel_id);
-// typedef void (*SctpSocket_ReadyToSendCallback)(void * user_data);
-// typedef void (*SctpSocket_TransportClosedCallback)(void * user_data, SctpSocket_Error error);
+typedef enum
+{
+  DELAY_PRECISION_LOW,
+  DELAY_PRECISION_HIGH,
+} SctpSocket_DelayPrecision;
 
 typedef SctpSocket_SendPacketStatus (*SctpSocket_SendPacket) (void * user_data, const uint8_t * data, size_t len); 
-typedef void (*SctpSocket_OnMessageReceived) (void * user_data, uint16_t stream_id, uint32_t ppid, const uint8_t * data, size_t len);
+typedef void (*SctpSocket_OnMessageReceived) (void * user_data, uint16_t stream_id, uint32_t ppid, uint8_t * data, size_t len);
 typedef void (*SctpSocket_OnError) (void * user_data, SctpSocket_Error error);
 typedef void (*SctpSocket_OnAborted) (void * user_data, SctpSocket_Error error);
 typedef void (*SctpSocket_OnConnected) (void * user_data);
@@ -128,6 +121,12 @@ typedef void (*SctpSocket_OnStreamsResetPerformed) (void * user_data, const uint
 typedef void (*SctpSocket_OnIncomingStreamsReset) (void * user_data, const uint16_t * streams, size_t len);
 typedef void (*SctpSocket_OnBufferedAmountLow) (void * user_data, uint16_t stream_id);
 typedef void (*SctpSocket_OnTotalBufferedAmountLow) (void * user_data);
+
+typedef void (*SctpSocketTimeout_Start) (void * user_data, int32_t milliseconds, uint64_t timeout_id);
+typedef void (*SctpSocketTimeout_Stop) (void * user_data);
+typedef uint64_t (*SctpSocketTimeout_TimeMillis) (void * user_data);
+
+typedef uint32_t (*SctpSocket_GetRandomInt) (void * user_data, uint32_t low, uint32_t high);
 
 struct _SctpSocket_Callbacks
 {
@@ -146,14 +145,18 @@ struct _SctpSocket_Callbacks
   SctpSocket_OnBufferedAmountLow on_buffered_amount_low;
   SctpSocket_OnTotalBufferedAmountLow on_total_buffered_amount_low;
 
+  SctpSocketTimeout_Start timeout_start;
+  SctpSocketTimeout_Stop timeout_stop;
+
+  SctpSocketTimeout_TimeMillis time_millis;
+  SctpSocket_GetRandomInt get_random_int;
+
   void * user_data;
 };
 
-SctpSocket * sctp_socket_new (SctpSocket_Callbacks * callbacks);
+SctpSocket * sctp_socket_new (int local_sctp_port, int remote_sctp_port, int max_message_size, SctpSocket_Callbacks * callbacks);
  
 void sctp_socket_free (SctpSocket * socket);
-
-// bool sctp_socket_start (SctpSocket * socket, int local_sctp_port, int remote_sctp_port, int max_message_size);
 
 // To be called when an incoming SCTP packet is to be processed.
 void sctp_socket_receive_packet (SctpSocket * socket, const uint8_t * data, size_t len);
@@ -182,6 +185,23 @@ SctpSocket_State sctp_socket_state (SctpSocket * socket);
 // If it's called before there is an established association, the message will
 // be queued.
 SctpSocket_SendStatus sctp_socket_send (SctpSocket * socket, const uint8_t * data, size_t len, uint16_t stream_id, uint32_t ppid, bool unordered, int32_t * lifetime, size_t * max_retransmissions);
+
+// Resetting streams is an asynchronous operation and the results will
+// be notified using `DcSctpSocketCallbacks::OnStreamsResetDone()` on success
+// and `DcSctpSocketCallbacks::OnStreamsResetFailed()` on failure. Note that
+// only outgoing streams can be reset.
+//
+// When it's known that the peer has reset its own outgoing streams,
+// `DcSctpSocketCallbacks::OnIncomingStreamReset` is called.
+//
+// Note that resetting a stream will also remove all queued messages on those
+// streams, but will ensure that the currently sent message (if any) is fully
+// sent before closing the stream.
+//
+// Resetting streams can only be done on an established association that
+// supports stream resetting. Calling this method on e.g. a closed association
+// or streams that don't support resetting will not perform any operation.
+SctpSocket_ResetStreamStatus sctp_socket_reset_streams (SctpSocket * socket, const uint16_t * streams, size_t len);
 
 #ifdef __cplusplus
 }

@@ -5,7 +5,6 @@ endif
 subdir('dcsctp')
 
 sctp_sources = [
-  'sctpsocket.cc',
   'sctpassociation.c'
 #  'dcsctp_transport.cc',
 #  'gstsctpdec.c',
@@ -24,7 +23,6 @@ endif
 gstsctp = library('gstsctp',
   sctp_sources,
   c_args : gst_plugins_bad_args + sctp_args,
-  cpp_args: ['-std=c++17'],
   include_directories : [configinc],
   dependencies : [gst_dep, gstbase_dep, gstsctp_dep, dcsctp_dep],
   install : true,

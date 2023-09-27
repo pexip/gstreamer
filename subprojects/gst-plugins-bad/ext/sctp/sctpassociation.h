@@ -29,7 +29,7 @@
 #include <glib-object.h>
 #include <gst/gst.h>
 
-#include "sctpsocket.h"
+#include "dcsctp/sctpsocket.h"
 
 G_BEGIN_DECLS
 
@@ -78,7 +78,7 @@ struct _GstSctpAssociationEncoderCtx
 };
 
 typedef void (*GstSctpAssociationPacketReceivedCb) (GstSctpAssociation *
-    sctp_association, guint8 * data, gsize length, guint16 stream_id,
+    sctp_association, const guint8 * data, gsize length, guint16 stream_id,
     guint ppid, gpointer user_data);
 
 typedef void (*GstSctpAssociationStreamResetCb)(GstSctpAssociation *

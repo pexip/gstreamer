@@ -98,6 +98,9 @@ dcsctp_sources = [
   'net/dcsctp/tx/retransmission_timeout.cc',
   'net/dcsctp/tx/outstanding_data.cc',
   'net/dcsctp/tx/retransmission_queue.cc',
+
+  # C wrapper
+  'sctpsocket.cc',
 ]
 
 dcsctp_linkargs = []
@@ -133,7 +136,7 @@ else
 endif
 
 
-dcsctp_lib = library('dcsctp',
+dcsctp_lib = static_library('dcsctp',
   dcsctp_sources,
   c_args: dcsctp_cargs,
   cpp_args: dcsctp_cppargs,

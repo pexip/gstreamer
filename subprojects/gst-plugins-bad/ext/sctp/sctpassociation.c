@@ -379,7 +379,7 @@ gst_sctp_association_send_packet (void *user_data, const uint8_t * data,
 
 static void
 gst_sctp_association_on_message_received (void *user_data,
-    uint16_t stream_id, uint32_t ppid, const uint8_t * data, size_t len)
+    uint16_t stream_id, uint32_t ppid, uint8_t * data, size_t len)
 {
   GstSctpAssociation *self = user_data;
 
@@ -533,11 +533,13 @@ gst_sctp_association_start_unlocked (GstSctpAssociation * self)
     .user_data = self
   };
 
-  self->socket = sctp_socket_new (&callbacks);
-  sctp_socket_connect (self->socket);
-
   gst_sctp_association_change_state_unlocked (self,
       GST_SCTP_ASSOCIATION_STATE_CONNECTING);
+
+  self->socket =
+      sctp_socket_new (self->local_port, self->remote_port, 256 * 1024,
+      &callbacks);
+  sctp_socket_connect (self->socket);
 
   return TRUE;
 }
