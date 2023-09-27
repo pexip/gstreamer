@@ -41,7 +41,10 @@ GST_DEBUG_CATEGORY_STATIC (gst_rtp_vp8_pay_debug);
 
 #define DEFAULT_PICTURE_ID_MODE VP8_PAY_NO_PICTURE_ID
 #define DEFAULT_PICTURE_ID_OFFSET (-1)
+#define DEFAULT_TL0PICIDX_OFFSET (-1)
+#define DEFAULT_TL0PICIDX 0
 #define DEFAULT_PARSE_FRAMES TRUE
+#define DEFAULT_MAX_TEMPORAL_LAYER_ID G_MAXUINT
 
 enum
 {
@@ -49,7 +52,10 @@ enum
   PROP_PICTURE_ID,
   PROP_PICTURE_ID_MODE,
   PROP_PICTURE_ID_OFFSET,
+  PROP_TL0PICIDX_OFFSET,
+  PROP_TL0PICIDX,
   PROP_PARSE_FRAMES,
+  PROP_MAX_TEMPORAL_LAYER_ID,
 };
 
 #define GST_TYPE_RTP_VP8_PAY_PICTURE_ID_MODE (gst_rtp_vp8_pay_picture_id_mode_get_type())
@@ -117,6 +123,7 @@ gst_rtp_vp8_pay_picture_id_reset (GstRtpVP8Pay * self)
   gint old_picture_id = self->picture_id;
   gint picture_id = 0;
 
+  GST_ERROR_OBJECT (self, "XXX reset pic id mode %d offset to set %d", self->picture_id_mode, self->picture_id_offset);
   if (self->picture_id_mode != VP8_PAY_NO_PICTURE_ID) {
     if (self->picture_id_offset == -1) {
       picture_id = g_random_int ();
@@ -130,6 +137,18 @@ gst_rtp_vp8_pay_picture_id_reset (GstRtpVP8Pay * self)
 
   GST_LOG_OBJECT (self, "picture-id reset %d -> %d",
       old_picture_id, picture_id);
+}
+
+static void
+gst_rtp_vp8_pay_tl0picidx_reset (GstRtpVP8Pay * self)
+{
+// TODO thread safety
+  self->tl0picidx = self->tl0picidx_offset;
+//  g_atomic_int_set (&self->tl0picidx, self->tl0picidx_offset);
+
+  GST_ERROR_OBJECT (self, "XXX set pic idx to %d", self->tl0picidx);
+  GST_LOG_OBJECT (self, "tl0picidx reset -> %d",
+       self->tl0picidx);
 }
 
 static void
@@ -152,9 +171,7 @@ static void
 gst_rtp_vp8_pay_reset (GstRtpVP8Pay * obj)
 {
   gst_rtp_vp8_pay_picture_id_reset (obj);
-  /* tl0picidx MAY start at a random value, but there's no point. Initialize
-   * so that first packet will use 0 for convenience */
-  obj->tl0picidx = -1;
+  gst_rtp_vp8_pay_tl0picidx_reset (obj);
   obj->temporal_scalability_fields_present = FALSE;
 }
 
@@ -163,6 +180,8 @@ gst_rtp_vp8_pay_init (GstRtpVP8Pay * obj)
 {
   obj->picture_id_mode = DEFAULT_PICTURE_ID_MODE;
   obj->picture_id_offset = DEFAULT_PICTURE_ID_OFFSET;
+  obj->tl0picidx_offset = DEFAULT_TL0PICIDX_OFFSET;
+  obj->max_tid = DEFAULT_MAX_TEMPORAL_LAYER_ID;
   gst_rtp_vp8_pay_reset (obj);
 }
 
@@ -201,6 +220,13 @@ gst_rtp_vp8_pay_class_init (GstRtpVP8PayClass * gst_rtp_vp8_pay_class)
           DEFAULT_PARSE_FRAMES,
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS | G_PARAM_CONSTRUCT_ONLY));
 
+  g_object_class_install_property (gobject_class, PROP_MAX_TEMPORAL_LAYER_ID,
+    g_param_spec_uint ("max-temporal-layer-id", "Maximum temporal layer ID",
+        "Buffers with temporal layer ID (TID) above this value will be dropped",
+        0, G_MAXUINT, DEFAULT_MAX_TEMPORAL_LAYER_ID,
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS)
+  );
+
   /**
    * rtpvp8pay:picture-id-offset:
    *
@@ -214,6 +240,16 @@ gst_rtp_vp8_pay_class_init (GstRtpVP8PayClass * gst_rtp_vp8_pay_class)
           -1, 0x7FFF, DEFAULT_PICTURE_ID_OFFSET,
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 
+  // XXX check maximum value for this
+  g_object_class_install_property (gobject_class, PROP_TL0PICIDX_OFFSET,
+      g_param_spec_int ("tl0picidx-offset", "TL0PICIDX offset",
+          "Offset to add to the initial TL0PICIDX (-1 = random)",
+          -1, 0x7FFF, DEFAULT_TL0PICIDX_OFFSET,
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+
+  g_object_class_install_property (gobject_class, PROP_TL0PICIDX,
+      g_param_spec_int ("tl0picidx", "TL0PICIDX",
+          "TL0PICIDX", 01, 0x7FFF, DEFAULT_TL0PICIDX, G_PARAM_READABLE | G_PARAM_STATIC_STRINGS));
   gst_element_class_add_static_pad_template (element_class,
       &gst_rtp_vp8_pay_sink_template);
   gst_element_class_add_static_pad_template (element_class,
@@ -248,8 +284,15 @@ gst_rtp_vp8_pay_set_property (GObject * object,
       rtpvp8pay->picture_id_offset = g_value_get_int (value);
       gst_rtp_vp8_pay_picture_id_reset (rtpvp8pay);
       break;
+    case PROP_TL0PICIDX_OFFSET:
+      rtpvp8pay->tl0picidx_offset = g_value_get_int (value);
+      gst_rtp_vp8_pay_tl0picidx_reset (rtpvp8pay);
+      break;
     case PROP_PARSE_FRAMES:
       rtpvp8pay->parse_frames = g_value_get_boolean (value);
+      break;
+    case PROP_MAX_TEMPORAL_LAYER_ID:
+      rtpvp8pay->max_tid = g_value_get_uint (value);
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
@@ -273,8 +316,17 @@ gst_rtp_vp8_pay_get_property (GObject * object,
     case PROP_PICTURE_ID_OFFSET:
       g_value_set_int (value, rtpvp8pay->picture_id_offset);
       break;
+    case PROP_TL0PICIDX_OFFSET:
+      g_value_set_int (value, rtpvp8pay->tl0picidx_offset);
+      break;
+    case PROP_TL0PICIDX:
+      g_value_set_int (value, rtpvp8pay->tl0picidx);
+      break;
     case PROP_PARSE_FRAMES:
       g_value_set_boolean (value, rtpvp8pay->parse_frames);
+      break;
+    case PROP_MAX_TEMPORAL_LAYER_ID:
+      g_value_set_uint (value, rtpvp8pay->max_tid);
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
@@ -572,6 +624,7 @@ gst_rtp_vp8_create_header_buffer (GstRtpVP8Pay * self, guint8 partid,
       p[1] |= 0x60;
     }
 
+    GST_ERROR_OBJECT (self, "XXX Adding picture ID to packet %u", self->picture_id);
     /* Insert picture ID */
     if (self->picture_id_mode == VP8_PAY_PICTURE_ID_7BITS) {
       /* I: 7 bit picture_id */
@@ -613,6 +666,7 @@ gst_rtp_vp8_create_header_buffer (GstRtpVP8Pay * self, guint8 partid,
         self->tl0picidx++;
       p[index] = self->tl0picidx & 0xFF;
       p[index + 1] = ((temporal_layer << 6) | (layer_sync << 5)) & 0xFF;
+      GST_ERROR_OBJECT (self, "XXX added SEND tl0picidx %u", self->tl0picidx);
     }
   }
 
@@ -624,6 +678,7 @@ gst_rtp_vp8_create_header_buffer (GstRtpVP8Pay * self, guint8 partid,
 
   GST_BUFFER_DURATION (out) = GST_BUFFER_DURATION (in);
   GST_BUFFER_PTS (out) = GST_BUFFER_PTS (in);
+
 
   return out;
 }
@@ -687,14 +742,16 @@ gst_rtp_vp8_payload_next (GstRtpVP8Pay * self, GstBufferList * list,
   /* whole set of partitions, payload them and done */
   header = gst_rtp_vp8_create_header_buffer (self, partition,
       start, mark, buffer, meta);
-  sub = gst_buffer_copy_region (buffer, GST_BUFFER_COPY_ALL, offset, available);
+  if (header) {
+    sub = gst_buffer_copy_region (buffer, GST_BUFFER_COPY_ALL, offset, available);
 
-  gst_rtp_copy_video_meta (self, header, buffer);
-  gst_rtp_vp8_drop_vp8_meta (self, header);
+    gst_rtp_copy_video_meta (self, header, buffer);
+    gst_rtp_vp8_drop_vp8_meta (self, header);
 
-  out = gst_buffer_append (header, sub);
+    out = gst_buffer_append (header, sub);
 
-  gst_buffer_list_insert (list, -1, out);
+    gst_buffer_list_insert (list, -1, out);
+  }
 
   return available;
 }
@@ -704,7 +761,7 @@ static GstFlowReturn
 gst_rtp_vp8_pay_handle_buffer (GstRTPBasePayload * payload, GstBuffer * buffer)
 {
   GstRtpVP8Pay *self = GST_RTP_VP8_PAY (payload);
-  GstFlowReturn ret;
+  GstFlowReturn ret = GST_FLOW_OK;
   GstBufferList *list;
   GstCustomMeta *meta;
   gsize size, max_paylen;
@@ -721,6 +778,8 @@ gst_rtp_vp8_pay_handle_buffer (GstRTPBasePayload * payload, GstBuffer * buffer)
     }
   }
 
+  gboolean should_payload = TRUE;
+
   if (meta) {
     GstStructure *s = gst_custom_meta_get_structure (meta);
     gboolean use_temporal_scaling;
@@ -730,27 +789,39 @@ gst_rtp_vp8_pay_handle_buffer (GstRTPBasePayload * payload, GstBuffer * buffer)
 
     gst_structure_get_boolean (s, "use-temporal-scaling",
         &use_temporal_scaling);
-    if (use_temporal_scaling)
+    if (use_temporal_scaling) {
       self->temporal_scalability_fields_present = TRUE;
+
+      guint temporal_layer;
+      if (gst_structure_get (s, "layer-id", G_TYPE_UINT, &temporal_layer, NULL)) {
+        should_payload = temporal_layer <= self->max_tid;
+      }
+
+      guint tl0picidx_meta;
+      gst_structure_get (s, "tl0picidx", G_TYPE_UINT, &tl0picidx_meta, NULL);
+      GST_ERROR_OBJECT (self, "XXX processing tl0picidx %u TID %u max %u", tl0picidx_meta, temporal_layer, self->max_tid);
+    }
   }
 
-  mtu = GST_RTP_BASE_PAYLOAD_MTU (payload);
-  vp8_hdr_len = gst_rtp_vp8_calc_header_len (self);
-  max_paylen = gst_rtp_buffer_calc_payload_len (mtu - vp8_hdr_len, 0,
-      gst_rtp_base_payload_get_source_count (payload, buffer));
+  if (should_payload) {
+    mtu = GST_RTP_BASE_PAYLOAD_MTU (payload);
+    vp8_hdr_len = gst_rtp_vp8_calc_header_len (self);
+    max_paylen = gst_rtp_buffer_calc_payload_len (mtu - vp8_hdr_len, 0,
+        gst_rtp_base_payload_get_source_count (payload, buffer));
 
-  list = gst_buffer_list_new_sized ((size / max_paylen) + 1);
+    list = gst_buffer_list_new_sized ((size / max_paylen) + 1);
 
-  offset = 0;
-  while (offset < size) {
-    offset +=
-        gst_rtp_vp8_payload_next (self, list, offset, buffer, size,
-        max_paylen, meta);
+    offset = 0;
+    while (offset < size) {
+      offset +=
+          gst_rtp_vp8_payload_next (self, list, offset, buffer, size,
+          max_paylen, meta);
+    }
+
+    ret = gst_rtp_base_payload_push_list (payload, list);
+
+    gst_rtp_vp8_pay_picture_id_increment (self);
   }
-
-  ret = gst_rtp_base_payload_push_list (payload, list);
-
-  gst_rtp_vp8_pay_picture_id_increment (self);
 
   gst_buffer_unref (buffer);
 

@@ -1,5 +1,4 @@
 /*
-/*
  * gstrtpvp8pay.h - Header for GstRtpVP8Pay
  * Copyright (C) 2011 Sjoerd Simons <sjoerd@luon.net>
  *
@@ -68,6 +67,9 @@ struct _GstRtpVP8Pay
   gint picture_id;
   gboolean temporal_scalability_fields_present;
   guint8 tl0picidx;
+  guint8 tl0picidx_offset;
+  /* Maximum temporal layer ID whose frames should be payloaded */
+  guint max_tid;
 };
 
 GType gst_rtp_vp8_pay_get_type (void);
