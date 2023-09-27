@@ -100,8 +100,6 @@ static void gst_sctp_association_set_property (GObject * object, guint prop_id,
 static void gst_sctp_association_get_property (GObject * object, guint prop_id,
     GValue * value, GParamSpec * pspec);
 
-static void force_close_unlocked (GstSctpAssociation * self,
-    gboolean change_state);
 // static struct socket *create_sctp_socket (GstSctpAssociation *
     // gst_sctp_association);
 // static struct sockaddr_conn get_sctp_socket_address (GstSctpAssociation *
@@ -418,58 +416,103 @@ static SctpSocket_SendPacketStatus
 gst_sctp_association_send_packet (void *user_data, const uint8_t * data,
     size_t len)
 {
-  (void) user_data;
-  (void) data;
-  (void) len;
+  GstSctpAssociation *self = user_data;
+
+  g_mutex_lock (&self->association_mutex);
+
+  g_assert (self->encoder_ctx.packet_out_cb);
+  g_assert (self->encoder_ctx.element);
+  self->encoder_ctx.packet_out_cb (self, data, len, self->encoder_ctx.element);
+
+  g_mutex_unlock (&self->association_mutex);
+
+  return SCTP_SOCKET_SEND_PACKET_STATUS_SUCCESS;
 }
 
 static void
 gst_sctp_association_on_message_received (void *user_data,
     uint16_t stream_id, uint32_t ppid, const uint8_t * data, size_t len)
 {
-  (void) user_data;
-  (void) stream_id;
-  (void) ppid;
-  (void) data;
-  (void) len;
+  GstSctpAssociation *self = user_data;
+
+  g_mutex_lock (&self->association_mutex);
+
+  g_assert (self->decoder_ctx.packet_received_cb);
+  g_assert (self->decoder_ctx.element);
+  self->decoder_ctx.packet_received_cb (self, data, len, stream_id, ppid,
+      self->decoder_ctx.element);
+
+  g_mutex_unlock (&self->association_mutex);
 }
 
 static void
 gst_sctp_association_on_error (void *user_data, SctpSocket_Error error)
 {
-  (void) user_data;
-  (void) error;
+  GstSctpAssociation *self = user_data;
+
+  g_mutex_lock (&self->association_mutex);
+
+  GST_ERROR ("error: %u", error);
+
+  gst_sctp_association_change_state_unlocked (self,
+      GST_SCTP_ASSOCIATION_STATE_ERROR);
+
+  g_mutex_unlock (&self->association_mutex);
 }
 
 static void
 gst_sctp_association_on_aborted (void *user_data, SctpSocket_Error error)
 {
-  (void) user_data;
-  (void) error;
+  GstSctpAssociation *self = user_data;
+
+  g_mutex_lock (&self->association_mutex);
+
+  GST_ERROR ("error: %u", error);
+
+  gst_sctp_association_change_state_unlocked (self,
+      GST_SCTP_ASSOCIATION_STATE_ERROR);
+
+  g_mutex_unlock (&self->association_mutex);
 }
 
 static void
 gst_sctp_association_on_connected (void *user_data)
 {
-  (void) user_data;
+  GstSctpAssociation *self = user_data;
+
+  g_mutex_lock (&self->association_mutex);
+
+  gst_sctp_association_change_state_unlocked (self,
+      GST_SCTP_ASSOCIATION_STATE_CONNECTED);
+
+  g_mutex_unlock (&self->association_mutex);
 }
 
 static void
 gst_sctp_association_on_closed (void *user_data)
 {
-  (void) user_data;
+  GstSctpAssociation *self = user_data;
+
+  g_mutex_lock (&self->association_mutex);
+
+  gst_sctp_association_change_state_unlocked (self,
+      GST_SCTP_ASSOCIATION_STATE_DISCONNECTED);
+
+  g_mutex_unlock (&self->association_mutex);
 }
 
 static void
 gst_sctp_association_on_connection_restarted (void *user_data)
 {
   (void) user_data;
+  GST_ERROR ("!");
 }
 
 static void
 gst_sctp_association_on_streams_reset_failed (void *user_data,
     const uint16_t * streams, size_t len)
 {
+  GST_ERROR ("!");
   (void) user_data;
   (void) streams;
   (void) len;
@@ -479,6 +522,7 @@ static void
 gst_sctp_association_on_streams_reset_performed (void *user_data,
     const uint16_t * streams, size_t len)
 {
+  GST_ERROR ("!");
   (void) user_data;
   (void) streams;
   (void) len;
@@ -488,6 +532,7 @@ static void
 gst_sctp_association_on_incoming_streams_reset (void *user_data,
     const uint16_t * streams, size_t len)
 {
+  GST_ERROR ("!");
   (void) user_data;
   (void) streams;
   (void) len;
@@ -497,6 +542,7 @@ static void
 gst_sctp_association_on_buffered_amount_low (void *user_data,
     uint16_t stream_id)
 {
+  GST_ERROR ("!");
   (void) user_data;
   (void) stream_id;
 
@@ -505,6 +551,7 @@ gst_sctp_association_on_buffered_amount_low (void *user_data,
 static void
 gst_sctp_association_on_total_buffered_amount_low (void *user_data)
 {
+  GST_ERROR ("!");
   (void) user_data;
 }
 
@@ -612,7 +659,7 @@ gst_sctp_association_incoming_packet (GstSctpAssociation * self,
         (size_t) length);
   } else {
     GST_WARNING ("Couldn't process buffer (%p with length %" G_GUINT32_FORMAT
-        "), missing socket");
+        "), missing socket", buf, length);
   }
 
   g_mutex_unlock (&self->association_mutex);
@@ -624,7 +671,6 @@ gst_sctp_association_send_data (GstSctpAssociation * self, const guint8 * buf,
     GstSctpAssociationPartialReliability pr, guint32 reliability_param,
     guint32 * bytes_sent_)
 {
-  (void) self;
   (void) buf;
   (void) length;
   (void) stream_id;
@@ -632,6 +678,37 @@ gst_sctp_association_send_data (GstSctpAssociation * self, const guint8 * buf,
   (void) ordered;
   (void) pr;
   (void) reliability_param;
+
+  g_mutex_lock (&self->association_mutex);
+  if (self->state != GST_SCTP_ASSOCIATION_STATE_CONNECTED) {
+    if (self->state == GST_SCTP_ASSOCIATION_STATE_DISCONNECTED ||
+        self->state == GST_SCTP_ASSOCIATION_STATE_DISCONNECTING) {
+      GST_INFO_OBJECT (self, "Disconnected");
+      g_mutex_unlock (&self->association_mutex);
+      return GST_FLOW_EOS;
+    } else {
+      GST_ERROR_OBJECT (self, "Association not connected yet");
+      g_mutex_unlock (&self->association_mutex);
+      return GST_FLOW_ERROR;
+    }
+  }
+
+  /* TODO: check for stream id state */
+
+  if (!self->socket) {
+    GST_ERROR ("No socket!");
+    g_assert_not_reached ();
+  }
+
+  SctpSocket_SendStatus send_status =
+      sctp_socket_send (self->socket, stream_id, ppid, buf, length);
+  GST_ERROR ("send_status: %d", send_status);
+
+  g_mutex_unlock (&self->association_mutex);
+
+  if (send_status != SCTP_SOCKET_STATUS_SUCCESS)
+    return GST_FLOW_ERROR;
+
 
   return GST_FLOW_OK;
 }
@@ -669,46 +746,43 @@ gst_sctp_association_reset_stream (GstSctpAssociation * self, guint16 stream_id)
   // g_free (srs);
 }
 
+static void
+force_close_unlocked (GstSctpAssociation * self)
+{
+  if (self->state != GST_SCTP_ASSOCIATION_STATE_CONNECTED)
+    return;
+
+  gst_sctp_association_change_state_unlocked (self,
+      GST_SCTP_ASSOCIATION_STATE_DISCONNECTING);
+
+  g_assert (self->socket);
+  sctp_socket_close (self->socket);
+  sctp_socket_free (self->socket);
+  self->socket = NULL;
+
+  gst_sctp_association_change_state_unlocked (self,
+      GST_SCTP_ASSOCIATION_STATE_DISCONNECTED);
+}
+
 void
 gst_sctp_association_force_close (GstSctpAssociation * self)
 {
   g_mutex_lock (&self->association_mutex);
-  force_close_unlocked (self, TRUE);
+  force_close_unlocked (self);
   g_mutex_unlock (&self->association_mutex);
-}
-
-static void
-force_close_unlocked (GstSctpAssociation * self, gboolean change_state)
-{
-  // if (self->sctp_ass_sock) {
-  //   usrsctp_close (self->sctp_ass_sock);
-  //   gst_sctp_association_deregister (self);
-  //   self->sctp_ass_sock = NULL;
-  // }
-
-  // self->sctp_assoc_id = 0;
-
-  if (change_state) {
-    gst_sctp_association_change_state_unlocked (self,
-        GST_SCTP_ASSOCIATION_STATE_DISCONNECTED);
-  }
 }
 
 static void
 gst_sctp_association_disconnect_unlocked (GstSctpAssociation * self)
 {
-  if (self->state == GST_SCTP_ASSOCIATION_STATE_CONNECTED) {
-    gst_sctp_association_change_state_unlocked (self,
-        GST_SCTP_ASSOCIATION_STATE_DISCONNECTING);
-  }
+  if (self->state != GST_SCTP_ASSOCIATION_STATE_CONNECTED)
+    return;
 
-  /* Fall through to ensure the transition to disconnected occurs */
-  if (self->state == GST_SCTP_ASSOCIATION_STATE_DISCONNECTING) {
-    force_close_unlocked (self, FALSE);
-    gst_sctp_association_change_state_unlocked (self,
-        GST_SCTP_ASSOCIATION_STATE_DISCONNECTED);
-    GST_INFO_OBJECT (self, "SCTP association disconnected!");
-  }
+  gst_sctp_association_change_state_unlocked (self,
+      GST_SCTP_ASSOCIATION_STATE_DISCONNECTING);
+
+  g_assert (self->socket);
+  sctp_socket_shutdown (self->socket);
 }
 
 void
