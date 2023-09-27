@@ -70,14 +70,18 @@ sctp_socket_state (SctpSocket * socket)
 }
 
 SctpSocket_SendStatus
-sctp_socket_send (SctpSocket * socket, uint16_t stream_id,
-    uint32_t ppid, const uint8_t * data, size_t len)
+sctp_socket_send (SctpSocket * socket, const uint8_t * data, size_t len,
+    uint16_t stream_id, uint32_t ppid, bool ordered, int32_t * lifetime,
+    size_t *max_retransmissions)
 {
   (void) socket;
   (void) stream_id;
   (void) ppid;
   (void) data;
   (void) len;
+  (void) ordered;
+  (void) lifetime;
+  (void) max_retransmissions;
   return SCTP_SOCKET_STATUS_SUCCESS;
 }
 

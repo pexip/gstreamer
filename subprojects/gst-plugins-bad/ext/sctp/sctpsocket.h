@@ -3,6 +3,7 @@
 
 #include <stddef.h>
 #include <inttypes.h>
+#include <stdbool.h>
 
 #ifdef __cplusplus
 extern "C"
@@ -180,25 +181,7 @@ SctpSocket_State sctp_socket_state (SctpSocket * socket);
 // The association does not have to be established before calling this method.
 // If it's called before there is an established association, the message will
 // be queued.
-SctpSocket_SendStatus sctp_socket_send (SctpSocket * socket, uint16_t stream_id, uint32_t ppid, const uint8_t * data, size_t len);
-
-// Resetting streams is an asynchronous operation and the results will
-// be notified using `DcSctpSocketCallbacks::OnStreamsResetDone()` on success
-// and `DcSctpSocketCallbacks::OnStreamsResetFailed()` on failure. Note that
-// only outgoing streams can be reset.
-//
-// When it's known that the peer has reset its own outgoing streams,
-// `DcSctpSocketCallbacks::OnIncomingStreamReset` is called.
-//
-// Note that resetting a stream will also remove all queued messages on those
-// streams, but will ensure that the currently sent message (if any) is fully
-// sent before closing the stream.
-//
-// Resetting streams can only be done on an established association that
-// supports stream resetting. Calling this method on e.g. a closed association
-// or streams that don't support resetting will not perform any operation.
-SctpSocket_ResetStreamStatus sctp_socket_reset_streams (SctpSocket * socket, const uint16_t * streams, size_t len);
-
+SctpSocket_SendStatus sctp_socket_send (SctpSocket * socket, const uint8_t * data, size_t len, uint16_t stream_id, uint32_t ppid, bool ordered, int32_t * lifetime, size_t * max_retransmissions);
 
 #ifdef __cplusplus
 }

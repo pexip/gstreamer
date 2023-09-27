@@ -100,24 +100,6 @@ static void gst_sctp_association_set_property (GObject * object, guint prop_id,
 static void gst_sctp_association_get_property (GObject * object, guint prop_id,
     GValue * value, GParamSpec * pspec);
 
-// static struct socket *create_sctp_socket (GstSctpAssociation *
-    // gst_sctp_association);
-// static struct sockaddr_conn get_sctp_socket_address (GstSctpAssociation *
-//     gst_sctp_association, guint16 port);
-// static int sctp_packet_out (void *addr, void *buffer, size_t length, guint8 tos,
-//     guint8 set_df);
-// static int receive_cb (struct socket *sock, union sctp_sockstore addr,
-//     void *data, size_t datalen, struct sctp_rcvinfo rcv_info, gint flags,
-    // void *ulp_info);
-// static void handle_notification (GstSctpAssociation * self,
-//     const union sctp_notification *notification, size_t length);
-// static void handle_association_changed (GstSctpAssociation * self,
-    // const struct sctp_assoc_change *sac);
-// static void handle_stream_reset_event (GstSctpAssociation * self,
-//     const struct sctp_stream_reset_event *ssr);
-// static void handle_message (GstSctpAssociation * self, guint8 * data,
-//     guint32 datalen, guint16 stream_id, guint32 ppid);
-
 static void maybe_set_state_to_ready_unlocked (GstSctpAssociation * self);
 static void gst_sctp_association_change_state_unlocked (GstSctpAssociation *
     self, GstSctpAssociationState new_state);
@@ -196,6 +178,10 @@ gst_sctp_association_finalize (GObject * object)
 {
   GstSctpAssociation *self = GST_SCTP_ASSOCIATION (object);
 
+  if (self->socket)
+    sctp_socket_free (self->socket);
+  self->socket = NULL;
+
   /* no need to hold the association_lock, it is held under
      gst_sctp_association_unref */
   g_hash_table_remove (associations_by_id,
@@ -221,7 +207,8 @@ gst_sctp_association_set_property (GObject * object, guint prop_id,
       case PROP_LOCAL_PORT:
       case PROP_REMOTE_PORT:
         GST_ERROR_OBJECT (self, "These properties cannot be set in this state");
-        goto error;
+        g_mutex_unlock (&self->association_mutex);
+        return;
     }
   }
 
@@ -255,9 +242,6 @@ gst_sctp_association_set_property (GObject * object, guint prop_id,
   g_mutex_unlock (&self->association_mutex);
 
   return;
-
-error:
-  g_mutex_unlock (&self->association_mutex);
 }
 
 static void
@@ -278,6 +262,8 @@ gst_sctp_association_get_property (GObject * object, guint prop_id,
     GValue * value, GParamSpec * pspec)
 {
   GstSctpAssociation *self = GST_SCTP_ASSOCIATION (object);
+
+  g_mutex_lock (&self->association_mutex);
 
   switch (prop_id) {
     case PROP_ASSOCIATION_ID:
@@ -302,47 +288,9 @@ gst_sctp_association_get_property (GObject * object, guint prop_id,
       G_OBJECT_WARN_INVALID_PROPERTY_ID (self, prop_id, pspec);
       break;
   }
+
+  g_mutex_unlock (&self->association_mutex);
 }
-
-/*
-* Helper register/deregister functions to workaround bug sctplab/usrsctp#405
-*
-* The sctp socket can outlive the association, so we need to protect ourselves
-* against being called with an invalid reference of GstSctpAssociation.
-* To do so, only register/deregister when we create/close the socket in a
-* thread-safe way.
-*
-*/
-// static void
-// gst_sctp_association_register (GstSctpAssociation * self)
-// {
-//   G_LOCK (associations_lock);
-
-//   /* demand we are not registering twice */
-//   g_assert (!g_hash_table_contains (ids_by_association, self));
-
-//   g_hash_table_insert (ids_by_association, self,
-//       GUINT_TO_POINTER (self->association_id));
-
-//   G_UNLOCK (associations_lock);
-
-//   usrsctp_register_address ((void *) self);
-// }
-
-// static void
-// gst_sctp_association_deregister (GstSctpAssociation * self)
-// {
-//   usrsctp_deregister_address ((void *) self);
-
-//   G_LOCK (associations_lock);
-
-//   /* demand we are not deregistering twice */
-//   g_assert (g_hash_table_contains (ids_by_association, self));
-
-//   g_hash_table_remove (ids_by_association, self);
-
-//   G_UNLOCK (associations_lock);
-// }
 
 /* Public functions */
 
@@ -565,10 +513,7 @@ gst_sctp_association_start_unlocked (GstSctpAssociation * self)
     return FALSE;
   }
 
-  if (self->socket) {
-    GST_ERROR ("Socket should be NULL at this point");
-    g_assert_not_reached ();
-  }
+  g_assert (!self->socket);
 
   SctpSocket_Callbacks callbacks = {
     .send_packet = gst_sctp_association_send_packet,
@@ -671,14 +616,6 @@ gst_sctp_association_send_data (GstSctpAssociation * self, const guint8 * buf,
     GstSctpAssociationPartialReliability pr, guint32 reliability_param,
     guint32 * bytes_sent_)
 {
-  (void) buf;
-  (void) length;
-  (void) stream_id;
-  (void) ppid;
-  (void) ordered;
-  (void) pr;
-  (void) reliability_param;
-
   g_mutex_lock (&self->association_mutex);
   if (self->state != GST_SCTP_ASSOCIATION_STATE_CONNECTED) {
     if (self->state == GST_SCTP_ASSOCIATION_STATE_DISCONNECTED ||
@@ -694,14 +631,25 @@ gst_sctp_association_send_data (GstSctpAssociation * self, const guint8 * buf,
   }
 
   /* TODO: check for stream id state */
-
   if (!self->socket) {
     GST_ERROR ("No socket!");
     g_assert_not_reached ();
   }
 
+  int32_t *lifetime = NULL;
+  size_t *max_retransmissions = NULL;
+
+  if (pr == GST_SCTP_ASSOCIATION_PARTIAL_RELIABILITY_TTL) {
+    *lifetime = reliability_param;
+  } else if (pr == GST_SCTP_ASSOCIATION_PARTIAL_RELIABILITY_RTX) {
+    *max_retransmissions = reliability_param;
+  } else {
+    GST_DEBUG ("Ignoring reliability parameter %d", pr);
+  }
+
   SctpSocket_SendStatus send_status =
-      sctp_socket_send (self->socket, stream_id, ppid, buf, length);
+      sctp_socket_send (self->socket, buf, length, stream_id, ppid, ordered,
+      lifetime, max_retransmissions);
   GST_ERROR ("send_status: %d", send_status);
 
   g_mutex_unlock (&self->association_mutex);
@@ -718,32 +666,6 @@ gst_sctp_association_reset_stream (GstSctpAssociation * self, guint16 stream_id)
 {
   (void) self;
   (void) stream_id;
-  // struct sctp_reset_streams *srs;
-  // socklen_t length;
-
-  // g_mutex_lock (&self->association_mutex);
-
-  // if (self->state != GST_SCTP_ASSOCIATION_STATE_CONNECTED) {
-  //   /* only allow resets on connected streams */
-  //   g_mutex_unlock (&self->association_mutex);
-  //   return;
-  // }
-
-  // length = (socklen_t) (sizeof (struct sctp_reset_streams) + sizeof (guint16));
-  // srs = (struct sctp_reset_streams *) g_malloc0 (length);
-  // srs->srs_flags = SCTP_STREAM_RESET_OUTGOING;
-  // srs->srs_number_streams = 1;
-  // srs->srs_stream_list[0] = stream_id;
-  // srs->srs_assoc_id = self->sctp_assoc_id;
-
-  // if (usrsctp_setsockopt (self->sctp_ass_sock, IPPROTO_SCTP,
-  //         SCTP_RESET_STREAMS, srs, length) < 0) {
-  //   GST_WARNING_OBJECT (self, "Resetting stream id=%u failed", stream_id);
-  // }
-
-  // g_mutex_unlock (&self->association_mutex);
-
-  // g_free (srs);
 }
 
 static void
@@ -793,196 +715,6 @@ gst_sctp_association_disconnect (GstSctpAssociation * self)
   g_mutex_unlock (&self->association_mutex);
 }
 
-// static gboolean
-// association_is_valid (GstSctpAssociation * self)
-// {
-//   gboolean valid = FALSE;
-
-//   G_LOCK (associations_lock);
-
-//   if (ids_by_association != NULL)
-//     valid = g_hash_table_contains (ids_by_association, self);
-
-//   G_UNLOCK (associations_lock);
-
-//   return valid;
-// }
-
-// static int
-// sctp_packet_out (void *addr, void *buffer, size_t length, guint8 tos,
-//     guint8 set_df)
-// {
-//   GstSctpAssociation *self = GST_SCTP_ASSOCIATION (addr);
-
-//   if (association_is_valid (self) && self->encoder_ctx.packet_out_cb) {
-//     self->encoder_ctx.packet_out_cb (self, buffer, length,
-//         self->encoder_ctx.element);
-//   }
-
-//   return 0;
-// }
-
-// static int
-// receive_cb (struct socket *sock, union sctp_sockstore addr, void *data,
-//     size_t datalen, struct sctp_rcvinfo rcv_info, gint flags, void *ulp_info)
-// {
-//   GstSctpAssociation *self = GST_SCTP_ASSOCIATION (ulp_info);
-
-//   if (!association_is_valid (self)) {
-//     return 1;
-//   }
-
-
-//   /* If we acquire the lock here it means this is the SCTP timer thread, if
-//      the thread has already acquired the lock, its coming from
-//      gst_sctp_association_incoming_packet()  */
-//   gboolean acquired_lock = g_mutex_trylock (&self->association_mutex);
-
-//   if (!data) {
-//     /* This is a notification that socket shutdown is complete */
-//     GST_INFO_OBJECT (self, "Received shutdown complete notification");
-//   } else {
-//     // if (flags & MSG_NOTIFICATION) {
-//       // handle_notification (self, (const union sctp_notification *) data,
-//       //     datalen);
-
-//       /* We use this instead of a bare `free()` so that we use the `free` from
-//        * the C runtime that usrsctp was built with. This makes a difference on
-//        * Windows where libusrstcp and GStreamer can be linked to two different
-//        * CRTs. */
-//       // usrsctp_freedumpbuffer (data);
-//     // } else {
-//       // handle_message (self, data, datalen, rcv_info.rcv_sid,
-//       //     ntohl (rcv_info.rcv_ppid));
-//     // }
-//   }
-
-//   if (acquired_lock)
-//     g_mutex_unlock (&self->association_mutex);
-
-//   return 1;
-// }
-
-// static void
-// handle_notification (GstSctpAssociation * self,
-//     const union sctp_notification *notification, size_t length)
-// {
-//   g_assert (notification->sn_header.sn_length == length);
-
-//   switch (notification->sn_header.sn_type) {
-//     case SCTP_ASSOC_CHANGE:
-//       GST_DEBUG_OBJECT (self, "Event: SCTP_ASSOC_CHANGE");
-//       handle_association_changed (self, &notification->sn_assoc_change);
-//       break;
-//     case SCTP_PEER_ADDR_CHANGE:
-//       GST_DEBUG_OBJECT (self, "Event: SCTP_PEER_ADDR_CHANGE");
-//       break;
-//     case SCTP_REMOTE_ERROR:
-//       GST_ERROR_OBJECT (self, "Event: SCTP_REMOTE_ERROR (%u)",
-//           notification->sn_remote_error.sre_error);
-//       break;
-//     case SCTP_SEND_FAILED:
-//       GST_ERROR_OBJECT (self, "Event: SCTP_SEND_FAILED");
-//       break;
-//     case SCTP_SHUTDOWN_EVENT:
-//       GST_DEBUG_OBJECT (self, "Event: SCTP_SHUTDOWN_EVENT");
-//       gst_sctp_association_change_state_unlocked (self,
-//           GST_SCTP_ASSOCIATION_STATE_DISCONNECTING);
-//       break;
-//     case SCTP_ADAPTATION_INDICATION:
-//       GST_DEBUG_OBJECT (self, "Event: SCTP_ADAPTATION_INDICATION");
-//       break;
-//     case SCTP_PARTIAL_DELIVERY_EVENT:
-//       GST_DEBUG_OBJECT (self, "Event: SCTP_PARTIAL_DELIVERY_EVENT");
-//       break;
-//     case SCTP_AUTHENTICATION_EVENT:
-//       GST_DEBUG_OBJECT (self, "Event: SCTP_AUTHENTICATION_EVENT");
-//       break;
-//     case SCTP_STREAM_RESET_EVENT:
-//       GST_DEBUG_OBJECT (self, "Event: SCTP_STREAM_RESET_EVENT");
-//       handle_stream_reset_event (self, &notification->sn_strreset_event);
-//       break;
-//     case SCTP_SENDER_DRY_EVENT:
-//       GST_DEBUG_OBJECT (self, "Event: SCTP_SENDER_DRY_EVENT");
-//       break;
-//     case SCTP_NOTIFICATIONS_STOPPED_EVENT:
-//       GST_DEBUG_OBJECT (self, "Event: SCTP_NOTIFICATIONS_STOPPED_EVENT");
-//       break;
-//     case SCTP_ASSOC_RESET_EVENT:
-//       GST_DEBUG_OBJECT (self, "Event: SCTP_ASSOC_RESET_EVENT");
-//       break;
-//     case SCTP_STREAM_CHANGE_EVENT:
-//       GST_DEBUG_OBJECT (self, "Event: SCTP_STREAM_CHANGE_EVENT");
-//       break;
-//     case SCTP_SEND_FAILED_EVENT:
-//       GST_ERROR_OBJECT (self, "Event: SCTP_SEND_FAILED_EVENT (%u)",
-//           notification->sn_send_failed_event.ssfe_error);
-//       break;
-//     default:
-//       break;
-//   }
-// }
-
-// static void
-// _apply_aggressive_heartbeat_unlocked (GstSctpAssociation * self)
-// {
-//   struct sctp_assocparams assoc_params;
-//   struct sctp_paddrparams peer_addr_params;
-//   struct sockaddr_conn addr;
-
-//   if (!self->aggressive_heartbeat)
-//     return;
-
-//   memset (&assoc_params, 0, sizeof (assoc_params));
-//   assoc_params.sasoc_assoc_id = self->sctp_assoc_id;
-//   assoc_params.sasoc_asocmaxrxt = 1;
-//   if (usrsctp_setsockopt (self->sctp_ass_sock, IPPROTO_SCTP,
-//           SCTP_ASSOCINFO, &assoc_params, sizeof (assoc_params))) {
-//     GST_WARNING_OBJECT (self, "Could not set SCTP_ASSOCINFO");
-//   }
-
-//   addr = get_sctp_socket_address (self, self->remote_port);
-//   memset (&peer_addr_params, 0, sizeof (peer_addr_params));
-//   memcpy (&peer_addr_params.spp_address, &addr, sizeof (addr));
-//   peer_addr_params.spp_flags = SPP_HB_ENABLE;
-//   peer_addr_params.spp_hbinterval = 10;
-//   if (usrsctp_setsockopt (self->sctp_ass_sock, IPPROTO_SCTP,
-//           SCTP_PEER_ADDR_PARAMS, &peer_addr_params,
-//           sizeof (peer_addr_params))) {
-//     GST_WARNING_OBJECT (self, "Could not set SCTP_PEER_ADDR_PARAMS");
-//   }
-// }
-
-// static void
-// handle_sctp_comm_up (GstSctpAssociation * self,
-//     const struct sctp_assoc_change *sac)
-// {
-//   GST_INFO_OBJECT (self, "SCTP_COMM_UP");
-//   if (self->state == GST_SCTP_ASSOCIATION_STATE_CONNECTING) {
-//     self->sctp_assoc_id = sac->sac_assoc_id;
-//     // _apply_aggressive_heartbeat_unlocked (self);
-//     gst_sctp_association_change_state_unlocked (self,
-//         GST_SCTP_ASSOCIATION_STATE_CONNECTED);
-//     GST_INFO_OBJECT (self, "SCTP association connected!");
-//   } else if (self->state == GST_SCTP_ASSOCIATION_STATE_CONNECTED) {
-//     GST_INFO_OBJECT (self, "SCTP association already open");
-//   } else {
-//     GST_WARNING_OBJECT (self, "SCTP association in unexpected state: %d",
-//         self->state);
-//   }
-// }
-
-// static void
-// handle_sctp_comm_lost_or_shutdown (GstSctpAssociation * self,
-//     const struct sctp_assoc_change *sac)
-// {
-//   GST_INFO_OBJECT (self, "SCTP event %s received",
-//       sac->sac_state == SCTP_COMM_LOST ?
-//       "SCTP_COMM_LOST" : "SCTP_SHUTDOWN_COMP");
-
-//   gst_sctp_association_disconnect_unlocked (self);
-// }
-
 // static void
 // gst_sctp_association_notify_restart (GstSctpAssociation * self)
 // {
@@ -1021,33 +753,6 @@ gst_sctp_association_disconnect (GstSctpAssociation * self)
 // }
 
 // static void
-// handle_association_changed (GstSctpAssociation * self,
-//     const struct sctp_assoc_change *sac)
-// {
-//   switch (sac->sac_state) {
-//     case SCTP_COMM_UP:
-//       handle_sctp_comm_up (self, sac);
-//       break;
-//     case SCTP_COMM_LOST:
-//       handle_sctp_comm_lost_or_shutdown (self, sac);
-//       break;
-//     case SCTP_RESTART:
-//       GST_INFO_OBJECT (self, "SCTP event SCTP_RESTART received");
-//       gst_sctp_association_notify_restart (self);
-//       break;
-//     case SCTP_SHUTDOWN_COMP:
-//       /* Occurs if in TCP mode when the far end sends SHUTDOWN */
-//       handle_sctp_comm_lost_or_shutdown (self, sac);
-//       break;
-//     case SCTP_CANT_STR_ASSOC:
-//       GST_WARNING_OBJECT (self, "SCTP event SCTP_CANT_STR_ASSOC received");
-//       gst_sctp_association_change_state_unlocked (self,
-//           GST_SCTP_ASSOCIATION_STATE_ERROR);
-//       break;
-//   }
-// }
-
-// static void
 // handle_stream_reset_event (GstSctpAssociation * self,
 //     const struct sctp_stream_reset_event *sr)
 // {
@@ -1062,23 +767,6 @@ gst_sctp_association_disconnect (GstSctpAssociation * self)
 //             sr->strreset_stream_list[i]);
 //       }
 //     }
-//   }
-// }
-
-// static void
-// handle_message (GstSctpAssociation * self, guint8 * data, guint32 datalen,
-//     guint16 stream_id, guint32 ppid)
-// {
-//   if (self->decoder_ctx.packet_received_cb) {
-//     /* It's the callbacks job to free the data correctly */
-//     self->decoder_ctx.packet_received_cb (self, data, datalen, stream_id, ppid,
-//         self->decoder_ctx.element);
-//   } else {
-//     /* We use this instead of a bare `free()` so that we use the `free` from
-//      * the C runtime that usrsctp was built with. This makes a difference on
-//      * Windows where libusrstcp and GStreamer can be linked to two different
-//      * CRTs. */
-//     usrsctp_freedumpbuffer ((gchar *) data);
 //   }
 // }
 
