@@ -379,7 +379,7 @@ gst_sctp_association_send_packet (void *user_data, const uint8_t * data,
 
 static void
 gst_sctp_association_on_message_received (void *user_data,
-    uint16_t stream_id, uint32_t ppid, uint8_t * data, size_t len)
+    uint16_t stream_id, uint32_t ppid, const uint8_t * data, size_t len)
 {
   GstSctpAssociation *self = user_data;
 

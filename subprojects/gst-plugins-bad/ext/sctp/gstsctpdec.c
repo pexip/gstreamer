@@ -167,7 +167,7 @@ static void on_gst_sctp_association_stream_reset (GstSctpAssociation *
 static void on_gst_sctp_association_restart (GstSctpAssociation *
     gst_sctp_association, gpointer user_data);
 static void on_receive (GstSctpAssociation * gst_sctp_association,
-    guint8 * buf, gsize length, guint16 stream_id, guint ppid,
+    const guint8 * buf, gsize length, guint16 stream_id, guint ppid,
     gpointer user_data);
 static GstPad *get_pad_for_stream_id (GstSctpDec * self, guint16 stream_id);
 static void remove_pad (GstSctpDec * self, GstPad * pad);
@@ -741,7 +741,7 @@ data_queue_item_free (GstDataQueueItem * item)
 }
 
 static void
-on_receive (GstSctpAssociation * sctp_association, guint8 * buf,
+on_receive (GstSctpAssociation * sctp_association, const guint8 * buf,
     gsize length, guint16 stream_id, guint ppid, gpointer user_data)
 {
   GstSctpDec *self = user_data;
@@ -760,9 +760,12 @@ on_receive (GstSctpAssociation * sctp_association, guint8 * buf,
       " with stream id %u ppid %u", length, stream_id, ppid);
 
   sctpdec_pad = GST_SCTP_DEC_PAD_CAST (src_pad);
-  gstbuf =
-      gst_buffer_new_wrapped_full (0, buf, length, 0, length, buf,
-      (GDestroyNotify) usrsctp_freedumpbuffer);
+  gstbuf = gst_buffer_new_memdup (buf, length);
+  // FIXME: make it zero-copy
+  //     (GDestroyNotify) NULL);
+  // gstbuf =
+  //     gst_buffer_new_wrapped_full (0, buf, length, 0, length, buf,
+  //     (GDestroyNotify) NULL);
   gst_sctp_buffer_add_receive_meta (gstbuf, ppid);
 
   item = g_new0 (GstDataQueueItem, 1);
