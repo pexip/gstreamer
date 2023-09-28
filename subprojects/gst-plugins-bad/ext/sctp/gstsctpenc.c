@@ -1027,6 +1027,29 @@ configure_association (GstSctpEnc * self)
   return TRUE;
 }
 
+static const gchar *
+gst_sctp_association_state_string (GstSctpAssociationState state)
+{
+  switch (state) {
+    case GST_SCTP_ASSOCIATION_STATE_NEW:
+      return "NEW";
+    case GST_SCTP_ASSOCIATION_STATE_READY:
+      return "READY";
+    case GST_SCTP_ASSOCIATION_STATE_CONNECTING:
+      return "CONNECTING";
+    case GST_SCTP_ASSOCIATION_STATE_CONNECTED:
+      return "CONNECTED";
+    case GST_SCTP_ASSOCIATION_STATE_DISCONNECTING:
+      return "DISCONNECTING";
+    case GST_SCTP_ASSOCIATION_STATE_DISCONNECTED:
+      return "DISCONNECTED";
+    case GST_SCTP_ASSOCIATION_STATE_ERROR:
+      return "ERROR";
+    default:
+      return "UNKNOWN!";
+  }
+}
+
 static void
 on_sctp_association_state_changed (GstSctpAssociation *
     sctp_association, GstSctpAssociationState state, gpointer user_data)
@@ -1035,7 +1058,8 @@ on_sctp_association_state_changed (GstSctpAssociation *
 
   /* we demand to have a valid encoder here */
   g_assert (self);
-  GST_DEBUG_OBJECT (self, "Association state changed to %d", state);
+  GST_DEBUG_OBJECT (self, "Association state changed to %s",
+      gst_sctp_association_state_string (state));
 
   switch (state) {
     case GST_SCTP_ASSOCIATION_STATE_NEW:
