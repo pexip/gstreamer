@@ -5,11 +5,10 @@ endif
 subdir('dcsctp')
 
 sctp_sources = [
-  'sctpassociation.c'
-#  'dcsctp_transport.cc',
-#  'gstsctpdec.c',
-#  'gstsctpenc.c',
-#  'gstsctpplugin.c',
+  'sctpassociation.c',
+  'gstsctpdec.c',
+  'gstsctpenc.c',
+  'gstsctpplugin.c'
 ]
 
 sctp_platform_deps = []
