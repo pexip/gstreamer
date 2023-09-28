@@ -21,7 +21,6 @@ public:
 
   virtual ~SctpSocketCallbacksHandler () override
   {
-    callbacks_ = nullptr;
   }
 
   virtual dcsctp::SendPacketStatus SendPacketWithStatus (rtc::ArrayView <
@@ -39,14 +38,13 @@ public:
 
   virtual dcsctp::TimeMs TimeMillis () override
   {
-    return static_cast<dcsctp::TimeMs>(0);
-    // return static_cast<TimeMs>(g_get_monotonic_time ());
+    uint32_t timems = callbacks_->time_millis (callbacks_->user_data);
+    return static_cast<dcsctp::TimeMs>(timems);
   }
 
   virtual uint32_t GetRandomInt (uint32_t low, uint32_t high) override
   {
-    return 0;
-    // return (uint32_t) g_random_int((gint32) low, (gint32) high); 
+    return callbacks_->get_random_int(callbacks_->user_data, low, high);
   }
 
   virtual void OnMessageReceived (dcsctp::DcSctpMessage message) override
@@ -162,36 +160,43 @@ void
 sctp_socket_receive_packet (SctpSocket * socket, const uint8_t * data,
     size_t len)
 {
-  (void) socket;
-  (void) data;
-  (void) len;
+  assert(socket);
+  assert(socket->socket_);
+  socket->socket_->ReceivePacket(rtc::ArrayView<const uint8_t>(data, len));
 }
 
 void
 sctp_socket_connect (SctpSocket * socket)
 {
-  (void) socket;
+  assert(socket);
+  assert(socket->socket_);
+  socket->socket_->Connect();
 }
 
 void
 sctp_socket_shutdown (SctpSocket * socket)
 {
-  (void) socket;
-
+  assert(socket);
+  assert(socket->socket_);
+  socket->socket_->Shutdown();
 }
 
 void
 sctp_socket_close (SctpSocket * socket)
 {
-  (void) socket;
-
+  assert(socket);
+  assert(socket->socket_);
+  socket->socket_->Close();
 }
 
 SctpSocket_State
 sctp_socket_state (SctpSocket * socket)
 {
-  (void) socket;
-  return SCTP_SOCKET_STATE_CLOSED;
+  assert(socket);
+  assert(socket->socket_);
+
+  dcsctp::SocketState state = socket->socket_->state(); 
+  return static_cast<SctpSocket_State>(state);
 }
 
 SctpSocket_SendStatus
@@ -199,15 +204,51 @@ sctp_socket_send (SctpSocket * socket, const uint8_t * data, size_t len,
     uint16_t stream_id, uint32_t ppid, bool unordered, int32_t * lifetime,
     size_t *max_retransmissions)
 {
-  (void) socket;
-  (void) stream_id;
-  (void) ppid;
-  (void) data;
-  (void) len;
-  (void) unordered;
-  (void) lifetime;
-  (void) max_retransmissions;
-  return SCTP_SOCKET_STATUS_SUCCESS;
+  assert(socket);
+  assert(socket->socket_);
+
+  auto max_message_size = socket->socket_->options().max_message_size;
+  if (max_message_size > 0 && len > max_message_size) {
+    // RTC_LOG(LS_WARNING) << debug_name_
+    //                     << "->SendData(...): "
+    //                        "Trying to send packet bigger "
+    //                        "than the max message size: "
+    //                     << payload.size() << " vs max of " << max_message_size;
+    // return RTCError(RTCErrorType::INVALID_RANGE);
+    return SCTP_SOCKET_STATUS_MESSAGE_TOO_LARGE;
+  }
+
+  std::vector<uint8_t> message_payload(data,
+                                       data +len);
+  if (message_payload.empty()) {
+    // https://www.rfc-editor.org/rfc/rfc8831.html#section-6.6
+    // SCTP does not support the sending of empty user messages. Therefore, if
+    // an empty message has to be sent, the appropriate PPID (WebRTC String
+    // Empty or WebRTC Binary Empty) is used, and the SCTP user message of one
+    // zero byte is sent.
+    message_payload.push_back('\0');
+  }
+
+  dcsctp::DcSctpMessage message(
+      dcsctp::StreamID(stream_id),
+      dcsctp::PPID(ppid),
+      std::move(message_payload));
+
+  dcsctp::SendOptions send_options;
+  send_options.unordered = dcsctp::IsUnordered(unordered);
+  if (lifetime) {
+    assert(*lifetime >= 0 &&
+             *lifetime <= std::numeric_limits<uint16_t>::max());
+    send_options.lifetime = dcsctp::DurationMs(*lifetime);
+  }
+  if (max_retransmissions) {
+    assert(*max_retransmissions >= 0 &&
+            *max_retransmissions <= std::numeric_limits<uint16_t>::max());
+    send_options.max_retransmissions = *max_retransmissions;
+  }
+
+  auto status = socket->socket_->Send(std::move(message), send_options);
+  return static_cast<SctpSocket_SendStatus>(status);
 }
 
 SctpSocket_ResetStreamStatus
