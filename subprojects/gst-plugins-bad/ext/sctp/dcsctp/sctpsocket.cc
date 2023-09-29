@@ -1,6 +1,7 @@
 #include "sctpsocket.h"
 
 #include <memory>
+#include <iostream>
 
 #include "net/dcsctp/public/dcsctp_options.h"
 #include "net/dcsctp/socket/dcsctp_socket.h"
@@ -12,10 +13,43 @@
 // duration. By limiting it to a reasonable limit, the time to recover reduces.
 constexpr dcsctp::DurationMs kMaxTimerBackoffDuration = dcsctp::DurationMs (3000);
 
+class SctpSocketTimeoutHandler : public dcsctp::Timeout
+{
+public:
+  SctpSocketTimeoutHandler(webrtc::TaskQueueBase::DelayPrecision precision, SctpSocket_Callbacks callbacks):
+    callbacks_(callbacks),
+    timeout_(nullptr)
+  {
+    // TODO: use the precision
+    (void) precision;
+    timeout_ = callbacks_.timeout_create (callbacks_.user_data);
+  }
+
+  virtual ~SctpSocketTimeoutHandler () override
+  {
+    callbacks_.timeout_delete (callbacks_.user_data, timeout_);
+  }
+
+  virtual void Start(dcsctp::DurationMs duration, dcsctp::TimeoutID timeout_id) override
+  {
+    // std::cout << " TIMEOUT_ID " << timeout_id.value()  << "    " << timeout_id << std::endl;
+    callbacks_.timeout_start (callbacks_.user_data, timeout_, duration.value(), timeout_id.value());
+  }
+
+  virtual void Stop() override
+  {
+    callbacks_.timeout_stop (callbacks_.user_data, timeout_); 
+  }
+
+private:
+  SctpSocket_Callbacks callbacks_;
+  void * timeout_;
+};
+
 class SctpSocketCallbacksHandler : public dcsctp::DcSctpSocketCallbacks
 {
 public:
-  SctpSocketCallbacksHandler(SctpSocket_Callbacks * callbacks): callbacks_(callbacks)
+  SctpSocketCallbacksHandler(SctpSocket_Callbacks callbacks): callbacks_(callbacks)
   {
   }
 
@@ -26,56 +60,55 @@ public:
   virtual dcsctp::SendPacketStatus SendPacketWithStatus (rtc::ArrayView <
       const uint8_t > data) override
   {
-    return (dcsctp::SendPacketStatus)callbacks_->send_packet(callbacks_->user_data, data.data(), data.size());
+    return (dcsctp::SendPacketStatus)callbacks_.send_packet(callbacks_.user_data, data.data(), data.size());
   }
 
   virtual std::unique_ptr < dcsctp::Timeout >
       CreateTimeout (webrtc::TaskQueueBase::DelayPrecision precision) override
   {
-    // return std::make_unique<SctpSocketTimeout> (precision);
-    return nullptr;
+    return std::make_unique<SctpSocketTimeoutHandler> (precision, callbacks_);
   }
 
   virtual dcsctp::TimeMs TimeMillis () override
   {
-    uint32_t timems = callbacks_->time_millis (callbacks_->user_data);
+    uint32_t timems = callbacks_.time_millis (callbacks_.user_data);
     return static_cast<dcsctp::TimeMs>(timems);
   }
 
   virtual uint32_t GetRandomInt (uint32_t low, uint32_t high) override
   {
-    return callbacks_->get_random_int(callbacks_->user_data, low, high);
+    return callbacks_.get_random_int(callbacks_.user_data, low, high);
   }
 
   virtual void OnMessageReceived (dcsctp::DcSctpMessage message) override
   {
     auto payload = std::move(message).ReleasePayload();
-    callbacks_->on_message_received(callbacks_->user_data, static_cast<uint16_t>(message.stream_id()), static_cast<uint32_t>(message.ppid()), payload.data(), payload.size());
+    callbacks_.on_message_received(callbacks_.user_data, message.stream_id().value(), message.ppid().value(), payload.data(), payload.size());
   }
 
   virtual void OnError (dcsctp::ErrorKind error, absl::string_view message) override
   {
-    callbacks_->on_error(callbacks_->user_data, (SctpSocket_Error) error);
+    callbacks_.on_error(callbacks_.user_data, (SctpSocket_Error) error);
   }
 
   virtual void OnAborted (dcsctp::ErrorKind error, absl::string_view message) override
   {
-    callbacks_->on_aborted(callbacks_->user_data, (SctpSocket_Error) error);
+    callbacks_.on_aborted(callbacks_.user_data, (SctpSocket_Error) error);
   }
 
   virtual void OnConnected () override
   {
-    callbacks_->on_connected(callbacks_->user_data);
+    callbacks_.on_connected(callbacks_.user_data);
   }
 
   virtual void OnClosed () override
   {
-    callbacks_->on_closed(callbacks_->user_data);
+    callbacks_.on_closed(callbacks_.user_data);
   }
 
   virtual void OnConnectionRestarted () override
   {
-    callbacks_->on_connection_restarted(callbacks_->user_data);
+    callbacks_.on_connection_restarted(callbacks_.user_data);
   }
 
   virtual void OnStreamsResetFailed (rtc::ArrayView < const dcsctp::StreamID >
@@ -105,7 +138,7 @@ public:
   }
 
 private:
-  SctpSocket_Callbacks * callbacks_;
+  SctpSocket_Callbacks callbacks_;
 };
 
 struct _SctpSocket
@@ -138,7 +171,7 @@ sctp_socket_new (int local_sctp_port, int remote_sctp_port,
   options.max_init_retransmits = absl::nullopt;
 
   std::unique_ptr < dcsctp::PacketObserver > packet_observer;
-  std::shared_ptr<SctpSocketCallbacksHandler> callbacksHandler = std::make_shared<SctpSocketCallbacksHandler>(callbacks);
+  std::shared_ptr<SctpSocketCallbacksHandler> callbacksHandler = std::make_shared<SctpSocketCallbacksHandler>(*callbacks);
 
 
   // if (RTC_LOG_CHECK_LEVEL (LS_VERBOSE)) {
@@ -162,7 +195,17 @@ sctp_socket_receive_packet (SctpSocket * socket, const uint8_t * data,
 {
   assert(socket);
   assert(socket->socket_);
-  socket->socket_->ReceivePacket(rtc::ArrayView<const uint8_t>(data, len));
+
+  // FIXME: review this extra copy, is it necessary ?
+  std::vector<uint8_t> packet(data, data +len);
+  socket->socket_->ReceivePacket(packet);
+}
+
+void sctp_socket_handle_timeout (SctpSocket * socket, uint64_t timeout_id)
+{
+  assert(socket);
+  assert(socket->socket_);
+  socket->socket_->HandleTimeout (dcsctp::TimeoutID(timeout_id));
 }
 
 void

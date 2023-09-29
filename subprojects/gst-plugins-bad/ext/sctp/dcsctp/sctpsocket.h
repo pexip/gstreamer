@@ -122,10 +122,12 @@ typedef void (*SctpSocket_OnIncomingStreamsReset) (void * user_data, const uint1
 typedef void (*SctpSocket_OnBufferedAmountLow) (void * user_data, uint16_t stream_id);
 typedef void (*SctpSocket_OnTotalBufferedAmountLow) (void * user_data);
 
-typedef void (*SctpSocketTimeout_Start) (void * user_data, int32_t milliseconds, uint64_t timeout_id);
-typedef void (*SctpSocketTimeout_Stop) (void * user_data);
-typedef uint64_t (*SctpSocketTimeout_TimeMillis) (void * user_data);
+typedef void* (*SctpSocketTimeout_Create) (void * user_data);
+typedef void (*SctpSocketTimeout_Delete) (void * user_data, void * timeout);
+typedef void (*SctpSocketTimeout_Start) (void * user_data, void * timeout, int32_t milliseconds, uint64_t timeout_id);
+typedef void (*SctpSocketTimeout_Stop) (void * user_data, void * timeout);
 
+typedef uint64_t (*SctpSocketTimeout_TimeMillis) (void * user_data);
 typedef uint32_t (*SctpSocket_GetRandomInt) (void * user_data, uint32_t low, uint32_t high);
 
 struct _SctpSocket_Callbacks
@@ -145,6 +147,8 @@ struct _SctpSocket_Callbacks
   SctpSocket_OnBufferedAmountLow on_buffered_amount_low;
   SctpSocket_OnTotalBufferedAmountLow on_total_buffered_amount_low;
 
+  SctpSocketTimeout_Create timeout_create;
+  SctpSocketTimeout_Delete timeout_delete;
   SctpSocketTimeout_Start timeout_start;
   SctpSocketTimeout_Stop timeout_stop;
 
@@ -160,6 +164,10 @@ void sctp_socket_free (SctpSocket * socket);
 
 // To be called when an incoming SCTP packet is to be processed.
 void sctp_socket_receive_packet (SctpSocket * socket, const uint8_t * data, size_t len);
+
+// To be called when a timeout has expired. The `timeout_id` is provided
+// when the timeout was initiated.
+void sctp_socket_handle_timeout (SctpSocket * socket, uint64_t timeout_id);
 
 // Connects the socket. This is an asynchronous operation, and
 // `DcSctpSocketCallbacks::OnConnected` will be called on success.

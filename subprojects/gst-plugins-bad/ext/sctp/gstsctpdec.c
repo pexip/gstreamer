@@ -28,6 +28,8 @@
 #endif
 #include "gstsctpdec.h"
 
+#include "sctpassociation_factory.h"
+
 #include <gst/sctp/sctpreceivemeta.h>
 #include <gst/base/gstdataqueue.h>
 
@@ -380,7 +382,6 @@ gst_sctp_dec_packet_chain (GstPad * pad, GstSctpDec * self, GstBuffer * buf)
 {
   GstFlowReturn flow_ret;
   GstMapInfo map;
-  GstSctpAssociation *sctp_association = NULL;
 
   GST_DEBUG_OBJECT (self, "Processing received buffer %" GST_PTR_FORMAT, buf);
 
@@ -391,14 +392,13 @@ gst_sctp_dec_packet_chain (GstPad * pad, GstSctpDec * self, GstBuffer * buf)
   }
 
   GST_SCTP_DEC_ASSOC_MUTEX_LOCK (self);
-  sctp_association = gst_sctp_association_ref (self->sctp_association);
+
+  if (self->sctp_association)
+    gst_sctp_association_incoming_packet (self->sctp_association,
+        (const guint8 *) map.data, (guint32) map.size);
+
   GST_SCTP_DEC_ASSOC_MUTEX_UNLOCK (self);
 
-  if (sctp_association) {
-    gst_sctp_association_incoming_packet (sctp_association,
-        (const guint8 *) map.data, (guint32) map.size);
-    gst_sctp_association_unref (sctp_association);
-  }
 
   gst_buffer_unmap (buf, &map);
   gst_buffer_unref (buf);
@@ -531,13 +531,13 @@ configure_association (GstSctpDec * self)
   GstSctpAssociationDecoderCtx ctx;
 
   GST_SCTP_DEC_ASSOC_MUTEX_LOCK (self);
-  self->sctp_association = gst_sctp_association_get (self->sctp_association_id);
+  self->sctp_association = gst_sctp_association_factory_get (self->sctp_association_id);
   g_object_get (self->sctp_association, "state", &state, NULL);
 
   if (state != GST_SCTP_ASSOCIATION_STATE_NEW) {
     GST_WARNING_OBJECT (self,
         "Could not configure SCTP association. Association already in use!");
-    gst_sctp_association_unref (self->sctp_association);
+    gst_sctp_association_factory_release (self->sctp_association);
     self->sctp_association = NULL;
     GST_SCTP_DEC_ASSOC_MUTEX_UNLOCK (self);
     return FALSE;
@@ -791,11 +791,10 @@ cleanup_association (GstSctpDec * self)
     GST_SCTP_DEC_ASSOC_MUTEX_UNLOCK (self);
     return;
   }
-  
+
   memset (&ctx, 0, sizeof (GstSctpAssociationDecoderCtx));
   gst_sctp_association_set_decoder_ctx (self->sctp_association, &ctx);
-  gst_sctp_association_force_close (self->sctp_association);
-  gst_sctp_association_unref (self->sctp_association);
+  gst_sctp_association_factory_release (self->sctp_association);
   self->sctp_association = NULL;
   GST_SCTP_DEC_ASSOC_MUTEX_UNLOCK (self);
 }
@@ -803,15 +802,15 @@ cleanup_association (GstSctpDec * self)
 static void
 on_reset_stream (GstSctpDec * self, guint stream_id)
 {
-  GstSctpAssociation *sctp_association = NULL;
-
   GST_SCTP_DEC_ASSOC_MUTEX_LOCK (self);
-  sctp_association = gst_sctp_association_ref (self->sctp_association);
+
+  if (self->sctp_association) {
+    gst_sctp_association_reset_stream (self->sctp_association, stream_id);
+    on_gst_sctp_association_stream_reset (self->sctp_association, stream_id,
+        self);
+  }
+
   GST_SCTP_DEC_ASSOC_MUTEX_UNLOCK (self);
 
-  if (sctp_association) {
-    gst_sctp_association_reset_stream (sctp_association, stream_id);
-    on_gst_sctp_association_stream_reset (sctp_association, stream_id, self);
-    gst_sctp_association_unref (sctp_association);
-  }
+
 }

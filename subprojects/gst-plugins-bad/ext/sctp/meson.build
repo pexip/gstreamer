@@ -5,6 +5,7 @@ endif
 subdir('dcsctp')
 
 sctp_sources = [
+  'sctpassociation_factory.c',
   'sctpassociation.c',
   'gstsctpdec.c',
   'gstsctpenc.c',
