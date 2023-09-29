@@ -1,5 +1,7 @@
 /*
- * Copyright (c) 2023, Collabora Ltd.
+ * Copyright (c) 2015, Collabora Ltd.
+ * Copyright (c) 2023, Pexip AS
+ *  @author: Tulio Beloqui <tulio@pexip.com>
  *
  * Redistribution and use in source and binary forms, with or without modification,
  * are permitted provided that the following conditions are met:
@@ -318,7 +320,7 @@ gst_sctp_association_async_return (GstSctpAssociation * assoc)
   g_assert (source);
   guint source_id = g_source_get_id (source);
 
-  GST_ERROR ("de-registering source_id: %u", source_id);
+  GST_LOG ("de-registering source_id: %u", source_id);
 
   g_mutex_lock (&assoc->association_mutex);
   g_assert (g_hash_table_remove (assoc->pending_source_ids,
@@ -340,7 +342,7 @@ gst_sctp_association_call_async (GstSctpAssociation * assoc, guint timeout_ms,
   /* attach the source */
   guint source_id = g_source_attach (source, assoc->main_context);
 
-  GST_ERROR ("registering source_id: %u", source_id);
+  GST_LOG ("registering source_id: %u", source_id);
 
   /* register it, so we can cancel it later */
   g_assert (g_hash_table_insert (assoc->pending_source_ids,
