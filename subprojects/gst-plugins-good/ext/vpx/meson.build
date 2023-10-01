@@ -145,7 +145,7 @@ foreach isa_flags : pex_isas
   vpxisa_dep = dependency('vpx-@0@'.format(isa), required : false)
 
   if vpxisa_dep.found()
-    gstvpxisa = shared_library('gstvpx_' + isa,
+    gstvpxisa = library('gstvpx_' + isa,
       vpx_sources, gstvpx_enums,
       c_args : gst_plugins_good_args + vpx_args + flags,
       include_directories: [configinc],
@@ -153,5 +153,6 @@ foreach isa_flags : pex_isas
       install : true,
       install_dir : plugins_install_dir_isa + isa,
     )
+    plugins += [gstvpxisa]
   endif
 endforeach
