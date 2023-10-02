@@ -108,6 +108,20 @@ typedef enum
   DELAY_PRECISION_HIGH,
 } SctpSocket_DelayPrecision;
 
+typedef struct
+{
+  int local_port;
+  int remote_port;
+  size_t max_message_size;
+
+  int32_t max_timer_backoff_duration_ms;
+  int32_t heartbeat_interval_ms;
+
+  int * max_retransmissions;
+  int * max_init_retransmits;
+
+} SctpSocket_Options;
+
 typedef SctpSocket_SendPacketStatus (*SctpSocket_SendPacket) (void * user_data, const uint8_t * data, size_t len); 
 typedef void (*SctpSocket_OnMessageReceived) (void * user_data, uint16_t stream_id, uint32_t ppid, const uint8_t * data, size_t len);
 typedef void (*SctpSocket_OnError) (void * user_data, SctpSocket_Error error);
@@ -158,7 +172,7 @@ struct _SctpSocket_Callbacks
   void * user_data;
 };
 
-SctpSocket * sctp_socket_new (int local_sctp_port, int remote_sctp_port, int max_message_size, SctpSocket_Callbacks * callbacks);
+SctpSocket * sctp_socket_new (SctpSocket_Options * opts, SctpSocket_Callbacks * callbacks);
  
 void sctp_socket_free (SctpSocket * socket);
 

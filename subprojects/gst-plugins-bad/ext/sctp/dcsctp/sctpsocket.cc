@@ -5,13 +5,6 @@
 
 #include "net/dcsctp/public/dcsctp_options.h"
 #include "net/dcsctp/socket/dcsctp_socket.h"
-// #include "net/dcsctp/public/dcsctp_socket.h"
-
-// When there is packet loss for a long time, the SCTP retry timers will use
-// exponential backoff, which can grow to very long durations and when the
-// connection recovers, it may take a long time to reach the new backoff
-// duration. By limiting it to a reasonable limit, the time to recover reduces.
-constexpr dcsctp::DurationMs kMaxTimerBackoffDuration = dcsctp::DurationMs (3000);
 
 class SctpSocketTimeoutHandler : public dcsctp::Timeout
 {
@@ -158,21 +151,21 @@ struct _SctpSocket
 };
 
 SctpSocket *
-sctp_socket_new (int local_sctp_port, int remote_sctp_port,
-    int max_message_size, SctpSocket_Callbacks * callbacks)
+sctp_socket_new (SctpSocket_Options * opts, SctpSocket_Callbacks * callbacks)
 {
   dcsctp::DcSctpOptions options;
-  options.local_port = local_sctp_port;
-  options.remote_port = remote_sctp_port;
-  options.max_message_size = max_message_size;
-  options.max_timer_backoff_duration = kMaxTimerBackoffDuration;
-  // Don't close the connection automatically on too many retransmissions.
-  options.max_retransmissions = absl::nullopt;
-  options.max_init_retransmits = absl::nullopt;
+  options.local_port = opts->local_port;
+  options.remote_port = opts->remote_port;
+  options.max_message_size = opts->max_message_size;
+
+  options.max_timer_backoff_duration = dcsctp::DurationMs(opts->max_timer_backoff_duration_ms);
+  options.max_retransmissions = opts->max_retransmissions ?
+    absl::make_optional(*opts->max_retransmissions) : absl::nullopt;
+  options.max_init_retransmits = opts->max_init_retransmits ?
+    absl::make_optional(*opts->max_init_retransmits) : absl::nullopt;
 
   std::unique_ptr < dcsctp::PacketObserver > packet_observer;
   std::shared_ptr<SctpSocketCallbacksHandler> callbacksHandler = std::make_shared<SctpSocketCallbacksHandler>(*callbacks);
-
 
   // if (RTC_LOG_CHECK_LEVEL (LS_VERBOSE)) {
   //   packet_observer =
