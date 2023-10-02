@@ -985,7 +985,7 @@ reconnect (GstSctpEnc * self)
     return;
   }
 
-  gst_sctp_association_start (self->sctp_association);
+  gst_sctp_association_connect (self->sctp_association);
   GST_SCTP_ENC_ASSOC_MUTEX_UNLOCK (self);
 }
 
@@ -996,7 +996,8 @@ configure_association (GstSctpEnc * self)
   GstSctpAssociationEncoderCtx ctx;
 
   GST_SCTP_ENC_ASSOC_MUTEX_LOCK (self);
-  self->sctp_association = gst_sctp_association_factory_get (self->sctp_association_id);
+  self->sctp_association =
+      gst_sctp_association_factory_get (self->sctp_association_id);
   g_object_get (self->sctp_association, "state", &state, NULL);
 
   if (state != GST_SCTP_ASSOCIATION_STATE_NEW) {
@@ -1060,7 +1061,7 @@ on_sctp_association_state_changed (GstSctpAssociation *
     case GST_SCTP_ASSOCIATION_STATE_NEW:
       break;
     case GST_SCTP_ASSOCIATION_STATE_READY:
-      gst_sctp_association_start (sctp_association);
+      gst_sctp_association_connect (sctp_association);
       break;
     case GST_SCTP_ASSOCIATION_STATE_CONNECTING:
       break;

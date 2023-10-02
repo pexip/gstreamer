@@ -103,6 +103,7 @@ static void gst_sctp_association_change_state_unlocked (GstSctpAssociation *
     assoc, GstSctpAssociationState new_state);
 static void gst_sctp_association_cancel_pending_async (GstSctpAssociation *
     assoc);
+static gboolean force_close_async (GstSctpAssociation * assoc);
 
 static void
 gst_sctp_association_class_init (GstSctpAssociationClass * klass)
@@ -323,8 +324,9 @@ gst_sctp_association_async_return (GstSctpAssociation * assoc)
   GST_LOG ("de-registering source_id: %u", source_id);
 
   g_mutex_lock (&assoc->association_mutex);
-  g_assert (g_hash_table_remove (assoc->pending_source_ids,
-          GUINT_TO_POINTER (source_id)));
+  // g_assert (g_hash_table_remove (assoc->pending_source_ids,
+  //         GUINT_TO_POINTER (source_id)));
+  g_hash_table_remove (assoc->pending_source_ids, GUINT_TO_POINTER (source_id));
   g_mutex_unlock (&assoc->association_mutex);
 
   return FALSE;
@@ -386,34 +388,60 @@ gst_sctp_association_on_message_received (void *user_data,
   g_mutex_unlock (&assoc->association_mutex);
 }
 
+static const gchar *
+sctp_socket_error_to_string (SctpSocket_Error error)
+{
+  switch (error) {
+    SCTP_SOCKET_SUCCESS:
+      return "Success";
+    case SCTP_SOCKET_ERROR_TOO_MANY_RETRIES:
+      return "Too many retries";
+    case SCTP_SOCKET_ERROR_NOT_CONNECTED:
+      return "Not connected";
+    case SCTP_SOCKET_ERROR_PARSE_FAILED:
+      return "Parse failed";
+    case SCTP_SOCKET_ERROR_WRONG_SEQUENCE:
+      return "Wrong sequence";
+    case SCTP_SOCKET_ERROR_PEER_REPORTED:
+      return "Peer reported";
+    case SCTP_SOCKET_ERROR_PROTOCOL_VIOLATION:
+      return "Protocol violation";
+    case SCTP_SOCKET_ERROR_RESOURCE_EXHAUSTION:
+      return "Resource exhaustion";
+    case SCTP_SOCKET_ERROR_UNSUPPORTED_OPERATION:
+      return "Unsuported operation";
+    default:
+      return "Unknown SCTP socket error";
+  }
+}
+
+static void
+gst_sctp_association_handle_error (GstSctpAssociation * assoc,
+    SctpSocket_Error error)
+{
+  GST_ERROR ("error: %s", sctp_socket_error_to_string (error));
+
+  g_mutex_lock (&assoc->association_mutex);
+  gst_sctp_association_change_state_unlocked (assoc,
+      GST_SCTP_ASSOCIATION_STATE_ERROR);
+  g_mutex_unlock (&assoc->association_mutex);
+
+  g_assert (error != SCTP_SOCKET_SUCCESS);
+  force_close_async (assoc);
+}
+
 static void
 gst_sctp_association_on_error (void *user_data, SctpSocket_Error error)
 {
   GstSctpAssociation *assoc = user_data;
-
-  g_mutex_lock (&assoc->association_mutex);
-
-  GST_ERROR ("error: %u", error);
-
-  gst_sctp_association_change_state_unlocked (assoc,
-      GST_SCTP_ASSOCIATION_STATE_ERROR);
-
-  g_mutex_unlock (&assoc->association_mutex);
+  gst_sctp_association_handle_error (assoc, error);
 }
 
 static void
 gst_sctp_association_on_aborted (void *user_data, SctpSocket_Error error)
 {
   GstSctpAssociation *assoc = user_data;
-
-  g_mutex_lock (&assoc->association_mutex);
-
-  GST_ERROR ("error: %u", error);
-
-  gst_sctp_association_change_state_unlocked (assoc,
-      GST_SCTP_ASSOCIATION_STATE_ERROR);
-
-  g_mutex_unlock (&assoc->association_mutex);
+  gst_sctp_association_handle_error (assoc, error);
 }
 
 static void
@@ -433,6 +461,8 @@ static void
 gst_sctp_association_on_closed (void *user_data)
 {
   GstSctpAssociation *assoc = user_data;
+
+  GST_ERROR ("!");
 
   g_mutex_lock (&assoc->association_mutex);
   gst_sctp_association_change_state_unlocked (assoc,
@@ -629,7 +659,7 @@ gst_sctp_association_async_ctx_free (GstSctpAssociationAsyncContext * ctx)
 }
 
 static gboolean
-gst_sctp_association_start_async (GstSctpAssociation * assoc)
+gst_sctp_association_connect_async (GstSctpAssociation * assoc)
 {
   g_assert (!assoc->socket);
 
@@ -657,14 +687,43 @@ gst_sctp_association_start_async (GstSctpAssociation * assoc)
     .user_data = assoc
   };
 
+  gboolean aggressive_heartbeat;
+
   g_mutex_lock (&assoc->association_mutex);
+  aggressive_heartbeat = assoc->aggressive_heartbeat;
   gst_sctp_association_change_state_unlocked (assoc,
       GST_SCTP_ASSOCIATION_STATE_CONNECTING);
   g_mutex_unlock (&assoc->association_mutex);
 
-  assoc->socket =
-      sctp_socket_new (assoc->local_port, assoc->remote_port, 256 * 1024,
-      &callbacks);
+  // When there is packet loss for a long time, the SCTP retry timers will use
+  // exponential backoff, which can grow to very long durations and when the
+  // connection recovers, it may take a long time to reach the new backoff
+  // duration. By limiting it to a reasonable limit, the time to recover reduces.
+  int32_t max_timer_backoff_duration_ms = aggressive_heartbeat ? 1500 : 3000;
+  int32_t heartbeat_interval_ms = aggressive_heartbeat ? 10 : 30000;
+
+  // for aggresive-heartbeat
+  int max_retransmissions = 10;
+  int max_init_retransmits = 8;
+
+  SctpSocket_Options opts;
+  memset (&opts, 0, sizeof (SctpSocket_Options));
+
+  opts.local_port = assoc->local_port;
+  opts.remote_port = assoc->remote_port;
+  opts.max_message_size = 256 * 1024;
+  opts.max_timer_backoff_duration_ms = &max_timer_backoff_duration_ms;
+  opts.heartbeat_interval_ms = &heartbeat_interval_ms;
+
+  if (aggressive_heartbeat) {
+    opts.max_retransmissions = &max_retransmissions;
+    opts.max_init_retransmits = &max_init_retransmits;
+  } else {
+    opts.max_retransmissions = NULL;
+    opts.max_init_retransmits = NULL;
+  }
+
+  assoc->socket = sctp_socket_new (&opts, &callbacks);
   sctp_socket_connect (assoc->socket);
 
   return gst_sctp_association_async_return (assoc);
@@ -884,7 +943,7 @@ gst_sctp_association_force_close (GstSctpAssociation * assoc)
 }
 
 gboolean
-gst_sctp_association_start (GstSctpAssociation * assoc)
+gst_sctp_association_connect (GstSctpAssociation * assoc)
 {
   g_mutex_lock (&assoc->association_mutex);
 
@@ -898,7 +957,7 @@ gst_sctp_association_start (GstSctpAssociation * assoc)
   }
 
   gst_sctp_association_call_async (assoc, 0,
-      (GSourceFunc) gst_sctp_association_start_async, NULL, NULL);
+      (GSourceFunc) gst_sctp_association_connect_async, NULL, NULL);
 
   g_mutex_unlock (&assoc->association_mutex);
   return TRUE;

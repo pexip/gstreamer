@@ -127,7 +127,7 @@ struct _GstSctpAssociationClass
 
 GType gst_sctp_association_get_type (void);
 
-gboolean gst_sctp_association_start (GstSctpAssociation * self);
+gboolean gst_sctp_association_connect (GstSctpAssociation * self);
 
 void gst_sctp_association_set_encoder_ctx (GstSctpAssociation * self, 
     GstSctpAssociationEncoderCtx * ctx);
