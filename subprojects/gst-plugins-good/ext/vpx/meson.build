@@ -117,7 +117,9 @@ if vpx_dep.found()
 endif
 
 
-
+if get_option('default_library') == 'static'
+  subdir_done()
+endif
 
 #Pexip spesific
 
