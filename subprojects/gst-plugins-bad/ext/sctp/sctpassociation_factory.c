@@ -41,7 +41,7 @@ GST_DEBUG_CATEGORY_STATIC (gst_sctp_association_factory_debug_category);
 G_LOCK_DEFINE_STATIC (associations_lock);
 
 static GHashTable *associations_by_id = NULL;
-static GHashTable *ids_by_association = NULL;
+static GHashTable *associations_refs = NULL;
 
 static GMainContext *main_context = NULL;
 static GMainLoop *main_loop = NULL;
@@ -68,7 +68,7 @@ gst_sctp_association_factory_main_loop_quit (gpointer data)
 static void
 gst_sctp_association_factory_init (void)
 {
-  g_assert (ids_by_association == NULL);
+  g_assert (associations_refs == NULL);
   g_assert (main_loop == NULL);
 
   static gsize initialized = 0;
@@ -85,8 +85,9 @@ gst_sctp_association_factory_init (void)
 
   associations_by_id =
       g_hash_table_new_full (g_direct_hash, g_direct_equal, NULL, NULL);
-  ids_by_association =
-      g_hash_table_new_full (g_direct_hash, g_direct_equal, NULL, NULL);
+  associations_refs =
+      g_hash_table_new_full (g_direct_hash, g_direct_equal, NULL,
+      (GDestroyNotify) g_free);
 
   main_context = g_main_context_new ();
   main_loop = g_main_loop_new (main_context, FALSE);
@@ -98,13 +99,13 @@ gst_sctp_association_factory_init (void)
 static void
 gst_sctp_association_factory_deinit (void)
 {
-  /* demand all association have ben deregistered */
-  g_assert (g_hash_table_size (ids_by_association) == 0);
+  /* demand all association have ben released */
+  g_assert (g_hash_table_size (associations_refs) == 0);
 
   g_hash_table_destroy (associations_by_id);
-  g_hash_table_destroy (ids_by_association);
+  g_hash_table_destroy (associations_refs);
   associations_by_id = NULL;
-  ids_by_association = NULL;
+  associations_refs = NULL;
 
 
   /* kill main loop and ctx */
@@ -127,18 +128,42 @@ gst_sctp_association_factory_deinit (void)
 static gboolean
 gst_sctp_association_factory_unref_in_main_loop (GstSctpAssociation * assoc)
 {
-  guint32 association_id = assoc->association_id;
-  gint assoc_ref_count = g_atomic_int_get (&G_OBJECT (assoc)->ref_count);
-
   g_object_unref (assoc);
-
-  if (assoc_ref_count - 1 == 0) {
-    g_hash_table_remove (associations_by_id, GUINT_TO_POINTER (association_id));
-  }
 
   g_mutex_lock (&unref_mutex);
   g_cond_signal (&unref_cond);
   g_mutex_unlock (&unref_mutex);
+
+  return FALSE;
+}
+
+static void
+gst_sctp_association_factory_association_ref (GstSctpAssociation * assoc)
+{
+  guint32 association_id = assoc->association_id;
+  gint *ref_count = g_hash_table_lookup (associations_refs,
+      GUINT_TO_POINTER (association_id));
+  if (!ref_count) {
+    ref_count = g_new0 (gint, 1);
+    g_hash_table_insert (associations_refs, GUINT_TO_POINTER (association_id),
+        (gpointer) ref_count);
+  }
+
+  g_atomic_int_inc (ref_count);
+}
+
+static void
+gst_sctp_association_factory_association_unref (GstSctpAssociation * assoc)
+{
+  guint32 association_id = assoc->association_id;
+  gint *ref_count = g_hash_table_lookup (associations_refs,
+      GUINT_TO_POINTER (association_id));
+  g_assert (ref_count);
+
+  if (g_atomic_int_dec_and_test (ref_count)) {
+    g_hash_table_remove (associations_by_id, GUINT_TO_POINTER (association_id));
+    g_hash_table_remove (associations_refs, GUINT_TO_POINTER (association_id));
+  }
 }
 
 
@@ -147,31 +172,33 @@ gst_sctp_association_factory_unref_in_main_loop (GstSctpAssociation * assoc)
 GstSctpAssociation *
 gst_sctp_association_factory_get (guint32 association_id)
 {
-  GstSctpAssociation *association;
+  GstSctpAssociation *assoc;
 
   G_LOCK (associations_lock);
 
   if (!associations_by_id)
     gst_sctp_association_factory_init ();
 
-  association =
+  assoc =
       g_hash_table_lookup (associations_by_id,
       GUINT_TO_POINTER (association_id));
-  if (!association) {
-    association =
+  if (!assoc) {
+    assoc =
         g_object_new (GST_SCTP_TYPE_ASSOCIATION, "association-id",
         association_id, NULL);
-    association->main_context = main_context;
+    assoc->main_context = main_context;
     g_hash_table_insert (associations_by_id, GUINT_TO_POINTER (association_id),
-        association);
-    /* set context */
-
+        assoc);
   } else {
-    g_object_ref (association);
+    g_object_ref (assoc);
   }
+
+  gst_sctp_association_factory_association_ref (assoc);
+
   G_UNLOCK (associations_lock);
-  return association;
+  return assoc;
 }
+
 
 void
 gst_sctp_association_factory_release (GstSctpAssociation * assoc)
@@ -180,19 +207,20 @@ gst_sctp_association_factory_release (GstSctpAssociation * assoc)
 
   GSource *source = g_idle_source_new ();
 
+  gst_sctp_association_factory_association_unref (assoc);
+
   g_source_set_callback (source,
       gst_sctp_association_factory_unref_in_main_loop, assoc, NULL);
 
   g_mutex_lock (&unref_mutex);
-
   guint source_id = g_source_attach (source, main_context);
   g_source_unref (source);
 
-  while (g_main_context_find_source_by_user_data (main_context, assoc) != NULL) {
+  while (g_main_context_find_source_by_id (main_context, source_id) != NULL) {
     g_cond_wait (&unref_cond, &unref_mutex);
   }
-
   g_mutex_unlock (&unref_mutex);
+
 
   if (g_hash_table_size (associations_by_id) == 0)
     gst_sctp_association_factory_deinit ();
