@@ -746,6 +746,25 @@ gst_sctp_association_incoming_packet_async (GstSctpAssociationAsyncContext *
   return gst_sctp_association_async_return (assoc);
 }
 
+static const gchar *
+send_status_to_string (SctpSocket_SendStatus send_status)
+{
+  switch (send_status) {
+    case SCTP_SOCKET_STATUS_SUCCESS:
+      return "Success";
+    case SCTP_SOCKET_STATUS_MESSAGE_EMPTY:
+      return "Message is empty";
+    case SCTP_SOCKET_STATUS_MESSAGE_TOO_LARGE:
+      return "Message is too large";
+    case SCTP_SOCKET_STATUS_ERROR_RESOURCE_EXHAUSTION:
+      return "Resource exhaustion";
+    case SCTP_SOCKET_STATUS_ERROR_SHUTTING_DOWN:
+      return "Shutting down";
+    default:
+      return "Unknown send status";
+  }
+}
+
 static gboolean
 gst_sctp_association_send_data_async (GstSctpAssociationAsyncContext * ctx)
 {
@@ -771,6 +790,10 @@ gst_sctp_association_send_data_async (GstSctpAssociationAsyncContext * ctx)
       lifetime, max_retransmissions);
   GST_LOG ("send_status: %d", send_status);
 
+  if (send_status != SCTP_SOCKET_STATUS_SUCCESS) {
+    GST_ERROR_OBJECT (assoc, "Error sending %p of %" G_GSIZE_FORMAT,
+        " bytes, status: %s", send_status_to_string (send_status));
+  }
   // TODO: wait for the result in send_data?
   // if (send_status != SCTP_SOCKET_STATUS_SUCCESS)
   //   return GST_FLOW_ERROR;
