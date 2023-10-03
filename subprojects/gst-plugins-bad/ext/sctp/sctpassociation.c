@@ -883,8 +883,6 @@ gst_sctp_association_send_data (GstSctpAssociation * assoc, const guint8 * buf,
     GstSctpAssociationPartialReliability pr, guint32 reliability_param,
     guint32 * bytes_sent_)
 {
-  (void) bytes_sent_;
-
   g_mutex_lock (&assoc->association_mutex);
   if (assoc->state != GST_SCTP_ASSOCIATION_STATE_CONNECTED) {
     if (assoc->state == GST_SCTP_ASSOCIATION_STATE_DISCONNECTED ||
@@ -915,6 +913,9 @@ gst_sctp_association_send_data (GstSctpAssociation * assoc, const guint8 * buf,
       ctx, (GDestroyNotify) g_free);
 
   g_mutex_unlock (&assoc->association_mutex);
+
+  if (bytes_sent_)
+    *bytes_sent_ = length;
 
   return GST_FLOW_OK;
 }
