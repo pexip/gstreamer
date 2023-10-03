@@ -548,7 +548,7 @@ gst_sctp_timeout_handle_async (GstSctpTimeout * timeout)
 
     sctp_socket_handle_timeout (assoc->socket, timeout->timeout_id);
   } else {
-    GST_WARNING ("Couldn't handle timeout: %" G_GUINT64_FORMAT,
+    GST_INFO ("Couldn't handle timeout: %" G_GUINT64_FORMAT,
         timeout->timeout_id);
   }
 
@@ -739,7 +739,7 @@ gst_sctp_association_incoming_packet_async (GstSctpAssociationAsyncContext *
     sctp_socket_receive_packet (assoc->socket, (const uint8_t *) ctx->data,
         (size_t) ctx->len);
   } else {
-    GST_WARNING ("Couldn't process buffer (%p with length %" G_GSIZE_FORMAT
+    GST_INFO ("Couldn't process buffer (%p with length %" G_GSIZE_FORMAT
         "), missing socket", ctx->data, ctx->len);
   }
 
