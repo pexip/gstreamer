@@ -405,31 +405,38 @@ sctp_socket_error_to_string (SctpSocket_Error error)
 
 static void
 gst_sctp_association_handle_error (GstSctpAssociation * assoc,
-    SctpSocket_Error error)
+    SctpSocket_Error error, const char *message)
 {
-  GST_ERROR_OBJECT (assoc, "error: %s", sctp_socket_error_to_string (error));
+  GST_ERROR_OBJECT (assoc, "error: %s - %s",
+      sctp_socket_error_to_string (error), message);
+  g_assert (error != SCTP_SOCKET_SUCCESS);
+
+  if (error == SCTP_SOCKET_ERROR_TOO_MANY_RETRIES) {
+    GST_DEBUG_OBJECT (assoc, "Too many retries! disconnecting...");
+    force_close_async (assoc);
+    return;
+  }
 
   g_mutex_lock (&assoc->association_mutex);
   gst_sctp_association_change_state_unlocked (assoc,
       GST_SCTP_ASSOCIATION_STATE_ERROR);
   g_mutex_unlock (&assoc->association_mutex);
-
-  g_assert (error != SCTP_SOCKET_SUCCESS);
-  force_close_async (assoc);
 }
 
 static void
-gst_sctp_association_on_error (void *user_data, SctpSocket_Error error)
+gst_sctp_association_on_error (void *user_data, SctpSocket_Error error,
+    const char *message)
 {
   GstSctpAssociation *assoc = user_data;
-  gst_sctp_association_handle_error (assoc, error);
+  gst_sctp_association_handle_error (assoc, error, message);
 }
 
 static void
-gst_sctp_association_on_aborted (void *user_data, SctpSocket_Error error)
+gst_sctp_association_on_aborted (void *user_data, SctpSocket_Error error,
+    const char *message)
 {
   GstSctpAssociation *assoc = user_data;
-  gst_sctp_association_handle_error (assoc, error);
+  gst_sctp_association_handle_error (assoc, error, message);
 }
 
 static void
@@ -466,7 +473,7 @@ static void
 gst_sctp_association_on_connection_restarted (void *user_data)
 {
   GstSctpAssociation *assoc = user_data;
-  GST_ERROR_OBJECT (assoc, "!");
+  GST_INFO_OBJECT (assoc, "Connection restarted!");
 }
 
 static void
@@ -658,7 +665,7 @@ gst_sctp_association_sctp_socket_log (void *user_data,
   }
 
   gst_debug_log (sctplib_log_category, level, __FILE__, GST_FUNCTION,
-      __LINE__, G_OBJECT (assoc), msg);
+      __LINE__, G_OBJECT (assoc), msg, NULL);
 }
 
 #endif
@@ -731,8 +738,8 @@ gst_sctp_association_connect_async (GstSctpAssociation * assoc)
   g_mutex_unlock (&assoc->association_mutex);
 
   // for aggresive-heartbeat only
-  int max_retransmissions = 10;
-  int max_init_retransmits = 8;
+  int max_retransmissions = 100;
+  int max_init_retransmits = 100;
 
   SctpSocket_Options opts;
   memset (&opts, 0, sizeof (SctpSocket_Options));
@@ -745,8 +752,8 @@ gst_sctp_association_connect_async (GstSctpAssociation * assoc)
   // exponential backoff, which can grow to very long durations and when the
   // connection recovers, it may take a long time to reach the new backoff
   // duration. By limiting it to a reasonable limit, the time to recover reduces.
-  opts.max_timer_backoff_duration_ms = aggressive_heartbeat ? 3000 : 3000;
-  opts.heartbeat_interval_ms = aggressive_heartbeat ? 30000 : 30000;;
+  opts.max_timer_backoff_duration_ms = 3000;
+  opts.heartbeat_interval_ms = aggressive_heartbeat ? 3000 : 30000;
 
   if (aggressive_heartbeat) {
     opts.max_retransmissions = &max_retransmissions;

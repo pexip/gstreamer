@@ -87,12 +87,12 @@ public:
 
   virtual void OnError (dcsctp::ErrorKind error, absl::string_view message) override
   {
-    callbacks_.on_error(callbacks_.user_data, (SctpSocket_Error) error);
+    callbacks_.on_error(callbacks_.user_data, (SctpSocket_Error) error, message.data());
   }
 
   virtual void OnAborted (dcsctp::ErrorKind error, absl::string_view message) override
   {
-    callbacks_.on_aborted(callbacks_.user_data, (SctpSocket_Error) error);
+    callbacks_.on_aborted(callbacks_.user_data, (SctpSocket_Error) error, message.data());
   }
 
   virtual void OnConnected () override

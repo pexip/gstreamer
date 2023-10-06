@@ -210,7 +210,8 @@ gst_sctp_association_factory_release (GstSctpAssociation * assoc)
   gst_sctp_association_factory_association_unref (assoc);
 
   g_source_set_callback (source,
-      gst_sctp_association_factory_unref_in_main_loop, assoc, NULL);
+      (GSourceFunc) gst_sctp_association_factory_unref_in_main_loop, assoc,
+      NULL);
 
   g_mutex_lock (&unref_mutex);
   guint source_id = g_source_attach (source, main_context);
