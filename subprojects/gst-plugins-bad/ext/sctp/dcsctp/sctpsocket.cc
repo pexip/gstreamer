@@ -7,6 +7,19 @@
 #include "net/dcsctp/public/dcsctp_options.h"
 #include "net/dcsctp/socket/dcsctp_socket.h"
 
+
+static std::vector<uint16_t>
+get_vector_from_streams (rtc::ArrayView < const dcsctp::StreamID > streams)
+{
+  std::vector<uint16_t> values;
+
+  for (auto& streamID : streams) {
+    values.push_back(static_cast<uint16_t>(streamID));
+  }
+
+  return values;
+}
+
 class SctpSocketTimeoutHandler : public dcsctp::Timeout
 {
 public:
@@ -113,19 +126,22 @@ public:
   virtual void OnStreamsResetFailed (rtc::ArrayView < const dcsctp::StreamID >
       outgoing_streams, absl::string_view reason) override
   {
-
+    auto streams = get_vector_from_streams (outgoing_streams);
+    callbacks_.on_streams_reset_failed (callbacks_.user_data, streams.data(), streams.size(), reason.data());
   }
 
   virtual void OnStreamsResetPerformed (rtc::ArrayView < const dcsctp::StreamID >
       outgoing_streams) override
   {
-
+    auto streams = get_vector_from_streams (outgoing_streams);
+    callbacks_.on_streams_reset_performed (callbacks_.user_data, streams.data(), streams.size());
   }
 
   virtual void OnIncomingStreamsReset (rtc::ArrayView < const dcsctp::StreamID >
       incoming_streams)
   {
-
+    auto streams = get_vector_from_streams (incoming_streams);
+    callbacks_.on_incoming_streams_reset (callbacks_.user_data, streams.data(), streams.size());
   }
 
   virtual void OnBufferedAmountLow (dcsctp::StreamID stream_id) override

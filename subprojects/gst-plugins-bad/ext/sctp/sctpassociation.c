@@ -107,6 +107,9 @@ static gboolean force_close_async (GstSctpAssociation * assoc);
 static void
 gst_sctp_association_reset_stream_unlocked (GstSctpAssociation * assoc,
     uint16_t stream_id);
+static gboolean
+gst_sctp_association_open_stream (GstSctpAssociation * assoc,
+    guint16 stream_id);
 
 static void
 gst_sctp_association_class_init (GstSctpAssociationClass * klass)
@@ -376,6 +379,15 @@ gst_sctp_association_on_message_received (void *user_data,
   GstSctpAssociation *assoc = user_data;
 
   g_rec_mutex_lock (&assoc->association_mutex);
+
+  if (!gst_sctp_association_open_stream (assoc, stream_id)) {
+    GST_INFO_OBJECT (assoc,
+        "Skipping receiving data on invalid state with stream id:%u",
+        stream_id);
+    g_rec_mutex_unlock (&assoc->association_mutex);
+    return;
+  }
+
   if (assoc->decoder_ctx.packet_received_cb) {
     assoc->decoder_ctx.packet_received_cb (assoc, data, len, stream_id, ppid,
         assoc->decoder_ctx.element);
@@ -560,15 +572,16 @@ gst_sctp_association_handle_stream_reset (GstSctpAssociation * assoc,
         // procedure, the association needs to reset the stream in the other
         // direction too.
         gst_sctp_association_reset_stream_unlocked (assoc, stream_id);
+        gst_sctp_association_notify_stream_reset (assoc, stream_id);
       }
     } else {
       state->outgoing_reset_done = TRUE;
     }
 
     if (state->incoming_reset_done) {
+      gst_sctp_association_notify_stream_reset (assoc, stream_id);
       g_hash_table_remove (assoc->stream_id_to_state,
           GUINT_TO_POINTER (stream_id));
-      gst_sctp_association_notify_stream_reset (assoc, stream_id);
     }
   }
   g_rec_mutex_unlock (&assoc->association_mutex);
