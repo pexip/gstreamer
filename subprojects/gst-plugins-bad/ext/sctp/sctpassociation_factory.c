@@ -49,6 +49,7 @@ static GThread *main_loop_thread = NULL;
 
 static GMutex unref_mutex;
 static GCond unref_cond;
+static gboolean unref_called;
 
 
 static gpointer
@@ -131,6 +132,7 @@ gst_sctp_association_factory_unref_in_main_loop (GstSctpAssociation * assoc)
   g_object_unref (assoc);
 
   g_mutex_lock (&unref_mutex);
+  unref_called = TRUE;
   g_cond_signal (&unref_cond);
   g_mutex_unlock (&unref_mutex);
 
@@ -209,15 +211,17 @@ gst_sctp_association_factory_release (GstSctpAssociation * assoc)
 
   gst_sctp_association_factory_association_unref (assoc);
 
+  g_mutex_lock (&unref_mutex);
+  unref_called = FALSE;
+
   g_source_set_callback (source,
       (GSourceFunc) gst_sctp_association_factory_unref_in_main_loop, assoc,
       NULL);
 
-  g_mutex_lock (&unref_mutex);
   guint source_id = g_source_attach (source, main_context);
   g_source_unref (source);
 
-  while (g_main_context_find_source_by_id (main_context, source_id) != NULL) {
+  while (!unref_called) {
     g_cond_wait (&unref_cond, &unref_mutex);
   }
   g_mutex_unlock (&unref_mutex);
