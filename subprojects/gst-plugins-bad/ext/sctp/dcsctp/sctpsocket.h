@@ -13,6 +13,24 @@ extern "C"
 typedef struct _SctpSocket SctpSocket;
 typedef struct _SctpSocket_Callbacks SctpSocket_Callbacks; 
 
+//////////////////////////////////////////////////////////////////////
+// The meanings of the levels are:
+//  SCTP_SOCKET_VERBOSE: This level is for data which we do not want to appear in the
+//   normal debug log, but should appear in diagnostic logs.
+//  SCTP_SOCKET_INFO: Chatty level used in debugging for all sorts of things, the default
+//   in debug builds.
+//  SCTP_SOCKET_WARNING: Something that may warrant investigation.
+//  SCTP_SOCKET_ERROR: Something that should not have occurred.
+//  SCTP_SOCKET_NONE: Don't log.
+typedef enum
+{
+  SCTP_SOCKET_VERBOSE,
+  SCTP_SOCKET_INFO,
+  SCTP_SOCKET_WARNING,
+  SCTP_SOCKET_ERROR,
+  SCTP_SOCKET_NONE,
+} SctpSocket_LoggingSeverity;
+
 typedef enum
 {
   // The socket is closed.
@@ -144,6 +162,8 @@ typedef void (*SctpSocketTimeout_Stop) (void * user_data, void * timeout);
 typedef uint64_t (*SctpSocketTimeout_TimeMillis) (void * user_data);
 typedef uint32_t (*SctpSocket_GetRandomInt) (void * user_data, uint32_t low, uint32_t high);
 
+typedef void (*SctpSocket_LoggingFunction) (void * user_data, SctpSocket_LoggingSeverity severity, const char * msg);
+
 struct _SctpSocket_Callbacks
 {
   SctpSocket_SendPacket send_packet;
@@ -168,6 +188,8 @@ struct _SctpSocket_Callbacks
 
   SctpSocketTimeout_TimeMillis time_millis;
   SctpSocket_GetRandomInt get_random_int;
+
+  SctpSocket_LoggingFunction log_message;
 
   void * user_data;
 };

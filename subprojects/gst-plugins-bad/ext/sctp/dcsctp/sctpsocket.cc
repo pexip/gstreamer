@@ -3,6 +3,7 @@
 #include <memory>
 #include <iostream>
 
+#include "rtc_base/logging.h"
 #include "net/dcsctp/public/dcsctp_options.h"
 #include "net/dcsctp/socket/dcsctp_socket.h"
 
@@ -39,16 +40,21 @@ private:
   void * timeout_;
 };
 
-class SctpSocketCallbacksHandler : public dcsctp::DcSctpSocketCallbacks
+class SctpSocketCallbacksHandler :  public dcsctp::DcSctpSocketCallbacks, public rtc::LogSink
 {
 public:
   SctpSocketCallbacksHandler(SctpSocket_Callbacks callbacks): callbacks_(callbacks)
   {
+    rtc::LogMessage::SetLogToStderr(false);
+    rtc::LogMessage::AddLogToStream(this, rtc::LS_VERBOSE);
   }
 
   virtual ~SctpSocketCallbacksHandler () override
   {
+    rtc::LogMessage::RemoveLogToStream(this);
   }
+
+  /* DcSctpSocketCallbacks */
 
   virtual dcsctp::SendPacketStatus SendPacketWithStatus (rtc::ArrayView <
       const uint8_t > data) override
@@ -127,6 +133,19 @@ public:
   }
 
   virtual void OnTotalBufferedAmountLow () override
+  {
+  }
+
+  /* LogSink */
+  virtual void OnLogMessage(const std::string& message,
+                            rtc::LoggingSeverity severity)
+  {
+   if (callbacks_.log_message) {
+      callbacks_.log_message(callbacks_.user_data, static_cast<SctpSocket_LoggingSeverity>(severity), message.c_str());
+    }
+  }
+
+  virtual void OnLogMessage(const std::string& message) override
   {
   }
 

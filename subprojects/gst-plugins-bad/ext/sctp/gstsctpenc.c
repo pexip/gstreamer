@@ -1054,8 +1054,8 @@ on_sctp_association_state_changed (GstSctpAssociation *
 
   /* we demand to have a valid encoder here */
   g_assert (self);
-  GST_DEBUG_OBJECT (self, "Association state changed to %s",
-      gst_sctp_association_state_string (state));
+  GST_DEBUG_OBJECT (self, "Association (%p) state changed to %s",
+      sctp_association, gst_sctp_association_state_string (state));
 
   switch (state) {
     case GST_SCTP_ASSOCIATION_STATE_NEW:

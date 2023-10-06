@@ -38,7 +38,7 @@
 
 GST_DEBUG_CATEGORY_STATIC (gst_sctp_association_debug_category);
 #define GST_CAT_DEFAULT gst_sctp_association_debug_category
-GST_DEBUG_CATEGORY_STATIC (gst_sctp_debug_category);
+GST_DEBUG_CATEGORY_STATIC (sctplib_log_category);
 
 #define GST_SCTP_ASSOCIATION_STATE_TYPE (gst_sctp_association_state_get_type())
 static GType
@@ -149,23 +149,9 @@ gst_sctp_association_class_init (GstSctpAssociationClass * klass)
 
   GST_DEBUG_CATEGORY_INIT (gst_sctp_association_debug_category,
       "sctpassociation", 0, "debug category for sctpassociation");
-  GST_DEBUG_CATEGORY_INIT (gst_sctp_debug_category,
-      "dcsctp", 0, "debug category for messages from dcSCTP");
+  GST_DEBUG_CATEGORY_INIT (sctplib_log_category,
+      "sctplib", 0, "debug category for messages from dcSCTP");
 }
-
-// #if defined(SCTP_DEBUG) && !defined(GST_DISABLE_GST_DEBUG)
-// #define SCTP_GST_DEBUG_LEVEL GST_LEVEL_DEBUG
-// static void
-// gst_usrsctp_debug (const gchar * format, ...)
-// {
-//   va_list varargs;
-
-//   va_start (varargs, format);
-//   gst_debug_log_valist (gst_sctp_debug_category, SCTP_GST_DEBUG_LEVEL,
-//       __FILE__, GST_FUNCTION, __LINE__, NULL, format, varargs);
-//   va_end (varargs);
-// }
-// #endif
 
 static void
 gst_sctp_association_init (GstSctpAssociation * assoc)
@@ -363,7 +349,8 @@ gst_sctp_association_send_packet (void *user_data, const uint8_t * data,
 {
   GstSctpAssociation *assoc = user_data;
 
-  GST_LOG_OBJECT (assoc, "Sendpacket ! %p %p %" G_GSIZE_FORMAT, assoc, data, len);
+  GST_LOG_OBJECT (assoc, "Sendpacket ! %p %p %" G_GSIZE_FORMAT, assoc, data,
+      len);
 
   g_mutex_lock (&assoc->association_mutex);
   if (assoc->encoder_ctx.packet_out_cb) {
@@ -420,7 +407,7 @@ static void
 gst_sctp_association_handle_error (GstSctpAssociation * assoc,
     SctpSocket_Error error)
 {
-  GST_ERROR_OBJECT(assoc, "error: %s", sctp_socket_error_to_string (error));
+  GST_ERROR_OBJECT (assoc, "error: %s", sctp_socket_error_to_string (error));
 
   g_mutex_lock (&assoc->association_mutex);
   gst_sctp_association_change_state_unlocked (assoc,
@@ -549,7 +536,8 @@ gst_sctp_timeout_handle_async (GstSctpTimeout * timeout)
   g_assert (assoc);
 
   if (assoc->socket) {
-    GST_LOG_OBJECT (assoc, "handle timeout timeout_handle %p %" G_GUINT64_FORMAT, timeout,
+    GST_LOG_OBJECT (assoc,
+        "handle timeout timeout_handle %p %" G_GUINT64_FORMAT, timeout,
         timeout->timeout_id);
 
     sctp_socket_handle_timeout (assoc->socket, timeout->timeout_id);
@@ -641,6 +629,40 @@ gst_sctp_association_get_random_int (void *user_data, uint32_t low,
       MAX ((int32_t) high, G_MAXINT32));
 }
 
+#if defined(SCTP_DEBUG) && !defined(GST_DISABLE_GST_DEBUG)
+
+static void
+gst_sctp_association_sctp_socket_log (void *user_data,
+    SctpSocket_LoggingSeverity severity, const char *msg)
+{
+  GstSctpAssociation *assoc = user_data;
+  GstDebugLevel level;
+
+  switch (severity) {
+    case SCTP_SOCKET_VERBOSE:
+      level = GST_LEVEL_DEBUG;
+      break;
+    case SCTP_SOCKET_INFO:
+      level = GST_LEVEL_INFO;
+      break;
+    case SCTP_SOCKET_WARNING:
+      level = GST_LEVEL_WARNING;
+      break;
+    case SCTP_SOCKET_ERROR:
+      level = GST_LEVEL_ERROR;
+      break;
+    case SCTP_SOCKET_NONE:
+    default:
+      level = GST_LEVEL_NONE;
+      break;
+  }
+
+  gst_debug_log (sctplib_log_category, level, __FILE__, GST_FUNCTION,
+      __LINE__, G_OBJECT (assoc), msg);
+}
+
+#endif
+
 typedef struct
 {
   /* common */
@@ -670,6 +692,11 @@ gst_sctp_association_connect_async (GstSctpAssociation * assoc)
 {
   g_assert (!assoc->socket);
 
+  SctpSocket_LoggingFunction log_message_func = NULL;
+#if defined(SCTP_DEBUG) && !defined(GST_DISABLE_GST_DEBUG)
+  log_message_func = gst_sctp_association_sctp_socket_log;
+#endif
+
   SctpSocket_Callbacks callbacks = {
     .send_packet = gst_sctp_association_send_packet,
     .on_message_received = gst_sctp_association_on_message_received,
@@ -691,6 +718,7 @@ gst_sctp_association_connect_async (GstSctpAssociation * assoc)
     .timeout_stop = gst_sctp_association_timeout_stop,
     .time_millis = gst_sctp_association_time_millis,
     .get_random_int = gst_sctp_association_get_random_int,
+    .log_message = log_message_func,
     .user_data = assoc
   };
 
@@ -744,7 +772,7 @@ gst_sctp_association_incoming_packet_async (GstSctpAssociationAsyncContext *
     sctp_socket_receive_packet (assoc->socket, (const uint8_t *) ctx->data,
         (size_t) ctx->len);
   } else {
-    GST_DEBUG_OBJECT (ctx->assoc,
+    GST_LOG_OBJECT (ctx->assoc,
         "Couldn't process buffer (%p with length %" G_GSIZE_FORMAT
         "), missing socket", ctx->data, ctx->len);
   }
