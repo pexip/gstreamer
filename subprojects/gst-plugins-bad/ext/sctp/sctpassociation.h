@@ -118,7 +118,7 @@ struct _GstSctpAssociation
   gboolean aggressive_heartbeat;
   SctpSocket * socket;
 
-  GMutex association_mutex;
+  GRecMutex association_mutex;
 
   GstSctpAssociationState state;
   GHashTable * stream_id_to_state;
