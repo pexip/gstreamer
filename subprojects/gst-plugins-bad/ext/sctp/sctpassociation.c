@@ -393,7 +393,7 @@ static const gchar *
 sctp_socket_error_to_string (SctpSocket_Error error)
 {
   switch (error) {
-    SCTP_SOCKET_SUCCESS:
+    case SCTP_SOCKET_SUCCESS:
       return "Success";
     case SCTP_SOCKET_ERROR_TOO_MANY_RETRIES:
       return "Too many retries";
@@ -697,14 +697,7 @@ gst_sctp_association_connect_async (GstSctpAssociation * assoc)
       GST_SCTP_ASSOCIATION_STATE_CONNECTING);
   g_mutex_unlock (&assoc->association_mutex);
 
-  // When there is packet loss for a long time, the SCTP retry timers will use
-  // exponential backoff, which can grow to very long durations and when the
-  // connection recovers, it may take a long time to reach the new backoff
-  // duration. By limiting it to a reasonable limit, the time to recover reduces.
-  int32_t max_timer_backoff_duration_ms = aggressive_heartbeat ? 1500 : 3000;
-  int32_t heartbeat_interval_ms = aggressive_heartbeat ? 10 : 30000;
-
-  // for aggresive-heartbeat
+  // for aggresive-heartbeat only
   int max_retransmissions = 10;
   int max_init_retransmits = 8;
 
@@ -714,8 +707,13 @@ gst_sctp_association_connect_async (GstSctpAssociation * assoc)
   opts.local_port = assoc->local_port;
   opts.remote_port = assoc->remote_port;
   opts.max_message_size = 256 * 1024;
-  opts.max_timer_backoff_duration_ms = &max_timer_backoff_duration_ms;
-  opts.heartbeat_interval_ms = &heartbeat_interval_ms;
+
+  // When there is packet loss for a long time, the SCTP retry timers will use
+  // exponential backoff, which can grow to very long durations and when the
+  // connection recovers, it may take a long time to reach the new backoff
+  // duration. By limiting it to a reasonable limit, the time to recover reduces.
+  opts.max_timer_backoff_duration_ms = aggressive_heartbeat ? 3000 : 3000;
+  opts.heartbeat_interval_ms = aggressive_heartbeat ? 30000 : 30000;;
 
   if (aggressive_heartbeat) {
     opts.max_retransmissions = &max_retransmissions;
