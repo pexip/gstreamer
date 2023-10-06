@@ -302,7 +302,8 @@ gst_sctp_association_cancel_pending_async (GstSctpAssociation * assoc)
   g_hash_table_iter_init (&iter, assoc->pending_source_ids);
   while (g_hash_table_iter_next (&iter, &key, NULL)) {
     guint source_id = GPOINTER_TO_UINT (key);
-    GST_LOG ("canceling source_id: %" G_GUINT64_FORMAT, source_id);
+    GST_LOG_OBJECT (assoc, "canceling source_id: %" G_GUINT32_FORMAT,
+        source_id);
     GSource *source = g_main_context_find_source_by_id (assoc->main_context,
         source_id);
     if (source)
@@ -321,7 +322,7 @@ gst_sctp_association_async_return (GstSctpAssociation * assoc)
   g_assert (source);
   guint source_id = g_source_get_id (source);
 
-  GST_LOG ("de-registering source_id: %u", source_id);
+  GST_LOG_OBJECT (assoc, "de-registering source_id: %u", source_id);
 
   g_mutex_lock (&assoc->association_mutex);
   // g_assert (g_hash_table_remove (assoc->pending_source_ids,
@@ -344,7 +345,7 @@ gst_sctp_association_call_async (GstSctpAssociation * assoc, guint timeout_ms,
   /* attach the source */
   guint source_id = g_source_attach (source, assoc->main_context);
 
-  GST_LOG ("registering source_id: %u", source_id);
+  GST_LOG_OBJECT (assoc, "registering source_id: %u", source_id);
 
   /* register it, so we can cancel it later */
   g_assert (g_hash_table_insert (assoc->pending_source_ids,
@@ -362,7 +363,7 @@ gst_sctp_association_send_packet (void *user_data, const uint8_t * data,
 {
   GstSctpAssociation *assoc = user_data;
 
-  GST_LOG ("Sendpacket ! %p %u %" G_GSIZE_FORMAT, assoc, data, len);
+  GST_LOG_OBJECT (assoc, "Sendpacket ! %p %p %" G_GSIZE_FORMAT, assoc, data, len);
 
   g_mutex_lock (&assoc->association_mutex);
   if (assoc->encoder_ctx.packet_out_cb) {
@@ -419,7 +420,7 @@ static void
 gst_sctp_association_handle_error (GstSctpAssociation * assoc,
     SctpSocket_Error error)
 {
-  GST_ERROR ("error: %s", sctp_socket_error_to_string (error));
+  GST_ERROR_OBJECT(assoc, "error: %s", sctp_socket_error_to_string (error));
 
   g_mutex_lock (&assoc->association_mutex);
   gst_sctp_association_change_state_unlocked (assoc,
@@ -462,7 +463,7 @@ gst_sctp_association_on_closed (void *user_data)
 {
   GstSctpAssociation *assoc = user_data;
 
-  GST_ERROR ("!");
+  GST_ERROR_OBJECT (assoc, "!");
 
   g_mutex_lock (&assoc->association_mutex);
   gst_sctp_association_change_state_unlocked (assoc,
@@ -478,14 +479,14 @@ static void
 gst_sctp_association_on_connection_restarted (void *user_data)
 {
   (void) user_data;
-  GST_ERROR ("!");
+  GST_ERROR_OBJECT (assoc, "!");
 }
 
 static void
 gst_sctp_association_on_streams_reset_failed (void *user_data,
     const uint16_t * streams, size_t len)
 {
-  GST_ERROR ("!");
+  GST_ERROR_OBJECT (assoc, "!");
   (void) user_data;
   (void) streams;
   (void) len;
@@ -495,7 +496,7 @@ static void
 gst_sctp_association_on_streams_reset_performed (void *user_data,
     const uint16_t * streams, size_t len)
 {
-  GST_ERROR ("!");
+  GST_ERROR_OBJECT (assoc, "!");
   (void) user_data;
   (void) streams;
   (void) len;
@@ -505,7 +506,7 @@ static void
 gst_sctp_association_on_incoming_streams_reset (void *user_data,
     const uint16_t * streams, size_t len)
 {
-  GST_ERROR ("!");
+  GST_ERROR_OBJECT (assoc, "!");
   (void) user_data;
   (void) streams;
   (void) len;
@@ -515,7 +516,7 @@ static void
 gst_sctp_association_on_buffered_amount_low (void *user_data,
     uint16_t stream_id)
 {
-  GST_ERROR ("!");
+  GST_ERROR_OBJECT (assoc, "!");
   (void) user_data;
   (void) stream_id;
 
@@ -524,7 +525,7 @@ gst_sctp_association_on_buffered_amount_low (void *user_data,
 static void
 gst_sctp_association_on_total_buffered_amount_low (void *user_data)
 {
-  GST_ERROR ("!");
+  GST_ERROR_OBJECT (assoc, "!");
   (void) user_data;
 }
 
@@ -543,12 +544,12 @@ gst_sctp_timeout_handle_async (GstSctpTimeout * timeout)
   g_assert (assoc);
 
   if (assoc->socket) {
-    GST_LOG ("handle timeout timeout_handle %p %u", timeout,
+    GST_LOG_OBJECT (assoc, "handle timeout timeout_handle %p %" G_GUINT64_FORMAT, timeout,
         timeout->timeout_id);
 
     sctp_socket_handle_timeout (assoc->socket, timeout->timeout_id);
   } else {
-    GST_INFO ("Couldn't handle timeout: %" G_GUINT64_FORMAT,
+    GST_INFO_OBJECT (assoc, "Couldn't handle timeout: %" G_GUINT64_FORMAT,
         timeout->timeout_id);
   }
 
@@ -573,8 +574,8 @@ gst_sctp_association_timeout_start (void *user_data, void *void_timeout,
 
   timeout->source_id = id;
 
-  GST_LOG ("timeout start timeout=%p %d timeout_id=%u source_id=%u", timeout,
-      milliseconds, timeout_id, id);
+  GST_LOG ("timeout start timeout=%p %d timeout_id=%" G_GUINT64_FORMAT
+      " source_id=%" G_GUINT32_FORMAT, timeout, milliseconds, timeout_id, id);
 }
 
 static void
@@ -583,8 +584,9 @@ gst_sctp_association_timeout_stop (void *user_data, void *void_timeout)
   GstSctpTimeout *timeout = void_timeout;
   GstSctpAssociation *assoc = user_data;
 
-  GST_LOG ("timeout stop timeout=%p timeout_id=%u source_id=%u", timeout,
-      timeout->timeout_id, timeout->source_id);
+  GST_LOG ("timeout stop timeout=%p timeout_id=%" G_GUINT64_FORMAT
+      " source_id=%" G_GUINT32_FORMAT, timeout, timeout->timeout_id,
+      timeout->source_id);
 
   GSource *source = g_main_context_find_source_by_id (assoc->main_context,
       timeout->source_id);
@@ -739,7 +741,8 @@ gst_sctp_association_incoming_packet_async (GstSctpAssociationAsyncContext *
     sctp_socket_receive_packet (assoc->socket, (const uint8_t *) ctx->data,
         (size_t) ctx->len);
   } else {
-    GST_INFO ("Couldn't process buffer (%p with length %" G_GSIZE_FORMAT
+    GST_DEBUG_OBJECT (ctx->assoc,
+        "Couldn't process buffer (%p with length %" G_GSIZE_FORMAT
         "), missing socket", ctx->data, ctx->len);
   }
 
@@ -780,19 +783,20 @@ gst_sctp_association_send_data_async (GstSctpAssociationAsyncContext * ctx)
     *lifetime = ctx->reliability_param;
   } else if (ctx->pr == GST_SCTP_ASSOCIATION_PARTIAL_RELIABILITY_RTX) {
     *max_retransmissions = ctx->reliability_param;
-  } else {
-    GST_DEBUG ("Ignoring reliability parameter %d", ctx->pr);
+  } else if (ctx->pr != GST_SCTP_ASSOCIATION_PARTIAL_RELIABILITY_NONE) {
+    GST_DEBUG_OBJECT (assoc, "Ignoring reliability parameter %d", ctx->pr);
   }
 
   SctpSocket_SendStatus send_status =
       sctp_socket_send (assoc->socket, ctx->data, ctx->len, ctx->stream_id,
       ctx->ppid, !ctx->ordered,
       lifetime, max_retransmissions);
-  GST_LOG ("send_status: %d", send_status);
+  GST_LOG_OBJECT (assoc, "send_status: %d", send_status);
 
   if (send_status != SCTP_SOCKET_STATUS_SUCCESS) {
-    GST_ERROR_OBJECT (assoc, "Error sending %p of %" G_GSIZE_FORMAT,
-        " bytes, status: %s", send_status_to_string (send_status));
+    GST_ERROR_OBJECT (assoc,
+        "Error sending buffer:%p of %" G_GSIZE_FORMAT " bytes, status: %s",
+        ctx->data, ctx->len, send_status_to_string (send_status));
   }
   // TODO: wait for the result in send_data?
   // if (send_status != SCTP_SOCKET_STATUS_SUCCESS)

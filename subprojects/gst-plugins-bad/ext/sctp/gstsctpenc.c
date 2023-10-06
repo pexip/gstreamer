@@ -625,7 +625,7 @@ gst_sctp_enc_srcpad_loop (GstPad * pad)
   if (gst_data_queue_pop (self->outbound_sctp_packet_queue, &item)) {
     GstBuffer *buffer = GST_BUFFER (item->object);
 
-    GST_DEBUG_OBJECT (self, "Forwarding buffer %" GST_PTR_FORMAT, buffer);
+    GST_LOG_OBJECT (self, "Forwarding buffer %" GST_PTR_FORMAT, buffer);
 
     flow_ret = gst_pad_push (self->src_pad, buffer);
     item->object = NULL;
@@ -789,7 +789,7 @@ gst_sctp_enc_sink_chain (GstPad * pad, GstObject * parent, GstBuffer * buffer)
       g_cond_wait_until (&sctpenc_pad->cond, &sctpenc_pad->lock, end_time);
 
     } else if (bytes_sent == length) {
-      GST_DEBUG_OBJECT (pad, "Successfully sent buffer");
+      GST_LOG_OBJECT (pad, "Successfully sent buffer");
       sctpenc_pad->bytes_sent += bytes_sent;
       break;
     }
@@ -1099,7 +1099,7 @@ on_sctp_packet_out (GstSctpAssociation * _association, const guint8 * buf,
   GstDataQueueItem *item;
   GstSctpEncPad *sctpenc_pad;
 
-  GST_DEBUG_OBJECT (self, "Received output packet of size %" G_GSIZE_FORMAT,
+  GST_LOG_OBJECT (self, "Received output packet of size %" G_GSIZE_FORMAT,
       length);
 
   gstbuf = gst_buffer_new_memdup (buf, length);

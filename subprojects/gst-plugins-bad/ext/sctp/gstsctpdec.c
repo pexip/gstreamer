@@ -385,7 +385,7 @@ gst_sctp_dec_packet_chain (GstPad * pad, GstSctpDec * self, GstBuffer * buf)
   GstFlowReturn flow_ret;
   GstMapInfo map;
 
-  GST_DEBUG_OBJECT (self, "Processing received buffer %" GST_PTR_FORMAT, buf);
+  GST_LOG_OBJECT (self, "Processing received buffer %" GST_PTR_FORMAT, buf);
 
   if (!gst_buffer_map (buf, &map, GST_MAP_READ)) {
     GST_ERROR_OBJECT (self, "Could not map GstBuffer");
