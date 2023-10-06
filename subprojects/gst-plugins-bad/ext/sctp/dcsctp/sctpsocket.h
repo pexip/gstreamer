@@ -148,7 +148,7 @@ typedef void (*SctpSocket_OnConnected) (void * user_data);
 typedef void (*SctpSocket_OnClosed) (void * user_data);
 typedef void (*SctpSocket_OnConnectionRestarted) (void * user_data);
 
-typedef void (*SctpSocket_OnStreamsResetFailed) (void * user_data, const uint16_t * streams, size_t len);
+typedef void (*SctpSocket_OnStreamsResetFailed) (void * user_data, const uint16_t * streams, size_t len, const char * message);
 typedef void (*SctpSocket_OnStreamsResetPerformed) (void * user_data, const uint16_t * streams, size_t len);
 typedef void (*SctpSocket_OnIncomingStreamsReset) (void * user_data, const uint16_t * streams, size_t len);
 typedef void (*SctpSocket_OnBufferedAmountLow) (void * user_data, uint16_t stream_id);

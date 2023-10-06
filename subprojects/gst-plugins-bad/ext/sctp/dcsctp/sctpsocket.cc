@@ -310,9 +310,13 @@ SctpSocket_ResetStreamStatus
 sctp_socket_reset_streams (SctpSocket * socket,
     const uint16_t * streams, size_t len)
 {
-  (void) socket;
-  (void) streams;
-  (void) len;
+  assert(socket);
+  assert(socket->socket_);
 
-  return SCTP_SOCKET_RESET_STREAM_STATUS_NOT_CONNECTED;
+  std::vector<dcsctp::StreamID> reset_streams;
+  for (size_t i = 0 ; i < len; i++)
+    reset_streams.push_back(dcsctp::StreamID(streams[i]));
+
+  auto status = socket->socket_->ResetStreams(reset_streams);
+  return static_cast<SctpSocket_ResetStreamStatus>(status);
 }

@@ -97,6 +97,16 @@ struct _GstSctpAssociationDecoderCtx
   GstSctpAssociationRestartCb restart_cb;
 };
 
+typedef struct
+{
+  // True when the local connection has initiated the reset.
+  gboolean closure_initiated;
+  // True when the local connection received OnIncomingStreamsReset
+  gboolean incoming_reset_done;
+  // True when the local connection received OnStreamsResetPerformed
+  gboolean outgoing_reset_done;
+} GstSctpStreamState;
+
 struct _GstSctpAssociation
 {
   GObject parent_instance;
@@ -111,6 +121,7 @@ struct _GstSctpAssociation
   GMutex association_mutex;
 
   GstSctpAssociationState state;
+  GHashTable * stream_id_to_state;
 
   GMainContext *main_context;
 
