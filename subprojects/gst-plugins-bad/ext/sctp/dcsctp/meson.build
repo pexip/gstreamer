@@ -103,7 +103,6 @@ dcsctp_sources = [
   'sctpsocket.cc',
 ]
 
-dcsctp_linkargs = []
 dcsctp_cargs = []
 dcsctp_cppargs = [
   '-std=c++17'
@@ -121,26 +120,19 @@ elif host_system == 'linux'
     '-DWEBRTC_LINUX',
     '-DWEBRTC_POSIX',
   ]
-
-  dcsctp_linkargs += [
-    '-lpthread',
-  ]
 else
   dcsctp_cppargs += [
     '-DWEBRTC_POSIX',
   ]
-
-  dcsctp_linkargs += [
-    '-lpthread',
-  ]
 endif
 
+threads_dep = dependency('threads')
 
 dcsctp_lib = static_library('dcsctp',
   dcsctp_sources,
   c_args: dcsctp_cargs,
   cpp_args: dcsctp_cppargs,
-  link_args: dcsctp_linkargs,
+  dependencies: [threads_dep],
   install: false,
   include_directories: [include_directories('.')])
 
