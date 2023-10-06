@@ -516,6 +516,25 @@ gst_sctp_association_on_streams_reset_failed (void *user_data,
 }
 
 static void
+gst_sctp_association_notify_stream_reset (GstSctpAssociation * assoc,
+    guint16 stream_id)
+{
+  GstSctpAssociationStreamResetCb stream_reset_cb;
+  gpointer user_data;
+
+  stream_reset_cb = assoc->decoder_ctx.stream_reset_cb;
+  user_data = assoc->decoder_ctx.element;
+  if (user_data)
+    gst_object_ref (user_data);
+
+  if (stream_reset_cb)
+    stream_reset_cb (assoc, stream_id, user_data);
+
+  if (user_data)
+    gst_object_unref (user_data);
+}
+
+static void
 gst_sctp_association_handle_stream_reset (GstSctpAssociation * assoc,
     const uint16_t * streams, size_t len, gboolean incoming_reset)
 {
@@ -549,6 +568,7 @@ gst_sctp_association_handle_stream_reset (GstSctpAssociation * assoc,
     if (state->incoming_reset_done) {
       g_hash_table_remove (assoc->stream_id_to_state,
           GUINT_TO_POINTER (stream_id));
+      gst_sctp_association_notify_stream_reset (assoc, stream_id);
     }
   }
   g_mutex_unlock (&assoc->association_mutex);
@@ -1227,44 +1247,6 @@ gst_sctp_association_disconnect (GstSctpAssociation * assoc)
 
   g_mutex_unlock (&assoc->association_mutex);
 }
-
-
-// static void
-// gst_sctp_association_notify_stream_reset (GstSctpAssociation * assoc,
-//     guint16 stream_id)
-// {
-//   GstSctpAssociationStreamResetCb stream_reset_cb;
-//   gpointer user_data;
-
-//   stream_reset_cb = assoc->decoder_ctx.stream_reset_cb;
-//   user_data = assoc->decoder_ctx.element;
-//   if (user_data)
-//     gst_object_ref (user_data);
-
-//   if (stream_reset_cb)
-//     stream_reset_cb (assoc, stream_id, user_data);
-
-//   if (user_data)
-//     gst_object_unref (user_data);
-// }
-
-// static void
-// handle_stream_reset_event (GstSctpAssociation * assoc,
-//     const struct sctp_stream_reset_event *sr)
-// {
-//   guint32 i, n;
-//   if (!(sr->strreset_flags & SCTP_STREAM_RESET_DENIED) &&
-//       !(sr->strreset_flags & SCTP_STREAM_RESET_DENIED)) {
-//     n = (sr->strreset_length -
-//         sizeof (struct sctp_stream_reset_event)) / sizeof (uint16_t);
-//     for (i = 0; i < n; i++) {
-//       if (sr->strreset_flags & SCTP_STREAM_RESET_INCOMING_SSN) {
-//         gst_sctp_association_notify_stream_reset (assoc,
-//             sr->strreset_stream_list[i]);
-//       }
-//     }
-//   }
-// }
 
 static void
 gst_sctp_association_change_state_unlocked (GstSctpAssociation * assoc,
