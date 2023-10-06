@@ -478,7 +478,7 @@ gst_sctp_association_on_closed (void *user_data)
 static void
 gst_sctp_association_on_connection_restarted (void *user_data)
 {
-  (void) user_data;
+  GstSctpAssociation *assoc = user_data;
   GST_ERROR_OBJECT (assoc, "!");
 }
 
@@ -486,6 +486,7 @@ static void
 gst_sctp_association_on_streams_reset_failed (void *user_data,
     const uint16_t * streams, size_t len)
 {
+  GstSctpAssociation *assoc = user_data;
   GST_ERROR_OBJECT (assoc, "!");
   (void) user_data;
   (void) streams;
@@ -496,6 +497,7 @@ static void
 gst_sctp_association_on_streams_reset_performed (void *user_data,
     const uint16_t * streams, size_t len)
 {
+  GstSctpAssociation *assoc = user_data;
   GST_ERROR_OBJECT (assoc, "!");
   (void) user_data;
   (void) streams;
@@ -506,6 +508,7 @@ static void
 gst_sctp_association_on_incoming_streams_reset (void *user_data,
     const uint16_t * streams, size_t len)
 {
+  GstSctpAssociation *assoc = user_data;
   GST_ERROR_OBJECT (assoc, "!");
   (void) user_data;
   (void) streams;
@@ -516,6 +519,7 @@ static void
 gst_sctp_association_on_buffered_amount_low (void *user_data,
     uint16_t stream_id)
 {
+  GstSctpAssociation *assoc = user_data;
   GST_ERROR_OBJECT (assoc, "!");
   (void) user_data;
   (void) stream_id;
@@ -525,6 +529,7 @@ gst_sctp_association_on_buffered_amount_low (void *user_data,
 static void
 gst_sctp_association_on_total_buffered_amount_low (void *user_data)
 {
+  GstSctpAssociation *assoc = user_data;
   GST_ERROR_OBJECT (assoc, "!");
   (void) user_data;
 }
