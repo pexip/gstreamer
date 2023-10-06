@@ -53,18 +53,43 @@ private:
   void * timeout_;
 };
 
-class SctpSocketCallbacksHandler :  public dcsctp::DcSctpSocketCallbacks, public rtc::LogSink
+
+class GstLogSink : public rtc::LogSink
+{
+public:
+  GstLogSink(SctpSocket_LoggingFunction log_func): log_func_(log_func)
+  {
+  }
+
+  virtual ~GstLogSink () override
+  { 
+  }
+
+  virtual void OnLogMessage(const std::string& message,
+                            rtc::LoggingSeverity severity)
+  {
+   if (log_func_) {
+      log_func_(static_cast<SctpSocket_LoggingSeverity>(severity), message.c_str());
+    }
+  }
+
+  virtual void OnLogMessage(const std::string& message) override
+  {
+  }
+
+private:
+ SctpSocket_LoggingFunction log_func_; 
+};
+
+class SctpSocketCallbacksHandler :  public dcsctp::DcSctpSocketCallbacks
 {
 public:
   SctpSocketCallbacksHandler(SctpSocket_Callbacks callbacks): callbacks_(callbacks)
   {
-    rtc::LogMessage::SetLogToStderr(false);
-    rtc::LogMessage::AddLogToStream(this, rtc::LS_VERBOSE);
   }
 
   virtual ~SctpSocketCallbacksHandler () override
   {
-    rtc::LogMessage::RemoveLogToStream(this);
   }
 
   /* DcSctpSocketCallbacks */
@@ -149,19 +174,6 @@ public:
   }
 
   virtual void OnTotalBufferedAmountLow () override
-  {
-  }
-
-  /* LogSink */
-  virtual void OnLogMessage(const std::string& message,
-                            rtc::LoggingSeverity severity)
-  {
-   if (callbacks_.log_message) {
-      callbacks_.log_message(callbacks_.user_data, static_cast<SctpSocket_LoggingSeverity>(severity), message.c_str());
-    }
-  }
-
-  virtual void OnLogMessage(const std::string& message) override
   {
   }
 
@@ -335,4 +347,11 @@ sctp_socket_reset_streams (SctpSocket * socket,
 
   auto status = socket->socket_->ResetStreams(reset_streams);
   return static_cast<SctpSocket_ResetStreamStatus>(status);
+}
+
+void sctp_socket_register_logging_function (SctpSocket_LoggingFunction log_func)
+{
+  static std::shared_ptr<GstLogSink> gst_log_sink_ = std::make_shared<GstLogSink>(log_func);
+  rtc::LogMessage::SetLogToStderr(false);
+  rtc::LogMessage::AddLogToStream(gst_log_sink_.get(), rtc::LS_VERBOSE);
 }

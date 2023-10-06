@@ -162,7 +162,7 @@ typedef void (*SctpSocketTimeout_Stop) (void * user_data, void * timeout);
 typedef uint64_t (*SctpSocketTimeout_TimeMillis) (void * user_data);
 typedef uint32_t (*SctpSocket_GetRandomInt) (void * user_data, uint32_t low, uint32_t high);
 
-typedef void (*SctpSocket_LoggingFunction) (void * user_data, SctpSocket_LoggingSeverity severity, const char * msg);
+typedef void (*SctpSocket_LoggingFunction) (SctpSocket_LoggingSeverity severity, const char * msg);
 
 struct _SctpSocket_Callbacks
 {
@@ -188,8 +188,6 @@ struct _SctpSocket_Callbacks
 
   SctpSocketTimeout_TimeMillis time_millis;
   SctpSocket_GetRandomInt get_random_int;
-
-  SctpSocket_LoggingFunction log_message;
 
   void * user_data;
 };
@@ -246,6 +244,9 @@ SctpSocket_SendStatus sctp_socket_send (SctpSocket * socket, const uint8_t * dat
 // supports stream resetting. Calling this method on e.g. a closed association
 // or streams that don't support resetting will not perform any operation.
 SctpSocket_ResetStreamStatus sctp_socket_reset_streams (SctpSocket * socket, const uint16_t * streams, size_t len);
+
+
+void sctp_socket_register_logging_function (SctpSocket_LoggingFunction log_func);
 
 #ifdef __cplusplus
 }

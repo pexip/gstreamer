@@ -111,6 +111,40 @@ static gboolean
 gst_sctp_association_open_stream (GstSctpAssociation * assoc,
     guint16 stream_id);
 
+#if defined(SCTP_DEBUG) && !defined(GST_DISABLE_GST_DEBUG)
+
+static void
+gst_sctp_association_sctp_socket_log (SctpSocket_LoggingSeverity severity,
+    const char *msg)
+{
+  GstDebugLevel level;
+
+  switch (severity) {
+    case SCTP_SOCKET_VERBOSE:
+      level = GST_LEVEL_DEBUG;
+      break;
+    case SCTP_SOCKET_INFO:
+      level = GST_LEVEL_INFO;
+      break;
+    case SCTP_SOCKET_WARNING:
+      level = GST_LEVEL_WARNING;
+      break;
+    case SCTP_SOCKET_ERROR:
+      level = GST_LEVEL_ERROR;
+      break;
+    case SCTP_SOCKET_NONE:
+    default:
+      level = GST_LEVEL_NONE;
+      break;
+  }
+
+  gst_debug_log (sctplib_log_category, level, __FILE__, GST_FUNCTION,
+      __LINE__, NULL, msg, NULL);
+}
+
+#endif
+
+
 static void
 gst_sctp_association_class_init (GstSctpAssociationClass * klass)
 {
@@ -157,6 +191,12 @@ gst_sctp_association_class_init (GstSctpAssociationClass * klass)
       "sctpassociation", 0, "debug category for sctpassociation");
   GST_DEBUG_CATEGORY_INIT (sctplib_log_category,
       "sctplib", 0, "debug category for messages from dcSCTP");
+
+#if defined(SCTP_DEBUG) && !defined(GST_DISABLE_GST_DEBUG)
+  sctp_socket_register_logging_function (gst_sctp_association_sctp_socket_log);
+#else
+  sctp_socket_register_logging_function (NULL);
+#endif
 }
 
 static void
@@ -731,40 +771,6 @@ gst_sctp_association_get_random_int (void *user_data, uint32_t low,
       MAX ((int32_t) high, G_MAXINT32));
 }
 
-#if defined(SCTP_DEBUG) && !defined(GST_DISABLE_GST_DEBUG)
-
-static void
-gst_sctp_association_sctp_socket_log (void *user_data,
-    SctpSocket_LoggingSeverity severity, const char *msg)
-{
-  GstSctpAssociation *assoc = user_data;
-  GstDebugLevel level;
-
-  switch (severity) {
-    case SCTP_SOCKET_VERBOSE:
-      level = GST_LEVEL_DEBUG;
-      break;
-    case SCTP_SOCKET_INFO:
-      level = GST_LEVEL_INFO;
-      break;
-    case SCTP_SOCKET_WARNING:
-      level = GST_LEVEL_WARNING;
-      break;
-    case SCTP_SOCKET_ERROR:
-      level = GST_LEVEL_ERROR;
-      break;
-    case SCTP_SOCKET_NONE:
-    default:
-      level = GST_LEVEL_NONE;
-      break;
-  }
-
-  gst_debug_log (sctplib_log_category, level, __FILE__, GST_FUNCTION,
-      __LINE__, G_OBJECT (assoc), msg, NULL);
-}
-
-#endif
-
 typedef struct
 {
   /* common */
@@ -794,11 +800,6 @@ gst_sctp_association_connect_async (GstSctpAssociation * assoc)
 {
   g_assert (!assoc->socket);
 
-  SctpSocket_LoggingFunction log_message_func = NULL;
-#if defined(SCTP_DEBUG) && !defined(GST_DISABLE_GST_DEBUG)
-  log_message_func = gst_sctp_association_sctp_socket_log;
-#endif
-
   SctpSocket_Callbacks callbacks = {
     .send_packet = gst_sctp_association_send_packet,
     .on_message_received = gst_sctp_association_on_message_received,
@@ -820,7 +821,6 @@ gst_sctp_association_connect_async (GstSctpAssociation * assoc)
     .timeout_stop = gst_sctp_association_timeout_stop,
     .time_millis = gst_sctp_association_time_millis,
     .get_random_int = gst_sctp_association_get_random_int,
-    .log_message = log_message_func,
     .user_data = assoc
   };
 
