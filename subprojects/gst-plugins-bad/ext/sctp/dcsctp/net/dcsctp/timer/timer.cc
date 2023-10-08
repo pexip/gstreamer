@@ -48,6 +48,7 @@ DurationMs GetBackoffDuration(const TimerOptions& options,
       return DurationMs(std::min(duration_ms, *Timer::kMaxTimerDuration));
     }
   }
+  return base_duration;
 }
 }  // namespace
 

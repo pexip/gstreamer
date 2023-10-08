@@ -358,6 +358,7 @@ absl::string_view DataTracker::ToString(AckState ack_state) {
     case AckState::kImmediate:
       return "IMMEDIATE";
   }
+  return "Unknown";
 }
 
 HandoverReadinessStatus DataTracker::GetHandoverReadiness() const {

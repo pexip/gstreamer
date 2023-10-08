@@ -25,6 +25,7 @@
 // http://stackoverflow.com/questions/227897/solve-the-memory-alignment-in-c-interview-question-that-stumped-me
 namespace webrtc {
 
+static
 uintptr_t GetRightAlign(uintptr_t start_pos, size_t alignment) {
   // The pointer should be aligned with `alignment` bytes. The - 1 guarantees
   // that it is aligned towards the closest higher (right) address.
@@ -32,7 +33,7 @@ uintptr_t GetRightAlign(uintptr_t start_pos, size_t alignment) {
 }
 
 // Alignment must be an integer power of two.
-bool ValidAlignment(size_t alignment) {
+static bool ValidAlignment(size_t alignment) {
   if (!alignment) {
     return false;
   }

@@ -218,14 +218,12 @@ gst_sctp_association_factory_release (GstSctpAssociation * assoc)
       (GSourceFunc) gst_sctp_association_factory_unref_in_main_loop, assoc,
       NULL);
 
-  guint source_id = g_source_attach (source, main_context);
+  g_source_attach (source, main_context);
   g_source_unref (source);
 
-  while (!unref_called) {
+  while (!unref_called)
     g_cond_wait (&unref_cond, &unref_mutex);
-  }
   g_mutex_unlock (&unref_mutex);
-
 
   if (g_hash_table_size (associations_by_id) == 0)
     gst_sctp_association_factory_deinit ();

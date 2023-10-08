@@ -106,7 +106,10 @@ dcsctp_sources = [
 dcsctp_linkargs = []
 dcsctp_cargs = []
 dcsctp_cppargs = [
-  '-std=c++17'
+  '-std=c++17',
+  '-Wall',
+  '-Werror',
+  '-Wno-comment',
 ]
 
 if host_system == 'windows'

@@ -237,6 +237,7 @@ bool DcSctpSocket::IsConsistent() const {
       return (tcb_ != nullptr && !t1_init_->is_running() &&
               !t1_cookie_->is_running() && t2_shutdown_->is_running());
   }
+  return false;
 }
 
 constexpr absl::string_view DcSctpSocket::ToString(DcSctpSocket::State state) {
@@ -258,6 +259,7 @@ constexpr absl::string_view DcSctpSocket::ToString(DcSctpSocket::State state) {
     case DcSctpSocket::State::kShutdownAckSent:
       return "SHUTDOWN_ACK_SENT";
   }
+  return "Unknown";
 }
 
 void DcSctpSocket::SetState(State state, absl::string_view reason) {
@@ -554,6 +556,7 @@ SocketState DcSctpSocket::state() const {
     case State::kShutdownAckSent:
       return SocketState::kShuttingDown;
   }
+  return SocketState::kClosed;
 }
 
 void DcSctpSocket::SetMaxMessageSize(size_t max_message_size) {

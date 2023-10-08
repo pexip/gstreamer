@@ -12,12 +12,13 @@ sctp_sources = [
   'gstsctpplugin.c'
 ]
 
-sctp_platform_deps = []
+sctp_args = [
+  '-Wall',
+  '-Werror',
+]
 
 if not gst_debug_disabled
-  sctp_args = ['-DSCTP_DEBUG']
-else
-  sctp_args = []
+  sctp_args += ['-DSCTP_DEBUG']
 endif
 
 gstsctp = library('gstsctp',

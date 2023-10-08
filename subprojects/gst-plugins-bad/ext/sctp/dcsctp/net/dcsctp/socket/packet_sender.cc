@@ -44,5 +44,7 @@ bool PacketSender::Send(SctpPacket::Builder& builder) {
       return false;
     }
   }
+
+  return false;
 }
 }  // namespace dcsctp
