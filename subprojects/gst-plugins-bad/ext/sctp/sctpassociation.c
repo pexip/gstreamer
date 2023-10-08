@@ -475,11 +475,6 @@ gst_sctp_association_handle_error (GstSctpAssociation * assoc,
     force_close_async (assoc);
     return;
   }
-
-  g_rec_mutex_lock (&assoc->association_mutex);
-  gst_sctp_association_change_state_unlocked (assoc,
-      GST_SCTP_ASSOCIATION_STATE_ERROR);
-  g_rec_mutex_unlock (&assoc->association_mutex);
 }
 
 static void
@@ -515,8 +510,6 @@ static void
 gst_sctp_association_on_closed (void *user_data)
 {
   GstSctpAssociation *assoc = user_data;
-
-  GST_ERROR_OBJECT (assoc, "!");
 
   g_rec_mutex_lock (&assoc->association_mutex);
   gst_sctp_association_change_state_unlocked (assoc,
@@ -927,12 +920,14 @@ gst_sctp_association_send_data_async (GstSctpAssociationAsyncContext * ctx)
   int32_t *lifetime = NULL;
   size_t *max_retransmissions = NULL;
 
-  if (ctx->pr == GST_SCTP_ASSOCIATION_PARTIAL_RELIABILITY_TTL) {
-    *lifetime = ctx->reliability_param;
-  } else if (ctx->pr == GST_SCTP_ASSOCIATION_PARTIAL_RELIABILITY_RTX) {
-    *max_retransmissions = ctx->reliability_param;
-  } else if (ctx->pr != GST_SCTP_ASSOCIATION_PARTIAL_RELIABILITY_NONE) {
-    GST_DEBUG_OBJECT (assoc, "Ignoring reliability parameter %d", ctx->pr);
+  if (!assoc->use_sock_stream) {
+    if (ctx->pr == GST_SCTP_ASSOCIATION_PARTIAL_RELIABILITY_TTL) {
+      *lifetime = ctx->reliability_param;
+    } else if (ctx->pr == GST_SCTP_ASSOCIATION_PARTIAL_RELIABILITY_RTX) {
+      *max_retransmissions = ctx->reliability_param;
+    } else if (ctx->pr != GST_SCTP_ASSOCIATION_PARTIAL_RELIABILITY_NONE) {
+      GST_DEBUG_OBJECT (assoc, "Ignoring reliability parameter %d", ctx->pr);
+    }
   }
 
   SctpSocket_SendStatus send_status =
@@ -946,9 +941,6 @@ gst_sctp_association_send_data_async (GstSctpAssociationAsyncContext * ctx)
         "Error sending buffer:%p of %" G_GSIZE_FORMAT " bytes, status: %s",
         ctx->data, ctx->len, send_status_to_string (send_status));
   }
-  // TODO: wait for the result in send_data?
-  // if (send_status != SCTP_SOCKET_STATUS_SUCCESS)
-  //   return GST_FLOW_ERROR;
 
   return gst_sctp_association_async_return (assoc);
 }
@@ -1133,7 +1125,11 @@ gst_sctp_association_reset_stream_unlocked (GstSctpAssociation * assoc,
 {
   GstSctpStreamState *state = g_hash_table_lookup (assoc->stream_id_to_state,
       GUINT_TO_POINTER (stream_id));
-  g_assert (state);
+  if (!state) {
+    GST_WARNING_OBJECT (assoc, "Couldn't reset stream %u, not present",
+        stream_id);
+    return;
+  }
 
   state->closure_initiated = TRUE;
 
