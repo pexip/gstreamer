@@ -1,3 +1,29 @@
+/*
+ * Copyright (c) 2023, Pexip AS
+ *  @author: Tulio Beloqui <tulio@pexip.com>
+ *
+ * Redistribution and use in source and binary forms, with or without modification,
+ * are permitted provided that the following conditions are met:
+ *
+ * 1. Redistributions of source code must retain the above copyright notice, this
+ * list of conditions and the following disclaimer.
+ *
+ * 2. Redistributions in binary form must reproduce the above copyright notice, this
+ * list of conditions and the following disclaimer in the documentation and/or other
+ * materials provided with the distribution.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
+ * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+ * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
+ * IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT,
+ * INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT
+ * NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+ * PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY,
+ * WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+ * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY
+ * OF SUCH DAMAGE.
+ */
+
 #include "sctpsocket.h"
 
 #include <memory>
@@ -39,7 +65,6 @@ public:
 
   virtual void Start(dcsctp::DurationMs duration, dcsctp::TimeoutID timeout_id) override
   {
-    // std::cout << " TIMEOUT_ID " << timeout_id.value()  << "    " << timeout_id << std::endl;
     callbacks_.timeout_start (callbacks_.user_data, timeout_, duration.value(), timeout_id.value());
   }
 
@@ -292,12 +317,6 @@ sctp_socket_send (SctpSocket * socket, const uint8_t * data, size_t len,
 
   auto max_message_size = socket->socket_->options().max_message_size;
   if (max_message_size > 0 && len > max_message_size) {
-    // RTC_LOG(LS_WARNING) << debug_name_
-    //                     << "->SendData(...): "
-    //                        "Trying to send packet bigger "
-    //                        "than the max message size: "
-    //                     << payload.size() << " vs max of " << max_message_size;
-    // return RTCError(RTCErrorType::INVALID_RANGE);
     return SCTP_SOCKET_STATUS_MESSAGE_TOO_LARGE;
   }
 
