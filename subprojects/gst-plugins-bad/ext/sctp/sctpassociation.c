@@ -522,19 +522,8 @@ gst_sctp_association_on_closed (void *user_data)
 static void
 gst_sctp_association_notify_restart (GstSctpAssociation * assoc)
 {
-  GstSctpAssociationRestartCb restart_cb;
-  gpointer user_data;
-
-  restart_cb = assoc->decoder_ctx.restart_cb;
-  user_data = assoc->decoder_ctx.element;
-  if (user_data)
-    gst_object_ref (user_data);
-
-  if (restart_cb)
-    restart_cb (assoc, user_data);
-
-  if (user_data)
-    gst_object_unref (user_data);
+  if (assoc->decoder_ctx.restart_cb)
+    assoc->decoder_ctx.restart_cb (assoc, assoc->decoder_ctx.element);
 }
 
 static void
@@ -562,19 +551,9 @@ static void
 gst_sctp_association_notify_stream_reset (GstSctpAssociation * assoc,
     guint16 stream_id)
 {
-  GstSctpAssociationStreamResetCb stream_reset_cb;
-  gpointer user_data;
-
-  stream_reset_cb = assoc->decoder_ctx.stream_reset_cb;
-  user_data = assoc->decoder_ctx.element;
-  if (user_data)
-    gst_object_ref (user_data);
-
-  if (stream_reset_cb)
-    stream_reset_cb (assoc, stream_id, user_data);
-
-  if (user_data)
-    gst_object_unref (user_data);
+  if (assoc->decoder_ctx.stream_reset_cb)
+    assoc->decoder_ctx.stream_reset_cb (assoc, stream_id,
+        assoc->decoder_ctx.element);
 }
 
 static void
