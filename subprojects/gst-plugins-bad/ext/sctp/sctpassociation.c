@@ -361,8 +361,6 @@ gst_sctp_association_async_return (GstSctpAssociation * assoc)
   GST_LOG_OBJECT (assoc, "de-registering source_id: %u", source_id);
 
   g_rec_mutex_lock (&assoc->association_mutex);
-  // g_assert (g_hash_table_remove (assoc->pending_source_ids,
-  //         GUINT_TO_POINTER (source_id)));
   g_hash_table_remove (assoc->pending_source_ids, GUINT_TO_POINTER (source_id));
   g_rec_mutex_unlock (&assoc->association_mutex);
 
@@ -732,7 +730,6 @@ gst_sctp_association_timeout_stop (void *user_data, void *void_timeout)
 static void *
 gst_sctp_association_timeout_create (void *user_data)
 {
-  (void) user_data;
   GstSctpTimeout *timeout = g_new0 (GstSctpTimeout, 1);
   GST_LOG ("timeout create %p", timeout);
   return timeout;
@@ -743,9 +740,6 @@ gst_sctp_association_timeout_delete (void *user_data, void *void_timeout)
 {
   GST_LOG ("deleting %p", void_timeout);
   GstSctpTimeout *timeout = void_timeout;
-
-  /* demand the timeouts have been either handled or stopped */
-  // g_assert (timeout->timeout_id == 0);
   g_free (timeout);
 }
 
