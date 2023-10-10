@@ -569,6 +569,7 @@ gst_sctp_association_handle_stream_reset (GstSctpAssociation * assoc,
   GST_SCTP_ASSOC_MUTEX_LOCK (assoc);
   for (size_t i = 0; i < len; i++) {
     uint16_t stream_id = streams[i];
+    gboolean notify_reset = FALSE;
 
     GstSctpStreamState *state = g_hash_table_lookup (assoc->stream_id_to_state,
         GUINT_TO_POINTER (stream_id));
@@ -582,22 +583,25 @@ gst_sctp_association_handle_stream_reset (GstSctpAssociation * assoc,
 
     if (incoming_reset) {
       state->incoming_reset_done = TRUE;
+      notify_reset = state->outgoing_reset_done;
 
       if (!state->closure_initiated) {
         // When receiving an incoming stream reset event for a non local close
         // procedure, the association needs to reset the stream in the other
         // direction too.
         gst_sctp_association_reset_stream_unlocked (assoc, stream_id);
-        gst_sctp_association_notify_stream_reset (assoc, stream_id);
       }
+
     } else {
       state->outgoing_reset_done = TRUE;
+      notify_reset = state->incoming_reset_done;
     }
 
-    if (state->incoming_reset_done) {
-      gst_sctp_association_notify_stream_reset (assoc, stream_id);
+    if (notify_reset) {
       g_hash_table_remove (assoc->stream_id_to_state,
           GUINT_TO_POINTER (stream_id));
+
+      gst_sctp_association_notify_stream_reset (assoc, stream_id);
     }
   }
   GST_SCTP_ASSOC_MUTEX_UNLOCK (assoc);

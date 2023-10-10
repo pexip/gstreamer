@@ -487,7 +487,7 @@ gst_sctp_data_srcpad_loop (GstPad * pad)
     GstFlowReturn flow_ret;
 
     buffer = GST_BUFFER (item->object);
-    GST_DEBUG_OBJECT (pad, "Forwarding buffer %" GST_PTR_FORMAT, buffer);
+    GST_DEBUG_OBJECT (pad, "Forwarding %" GST_PTR_FORMAT, buffer);
 
     flow_ret = gst_pad_push (pad, buffer);
     item->object = NULL;
@@ -533,7 +533,8 @@ configure_association (GstSctpDec * self)
   GstSctpAssociationDecoderCtx ctx;
 
   GST_SCTP_DEC_ASSOC_MUTEX_LOCK (self);
-  self->sctp_association = gst_sctp_association_factory_get (self->sctp_association_id);
+  self->sctp_association =
+      gst_sctp_association_factory_get (self->sctp_association_id);
   g_object_get (self->sctp_association, "state", &state, NULL);
 
   if (state != GST_SCTP_ASSOCIATION_STATE_NEW) {
