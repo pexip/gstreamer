@@ -816,40 +816,18 @@ gst_sctp_association_connect_async (GstSctpAssociation * assoc)
   opts.remote_port = assoc->remote_port;
   opts.max_message_size = 256 * 1024;
 
-  (void) aggressive_heartbeat;
-
   // When there is packet loss for a long time, the SCTP retry timers will use
   // exponential backoff, which can grow to very long durations and when the
   // connection recovers, it may take a long time to reach the new backoff
   // duration. By limiting it to a reasonable limit, the time to recover reduces.
   opts.max_timer_backoff_duration_ms = 3 * 1000;
-  // opts.max_timer_backoff_duration_ms = 100;
-  // opts.max_timer_backoff_duration_ms = 30 * 1000;
-  // opts.max_timer_backoff_duration_ms =  30 * 1000;
-  // opts.max_timer_backoff_duration_ms = 1 * 1000;
-  // opts.max_timer_backoff_duration_ms = -1;
-  opts.heartbeat_interval_ms = aggressive_heartbeat ? 1 * 1000 : 3 * 1000;
-  // opts.heartbeat_interval_ms = 1 * 1000;
-  // opts.heartbeat_interval_ms = 0;
+  opts.heartbeat_interval_ms = aggressive_heartbeat ? 1 * 1000 : 30 * 1000;
 
-  opts.max_retransmissions = 3;
-  opts.max_init_retransmits = 3;
-
-  // opts.max_retransmissions = 10000;
-  // opts.max_init_retransmits = 8000;
-
-  // if (aggressive_heartbeat) {
-  //   opts.max_retransmissions = 100;
-  //   opts.max_init_retransmits = 80;
-  // } else {
-  // opts.max_retransmissions = -1;
-  // opts.max_init_retransmits = -1;
-  // }
+  opts.max_retransmissions = 5;
+  opts.max_init_retransmits = 8;
 
   assoc->socket = sctp_socket_new (&opts, &callbacks);
   sctp_socket_connect (assoc->socket);
-
-  GST_INFO ("connecting..!");
 
   return gst_sctp_association_async_return (assoc);
 }

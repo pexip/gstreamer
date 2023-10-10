@@ -248,9 +248,6 @@ sctp_socket_new (SctpSocket_Options * opts, SctpSocket_Callbacks * callbacks)
     options.max_init_retransmits = absl::nullopt;
   }
 
-  // std::cout << std::endl <<  "max_timer_backoff_duration: " << (int32_t)*options.max_timer_backoff_duration  << " max_retransmissions: " << *options.max_retransmissions << " max_init_retransmits: " << *options.max_init_retransmits << " local_port: " << options.local_port  << " remote_port: " << options.remote_port << " max_message_size: " << options.max_message_size << std::endl << std::endl;
-  // std::cout << std::endl <<  "max_timer_backoff_duration: " << (int32_t)opts->max_timer_backoff_duration_ms << " max_retransmissions: " << opts->max_retransmissions << " max_init_retransmits: " << opts->max_init_retransmits << " local_port: " << opts->local_port  << " remote_port: " << opts->remote_port << " max_message_size: " << opts->max_message_size << std::endl << std::endl;
-
   std::unique_ptr < dcsctp::PacketObserver > packet_observer;
   std::shared_ptr<SctpSocketCallbacksHandler> callbacksHandler = std::make_shared<SctpSocketCallbacksHandler>(*callbacks);
 
