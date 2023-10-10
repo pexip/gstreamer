@@ -161,8 +161,8 @@ typedef struct
   int32_t max_timer_backoff_duration_ms;
   int32_t heartbeat_interval_ms;
 
-  int * max_retransmissions;
-  int * max_init_retransmits;
+  int max_retransmissions;
+  int max_init_retransmits;
 
 } SctpSocket_Options;
 

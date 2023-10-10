@@ -134,7 +134,7 @@ public:
   virtual dcsctp::TimeMs TimeMillis () override
   {
     uint32_t timems = callbacks_.time_millis (callbacks_.user_data);
-    return static_cast<dcsctp::TimeMs>(timems);
+    return dcsctp::TimeMs(timems);
   }
 
   virtual uint32_t GetRandomInt (uint32_t low, uint32_t high) override
@@ -230,11 +230,26 @@ sctp_socket_new (SctpSocket_Options * opts, SctpSocket_Callbacks * callbacks)
   options.remote_port = opts->remote_port;
   options.max_message_size = opts->max_message_size;
 
-  options.max_timer_backoff_duration = dcsctp::DurationMs(opts->max_timer_backoff_duration_ms);
-  options.max_retransmissions = opts->max_retransmissions ?
-    absl::make_optional(*opts->max_retransmissions) : absl::nullopt;
-  options.max_init_retransmits = opts->max_init_retransmits ?
-    absl::make_optional(*opts->max_init_retransmits) : absl::nullopt;
+  if (opts->max_timer_backoff_duration_ms != -1) {
+    options.max_timer_backoff_duration = absl::make_optional(dcsctp::DurationMs(opts->max_timer_backoff_duration_ms));
+  } else {
+    options.max_timer_backoff_duration = absl::nullopt;
+  }
+
+  if (opts->max_retransmissions != -1) {
+    options.max_retransmissions = absl::make_optional(opts->max_retransmissions);
+  } else {
+    options.max_retransmissions = absl::nullopt;
+  }
+
+  if (opts->max_init_retransmits != -1) {
+    options.max_init_retransmits = absl::make_optional(opts->max_init_retransmits);
+  } else {
+    options.max_init_retransmits = absl::nullopt;
+  }
+
+  // std::cout << std::endl <<  "max_timer_backoff_duration: " << (int32_t)*options.max_timer_backoff_duration  << " max_retransmissions: " << *options.max_retransmissions << " max_init_retransmits: " << *options.max_init_retransmits << " local_port: " << options.local_port  << " remote_port: " << options.remote_port << " max_message_size: " << options.max_message_size << std::endl << std::endl;
+  // std::cout << std::endl <<  "max_timer_backoff_duration: " << (int32_t)opts->max_timer_backoff_duration_ms << " max_retransmissions: " << opts->max_retransmissions << " max_init_retransmits: " << opts->max_init_retransmits << " local_port: " << opts->local_port  << " remote_port: " << opts->remote_port << " max_message_size: " << opts->max_message_size << std::endl << std::endl;
 
   std::unique_ptr < dcsctp::PacketObserver > packet_observer;
   std::shared_ptr<SctpSocketCallbacksHandler> callbacksHandler = std::make_shared<SctpSocketCallbacksHandler>(*callbacks);

@@ -343,8 +343,7 @@ gst_sctp_association_cancel_pending_async (GstSctpAssociation * assoc)
   g_hash_table_iter_init (&iter, assoc->pending_source_ids);
   while (g_hash_table_iter_next (&iter, &key, NULL)) {
     guint source_id = GPOINTER_TO_UINT (key);
-    GST_LOG_OBJECT (assoc, "canceling source_id: %" G_GUINT32_FORMAT,
-        source_id);
+    GST_LOG_OBJECT (assoc, "source_id=%" G_GUINT32_FORMAT, source_id);
     GSource *source = g_main_context_find_source_by_id (assoc->main_context,
         source_id);
     if (source)
@@ -361,9 +360,11 @@ gst_sctp_association_async_return (GstSctpAssociation * assoc)
   (void) assoc;
   GSource *source = g_main_current_source ();
   g_assert (source);
+  g_assert (assoc->main_context == g_source_get_context (source));
+
   guint source_id = g_source_get_id (source);
 
-  GST_LOG_OBJECT (assoc, "de-registering source_id: %u", source_id);
+  GST_LOG_OBJECT (assoc, "source_id=%u", source_id);
 
   GST_SCTP_ASSOC_MUTEX_LOCK (assoc);
   g_hash_table_remove (assoc->pending_source_ids, GUINT_TO_POINTER (source_id));
@@ -377,14 +378,13 @@ static guint
 gst_sctp_association_call_async (GstSctpAssociation * assoc, guint timeout_ms,
     GSourceFunc func, gpointer data, GDestroyNotify notify)
 {
-  GSource *source = timeout_ms != 0 ?
-      g_idle_source_new () : g_timeout_source_new (timeout_ms);
+  GSource *source = g_timeout_source_new (timeout_ms);
   g_source_set_callback (source, func, data != NULL ? data : assoc, notify);
 
   /* attach the source */
   guint source_id = g_source_attach (source, assoc->main_context);
 
-  GST_LOG_OBJECT (assoc, "registering source_id: %u", source_id);
+  GST_LOG_OBJECT (assoc, "source_id=%u", source_id);
 
   /* register it, so we can cancel it later */
   g_assert (g_hash_table_insert (assoc->pending_source_ids,
@@ -425,7 +425,7 @@ gst_sctp_association_on_message_received (void *user_data,
 
   if (!gst_sctp_association_open_stream (assoc, stream_id)) {
     GST_INFO_OBJECT (assoc,
-        "Skipping receiving data on invalid state with stream id:%u",
+        "Skipping receiving data on invalid state with stream id=%u",
         stream_id);
     GST_SCTP_ASSOC_MUTEX_UNLOCK (assoc);
     return;
@@ -473,7 +473,8 @@ gst_sctp_association_handle_error (GstSctpAssociation * assoc,
       sctp_socket_error_to_string (error), message);
   g_assert (error != SCTP_SOCKET_SUCCESS);
 
-  if (error == SCTP_SOCKET_ERROR_TOO_MANY_RETRIES) {
+  if (error == SCTP_SOCKET_ERROR_TOO_MANY_RETRIES
+      || error == SCTP_SOCKET_ERROR_PEER_REPORTED) {
     GST_DEBUG_OBJECT (assoc, "Too many retries! disconnecting...");
     force_close_async (assoc);
     return;
@@ -647,19 +648,19 @@ typedef struct
 } GstSctpTimeout;
 
 static gboolean
-gst_sctp_timeout_handle_async (GstSctpTimeout * timeout)
+gst_sctp_association_timeout_handle_async (GstSctpTimeout * timeout)
 {
   GstSctpAssociation *assoc = timeout->assoc;
   g_assert (assoc);
 
   if (assoc->socket) {
     GST_LOG_OBJECT (assoc,
-        "handle timeout timeout_handle %p %" G_GUINT64_FORMAT, timeout,
+        "timeout=%p  timeout_id=%" G_GUINT64_FORMAT, timeout,
         timeout->timeout_id);
 
     sctp_socket_handle_timeout (assoc->socket, timeout->timeout_id);
   } else {
-    GST_INFO_OBJECT (assoc, "Couldn't handle timeout: %" G_GUINT64_FORMAT,
+    GST_INFO_OBJECT (assoc, "Couldn't handle timeout=%" G_GUINT64_FORMAT,
         timeout->timeout_id);
   }
 
@@ -676,16 +677,20 @@ gst_sctp_association_timeout_start (void *user_data, void *void_timeout,
   timeout->assoc = assoc;
   timeout->timeout_id = timeout_id;
 
+  g_assert (milliseconds > 0);
+
   GST_SCTP_ASSOC_MUTEX_LOCK (assoc);
-  guint id = gst_sctp_association_call_async (assoc, milliseconds,
-      (GSourceFunc) gst_sctp_timeout_handle_async,
+  guint id = gst_sctp_association_call_async (assoc, (guint) milliseconds,
+      (GSourceFunc) gst_sctp_association_timeout_handle_async,
       timeout, NULL);
   GST_SCTP_ASSOC_MUTEX_UNLOCK (assoc);
 
   timeout->source_id = id;
 
-  GST_LOG ("timeout start timeout=%p %d timeout_id=%" G_GUINT64_FORMAT
-      " source_id=%" G_GUINT32_FORMAT, timeout, milliseconds, timeout_id, id);
+  GST_LOG_OBJECT (assoc,
+      "timeout=%p %" GST_TIME_FORMAT " (%d) timeout_id=%" G_GUINT64_FORMAT
+      " source_id=%" G_GUINT32_FORMAT, timeout,
+      GST_TIME_ARGS (GST_MSECOND * milliseconds), milliseconds, timeout_id, id);
 }
 
 static void
@@ -694,9 +699,9 @@ gst_sctp_association_timeout_stop (void *user_data, void *void_timeout)
   GstSctpTimeout *timeout = void_timeout;
   GstSctpAssociation *assoc = user_data;
 
-  GST_LOG ("timeout stop timeout=%p timeout_id=%" G_GUINT64_FORMAT
-      " source_id=%" G_GUINT32_FORMAT, timeout, timeout->timeout_id,
-      timeout->source_id);
+  GST_LOG_OBJECT (assoc,
+      "timeout=%p timeout_id=%" G_GUINT64_FORMAT " source_id=%"
+      G_GUINT32_FORMAT, timeout, timeout->timeout_id, timeout->source_id);
 
   GSource *source = g_main_context_find_source_by_id (assoc->main_context,
       timeout->source_id);
@@ -715,14 +720,14 @@ static void *
 gst_sctp_association_timeout_create (void *user_data)
 {
   GstSctpTimeout *timeout = g_new0 (GstSctpTimeout, 1);
-  GST_LOG ("timeout create %p", timeout);
+  GST_LOG ("timeout=%p", timeout);
   return timeout;
 }
 
 static void
 gst_sctp_association_timeout_delete (void *user_data, void *void_timeout)
 {
-  GST_LOG ("deleting %p", void_timeout);
+  GST_LOG ("timeout=%p", void_timeout);
   GstSctpTimeout *timeout = void_timeout;
   g_free (timeout);
 }
@@ -803,9 +808,6 @@ gst_sctp_association_connect_async (GstSctpAssociation * assoc)
       GST_SCTP_ASSOCIATION_STATE_CONNECTING);
   GST_SCTP_ASSOC_MUTEX_UNLOCK (assoc);
 
-  // for aggresive-heartbeat only
-  int max_retransmissions = 100;
-  int max_init_retransmits = 100;
 
   SctpSocket_Options opts;
   memset (&opts, 0, sizeof (SctpSocket_Options));
@@ -814,23 +816,40 @@ gst_sctp_association_connect_async (GstSctpAssociation * assoc)
   opts.remote_port = assoc->remote_port;
   opts.max_message_size = 256 * 1024;
 
+  (void) aggressive_heartbeat;
+
   // When there is packet loss for a long time, the SCTP retry timers will use
   // exponential backoff, which can grow to very long durations and when the
   // connection recovers, it may take a long time to reach the new backoff
   // duration. By limiting it to a reasonable limit, the time to recover reduces.
-  opts.max_timer_backoff_duration_ms = 3000;
-  opts.heartbeat_interval_ms = aggressive_heartbeat ? 3000 : 30000;
+  opts.max_timer_backoff_duration_ms = 3 * 1000;
+  // opts.max_timer_backoff_duration_ms = 100;
+  // opts.max_timer_backoff_duration_ms = 30 * 1000;
+  // opts.max_timer_backoff_duration_ms =  30 * 1000;
+  // opts.max_timer_backoff_duration_ms = 1 * 1000;
+  // opts.max_timer_backoff_duration_ms = -1;
+  opts.heartbeat_interval_ms = aggressive_heartbeat ? 1 * 1000 : 3 * 1000;
+  // opts.heartbeat_interval_ms = 1 * 1000;
+  // opts.heartbeat_interval_ms = 0;
 
-  if (aggressive_heartbeat) {
-    opts.max_retransmissions = &max_retransmissions;
-    opts.max_init_retransmits = &max_init_retransmits;
-  } else {
-    opts.max_retransmissions = NULL;
-    opts.max_init_retransmits = NULL;
-  }
+  opts.max_retransmissions = 3;
+  opts.max_init_retransmits = 3;
+
+  // opts.max_retransmissions = 10000;
+  // opts.max_init_retransmits = 8000;
+
+  // if (aggressive_heartbeat) {
+  //   opts.max_retransmissions = 100;
+  //   opts.max_init_retransmits = 80;
+  // } else {
+  // opts.max_retransmissions = -1;
+  // opts.max_init_retransmits = -1;
+  // }
 
   assoc->socket = sctp_socket_new (&opts, &callbacks);
   sctp_socket_connect (assoc->socket);
+
+  GST_INFO ("connecting..!");
 
   return gst_sctp_association_async_return (assoc);
 }
@@ -912,7 +931,7 @@ gst_sctp_association_send_data_async (GstSctpAssociationAsyncContext * ctx)
       sctp_socket_send (assoc->socket, ctx->data, ctx->len, ctx->stream_id,
       ctx->ppid, !ctx->ordered,
       lifetime, max_retransmissions);
-  GST_LOG_OBJECT (assoc, "send_status: %d", send_status);
+  GST_LOG_OBJECT (assoc, "send_status=%d", send_status);
 
   if (send_status != SCTP_SOCKET_STATUS_SUCCESS) {
     GST_ERROR_OBJECT (assoc,
@@ -931,10 +950,11 @@ force_close_async (GstSctpAssociation * assoc)
       GST_SCTP_ASSOCIATION_STATE_DISCONNECTING);
   GST_SCTP_ASSOC_MUTEX_UNLOCK (assoc);
 
-  g_assert (assoc->socket);
-  sctp_socket_close (assoc->socket);
-  sctp_socket_free (assoc->socket);
-  assoc->socket = NULL;
+  if (assoc->socket) {
+    sctp_socket_close (assoc->socket);
+    sctp_socket_free (assoc->socket);
+    assoc->socket = NULL;
+  }
 
   GST_SCTP_ASSOC_MUTEX_LOCK (assoc);
   gst_sctp_association_change_state_unlocked (assoc,
