@@ -821,10 +821,11 @@ gst_sctp_association_connect_async (GstSctpAssociation * assoc)
   // connection recovers, it may take a long time to reach the new backoff
   // duration. By limiting it to a reasonable limit, the time to recover reduces.
   opts.max_timer_backoff_duration_ms = 3 * 1000;
-  opts.heartbeat_interval_ms = aggressive_heartbeat ? 1 * 1000 : 30 * 1000;
+  opts.heartbeat_interval_ms = aggressive_heartbeat ? 1 * 1000 : 3 * 1000;
 
-  opts.max_retransmissions = 5;
-  opts.max_init_retransmits = 8;
+  // keep the max rtx low so we can detect if the connection is broken  
+  opts.max_retransmissions = 3;
+  opts.max_init_retransmits = -1;
 
   assoc->socket = sctp_socket_new (&opts, &callbacks);
   sctp_socket_connect (assoc->socket);

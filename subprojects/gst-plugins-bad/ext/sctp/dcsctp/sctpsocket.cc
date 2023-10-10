@@ -236,6 +236,10 @@ sctp_socket_new (SctpSocket_Options * opts, SctpSocket_Callbacks * callbacks)
     options.max_timer_backoff_duration = absl::nullopt;
   }
 
+  if (opts->heartbeat_interval_ms != -1) {
+    options.heartbeat_interval = dcsctp::DurationMs(opts->heartbeat_interval_ms);
+  }
+
   if (opts->max_retransmissions != -1) {
     options.max_retransmissions = absl::make_optional(opts->max_retransmissions);
   } else {
