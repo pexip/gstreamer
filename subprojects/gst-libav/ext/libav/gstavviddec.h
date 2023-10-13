@@ -93,6 +93,9 @@ struct _GstFFMpegVidDec
   gint pool_height;
   enum AVPixelFormat pool_format;
   GstVideoInfo pool_info;
+
+  gboolean requiring_keyframe;
+  gboolean require_keyframe;
 };
 
 typedef struct _GstFFMpegVidDecClass GstFFMpegVidDecClass;
