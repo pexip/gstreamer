@@ -95,6 +95,8 @@ struct _GstFFMpegVidDec
   GstVideoInfo pool_info;
 
   gboolean needs_renegotation;
+  gboolean requiring_keyframe;
+  gboolean require_keyframe;
 };
 
 typedef struct _GstFFMpegVidDecClass GstFFMpegVidDecClass;
