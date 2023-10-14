@@ -960,7 +960,7 @@ gst_ffmpegvidenc_start (GstVideoEncoder * encoder)
   ffmpegenc->need_reopen = FALSE;
 
   ffmpegenc->picture = av_frame_alloc ();
-  gst_video_encoder_set_min_pts (encoder, GST_SECOND * 60 * 60 * 1000);
+  gst_video_encoder_set_min_pts (encoder, 0);
 
   return TRUE;
 }
