@@ -90,7 +90,7 @@ extern "C"
      #define MFX_DEPRECATED [[deprecated]]
      #define MFX_DEPRECATED_ENUM_FIELD_INSIDE(arg) arg [[deprecated]]
      #define MFX_DEPRECATED_ENUM_FIELD_OUTSIDE(arg)
-   #elif defined(__clang__)
+   #elif defined(__clang__) || defined(__INTEL_LLVM_COMPILER)
      #define MFX_DEPRECATED __attribute__((deprecated))
      #define MFX_DEPRECATED_ENUM_FIELD_INSIDE(arg) arg __attribute__((deprecated))
      #define MFX_DEPRECATED_ENUM_FIELD_OUTSIDE(arg)
