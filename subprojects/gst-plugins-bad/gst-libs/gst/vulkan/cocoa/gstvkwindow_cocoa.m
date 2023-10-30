@@ -281,7 +281,7 @@ _gst_vulkan_cocoa_create_macos_surface (GstVulkanWindow *window, VkSurfaceKHR * 
   ctx.info = &info;
   ctx.window = window;
 
-  _gst_vulkan_cocoa_invoke_on_main ((GstVulkanWindowFunc) _gst_vulkan_cocoa_create_macos_surface_on_main_thread, &ctx, NULL);
+  _gst_vk_invoke_on_main ((GstVulkanWindowFunc) _gst_vulkan_cocoa_create_macos_surface_on_main_thread, &ctx, NULL);
   _gst_vulkan_cocoa_wait_for_createmacossurface (&ctx);
 
   *surface = ctx.surface;
@@ -361,7 +361,7 @@ gst_vulkan_window_cocoa_set_window_handle (GstVulkanWindow * window,
       priv->visible = FALSE;
     }
 
-    _gst_vulkan_cocoa_invoke_on_main ((GstVulkanWindowFunc) _gst_vulkan_window_cocoa_insert_internal_win,
+    _gst_vk_invoke_on_main ((GstVulkanWindowFunc) _gst_vulkan_window_cocoa_insert_internal_win,
       gst_object_ref (window), (GDestroyNotify) gst_object_unref);
 
   } else {
