@@ -148,7 +148,8 @@ static void gst_vtenc_get_property (GObject * obj, guint prop_id,
 static void gst_vtenc_set_property (GObject * obj, guint prop_id,
     const GValue * value, GParamSpec * pspec);
 static void gst_vtenc_finalize (GObject * obj);
-
+static gboolean gst_vtenc_src_activate_mode (G_GNUC_UNUSED GstPad * pad,
+    GstObject * parent, GstPadMode mode, gboolean active);
 static gboolean gst_vtenc_start (GstVideoEncoder * enc);
 static gboolean gst_vtenc_stop (GstVideoEncoder * enc);
 static void gst_vtenc_loop (GstVTEnc * self);
@@ -422,6 +423,7 @@ gst_vtenc_class_init (GstVTEncClass * klass)
 static void
 gst_vtenc_init (GstVTEnc * self)
 {
+  GstVideoEncoder *enc = GST_VIDEO_ENCODER_CAST (self);
   GstVTEncClass *klass = (GstVTEncClass *) G_OBJECT_GET_CLASS (self);
   CFStringRef keyframe_props_keys[] = { kVTEncodeFrameOptionKey_ForceKeyFrame };
   CFBooleanRef keyframe_props_values[] = { kCFBooleanTrue };
@@ -443,6 +445,10 @@ gst_vtenc_init (GstVTEnc * self)
 
   g_mutex_init (&self->queue_mutex);
   g_cond_init (&self->queue_cond);
+
+  gst_pad_set_activatemode_function (enc->srcpad,
+      GST_DEBUG_FUNCPTR (gst_vtenc_src_activate_mode));
+
 }
 
 static void
@@ -698,6 +704,19 @@ gst_vtenc_pause_output_loop (GstVTEnc * self)
   g_mutex_unlock (&self->queue_mutex);
 }
 
+static gboolean
+gst_vtenc_src_activate_mode (G_GNUC_UNUSED GstPad * pad,
+    GstObject * parent, GstPadMode mode, gboolean active)
+{
+  GstVTEnc *self = GST_VTENC_CAST (parent);
+  GST_LOG_OBJECT (self, "activate mode %d active %d", mode, active);
+
+  if (active == FALSE)
+    gst_vtenc_pause_output_loop (self);
+
+  return TRUE;
+}
+
 static void
 gst_vtenc_set_flushing_flag (GstVTEnc * self)
 {
@@ -829,6 +848,8 @@ gst_vtenc_stop (GstVideoEncoder * enc)
 
   return TRUE;
 }
+
+
 
 static gboolean
 gst_vtenc_h264_parse_profile_level_key (GstVTEnc * self, const gchar * profile,
