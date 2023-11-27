@@ -2766,6 +2766,7 @@ gst_ffmpegviddec_get_property (GObject * object,
       break;
     case PROP_STD_COMPLIANCE:
       g_value_set_enum (value, ffmpegdec->std_compliance);
+      break;
     case PROP_REQUIRE_KEYFRAME:
       g_value_set_boolean (value, ffmpegdec->require_keyframe);
       break;
