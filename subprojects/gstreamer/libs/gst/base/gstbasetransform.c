@@ -180,6 +180,9 @@ struct _GstBaseTransformPrivate
   gsize cache_caps2_size;
   gboolean have_same_caps;
 
+  GstCaps *cache_incaps;
+  GstCaps *cache_outcaps;
+
   gboolean negotiated;
 
   /* QoS *//* with LOCK */
@@ -1029,6 +1032,9 @@ gst_base_transform_configure_caps (GstBaseTransform * trans, GstCaps * in,
   gst_caps_replace (&priv->cache_caps1, NULL);
   gst_caps_replace (&priv->cache_caps2, NULL);
 
+  gst_caps_replace (&priv->cache_incaps, in);
+  gst_caps_replace (&priv->cache_outcaps, out);
+
   /* figure out same caps state */
   priv->have_same_caps = gst_caps_is_equal (in, out);
   GST_DEBUG_OBJECT (trans, "have_same_caps: %d", priv->have_same_caps);
@@ -1708,8 +1714,8 @@ default_prepare_output_buffer (GstBaseTransform * trans,
   }
 
   /* else use the transform function to get the size */
-  incaps = gst_pad_get_current_caps (trans->sinkpad);
-  outcaps = gst_pad_get_current_caps (trans->srcpad);
+  incaps = priv->cache_incaps;
+  outcaps = priv->cache_outcaps;
 
   /* srcpad might be flushing already if we're being shut down */
   if (outcaps == NULL)
@@ -1720,9 +1726,6 @@ default_prepare_output_buffer (GstBaseTransform * trans,
   insize = gst_buffer_get_size (inbuf);
   res = gst_base_transform_transform_size (trans,
       GST_PAD_SINK, incaps, insize, outcaps, &outsize);
-
-  gst_caps_unref (incaps);
-  gst_caps_unref (outcaps);
 
   if (!res)
     goto unknown_size;
@@ -2078,8 +2081,7 @@ default_submit_input_buffer (GstBaseTransform * trans, gboolean is_discont,
    * or if the class doesn't implement a set_caps function (in which case it doesn't
    * care about caps)
    */
-  if (!priv->negotiated && !priv->passthrough &&
-      (bclass->set_caps != NULL))
+  if (!priv->negotiated && !priv->passthrough && (bclass->set_caps != NULL))
     goto not_negotiated;
 
   GST_OBJECT_LOCK (trans);
@@ -2531,6 +2533,9 @@ gst_base_transform_activate (GstBaseTransform * trans, gboolean active)
     }
     gst_caps_replace (&priv->cache_caps1, NULL);
     gst_caps_replace (&priv->cache_caps2, NULL);
+
+    gst_caps_replace (&priv->cache_incaps, NULL);
+    gst_caps_replace (&priv->cache_outcaps, NULL);
 
     /* Make sure any left over buffer is freed */
     gst_buffer_replace (&trans->queued_buf, NULL);
