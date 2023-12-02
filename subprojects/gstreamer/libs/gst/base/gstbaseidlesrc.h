@@ -210,7 +210,7 @@ void            gst_base_idle_src_submit_buffer_list (GstBaseIdleSrc * src,
 
 GST_BASE_API
 GstFlowReturn   gst_base_idle_src_alloc_buffer (GstBaseIdleSrc * src,
-                                                guint size,
+                                                gsize size,
                                                 GstBuffer ** buffer);
 
 G_DEFINE_AUTOPTR_CLEANUP_FUNC(GstBaseIdleSrc, gst_object_unref)

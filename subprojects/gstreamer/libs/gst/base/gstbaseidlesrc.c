@@ -1508,7 +1508,7 @@ gst_base_idle_src_submit_buffer_list (GstBaseIdleSrc * src,
 /**
  * gst_base_idle_src_alloc_buffer:
  * @src: a #GstBaseIdleSrc
- * @size: a guint with the size of the buffer
+ * @size: a gsize with the size of the buffer
  * @buffer: (transfer full): a #GstBuffer
  *
  * Subclasses can call this to alloc a buffer.
@@ -1517,7 +1517,7 @@ gst_base_idle_src_submit_buffer_list (GstBaseIdleSrc * src,
  */
 GstFlowReturn
 gst_base_idle_src_alloc_buffer (GstBaseIdleSrc * src,
-    guint size, GstBuffer ** buffer)
+    gsize size, GstBuffer ** buffer)
 {
   GstFlowReturn ret;
   GstBaseIdleSrcPrivate *priv = src->priv;
