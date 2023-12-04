@@ -117,6 +117,9 @@ static gboolean gst_mf_source_enum_device_activate (GstMFSourceReader * self,
     GstMFSourceType source_type, GList ** device_activates);
 static void gst_mf_device_activate_free (GstMFDeviceActivate * activate);
 
+static GstFlowReturn
+gst_mf_source_reader_read_sample (GstMFSourceReader * self);
+
 #define gst_mf_source_reader_parent_class parent_class
 G_DEFINE_TYPE (GstMFSourceReader, gst_mf_source_reader,
     GST_TYPE_MF_SOURCE_OBJECT);
@@ -283,6 +286,7 @@ compare_caps_func (gconstpointer a, gconstpointer b)
 static gboolean
 gst_mf_source_reader_open (GstMFSourceReader * self, IMFActivate * activate)
 {
+  GstMFSourceObject *object = GST_MF_SOURCE_OBJECT (self);
   GList *iter;
   HRESULT hr;
   ComPtr < IMFSourceReader > reader;
@@ -331,6 +335,24 @@ gst_mf_source_reader_open (GstMFSourceReader * self, IMFActivate * activate)
 
   GST_DEBUG_OBJECT (self, "Available output caps %" GST_PTR_FORMAT,
       self->supported_caps);
+
+  /* if we have specified a device path, try to read a frame, this will return
+     an error if the device is busy.
+     Note: we only want to do this  when a specific device is specified, as
+     this code is also used for camera enumeration */
+  if (object->device_path != nullptr) {
+    if (!gst_mf_source_reader_set_caps (GST_MF_SOURCE_OBJECT (self), self->supported_caps)) {
+      gst_mf_source_reader_close (self);
+      return FALSE;
+    }
+  
+    if (gst_mf_source_reader_read_sample (self) != GST_FLOW_OK){
+      gst_mf_source_reader_close (self);
+      return FALSE;
+    }
+
+    gst_vec_deque_clear (self->queue);
+  }
 
   return TRUE;
 }
