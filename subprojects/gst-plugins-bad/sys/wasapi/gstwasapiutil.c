@@ -385,6 +385,24 @@ gst_wasapi_util_get_devices (GstMMDeviceEnumerator * self,
   if (!enum_handle)
     return FALSE;
 
+  IMMDevice *default_render_device = NULL;
+  wchar_t *default_render_id = NULL;
+  hr = IMMDeviceEnumerator_GetDefaultAudioEndpoint (enum_handle, eRender,
+      eCommunications, &default_render_device);
+  if (hr == S_OK && default_render_device != NULL) {
+    hr = IMMDevice_GetId (default_render_device, &default_render_id);
+    IUnknown_Release (default_render_device);
+  }
+
+  IMMDevice *default_capture_device = NULL;
+  wchar_t *default_capture_id = NULL;
+  hr = IMMDeviceEnumerator_GetDefaultAudioEndpoint (enum_handle, eCapture,
+      eCommunications, &default_capture_device);
+  if (hr == S_OK && default_capture_device != NULL) {
+    hr = IMMDevice_GetId (default_capture_device, &default_capture_id);
+    IUnknown_Release (default_capture_device);
+  }
+
   hr = IMMDeviceEnumerator_EnumAudioEndpoints (enum_handle, eAll, dwStateMask,
       &device_collection);
   HR_FAILED_GOTO (hr, IMMDeviceEnumerator::EnumAudioEndpoints, err);
@@ -434,6 +452,15 @@ gst_wasapi_util_get_devices (GstMMDeviceEnumerator * self,
     hr = IMMDevice_GetId (item, &wstrid);
     if (hr != S_OK)
       goto next;
+
+    gboolean is_default = FALSE;
+    if (dataflow == eRender && default_render_id && wstrid
+        && wcscmp (default_render_id, wstrid) == 0)
+      is_default = TRUE;
+    if (dataflow == eCapture && default_capture_id && wstrid
+        && wcscmp (default_capture_id, wstrid) == 0)
+      is_default = TRUE;
+
     strid = g_utf16_to_utf8 (wstrid, -1, NULL, NULL, NULL);
     CoTaskMemFree (wstrid);
 
@@ -482,7 +509,8 @@ gst_wasapi_util_get_devices (GstMMDeviceEnumerator * self,
     props = gst_structure_new ("wasapi-proplist",
         "device.api", G_TYPE_STRING, "wasapi",
         "device.strid", G_TYPE_STRING, GST_STR_NULL (strid),
-        "wasapi.device.description", G_TYPE_STRING, description, NULL);
+        "wasapi.device.description", G_TYPE_STRING, description,
+        "is-default", G_TYPE_BOOLEAN, is_default, NULL);
 
     device = g_object_new (GST_TYPE_WASAPI_DEVICE, "device", strid,
         "display-name", description, "caps", caps,
@@ -512,6 +540,10 @@ gst_wasapi_util_get_devices (GstMMDeviceEnumerator * self,
   res = TRUE;
 
 err:
+  if (default_render_id)
+    CoTaskMemFree (default_render_id);
+  if (default_capture_id)
+    CoTaskMemFree (default_capture_id);
   if (device_collection)
     IUnknown_Release (device_collection);
   return res;
