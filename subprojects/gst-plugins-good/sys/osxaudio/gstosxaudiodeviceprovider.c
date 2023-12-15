@@ -412,7 +412,7 @@ gst_osx_audio_device_new (AudioDeviceID device_id, const gchar * device_name,
       template_caps = gst_static_pad_template_get_caps (&src_factory);
       caps = gst_core_audio_probe_caps (core_audio, template_caps);
       gst_caps_unref (template_caps);
-      is_default = _audio_systeM_device_is_default_input(device_id);
+      is_default = _audio_system_device_is_default_input(device_id);
       break;
     case GST_OSX_AUDIO_DEVICE_TYPE_SINK:
       element_name = "osxaudiosink";
