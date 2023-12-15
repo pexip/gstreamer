@@ -231,6 +231,41 @@ _audio_system_get_devices (gint * ndevices)
   return devices;
 }
 
+static gboolean _audio_system_device_is_default(AudioObjectPropertySelector selector, AudioDeviceID queriedDeviceID)
+{
+  OSStatus error = noErr;
+  AudioDeviceID deviceID = 0;
+  AudioObjectPropertyAddress propertyAddress;
+  UInt32 propertySize;
+
+  //sets which property to check
+  propertyAddress.mSelector = selector;
+  propertyAddress.mScope = kAudioObjectPropertyScopeGlobal;
+  propertyAddress.mElement = 0;
+  propertySize = sizeof(AudioDeviceID);
+
+  //gets property (system output device)
+  error = AudioObjectGetPropertyData( kAudioObjectSystemObject,
+                                               &propertyAddress,
+                                               0,
+                                               NULL,
+                                               &propertySize,
+                                               &deviceID);
+  if (error)
+    return FALSE;
+  return deviceID == queriedDeviceID;
+}
+
+static gboolean _audio_system_device_is_default_input(AudioDeviceID queriedDeviceID)
+{
+  return _audio_system_device_is_default(kAudioHardwarePropertyDefaultInputDevice, queriedDeviceID);
+}
+
+static gboolean _audio_system_device_is_default_output(AudioDeviceID queriedDeviceID)
+{
+  return _audio_system_device_is_default(kAudioHardwarePropertyDefaultOutputDevice, queriedDeviceID);
+}
+
 static void
 gst_osx_audio_device_provider_probe_internal (GstOsxAudioDeviceProvider * self,
     gboolean is_src, AudioDeviceID * osx_devices, gint ndevices,
@@ -368,6 +403,7 @@ gst_osx_audio_device_new (AudioDeviceID device_id, const gchar * device_name,
   g_return_val_if_fail (device_id > 0, NULL);
   g_return_val_if_fail (device_name, NULL);
 
+  gboolean is_default = FALSE;
   switch (type) {
     case GST_OSX_AUDIO_DEVICE_TYPE_SOURCE:
       element_name = "osxaudiosrc";
@@ -376,7 +412,7 @@ gst_osx_audio_device_new (AudioDeviceID device_id, const gchar * device_name,
       template_caps = gst_static_pad_template_get_caps (&src_factory);
       caps = gst_core_audio_probe_caps (core_audio, template_caps);
       gst_caps_unref (template_caps);
-
+      is_default = _audio_systeM_device_is_default_input(device_id);
       break;
     case GST_OSX_AUDIO_DEVICE_TYPE_SINK:
       element_name = "osxaudiosink";
@@ -385,6 +421,7 @@ gst_osx_audio_device_new (AudioDeviceID device_id, const gchar * device_name,
       template_caps = gst_static_pad_template_get_caps (&sink_factory);
       caps = gst_core_audio_probe_caps (core_audio, template_caps);
       gst_caps_unref (template_caps);
+      is_default = _audio_system_device_is_default_output(device_id);
 
       break;
     default:
@@ -392,12 +429,14 @@ gst_osx_audio_device_new (AudioDeviceID device_id, const gchar * device_name,
       break;
   }
 
+  GstStructure *props = gst_structure_new ("osxaudiodevice-proplist",
+          "is-default", G_TYPE_BOOLEAN, is_default, NULL);
   gstdev = g_object_new (GST_TYPE_OSX_AUDIO_DEVICE, "device-id",
       device_id, "display-name", device_name, "caps", caps, "device-class",
-      klass, NULL);
+      klass, "properties", props, NULL);
 
   gstdev->element = element_name;
-
+  gst_structure_free (props);
 
   return gstdev;
 }
