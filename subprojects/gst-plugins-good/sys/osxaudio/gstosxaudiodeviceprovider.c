@@ -54,6 +54,14 @@ G_DEFINE_TYPE (GstOsxAudioDeviceProvider, gst_osx_audio_device_provider,
 
 static GList *gst_osx_audio_device_provider_probe (GstDeviceProvider *
     provider);
+static gboolean gst_osx_audio_device_provider_start (GstDeviceProvider * provider);
+static void gst_osx_audio_device_provider_stop (GstDeviceProvider * provider);
+static OSStatus gst_osx_audio_device_change_cb(AudioObjectID inObjectID,
+                       UInt32 inNumberAddresses,
+                       const AudioObjectPropertyAddress* inAddresses,
+                       void* inClientData);
+static void
+gst_osx_audio_device_provider_update_devices (GstOsxAudioDeviceProvider * provider);
 
 static void
 gst_osx_audio_device_provider_class_init (GstOsxAudioDeviceProviderClass *
@@ -62,6 +70,8 @@ gst_osx_audio_device_provider_class_init (GstOsxAudioDeviceProviderClass *
   GstDeviceProviderClass *dm_class = GST_DEVICE_PROVIDER_CLASS (klass);
 
   dm_class->probe = gst_osx_audio_device_provider_probe;
+  dm_class->start = gst_osx_audio_device_provider_start;
+  dm_class->stop = gst_osx_audio_device_provider_stop;
 
   gst_device_provider_class_set_static_metadata (dm_class,
       "OSX Audio Device Provider", "Source/Sink/Audio",
@@ -69,9 +79,101 @@ gst_osx_audio_device_provider_class_init (GstOsxAudioDeviceProviderClass *
       "Hyunjun Ko <zzoon@igalia.com>");
 }
 
+static OSStatus gst_osx_audio_device_change_cb(AudioObjectID inObjectID,
+                       guint32 inNumberAddresses,
+                       const AudioObjectPropertyAddress* inAddresses,
+                       void* userdata) {
+    GstOsxAudioDeviceProvider * provider = (GstOsxAudioDeviceProvider *) userdata;
+
+    for (guint32 i = 0; i < inNumberAddresses; i++) {
+        switch (inAddresses[i].mSelector) {
+            case kAudioHardwarePropertyDefaultInputDevice:
+                gst_osx_audio_device_provider_update_devices(provider);
+                break;
+            case kAudioHardwarePropertyDefaultOutputDevice:
+                gst_osx_audio_device_provider_update_devices(provider);
+                break;
+            case kAudioHardwarePropertyDevices:
+                gst_osx_audio_device_provider_update_devices(provider);
+                break;
+            default:
+                break;
+        }
+    }
+    return noErr;
+}
+
 static void
 gst_osx_audio_device_provider_init (GstOsxAudioDeviceProvider * provider)
 {
+}
+
+static gboolean
+gst_osx_audio_device_provider_start (GstDeviceProvider * provider)
+{  
+  GstOsxAudioDeviceProvider *self = GST_OSX_AUDIO_DEVICE_PROVIDER (provider);
+
+  // Register callbacks for the following AudioObjectIDs
+  AudioObjectID event_ids[] = {kAudioHardwarePropertyDevices, kAudioHardwarePropertyDefaultInputDevice, kAudioHardwarePropertyDefaultOutputDevice};
+
+  for (size_t i = 0; i < sizeof(event_ids) / sizeof(event_ids[0]); i++){
+    AudioObjectPropertyAddress deviceListAddr = {
+        .mSelector = event_ids[i],
+        .mScope = kAudioObjectPropertyScopeGlobal,
+        .mElement = kAudioObjectPropertyElementMain
+    };
+
+    OSStatus err =
+        AudioObjectAddPropertyListener(kAudioObjectSystemObject,
+                                       &deviceListAddr,
+                                       gst_osx_audio_device_change_cb,
+                                       (void *)self);
+
+    if (err != noErr) {
+        GST_ERROR("Failed to register AudioObjectAddPropertyListener(%u) %d", event_ids[i], err);
+        return FALSE;
+    }
+  }
+
+  /* baseclass will not call probe() once it's started, but we can get
+   * notification only add/remove or change case. To this manually */
+  GList *devices = gst_osx_audio_device_provider_probe(provider);
+  if (devices) {
+    GList *iter;
+    for (iter = devices; iter; iter = g_list_next (iter)) {
+      gst_device_provider_device_add (provider, GST_DEVICE (iter->data));
+    }
+    g_list_free (devices);
+  }
+
+  return TRUE;
+}
+
+static void
+gst_osx_audio_device_provider_stop (GstDeviceProvider * provider)
+{
+  GstOsxAudioDeviceProvider *self = GST_OSX_AUDIO_DEVICE_PROVIDER (provider);
+
+  // De-register callbacks for the following AudioObjectIDs
+  AudioObjectID event_ids[] = {kAudioHardwarePropertyDevices, kAudioHardwarePropertyDefaultInputDevice, kAudioHardwarePropertyDefaultOutputDevice};
+
+  for (size_t i = 0; i < sizeof(event_ids) / sizeof(event_ids[0]); i++){
+    AudioObjectPropertyAddress deviceListAddr = {
+        .mSelector = event_ids[i],
+        .mScope = kAudioObjectPropertyScopeGlobal,
+        .mElement = kAudioObjectPropertyElementMain
+    };
+
+    OSStatus err =
+        AudioObjectRemovePropertyListener(kAudioObjectSystemObject,
+                                       &deviceListAddr,
+                                       gst_osx_audio_device_change_cb,
+                                       (void *)self);
+
+    if (err != noErr) {
+        GST_ERROR("Failed to de-register AudioObjectAddPropertyListener(%u) %d", event_ids[i], err);
+    }
+  }
 }
 
 static GstOsxAudioDevice *
@@ -344,6 +446,99 @@ done:
   return devices;
 }
 
+static gboolean
+gst_osx_audio_device_is_in_list (GList * list, GstDevice * device)
+{
+  GList *iter;
+  GstStructure *s;
+  AudioDeviceID device_id;
+  gboolean device_is_default;
+  gboolean found = FALSE;
+
+  s = gst_device_get_properties (device);
+  g_assert (s);
+  g_assert(gst_structure_get_int (s, "device-id", &device_id) == TRUE);
+  g_assert(gst_structure_get_boolean (s, "is-default", &device_is_default) == TRUE);
+
+  for (iter = list; iter; iter = g_list_next (iter)) {
+    GstStructure *other_s;
+    AudioDeviceID other_device_id;
+    gboolean other_device_is_default;
+
+    other_s = gst_device_get_properties (GST_DEVICE (iter->data));
+    g_assert (other_s);
+
+    g_assert(gst_structure_get_int (other_s, "device-id", &other_device_id) == TRUE);
+    g_assert(gst_structure_get_boolean (other_s, "is-default", &other_device_is_default) == TRUE);
+
+    if (device_id == other_device_id && device_is_default == other_device_is_default) {
+      found = TRUE;
+    }
+
+    gst_structure_free (other_s);
+    if (found)
+      break;
+  }
+
+  gst_structure_free (s);
+
+  return found;
+}
+
+static void
+gst_osx_audio_device_provider_update_devices (GstOsxAudioDeviceProvider * self)
+{
+  GstDeviceProvider *provider = GST_DEVICE_PROVIDER_CAST (self);
+  GList *prev_devices = NULL;
+  GList *new_devices = NULL;
+  GList *to_add = NULL;
+  GList *to_remove = NULL;
+  GList *iter;
+
+  GST_OBJECT_LOCK (self);
+  prev_devices = g_list_copy_deep (provider->devices,
+      (GCopyFunc) gst_object_ref, NULL);
+  GST_OBJECT_UNLOCK (self);
+
+  new_devices = gst_osx_audio_device_provider_probe (provider);
+
+  /* Ownership of GstDevice for gst_device_provider_device_add()
+   * and gst_device_provider_device_remove() is a bit complicated.
+   * Remove floating reference here for things to be clear */
+  for (iter = new_devices; iter; iter = g_list_next (iter))
+    gst_object_ref_sink (iter->data);
+
+  /* Check newly added devices */
+  for (iter = new_devices; iter; iter = g_list_next (iter)) {
+    if (!gst_osx_audio_device_is_in_list (prev_devices, GST_DEVICE (iter->data))) {
+      to_add = g_list_prepend (to_add, gst_object_ref (iter->data));
+    }
+  }
+
+  /* Check removed device */
+  for (iter = prev_devices; iter; iter = g_list_next (iter)) {
+    if (!gst_osx_audio_device_is_in_list (new_devices, GST_DEVICE (iter->data))) {
+      to_remove = g_list_prepend (to_remove, gst_object_ref (iter->data));
+    }
+  }
+
+  for (iter = to_remove; iter; iter = g_list_next (iter))
+    gst_device_provider_device_remove (provider, GST_DEVICE (iter->data));
+
+  for (iter = to_add; iter; iter = g_list_next (iter))
+    gst_device_provider_device_add (provider, GST_DEVICE (iter->data));
+
+  if (prev_devices)
+    g_list_free_full (prev_devices, (GDestroyNotify) gst_object_unref);
+
+  if (to_add)
+    g_list_free_full (to_add, (GDestroyNotify) gst_object_unref);
+
+  if (to_remove)
+    g_list_free_full (to_remove, (GDestroyNotify) gst_object_unref);
+}
+
+
 enum
 {
   PROP_DEVICE_ID = 1,
@@ -430,6 +625,7 @@ gst_osx_audio_device_new (AudioDeviceID device_id, const gchar * device_name,
   }
 
   GstStructure *props = gst_structure_new ("osxaudiodevice-proplist",
+          "device-id", G_TYPE_INT, device_id,
           "is-default", G_TYPE_BOOLEAN, is_default, NULL);
   gstdev = g_object_new (GST_TYPE_OSX_AUDIO_DEVICE, "device-id",
       device_id, "display-name", device_name, "caps", caps, "device-class",
