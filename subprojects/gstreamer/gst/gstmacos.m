@@ -11,7 +11,7 @@ struct _ThreadArgs {
   gboolean is_simple;
 };
 
-int
+gpointer
 gst_thread_func (ThreadArgs *args)
 {
   int ret;
@@ -21,8 +21,10 @@ gst_thread_func (ThreadArgs *args)
     ret = ((GstMainFunc) args->main_func) (args->argc, args->argv, args->user_data);
   }
 
-  [NSApp terminate: nil];
-  return ret;
+  [NSApp stop: nil];
+  [NSApp abortModal];
+
+  return  GINT_TO_POINTER (ret);
 }
 
 int
