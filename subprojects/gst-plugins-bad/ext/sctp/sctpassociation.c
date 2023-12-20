@@ -643,6 +643,8 @@ gst_sctp_association_handle_stream_reset (GstSctpAssociation * assoc,
         // procedure, the association needs to reset the stream in the other
         // direction too.
         gst_sctp_association_reset_stream_unlocked (assoc, stream_id);
+        
+        // do not notify until we get the next reset notification from the socket
         notify_reset = FALSE;
       }
 
