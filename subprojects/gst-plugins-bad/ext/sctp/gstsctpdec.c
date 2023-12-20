@@ -805,6 +805,4 @@ on_reset_stream (GstSctpDec * self, guint stream_id)
   if (self->sctp_association)
     gst_sctp_association_reset_stream (self->sctp_association, stream_id);
   GST_SCTP_DEC_ASSOC_MUTEX_UNLOCK (self);
-
-  on_gst_sctp_association_stream_reset (stream_id, self);
 }

@@ -643,17 +643,20 @@ gst_sctp_association_handle_stream_reset (GstSctpAssociation * assoc,
         // procedure, the association needs to reset the stream in the other
         // direction too.
         gst_sctp_association_reset_stream_unlocked (assoc, stream_id);
+        notify_reset = FALSE;
       }
 
     } else {
       state->outgoing_reset_done = TRUE;
       notify_reset = state->incoming_reset_done;
+
+      /* demand we come from a sane state */
+      g_assert (state->closure_initiated);
     }
-
+    
     if (notify_reset) {
-      g_hash_table_remove (assoc->stream_id_to_state,
-          GUINT_TO_POINTER (stream_id));
-
+      g_assert (g_hash_table_remove (assoc->stream_id_to_state,
+              GUINT_TO_POINTER (stream_id)));
       gst_sctp_association_notify_stream_reset (assoc, stream_id);
     }
   }
