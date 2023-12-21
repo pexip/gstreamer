@@ -147,6 +147,7 @@ gst_wasapi_device_is_in_list (GList * list, GstDevice * device)
   GList *iter;
   GstStructure *s;
   const gchar *device_id;
+  gboolean is_default;
   gboolean found = FALSE;
 
   s = gst_device_get_properties (device);
@@ -155,9 +156,12 @@ gst_wasapi_device_is_in_list (GList * list, GstDevice * device)
   device_id = gst_structure_get_string (s, "device.strid");
   g_assert (device_id);
 
+  g_assert (gst_structure_get_boolean (s, "is-default", &is_default));
+
   for (iter = list; iter; iter = g_list_next (iter)) {
     GstStructure *other_s;
     const gchar *other_id;
+    gboolean other_is_default;
 
     other_s = gst_device_get_properties (GST_DEVICE (iter->data));
     g_assert (other_s);
@@ -165,7 +169,11 @@ gst_wasapi_device_is_in_list (GList * list, GstDevice * device)
     other_id = gst_structure_get_string (other_s, "device.strid");
     g_assert (other_id);
 
-    if (g_ascii_strcasecmp (device_id, other_id) == 0) {
+    g_assert (gst_structure_get_boolean (other_s, "is-default",
+            &other_is_default));
+
+    if (is_default == other_is_default
+        && g_ascii_strcasecmp (device_id, other_id) == 0) {
       found = TRUE;
     }
 
