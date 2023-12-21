@@ -1,8 +1,11 @@
+# third party libraries
+subdir('third_party')
+
+# dcSCTP
 dcsctp_sources = [
   # rtc_base
   'rtc_base/memory/aligned_malloc.cc',
   'rtc_base/logging.cc',
-  'rtc_base/crc32.cc',
   'rtc_base/checks.cc',
   'rtc_base/platform_thread_types.cc',
   'rtc_base/time_utils.cc',
@@ -108,7 +111,7 @@ dcsctp_sources = [
 threads_dep = dependency('threads')
 
 dcsctp_cppargs = []
-dcsctp_deps = [threads_dep]
+dcsctp_deps = [threads_dep, crc32c_dep]
 
 if host_system == 'windows'
   dcsctp_cppargs += [
@@ -165,7 +168,7 @@ dcsctp_lib = static_library('dcsctp',
   cpp_args: dcsctp_cppargs,
   dependencies: dcsctp_deps,
   install: false,
-  include_directories: [include_directories('.')])
+  include_directories: include_directories('.'))
 
 dcsctp_dep = declare_dependency(link_with: dcsctp_lib,
   include_directories : include_directories('.'))
