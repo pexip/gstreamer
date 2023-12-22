@@ -53,8 +53,11 @@ int main() {
   return 0;
 }
   '''
-crc32c_core_conf.set10('HAVE_SSE42',
-  cxx.compiles(sse4_code, name : 'sse4() test'))
+have_sse4 = cxx.compiles(sse4_code, name : 'sse4() test')
+crc32c_core_conf.set10('HAVE_SSE42', have_sse4)
+if have_sse4
+  crc32c_sources += ['src/crc32c_sse42.cc']
+endif
 
 arm64_crc32c_code = '''
 #include <arm_acle.h>
@@ -66,8 +69,11 @@ int main() {
   return 0;
 }
 '''
-crc32c_core_conf.set10('HAVE_ARM64_CRC32C',
-  cxx.compiles(arm64_crc32c_code, name : 'arm_crc32c() test'))
+have_arm64_crc32c = cxx.compiles(arm64_crc32c_code, name : 'arm_crc32c() test')
+crc32c_core_conf.set10('HAVE_ARM64_CRC32C', have_arm64_crc32c)
+if have_arm64_crc32c
+  crc32c_sources += ['src/crc32c_arm64.cc']
+endif
 
 strong_getauxval_code = '''
 #include <arm_acle.h>
