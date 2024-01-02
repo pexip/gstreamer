@@ -458,11 +458,11 @@ gst_rtp_mux_chain_list (GstPad * pad, GstObject * parent,
     gst_caps_unref (current_caps);
   }
 
-  GST_OBJECT_LOCK (rtp_mux);
+  GST_PAD_STREAM_LOCK (rtp_mux->srcpad);
 
   padpriv = gst_pad_get_element_private (pad);
   if (!padpriv) {
-    GST_OBJECT_UNLOCK (rtp_mux);
+    GST_PAD_STREAM_UNLOCK (rtp_mux->srcpad);
     ret = GST_FLOW_NOT_LINKED;
     gst_buffer_list_unref (bufferlist);
     goto out;
@@ -481,8 +481,6 @@ gst_rtp_mux_chain_list (GstPad * pad, GstObject * parent,
     rtp_mux->last_pad = g_object_ref (pad);
   }
 
-  GST_OBJECT_UNLOCK (rtp_mux);
-
   if (changed)
     gst_pad_sticky_events_foreach (pad, resend_events, rtp_mux);
 
@@ -492,6 +490,8 @@ gst_rtp_mux_chain_list (GstPad * pad, GstObject * parent,
   } else {
     ret = gst_pad_push_list (rtp_mux->srcpad, bufferlist);
   }
+
+  GST_PAD_STREAM_UNLOCK (rtp_mux->srcpad);
 
 out:
 
@@ -546,22 +546,25 @@ gst_rtp_mux_chain (GstPad * pad, GstObject * parent, GstBuffer * buffer)
     gst_caps_unref (current_caps);
   }
 
-  GST_OBJECT_LOCK (rtp_mux);
+  GST_PAD_STREAM_LOCK (rtp_mux->srcpad);
+
   padpriv = gst_pad_get_element_private (pad);
 
   if (!padpriv) {
-    GST_OBJECT_UNLOCK (rtp_mux);
+    GST_PAD_STREAM_UNLOCK (rtp_mux->srcpad);
     gst_buffer_unref (buffer);
-    return GST_FLOW_NOT_LINKED;
+    ret = GST_FLOW_NOT_LINKED;
+    goto out;
   }
 
   buffer = gst_buffer_make_writable (buffer);
 
   if (!gst_rtp_buffer_map (buffer, GST_MAP_READWRITE, &rtpbuffer)) {
-    GST_OBJECT_UNLOCK (rtp_mux);
+    GST_PAD_STREAM_UNLOCK (rtp_mux->srcpad);
     gst_buffer_unref (buffer);
     GST_ERROR_OBJECT (rtp_mux, "Invalid RTP buffer");
-    return GST_FLOW_ERROR;
+    ret = GST_FLOW_ERROR;
+    goto out;
   }
 
   drop = !process_buffer_locked (rtp_mux, padpriv, &rtpbuffer);
@@ -583,8 +586,6 @@ gst_rtp_mux_chain (GstPad * pad, GstObject * parent, GstBuffer * buffer)
       rtp_mux->last_stop = GST_CLOCK_TIME_NONE;
   }
 
-  GST_OBJECT_UNLOCK (rtp_mux);
-
   if (changed)
     gst_pad_sticky_events_foreach (pad, resend_events, rtp_mux);
 
@@ -594,6 +595,8 @@ gst_rtp_mux_chain (GstPad * pad, GstObject * parent, GstBuffer * buffer)
   } else {
     ret = gst_pad_push (rtp_mux->srcpad, buffer);
   }
+
+  GST_PAD_STREAM_UNLOCK (rtp_mux->srcpad);
 
 out:
   return ret;
