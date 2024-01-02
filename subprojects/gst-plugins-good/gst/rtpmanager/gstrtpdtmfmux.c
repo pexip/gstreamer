@@ -138,9 +138,10 @@ gst_rtp_dtmf_mux_accept_buffer_locked (GstRTPMux * rtp_mux,
     } else {
       if (GST_CLOCK_TIME_IS_VALID (mux->last_priority_end) &&
           running_ts < mux->last_priority_end) {
-        GST_LOG_OBJECT (mux, "Dropping buffer %p because running time"
-            " %" GST_TIME_FORMAT " < %" GST_TIME_FORMAT, rtpbuffer->buffer,
-            GST_TIME_ARGS (running_ts), GST_TIME_ARGS (mux->last_priority_end));
+        GST_LOG_OBJECT (mux, "Dropping buffer %" GST_PTR_FORMAT
+            " because running time %" GST_TIME_FORMAT " < %" GST_TIME_FORMAT,
+            rtpbuffer->buffer, GST_TIME_ARGS (running_ts),
+            GST_TIME_ARGS (mux->last_priority_end));
         return FALSE;
       }
     }
