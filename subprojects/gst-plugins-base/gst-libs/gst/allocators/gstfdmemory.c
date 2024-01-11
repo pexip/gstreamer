@@ -70,8 +70,8 @@ gst_fd_mem_free (GstAllocator * allocator, GstMemory * gmem)
       && !(mem->flags & GST_FD_MEMORY_FLAG_DONT_CLOSE))
     close (mem->fd);
   g_mutex_clear (&mem->lock);
-  g_free (mem);
   GST_DEBUG ("%p: freed", mem);
+  g_free (mem);
 #endif
 }
 
