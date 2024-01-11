@@ -406,6 +406,7 @@ gst_pngenc_handle_frame (GstVideoEncoder * encoder, GstVideoCodecFrame * frame)
       gst_allocator_alloc (NULL, MAX (4096, GST_VIDEO_INFO_SIZE (info)), NULL);
   if (!pngenc->output_mem) {
     GST_ERROR_OBJECT (pngenc, "Failed to allocate memory");
+    g_free (row_pointers);
     return GST_FLOW_ERROR;
   }
 
