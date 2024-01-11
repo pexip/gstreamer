@@ -5797,14 +5797,15 @@ build_vpcC_extension (guint8 profile, guint8 level, guint8 bit_depth,
   hdl &= gst_byte_writer_put_uint8 (&bw, matrix_coefficients);
   /* codec initialization data, currently unused */
   hdl &= gst_byte_writer_put_uint16_le (&bw, 0);
+  data_block = gst_byte_writer_reset_and_get_data (&bw);
 
   if (!hdl) {
     GST_WARNING ("error creating header");
+    g_free (data_block);
     return NULL;
   }
 
   data_block_len = gst_byte_writer_get_size (&bw);
-  data_block = gst_byte_writer_reset_and_get_data (&bw);
   atom_data = atom_data_new_from_data (FOURCC_vpcC, data_block, data_block_len);
   g_free (data_block);
 
