@@ -1,5 +1,7 @@
 /* GStreamer
  * Copyright (C) 2019 Josh Matthews <josh@joshmatthews.net>
+ * Copyright (c) 2024, Pexip AS
+ *  @author: Tulio Beloqui <tulio@pexip.com
  *
  * avfdeviceprovider.c: AVF device probing and monitoring
  *
@@ -31,22 +33,81 @@
 
 #include <gst/gst.h>
 
-static GstDevice *gst_avf_device_new (const gchar * device_name, int device_index,
-                                      GstCaps * caps, GstAvfDeviceType type,
-                                      GstStructure *props);
+static GstDevice *gst_avf_device_new (AVCaptureDevice * device);
+
 G_DEFINE_TYPE (GstAVFDeviceProvider, gst_avf_device_provider,
                GST_TYPE_DEVICE_PROVIDER);
 
+#define GST_AVF_DEVICE_PROVIDER_IMPL(obj) \
+  ((__bridge GstAVFDeviceProviderImpl *) GST_AVF_DEVICE_PROVIDER_CAST (obj)->impl)
+
+static void gst_avf_device_provider_finalize (GObject * obj);
+
 static GList *gst_avf_device_provider_probe (GstDeviceProvider * provider);
+static gboolean gst_avf_device_provider_start (GstDeviceProvider * provider);
+static void gst_avf_device_provider_stop (GstDeviceProvider * provider);
+
+static void gst_avf_device_provider_on_device_added (GstDeviceProvider * provider, AVCaptureDevice * device);
+static void gst_avf_device_provider_on_device_removed (GstDeviceProvider * provider, const char * device_unique_id);
+
+@interface GstAVFDeviceProviderImpl : NSObject {
+  gpointer parent;
+}
+
+- (id)init;
+- (id)initWithParent:(gpointer)parent;
+
+- (void)deviceWasConnected:(NSNotification *)notification;
+- (void)deviceWasDisconnected:(NSNotification *)notification;
+
+@end
+
+@implementation GstAVFDeviceProviderImpl
+
+- (id)init
+{
+  return [self initWithParent:NULL];
+}
+
+- (id)initWithParent:(gpointer)p
+{
+  if ((self = [super init])) {
+    parent = p;
+  }
+
+  return self;
+}
+
+- (void)deviceWasConnected:(NSNotification *)notification
+{
+  AVCaptureDevice * device = notification.object;
+  if ([device hasMediaType:  AVMediaTypeVideo]) 
+    gst_avf_device_provider_on_device_added (GST_DEVICE_PROVIDER_CAST (parent), device);
+}
+
+
+- (void)deviceWasDisconnected:(NSNotification *)notification
+{
+  AVCaptureDevice * device = notification.object;
+  if ([device hasMediaType:  AVMediaTypeVideo]) {
+    const char * device_unique_id = [[device uniqueID] UTF8String];
+    gst_avf_device_provider_on_device_removed (GST_DEVICE_PROVIDER_CAST (parent), device_unique_id);
+  }
+}
+
+@end
 
 static void
 gst_avf_device_provider_class_init (GstAVFDeviceProviderClass * klass)
 {
+  GObjectClass *object_class = G_OBJECT_CLASS (klass);
   GstDeviceProviderClass *dm_class = GST_DEVICE_PROVIDER_CLASS (klass);
 
-  // TODO: Add start/stop callbacks to receive device notifications.
-  // https://gitlab.freedesktop.org/gstreamer/gst-plugins-bad/issues/886
+  object_class->finalize = gst_avf_device_provider_finalize;
+
   dm_class->probe = gst_avf_device_provider_probe;
+  dm_class->start = gst_avf_device_provider_start;
+  dm_class->stop = gst_avf_device_provider_stop;
 
   gst_avf_video_src_debug_init ();
 
@@ -59,6 +120,25 @@ gst_avf_device_provider_class_init (GstAVFDeviceProviderClass * klass)
 static void
 gst_avf_device_provider_init (GstAVFDeviceProvider * self)
 {
+  self->impl = (__bridge_retained gpointer)[[GstAVFDeviceProviderImpl alloc] initWithParent:self];
+}
+
+static void
+gst_avf_device_provider_finalize (GObject * obj)
+{
+  CFBridgingRelease(GST_AVF_DEVICE_PROVIDER_CAST(obj)->impl);
+  G_OBJECT_CLASS (gst_avf_device_provider_parent_class)->finalize (obj);
+}
+
+static gchar *
+gst_av_capture_device_get_device_unique_id (GstDevice * device)
+{
+  GstStructure *props;
+  g_object_get (device, "properties", &props, NULL);
+
+  gchar * uuid = g_strdup (gst_structure_get_string (props, "avf.unique_id"));
+  gst_structure_free (props);
+  return uuid;
 }
 
 static GstStructure *
@@ -96,26 +176,37 @@ gst_av_capture_device_get_props (AVCaptureDevice *device)
 static GList *
 gst_avf_device_provider_probe (GstDeviceProvider * provider)
 {
-  GList *result;
+  GList *result = NULL;
 
-  result = NULL;
-G_GNUC_BEGIN_IGNORE_DEPRECATIONS
-  NSArray *devices = [AVCaptureDevice devicesWithMediaType:AVMediaTypeVideo];
-G_GNUC_END_IGNORE_DEPRECATIONS
-  AVCaptureVideoDataOutput *output = [[AVCaptureVideoDataOutput alloc] init];
+  NSMutableArray<AVCaptureDeviceType> *deviceTypes = [NSMutableArray arrayWithArray:@[
+#if defined(HOST_IOS)
+                                                AVCaptureDeviceTypeBuiltInUltraWideCamera,
+                                                AVCaptureDeviceTypeBuiltInDualWideCamera,
+                                                AVCaptureDeviceTypeBuiltInTelephotoCamera,
+                                                AVCaptureDeviceTypeBuiltInDualCamera,
+                                                AVCaptureDeviceTypeBuiltInTripleCamera,
+#endif
+                                                AVCaptureDeviceTypeBuiltInWideAngleCamera
+                                                ]];
+
+  if (@available(iOS 17, macOS 14, *)) {
+    [deviceTypes addObject:AVCaptureDeviceTypeContinuityCamera];
+    [deviceTypes addObject:AVCaptureDeviceTypeExternal];
+  } else {
+#if defined(HOST_DARWIN)
+    [deviceTypes addObject:AVCaptureDeviceTypeExternalUnknown];
+#endif
+  }
+
+  AVCaptureDeviceDiscoverySession *discovery_sess = [AVCaptureDeviceDiscoverySession discoverySessionWithDeviceTypes:deviceTypes
+      mediaType:AVMediaTypeVideo
+      position:AVCaptureDevicePositionUnspecified];
+  NSArray<AVCaptureDevice *> *devices = discovery_sess.devices;
+  
   for (int i = 0; i < [devices count]; i++) {
     AVCaptureDevice *device = [devices objectAtIndex:i];
-    g_assert (device != nil);
-
-    GstCaps *caps = gst_av_capture_device_get_caps (device, output, GST_AVF_VIDEO_SOURCE_ORIENTATION_DEFAULT);
-    GstStructure *props = gst_av_capture_device_get_props (device);
-    const gchar *deviceName = [[device localizedName] UTF8String];
-    GstDevice *gst_device = gst_avf_device_new (deviceName, i, caps, GST_AVF_DEVICE_TYPE_VIDEO_SOURCE, props);
-
-    result = g_list_prepend (result, gst_object_ref_sink (gst_device));
-
-    gst_structure_free (props);
-    gst_caps_unref (caps);
+    GstDevice *gst_device = gst_avf_device_new (device);
+    result = g_list_prepend (result, gst_object_ref_sink (gst_device)); 
   }
 
   result = g_list_reverse (result);
@@ -123,9 +214,98 @@ G_GNUC_END_IGNORE_DEPRECATIONS
   return result;
 }
 
+
+static void
+gst_avf_device_provider_populate_devices (GstDeviceProvider * provider)
+{
+  GList *devices, *it;
+
+  devices = gst_avf_device_provider_probe (provider);
+
+  for (it = devices; it != NULL; it = g_list_next (it)) {
+    GstDevice *device = GST_DEVICE_CAST (it->data);
+    if (device)
+      gst_device_provider_device_add (provider, device);
+  }
+
+  g_list_free_full (devices, gst_object_unref);
+}
+
+static gboolean
+gst_avf_device_provider_start (GstDeviceProvider * provider)
+{
+  GST_INFO_OBJECT (provider, "Starting...");
+
+  gst_avf_device_provider_populate_devices (provider);
+
+  [NSNotificationCenter.defaultCenter addObserver:GST_AVF_DEVICE_PROVIDER_IMPL(provider)
+                                      selector:@selector(deviceWasConnected:)
+                                      name:AVCaptureDeviceWasConnectedNotification
+                                      object:nil];
+
+  [NSNotificationCenter.defaultCenter addObserver:GST_AVF_DEVICE_PROVIDER_IMPL(provider)
+                                      selector:@selector(deviceWasDisconnected:)
+                                      name:AVCaptureDeviceWasDisconnectedNotification
+                                      object:nil];
+
+  return TRUE;
+}
+
+static void
+gst_avf_device_provider_stop (GstDeviceProvider * provider)
+{
+  GST_INFO_OBJECT (provider, "Stoping...");
+
+  [NSNotificationCenter.defaultCenter removeObserver:GST_AVF_DEVICE_PROVIDER_IMPL(provider)
+                                      name:AVCaptureDeviceWasConnectedNotification
+                                      object:nil];
+
+  [NSNotificationCenter.defaultCenter removeObserver:GST_AVF_DEVICE_PROVIDER_IMPL(provider)
+                                      name:AVCaptureDeviceWasDisconnectedNotification
+                                      object:nil];
+
+  [NSNotificationCenter.defaultCenter removeObserver:GST_AVF_DEVICE_PROVIDER_IMPL(provider)];
+}
+
+static void
+gst_avf_device_provider_on_device_added (GstDeviceProvider * provider, AVCaptureDevice * device)
+{
+  gst_device_provider_device_add (provider, gst_avf_device_new (device));
+}
+
+static void
+gst_avf_device_provider_on_device_removed (GstDeviceProvider * provider, const char * id_to_remove)
+{
+  GstDevice *device = NULL;
+  GList *item;
+
+  GST_OBJECT_LOCK (provider);
+  for (item = provider->devices; item; item = item->next) {
+    device = item->data;
+    gchar *dev_unique_id = gst_av_capture_device_get_device_unique_id (device);
+    gboolean found;
+
+    found = (g_strcmp0 ((const gchar *)id_to_remove, dev_unique_id) == 0);
+    g_free (dev_unique_id);
+
+    if (found) {
+      gst_object_ref (device);
+      break;
+    }
+
+    device = NULL;
+  }
+  GST_OBJECT_UNLOCK (provider);
+
+  if (device) {
+    gst_device_provider_device_remove (provider, device);
+    g_object_unref (device);
+  }
+}
+
 enum
 {
-  PROP_DEVICE_INDEX = 1
+  PROP_0,
 };
 
 G_DEFINE_TYPE (GstAvfDevice, gst_avf_device, GST_TYPE_DEVICE);
@@ -140,6 +320,7 @@ static void gst_avf_device_get_property (GObject * object, guint prop_id,
 static void gst_avf_device_set_property (GObject * object, guint prop_id,
                                          const GValue * value, GParamSpec * pspec);
 
+
 static void
 gst_avf_device_class_init (GstAvfDeviceClass * klass)
 {
@@ -151,11 +332,6 @@ gst_avf_device_class_init (GstAvfDeviceClass * klass)
 
   object_class->get_property = gst_avf_device_get_property;
   object_class->set_property = gst_avf_device_set_property;
-
-  g_object_class_install_property (object_class, PROP_DEVICE_INDEX,
-      g_param_spec_int ("device-index", "Device Index",
-          "The zero-based device index", -1, G_MAXINT, 0,
-          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS | G_PARAM_CONSTRUCT_ONLY));
 }
 
 static void
@@ -197,9 +373,6 @@ gst_avf_device_get_property (GObject * object, guint prop_id,
   device = GST_AVF_DEVICE_CAST (object);
 
   switch (prop_id) {
-    case PROP_DEVICE_INDEX:
-      g_value_set_int (value, device->device_index);
-      break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
       break;
@@ -215,9 +388,6 @@ gst_avf_device_set_property (GObject * object, guint prop_id,
   device = GST_AVF_DEVICE_CAST (object);
 
   switch (prop_id) {
-    case PROP_DEVICE_INDEX:
-      device->device_index = g_value_get_int (value);
-      break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
       break;
@@ -225,33 +395,21 @@ gst_avf_device_set_property (GObject * object, guint prop_id,
 }
 
 static GstDevice *
-gst_avf_device_new (const gchar * device_name, int device_index, GstCaps * caps, GstAvfDeviceType type, GstStructure *props)
+gst_avf_device_new (AVCaptureDevice * device)
 {
-  GstAvfDevice *gstdev;
-  const gchar *element = NULL;
-  const gchar *klass = NULL;
+  AVCaptureVideoDataOutput *output = [[AVCaptureVideoDataOutput alloc] init];
+  GstCaps *caps = gst_av_capture_device_get_caps (device, output, GST_AVF_VIDEO_SOURCE_ORIENTATION_DEFAULT);
+  GstStructure *props = gst_av_capture_device_get_props (device);
+  const gchar *device_name = [[device localizedName] UTF8String];
 
-  g_return_val_if_fail (device_name, NULL);
-  g_return_val_if_fail (caps, NULL);
+  GstAvfDevice *gstdev = g_object_new (GST_TYPE_AVF_DEVICE,
+                         "display-name", device_name, "caps", caps, "device-class", "Video/Source",
+                         "properties", props, NULL);
 
+  gstdev->type = "Video/Source";
+  gstdev->element = "avfvideosrc";
 
-  switch (type) {
-    case GST_AVF_DEVICE_TYPE_VIDEO_SOURCE:
-      element = "avfvideosrc";
-      klass = "Video/Source";
-      break;
-    default:
-      g_assert_not_reached ();
-      break;
-  }
-
-
-  gstdev = g_object_new (GST_TYPE_AVF_DEVICE,
-                         "display-name", device_name, "caps", caps, "device-class", klass,
-                         "device-index", device_index, "properties", props, NULL);
-
-  gstdev->type = type;
-  gstdev->element = element;
+  gst_structure_free (props);
 
   return GST_DEVICE (gstdev);
 }
