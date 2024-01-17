@@ -351,28 +351,11 @@ static AVCaptureVideoOrientation GstAVFVideoSourceOrientation2AVCaptureVideoOrie
 {
   NSString *mediaType = AVMediaTypeVideo;
   NSError *err;
-G_GNUC_BEGIN_IGNORE_DEPRECATIONS
-  NSArray *devices = [AVCaptureDevice devicesWithMediaType:mediaType];
-G_GNUC_END_IGNORE_DEPRECATIONS
 
   if (deviceUniqueID) { // deviceUniqueID takes priority
-    for (int i = 0; i < [devices count]; i++) {
-      AVCaptureDevice *tmpDevice = [devices objectAtIndex:i];
-      const gchar * tmpDeviceUniqueID = [[tmpDevice uniqueID] UTF8String];
-      if (g_strcmp0 (tmpDeviceUniqueID, deviceUniqueID) == 0) {
-        device = tmpDevice;
-        break;
-      }
-    }
-  } else if (deviceIndex != DEFAULT_DEVICE_INDEX) {
-    if (deviceIndex >= [devices count]) {
-      GST_ELEMENT_ERROR (element, RESOURCE, NOT_FOUND,
-                          ("Invalid video capture device index"), (NULL));
-      return NO;
-    }
-    device = [devices objectAtIndex:deviceIndex];
-
-  } else { // no Unique ID and no Index, pick the default one:
+    device = [AVCaptureDevice deviceWithUniqueID: [NSString stringWithUTF8String:deviceUniqueID]];
+  } else { // no Unique ID, pick the default one:
+    
 #ifdef HAVE_IOS
     if (deviceType != DEFAULT_DEVICE_TYPE && position != DEFAULT_POSITION) {
       device = [AVCaptureDevice
