@@ -1,5 +1,7 @@
 /* GStreamer
  * Copyright (C) 2019 Josh Matthews <josh@joshmatthews.net>
+ * Copyright (c) 2024, Pexip AS
+ *  @author: Tulio Beloqui <tulio@pexip.com>
  *
  * avfdeviceprovider.h: AVF device probing and monitoring
  *
@@ -42,10 +44,12 @@ typedef struct _GstAVFDeviceProviderClass GstAVFDeviceProviderClass;
 #define GST_AVF_DEVICE_PROVIDER_GET_CLASS(obj)       (G_TYPE_INSTANCE_GET_CLASS ((obj), GST_TYPE_AVF_DEVICE_PROVIDER, GstAVFDeviceProviderClass))
 #define GST_AVF_DEVICE_PROVIDER(obj)                 (G_TYPE_CHECK_INSTANCE_CAST ((obj), GST_TYPE_AVF_DEVICE_PROVIDER, GstAVFDeviceProvider))
 #define GST_AVF_DEVICE_PROVIDER_CLASS(klass)         (G_TYPE_CHECK_CLASS_CAST ((klass), GST_TYPE_DEVICE_PROVIDER, GstAVFDeviceProviderClass))
-#define GST_AVF_DEVICE_PROVIDER_CAST(obj)            ((GstAvfDeviceProvider *)(obj))
+#define GST_AVF_DEVICE_PROVIDER_CAST(obj)            ((GstAVFDeviceProvider *)(obj))
 
 struct _GstAVFDeviceProvider {
   GstDeviceProvider parent;
+
+  gpointer impl;
 };
 
 typedef enum {
