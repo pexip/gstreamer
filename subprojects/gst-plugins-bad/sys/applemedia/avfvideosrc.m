@@ -164,6 +164,7 @@ gst_avf_video_source_device_type_get_type (void)
   GstPushSrc *pushSrc;
 
   gint deviceIndex;
+  gchar *deviceUniqueID;
   const gchar *deviceName;
   GstAVFVideoSourcePosition position;
   GstAVFVideoSourceOrientation orientation;
@@ -210,6 +211,7 @@ gst_avf_video_source_device_type_get_type (void)
 - (void)finalize;
 
 @property int deviceIndex;
+@property gchar * deviceUniqueID;
 @property const gchar *deviceName;
 @property GstAVFVideoSourcePosition position;
 @property GstAVFVideoSourceOrientation orientation;
@@ -300,7 +302,7 @@ static AVCaptureVideoOrientation GstAVFVideoSourceOrientation2AVCaptureVideoOrie
 
 @implementation GstAVFVideoSrcImpl
 
-@synthesize deviceIndex, deviceName, position, orientation, deviceType, doStats,
+@synthesize deviceIndex, deviceUniqueID, deviceName, position, orientation, deviceType, doStats,
     fps, captureScreen, captureScreenCursor, captureScreenMouseClicks, cropX, cropY, cropWidth, cropHeight;
 
 - (id)init
@@ -316,6 +318,7 @@ static AVCaptureVideoOrientation GstAVFVideoSourceOrientation2AVCaptureVideoOrie
     pushSrc = src;
 
     deviceIndex = DEFAULT_DEVICE_INDEX;
+    deviceUniqueID = NULL;
     deviceName = NULL;
     position = DEFAULT_POSITION;
     orientation = DEFAULT_ORIENTATION;
@@ -348,8 +351,28 @@ static AVCaptureVideoOrientation GstAVFVideoSourceOrientation2AVCaptureVideoOrie
 {
   NSString *mediaType = AVMediaTypeVideo;
   NSError *err;
+G_GNUC_BEGIN_IGNORE_DEPRECATIONS
+  NSArray *devices = [AVCaptureDevice devicesWithMediaType:mediaType];
+G_GNUC_END_IGNORE_DEPRECATIONS
 
-  if (deviceIndex == DEFAULT_DEVICE_INDEX) {
+  if (deviceUniqueID) { // deviceUniqueID takes priority
+    for (int i = 0; i < [devices count]; i++) {
+      AVCaptureDevice *tmpDevice = [devices objectAtIndex:i];
+      const gchar * tmpDeviceUniqueID = [[tmpDevice uniqueID] UTF8String];
+      if (g_strcmp0 (tmpDeviceUniqueID, deviceUniqueID) == 0) {
+        device = tmpDevice;
+        break;
+      }
+    }
+  } else if (deviceIndex != DEFAULT_DEVICE_INDEX) {
+    if (deviceIndex >= [devices count]) {
+      GST_ELEMENT_ERROR (element, RESOURCE, NOT_FOUND,
+                          ("Invalid video capture device index"), (NULL));
+      return NO;
+    }
+    device = [devices objectAtIndex:deviceIndex];
+
+  } else { // no Unique ID and no Index, pick the default one:
 #ifdef HAVE_IOS
     if (deviceType != DEFAULT_DEVICE_TYPE && position != DEFAULT_POSITION) {
       device = [AVCaptureDevice
@@ -362,23 +385,13 @@ static AVCaptureVideoOrientation GstAVFVideoSourceOrientation2AVCaptureVideoOrie
 #else
       device = [AVCaptureDevice defaultDeviceWithMediaType:mediaType];
 #endif
-    if (device == nil) {
-      GST_ELEMENT_ERROR (element, RESOURCE, NOT_FOUND,
-                          ("No video capture devices found"), (NULL));
-      return NO;
-    }
-  } else { // deviceIndex takes priority over position and deviceType
-G_GNUC_BEGIN_IGNORE_DEPRECATIONS
-    NSArray *devices = [AVCaptureDevice devicesWithMediaType:mediaType];
-G_GNUC_END_IGNORE_DEPRECATIONS
-    if (deviceIndex >= [devices count]) {
-      GST_ELEMENT_ERROR (element, RESOURCE, NOT_FOUND,
-                          ("Invalid video capture device index"), (NULL));
-      return NO;
-    }
-    device = [devices objectAtIndex:deviceIndex];
   }
-  g_assert (device != nil);
+
+  if (device == nil) {
+    GST_ELEMENT_ERROR (element, RESOURCE, NOT_FOUND,
+                        ("No video capture devices found"), (NULL));
+    return NO;
+  }
 
   deviceName = [[device localizedName] UTF8String];
   GST_INFO ("Opening '%s'", deviceName);
@@ -1123,6 +1136,7 @@ enum
 {
   PROP_0,
   PROP_DEVICE_INDEX,
+  PROP_DEVICE_UNIQUE_ID,
   PROP_DEVICE_NAME,
   PROP_POSITION,
   PROP_ORIENTATION,
@@ -1141,6 +1155,7 @@ enum
 };
 
 
+static void gst_avf_video_src_dispose (GObject * obj);
 static void gst_avf_video_src_finalize (GObject * obj);
 static void gst_avf_video_src_get_property (GObject * object, guint prop_id,
     GValue * value, GParamSpec * pspec);
@@ -1187,6 +1202,7 @@ gst_avf_video_src_class_init (GstAVFVideoSrcClass * klass)
   GstBaseSrcClass *gstbasesrc_class = GST_BASE_SRC_CLASS (klass);
   GstPushSrcClass *gstpushsrc_class = GST_PUSH_SRC_CLASS (klass);
 
+  gobject_class->dispose = gst_avf_video_src_dispose;
   gobject_class->finalize = gst_avf_video_src_finalize;
   gobject_class->get_property = gst_avf_video_src_get_property;
   gobject_class->set_property = gst_avf_video_src_set_property;
@@ -1218,6 +1234,10 @@ gst_avf_video_src_class_init (GstAVFVideoSrcClass * klass)
           "The zero-based device index",
           -1, G_MAXINT, DEFAULT_DEVICE_INDEX,
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+  g_object_class_install_property (gobject_class, PROP_DEVICE_UNIQUE_ID,
+      g_param_spec_string ("device-unique-id", "Device Unique ID",
+          "The unique ID used to identify the device to be selected",
+          NULL, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
   g_object_class_install_property (gobject_class, PROP_DEVICE_NAME,
       g_param_spec_string ("device-name", "Device Name",
           "The name of the currently opened capture device",
@@ -1290,6 +1310,17 @@ gst_avf_video_src_init (GstAVFVideoSrc * src)
 }
 
 static void
+gst_avf_video_src_dispose (GObject * obj)
+{
+  GstAVFVideoSrcImpl *impl = GST_AVF_VIDEO_SRC_IMPL (obj);
+
+  g_free (impl.deviceUniqueID);
+  impl.deviceUniqueID = NULL;
+
+  G_OBJECT_CLASS (parent_class)->dispose (obj);
+}
+
+static void
 gst_avf_video_src_finalize (GObject * obj)
 {
   CFBridgingRelease(GST_AVF_VIDEO_SRC_CAST(obj)->impl);
@@ -1329,6 +1360,9 @@ gst_avf_video_src_get_property (GObject * object, guint prop_id, GValue * value,
 #endif
     case PROP_DEVICE_INDEX:
       g_value_set_int (value, impl.deviceIndex);
+      break;
+    case PROP_DEVICE_UNIQUE_ID:
+      g_value_set_string (value, impl.deviceUniqueID);
       break;
     case PROP_DEVICE_NAME:
       g_value_set_string (value, impl.deviceName);
@@ -1388,6 +1422,10 @@ gst_avf_video_src_set_property (GObject * object, guint prop_id,
 #endif
     case PROP_DEVICE_INDEX:
       impl.deviceIndex = g_value_get_int (value);
+      break;
+    case PROP_DEVICE_UNIQUE_ID:
+      g_free (impl.deviceUniqueID);
+      impl.deviceUniqueID = g_strdup (g_value_get_string (value));
       break;
     case PROP_POSITION:
       impl.position = g_value_get_enum(value);
