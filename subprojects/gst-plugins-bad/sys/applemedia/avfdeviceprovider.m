@@ -130,15 +130,27 @@ gst_avf_device_provider_finalize (GObject * obj)
   G_OBJECT_CLASS (gst_avf_device_provider_parent_class)->finalize (obj);
 }
 
-static gchar *
-gst_av_capture_device_get_device_unique_id (GstDevice * device)
+static gint
+gst_avf_device_get_int_prop (GstDevice * device, const gchar * prop_name)
 {
   GstStructure *props;
   g_object_get (device, "properties", &props, NULL);
 
-  gchar * uuid = g_strdup (gst_structure_get_string (props, "avf.unique_id"));
+  gint ret = 0;
+  g_assert (gst_structure_get_int (props, prop_name, &ret));
   gst_structure_free (props);
-  return uuid;
+  return ret; 
+}
+
+static int
+gst_avf_device_get_string_prop (GstDevice * device, const gchar * prop_name)
+{
+  GstStructure *props;
+  g_object_get (device, "properties", &props, NULL);
+
+  gchar * ret = g_strdup (gst_structure_get_string (props, prop_name));
+  gst_structure_free (props);
+  return ret;
 }
 
 static GstStructure *
@@ -156,6 +168,7 @@ gst_av_capture_device_get_props (AVCaptureDevice *device)
     "avf.model_id", G_TYPE_STRING, model_id,
     "avf.has_flash", G_TYPE_BOOLEAN, [device hasFlash],
     "avf.has_torch", G_TYPE_BOOLEAN, [device hasTorch],
+    "avf.position", G_TYPE_INT, [device position],
   NULL);
 
   g_free (unique_id);
@@ -171,6 +184,29 @@ gst_av_capture_device_get_props (AVCaptureDevice *device)
 #endif
 
   return props;
+}
+
+/*  
+ * Compare the devices by position:
+ * AVCaptureDevicePositionFront=2
+ * AVCaptureDevicePositionBack=1
+ * AVCaptureDevicePositionUnspecified=0
+ *
+ * We want the high positions first so for ios we will put the "front" camera first.
+ */
+static gint
+gst_avf_device_compare_func (gconstpointer a, gconstpointer b)
+{
+  gint position_a = gst_avf_device_get_int_prop (GST_DEVICE_CAST(a), "avf.position");
+  gint position_b = gst_avf_device_get_int_prop (GST_DEVICE_CAST(b), "avf.position");
+
+  if (position_a > position_b)
+    return -1;
+
+  if (position_a == position_b)
+    return 0;
+
+  return 1;
 }
 
 static GList *
@@ -198,7 +234,8 @@ gst_avf_device_provider_probe (GstDeviceProvider * provider)
 #endif
   }
 
-  AVCaptureDeviceDiscoverySession *discovery_sess = [AVCaptureDeviceDiscoverySession discoverySessionWithDeviceTypes:deviceTypes
+  AVCaptureDeviceDiscoverySession *discovery_sess;
+  discovery_sess = [AVCaptureDeviceDiscoverySession discoverySessionWithDeviceTypes:deviceTypes
       mediaType:AVMediaTypeVideo
       position:AVCaptureDevicePositionUnspecified];
   NSArray<AVCaptureDevice *> *devices = discovery_sess.devices;
@@ -206,10 +243,11 @@ gst_avf_device_provider_probe (GstDeviceProvider * provider)
   for (int i = 0; i < [devices count]; i++) {
     AVCaptureDevice *device = [devices objectAtIndex:i];
     GstDevice *gst_device = gst_avf_device_new (device);
-    result = g_list_prepend (result, gst_object_ref_sink (gst_device)); 
+
+    result = g_list_prepend (result, gst_object_ref_sink (gst_device));
   }
 
-  result = g_list_reverse (result);
+  result = g_list_sort (result, gst_avf_device_compare_func);
 
   return result;
 }
@@ -282,7 +320,7 @@ gst_avf_device_provider_on_device_removed (GstDeviceProvider * provider, const c
   GST_OBJECT_LOCK (provider);
   for (item = provider->devices; item; item = item->next) {
     device = item->data;
-    gchar *dev_unique_id = gst_av_capture_device_get_device_unique_id (device);
+    gchar *dev_unique_id = gst_avf_device_get_string_prop (device, "avf.unique_id");
     gboolean found;
 
     found = (g_strcmp0 ((const gchar *)id_to_remove, dev_unique_id) == 0);
