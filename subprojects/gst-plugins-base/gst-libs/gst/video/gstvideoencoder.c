@@ -1286,7 +1286,8 @@ gst_video_encoder_sink_event_default (GstVideoEncoder * encoder,
   if (event) {
     if (!GST_EVENT_IS_SERIALIZED (event)
         || GST_EVENT_TYPE (event) == GST_EVENT_EOS
-        || GST_EVENT_TYPE (event) == GST_EVENT_FLUSH_STOP) {
+        || GST_EVENT_TYPE (event) == GST_EVENT_FLUSH_STOP
+        || GST_EVENT_TYPE (event) == GST_EVENT_CUSTOM_DOWNSTREAM) {
       ret = gst_video_encoder_push_event (encoder, event);
     } else {
       GST_VIDEO_ENCODER_STREAM_LOCK (encoder);
