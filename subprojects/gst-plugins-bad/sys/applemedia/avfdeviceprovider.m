@@ -142,7 +142,7 @@ gst_avf_device_get_int_prop (GstDevice * device, const gchar * prop_name)
   return ret; 
 }
 
-static int
+static gchar *
 gst_avf_device_get_string_prop (GstDevice * device, const gchar * prop_name)
 {
   GstStructure *props;
@@ -226,8 +226,10 @@ gst_avf_device_provider_probe (GstDeviceProvider * provider)
                                                 ]];
 
   if (@available(iOS 17, macOS 14, *)) {
+#if ((HOST_DARWIN && __MAC_OS_X_VERSION_MAX_ALLOWED >= 101300) || HOST_IOS)
     [deviceTypes addObject:AVCaptureDeviceTypeContinuityCamera];
     [deviceTypes addObject:AVCaptureDeviceTypeExternal];
+#endif
   } else {
 #if defined(HOST_DARWIN)
     [deviceTypes addObject:AVCaptureDeviceTypeExternalUnknown];
@@ -407,8 +409,8 @@ gst_avf_device_get_property (GObject * object, guint prop_id,
                              GValue * value, GParamSpec * pspec)
 {
   GstAvfDevice *device;
-
   device = GST_AVF_DEVICE_CAST (object);
+  (void) device;
 
   switch (prop_id) {
     default:
@@ -422,8 +424,8 @@ gst_avf_device_set_property (GObject * object, guint prop_id,
                              const GValue * value, GParamSpec * pspec)
 {
   GstAvfDevice *device;
-
   device = GST_AVF_DEVICE_CAST (object);
+  (void) device;
 
   switch (prop_id) {
     default:
@@ -444,7 +446,7 @@ gst_avf_device_new (AVCaptureDevice * device)
                          "display-name", device_name, "caps", caps, "device-class", "Video/Source",
                          "properties", props, NULL);
 
-  gstdev->type = "Video/Source";
+  gstdev->type = GST_AVF_DEVICE_TYPE_VIDEO_SOURCE;
   gstdev->element = "avfvideosrc";
 
   gst_structure_free (props);
