@@ -42,14 +42,13 @@ extra_comm_args = [
 have_d3d11sdk_h = false
 have_dxgidebug_h = false
 d3d11_winapi_app = false
-d3d11_winui = false
 d3d11_conf = configuration_data()
 
 d3d11_lib = cc.find_library('d3d11', required : false)
 dxgi_lib = cc.find_library('dxgi', required : false)
 d3dcompiler_lib = cc.find_library('d3dcompiler', required: false)
 runtimeobject_lib = cc.find_library('runtimeobject', required : false)
-windowsapp_lib = cc.find_library('windowsapp', required: false)
+windowsapp_lib = cc.find_library('Microsoft.WindowsAppRuntime', required: false)
 
 if not d3d11_lib.found() or not dxgi_lib.found()
   subdir_done()
@@ -91,15 +90,7 @@ if runtimeobject_lib.found() and d3dcompiler_lib.found()
       name: 'building for WinRT')
 endif
 
-if windowsapp_lib.found()
-  d3d11_winui = cxx.compiles('''#include <windows.h>
-      #include <Microsoft.UI.Xaml.media.dxinterop.h>
-      #include <winrt/Microsoft.UI.Xaml.Interop.h>
-      #include <winrt/Microsoft.UI.Xaml.Controls.h>
-      ''',
-      dependencies: [windowsapp_lib],
-      name: 'building for cppwinrt')
-endif
+d3d11_winui = windowsapp_lib.found()
 
 if not d3d11_winapi_desktop and not (d3d11_winapi_app or d3d11_winui)
   subdir_done()
@@ -109,7 +100,7 @@ extra_deps = []
 d3d11_winapi_only_app = d3d11_winapi_app and not d3d11_winapi_desktop
 d3d11_conf.set10('GST_D3D11_WINAPI_ONLY_APP', d3d11_winapi_only_app)
 d3d11_conf.set10('GST_D3D11_WINAPI_APP', d3d11_winapi_app)
-d3d11_conf.set10('GST_D3D11_WINUI', d3d11_winui)
+d3d11_conf.set10('GST_D3D11_WINUI', windowsapp_lib.found())
 
 # for enabling debug layer
 # NOTE: Disable d3d11/dxgi debug layer in case of [UWP build + release CRT]
