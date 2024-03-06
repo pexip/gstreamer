@@ -6,5 +6,6 @@ G_BEGIN_DECLS
 
 #mesondefine GST_D3D11_WINAPI_ONLY_APP
 #mesondefine GST_D3D11_WINAPI_APP
+#mesondefine GST_D3D11_WINRT_CPP
 
 G_END_DECLS

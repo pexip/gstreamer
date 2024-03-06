@@ -28,6 +28,7 @@ d3d11_sources = [
 ]
 
 extra_c_args = ['-DCOBJMACROS']
+extra_cpp_args = ['/std:c++17']
 extra_args = ['-DGST_USE_UNSTABLE_API']
 extra_dep = []
 
@@ -46,8 +47,9 @@ endif
 
 runtimeobject_lib = cc.find_library('runtimeobject', required : false)
 winmm_lib = cc.find_library('winmm', required: false)
+windowsapp_lib = cc.find_library('windowsapp', required: false)
 
-if d3d11_winapi_only_app and (not d3dcompiler_lib.found() or not runtimeobject_lib.found())
+if d3d11_winapi_only_app and (not d3dcompiler_lib.found() or not runtimeobject_lib.found() or windowsapp_lib.found())
   if d3d11_option.enabled()
     error('The d3d11 plugin was enabled explicitly, but required dependencies were not found.')
   endif
@@ -93,6 +95,11 @@ if d3d11_winapi_app
   extra_dep += [runtimeobject_lib]
 endif
 
+if d3d11_cppwinrt
+  d3d11_sources += ['gstd3d11window_swapchainpanel.cpp']
+  extra_dep += [windowsapp_lib]
+endif
+
 if d3d11_winapi_desktop
   d3d11_sources += ['gstd3d11dxgicapture.cpp',
                     'gstd3d11screencapture.cpp',
@@ -126,7 +133,7 @@ endif
 gstd3d11 = library('gstd3d11',
   d3d11_sources,
   c_args : gst_plugins_bad_args + extra_c_args + extra_args,
-  cpp_args: gst_plugins_bad_args + extra_args,
+  cpp_args: gst_plugins_bad_args + extra_cpp_args + extra_args,
   include_directories : [configinc],
   dependencies : [gstbase_dep, gstvideo_dep, gmodule_dep, gstcontroller_dep,
                   gstd3d11_dep, gstdxva_dep, d2d_dep] + extra_dep,

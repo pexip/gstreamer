@@ -25,6 +25,26 @@
 #include "gstd3d11window.h"
 #include "gstd3d11pluginutils.h"
 
+#if GST_D3D11_WINRT_CPP
+
+#include <Windows.h>
+#undef GetCurrentTime
+
+#include <winrt/base.h>
+#include <winrt/Windows.Foundation.Collections.h>
+#include <winrt/Windows.UI.Xaml.Interop.h>
+#include <winrt/Microsoft.UI.Xaml.Controls.h>
+#include <winrt/Microsoft.UI.Xaml.Controls.Primitives.h>
+#include <winrt/Microsoft.UI.Xaml.XamlTypeInfo.h>
+#include <winrt/Microsoft.UI.Xaml.Markup.h>
+
+#include <microsoft.ui.xaml.media.dxinterop.h>
+#include <winrt/Microsoft.UI.Xaml.Controls.h>
+#include <winrt/Microsoft.UI.Xaml.Controls.Primitives.h>
+#include <winrt/Microsoft.UI.Xaml.XamlTypeInfo.h>
+
+#endif
+
 #if GST_D3D11_WINAPI_APP
 /* workaround for GetCurrentTime collision */
 #ifdef GetCurrentTime
@@ -34,11 +54,14 @@
 #include <windows.applicationmodel.core.h>
 #endif
 
+#if !GST_D3D11_WINRT_CPP
 #include <wrl.h>
 
 /* *INDENT-OFF* */
 using namespace Microsoft::WRL;
 /* *INDENT-ON* */
+#endif
+
 
 GST_DEBUG_CATEGORY_EXTERN (gst_d3d11_window_debug);
 #define GST_CAT_DEFAULT gst_d3d11_window_debug
@@ -293,7 +316,13 @@ gst_d3d11_window_on_resize_default (GstD3D11Window * self, guint width,
   HRESULT hr;
   D3D11_TEXTURE2D_DESC desc;
   DXGI_SWAP_CHAIN_DESC swap_desc;
+
+#if GST_D3D11_WINRT_CPP
+  winrt::com_ptr < ID3D11Texture2D > backbuffer;
+#else
   ComPtr < ID3D11Texture2D > backbuffer;
+#endif
+
   GstVideoRectangle src_rect, dst_rect, rst_rect;
   IDXGISwapChain *swap_chain;
   GstMemory *mem;
@@ -335,8 +364,14 @@ gst_d3d11_window_on_resize_default (GstD3D11Window * self, guint width,
     size *= 4;
   }
 
+#if GST_D3D11_WINRT_CPP
+  mem = gst_d3d11_allocator_alloc_wrapped (nullptr,
+      self->device, backbuffer.get(), size, nullptr, nullptr);
+#else
   mem = gst_d3d11_allocator_alloc_wrapped (nullptr,
       self->device, backbuffer.Get (), size, nullptr, nullptr);
+#endif
+
   if (!mem) {
     GST_ERROR_OBJECT (self, "Couldn't allocate wrapped memory");
     return;
@@ -562,7 +597,13 @@ gst_d3d11_window_prepare_default (GstD3D11Window * window, guint display_width,
   gboolean have_hdr10_meta = FALSE;
   GstVideoMasteringDisplayInfo mdcv;
   GstVideoContentLightLevel cll;
+
+#if GST_D3D11_WINRT_CPP
+  winrt::com_ptr < IDXGISwapChain3 > swapchain3;
+#else
   ComPtr < IDXGISwapChain3 > swapchain3;
+#endif
+
   GstStructure *s;
   const gchar *cll_str = nullptr;
   const gchar *mdcv_str = nullptr;
@@ -713,20 +754,38 @@ gst_d3d11_window_prepare_default (GstD3D11Window * window, guint display_width,
 
   hr = window->swap_chain->QueryInterface (IID_PPV_ARGS (&swapchain3));
   if (gst_d3d11_result (hr, device)) {
-    if (gst_d3d11_find_swap_chain_color_space (&window->render_info,
-            swapchain3.Get (), &swapchain_colorspace)) {
+    gboolean has_colorspace;
+
+#if GST_D3D11_WINRT_CPP
+    has_colorspace = gst_d3d11_find_swap_chain_color_space (&window->render_info,
+            swapchain3.get (), &swapchain_colorspace);
+#else
+    has_colorspace = gst_d3d11_find_swap_chain_color_space (&window->render_info,
+            swapchain3.Get (), &swapchain_colorspace);
+#endif
+
+    if (has_colorspace) {
       hr = swapchain3->SetColorSpace1 (swapchain_colorspace);
       if (!gst_d3d11_result (hr, window->device)) {
         GST_WARNING_OBJECT (window, "Failed to set colorspace %d, hr: 0x%x",
             swapchain_colorspace, (guint) hr);
         swapchain_colorspace = DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709;
       } else {
-        ComPtr < IDXGISwapChain4 > swapchain4;
+#if GST_D3D11_WINRT_CPP
+  winrt::com_ptr < IDXGISwapChain4 > swapchain4;
+#else
+  ComPtr < IDXGISwapChain4 > swapchain4;
+#endif
 
         /* DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020 = 12, undefined in old
          * mingw header */
         if (swapchain_colorspace == 12 && have_hdr10_meta) {
+
+#if GST_D3D11_WINRT_CPP
+          hr = swapchain3.try_as (swapchain4);
+#else
           hr = swapchain3.As (&swapchain4);
+#endif
           if (gst_d3d11_result (hr, device)) {
             DXGI_HDR_METADATA_HDR10 hdr10_metadata = { 0, };
 
@@ -1043,6 +1102,7 @@ gst_d3d11_window_unprepare (GstD3D11Window * window)
 GstD3D11WindowNativeType
 gst_d3d11_window_get_native_type_from_handle (guintptr handle)
 {
+  GST_ERROR ("native type from handle!");
   if (!handle)
     return GST_D3D11_WINDOW_NATIVE_TYPE_NONE;
 
@@ -1050,7 +1110,7 @@ gst_d3d11_window_get_native_type_from_handle (guintptr handle)
   if (IsWindow ((HWND) handle))
     return GST_D3D11_WINDOW_NATIVE_TYPE_HWND;
 #endif
-#if GST_D3D11_WINAPI_ONLY_APP
+#if GST_D3D11_WINAPI_APP
   {
     /* *INDENT-OFF* */
     ComPtr<IInspectable> window = reinterpret_cast<IInspectable*> (handle);
@@ -1058,11 +1118,33 @@ gst_d3d11_window_get_native_type_from_handle (guintptr handle)
     ComPtr<ABI::Windows::UI::Xaml::Controls::ISwapChainPanel> panel;
     /* *INDENT-ON* */
 
-    if (SUCCEEDED (window.As (&core_window)))
+    if (SUCCEEDED (window.As (&core_window))){
       return GST_D3D11_WINDOW_NATIVE_TYPE_CORE_WINDOW;
+    }
 
-    if (SUCCEEDED (window.As (&panel)))
+    if (SUCCEEDED (window.As (&panel))) {
       return GST_D3D11_WINDOW_NATIVE_TYPE_SWAP_CHAIN_PANEL;
+    }
+  }
+#endif
+
+#if GST_D3D11_WINRT_CPP
+  {
+    using namespace winrt::Windows::Foundation;
+    GST_ERROR ("WE GOT TO THE SPOT");
+    /* *INDENT-OFF* */
+    winrt::Windows::Foundation::IUnknown unk;
+    winrt::Microsoft::UI::Xaml::Controls::ISwapChainPanel panel;
+    /* *INDENT-ON* */
+
+    winrt::attach_abi (unk, (void*) (handle));
+
+    // window.attach (reinterpret_cast<IInspectable*> (handle));
+
+   if (unk.try_as (panel)) {
+      GST_ERROR ("WE ARE A PANEL!");
+      return GST_D3D11_WINDOW_NATIVE_TYPE_SWAP_CHAIN_PANEL;
+    }
   }
 #endif
 

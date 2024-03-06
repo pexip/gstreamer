@@ -42,6 +42,10 @@
 #include "gstd3d11pluginutils.h"
 #include <string>
 
+#if GST_D3D11_WINRT_CPP
+#include "gstd3d11window_swapchainpanel.h"
+#endif
+
 #if GST_D3D11_WINAPI_APP
 #include "gstd3d11window_corewindow.h"
 #include "gstd3d11window_swapchainpanel.h"
@@ -1030,6 +1034,12 @@ gst_d3d11_video_sink_prepare_window (GstD3D11VideoSink * self)
       self->window = gst_d3d11_window_swap_chain_panel_new (self->device,
           self->window_id);
       break;
+#endif
+#if GST_D3D11_WINRT_CPP
+    case GST_D3D11_WINDOW_NATIVE_TYPE_SWAP_CHAIN_PANEL:
+      self->window = gst_d3d11_window_swap_chain_panel_new (self->device,
+          self->window_id);
+    break;
 #endif
     default:
       break;
