@@ -26,12 +26,67 @@
 #include "gstd3d11pluginutils.h"
 
 #if GST_D3D11_WINAPI_APP
+#pragma comment(lib, "windowsapp")
+
 /* workaround for GetCurrentTime collision */
 #ifdef GetCurrentTime
 #undef GetCurrentTime
 #endif
 #include <windows.ui.xaml.h>
 #include <windows.applicationmodel.core.h>
+#endif
+
+#if GST_D3D11_WINUI
+// #include <windows.ui.xaml.media.dxinterop.h>
+#include <Microsoft.UI.Xaml.media.dxinterop.h>
+#include <winrt/Microsoft.UI.Xaml.Interop.h>
+#include <winrt/Microsoft.UI.Xaml.Controls.h>
+
+// #include <microsoft.ui.xaml.window.h>
+
+// #include <winrt/Windows.UI.Xaml.Interop.h>
+// #include <winrt/microsoft.ui.interop.h>
+
+// #include <winrt/Microsoft.UI.Xaml.Controls.h>
+// #include <winrt/Microsoft.UI.Xaml.Controls.Primitives.h>
+
+// #include <winrt/Microsoft.UI.Xaml.Controls.h>
+// #include <winrt/Microsoft.UI.Xaml.Controls.Primitives.h>
+// #include <winrt/Microsoft.UI.Xaml.XamlTypeInfo.h>
+// #include <winrt/Microsoft.UI.Xaml.Markup.h>
+
+
+// #include <winrt/Windows.Foundation.h>
+// #include <winrt/Windows.Foundation.Collections.h>
+// #include <winrt/Windows.ApplicationModel.Activation.h>
+// #include <winrt/Microsoft.UI.Composition.h>
+// #include <winrt/Microsoft.UI.Xaml.h>
+// #include <winrt/Microsoft.UI.Xaml.Controls.h>
+// #include <winrt/Microsoft.UI.Xaml.Controls.Primitives.h>
+// #include <winrt/Microsoft.UI.Xaml.Data.h>
+// #include <winrt/Microsoft.UI.Xaml.Interop.h>
+// #include <winrt/Microsoft.UI.Xaml.Markup.h>
+// #include <winrt/Microsoft.UI.Xaml.Media.h>
+// #include <winrt/Microsoft.UI.Xaml.Navigation.h>
+// #include <winrt/Microsoft.UI.Xaml.Shapes.h>
+// #include <winrt/Microsoft.UI.Dispatching.h>
+// #include <wil/cppwinrt_helpers.h>
+
+// #include <winrt/Windows.Media.Playback.h>
+
+
+// #include <Microsoft.UI.Xaml.media.dxinterop.h>
+
+// #include <DXGI1_2.h>
+// #include <Dxgi1_3.h>
+// #include <D3D11.h>
+// #include <D2d1_1.h>
+// #include <windows.graphics.directx.direct3d11.interop.h>
+
+// using namespace winrt;
+// using namespace Microsoft::UI::Xaml;
+// using namespace Microsoft::UI::Xaml::Controls;
+
 #endif
 
 #include <wrl.h>
@@ -1050,21 +1105,35 @@ gst_d3d11_window_get_native_type_from_handle (guintptr handle)
   if (IsWindow ((HWND) handle))
     return GST_D3D11_WINDOW_NATIVE_TYPE_HWND;
 #endif
-#if GST_D3D11_WINAPI_ONLY_APP
+#if GST_D3D11_WINAPI_APP
   {
     /* *INDENT-OFF* */
     ComPtr<IInspectable> window = reinterpret_cast<IInspectable*> (handle);
     ComPtr<ABI::Windows::UI::Core::ICoreWindow> core_window;
-    ComPtr<ABI::Windows::UI::Xaml::Controls::ISwapChainPanel> panel;
+    // ComPtr<ABI::Windows::UI::Xaml::Controls::ISwapChainPanel> panel;
+   // ComPtr<winrt::Microsoft::UI::Xaml::Controls::ISwapChainPanel> panel_winui;
     /* *INDENT-ON* */
 
-    if (SUCCEEDED (window.As (&core_window)))
-      return GST_D3D11_WINDOW_NATIVE_TYPE_CORE_WINDOW;
+    GST_ERROR ("UNDER WINAPI!");
 
-    if (SUCCEEDED (window.As (&panel)))
-      return GST_D3D11_WINDOW_NATIVE_TYPE_SWAP_CHAIN_PANEL;
+    if (SUCCEEDED (window.As (&core_window))){
+      GST_ERROR ("CORE WINDOW");
+      return GST_D3D11_WINDOW_NATIVE_TYPE_CORE_WINDOW;
+    }
+
+    // if (SUCCEEDED (window.As (&panel))) {
+    //   GST_ERROR ("SWAP CHAIN UWP");
+    //   return GST_D3D11_WINDOW_NATIVE_TYPE_SWAP_CHAIN_PANEL;
+    // }
+
+    // if (SUCCEEDED (window.As (&panel_winui))) {
+    //   GST_ERROR ("SWAP CHAIN WIN UI");
+    //   return GST_D3D11_WINDOW_NATIVE_TYPE_SWAP_CHAIN_PANEL;
+    // }
   }
 #endif
+
+  GST_ERROR("NONE!");
 
   return GST_D3D11_WINDOW_NATIVE_TYPE_NONE;
 }

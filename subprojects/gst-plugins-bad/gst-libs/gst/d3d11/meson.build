@@ -30,6 +30,9 @@ endif
 extra_c_args = [
   '-DCOBJMACROS',
 ]
+extra_cpp_args = [
+  '/std:c++17',
+]
 extra_comm_args = [
   '-DGST_USE_UNSTABLE_API',
   '-DBUILDING_GST_D3D11',
@@ -39,12 +42,14 @@ extra_comm_args = [
 have_d3d11sdk_h = false
 have_dxgidebug_h = false
 d3d11_winapi_app = false
+d3d11_winui = false
 d3d11_conf = configuration_data()
 
 d3d11_lib = cc.find_library('d3d11', required : false)
 dxgi_lib = cc.find_library('dxgi', required : false)
 d3dcompiler_lib = cc.find_library('d3dcompiler', required: false)
 runtimeobject_lib = cc.find_library('runtimeobject', required : false)
+windowsapp_lib = cc.find_library('windowsapp', required: false)
 
 if not d3d11_lib.found() or not dxgi_lib.found()
   subdir_done()
@@ -86,7 +91,17 @@ if runtimeobject_lib.found() and d3dcompiler_lib.found()
       name: 'building for WinRT')
 endif
 
-if not d3d11_winapi_desktop and not d3d11_winapi_app
+if windowsapp_lib.found()
+  d3d11_winui = cxx.compiles('''#include <windows.h>
+      #include <Microsoft.UI.Xaml.media.dxinterop.h>
+      #include <winrt/Microsoft.UI.Xaml.Interop.h>
+      #include <winrt/Microsoft.UI.Xaml.Controls.h>
+      ''',
+      dependencies: [windowsapp_lib],
+      name: 'building for cppwinrt')
+endif
+
+if not d3d11_winapi_desktop and not (d3d11_winapi_app or d3d11_winui)
   subdir_done()
 endif
 
@@ -94,6 +109,7 @@ extra_deps = []
 d3d11_winapi_only_app = d3d11_winapi_app and not d3d11_winapi_desktop
 d3d11_conf.set10('GST_D3D11_WINAPI_ONLY_APP', d3d11_winapi_only_app)
 d3d11_conf.set10('GST_D3D11_WINAPI_APP', d3d11_winapi_app)
+d3d11_conf.set10('GST_D3D11_WINUI', d3d11_winui)
 
 # for enabling debug layer
 # NOTE: Disable d3d11/dxgi debug layer in case of [UWP build + release CRT]
@@ -156,6 +172,10 @@ if d3d11_winapi_only_app
   extra_deps += [d3dcompiler_lib, runtimeobject_lib]
 endif
 
+if d3d11_winui
+  extra_deps += [windowsapp_lib]
+endif
+
 # MinGW 32bits compiler seems to be complaining about redundant-decls
 # when ComPtr is in use. Let's just disable the warning
 if cc.get_id() != 'msvc'
@@ -178,7 +198,7 @@ pkg_name = 'gstreamer-d3d11-' + api_version
 gstd3d11 = library('gstd3d11-' + api_version,
   d3d11_sources,
   c_args : gst_plugins_bad_args + extra_c_args + extra_comm_args,
-  cpp_args : gst_plugins_bad_args + extra_comm_args,
+  cpp_args : gst_plugins_bad_args + extra_cpp_args + extra_comm_args,
   include_directories : [configinc, libsinc],
   version : libversion,
   soversion : soversion,
@@ -224,7 +244,7 @@ install_headers(d3d11_headers, subdir : 'gstreamer-1.0/gst/d3d11')
 
 gstd3d11_dep = declare_dependency(link_with : gstd3d11,
   include_directories : [libsinc],
-  dependencies : [gstbase_dep, gstvideo_dep, d3d11_lib, dxgi_lib],
+  dependencies : [gstbase_dep, gstvideo_dep, d3d11_lib, dxgi_lib] + extra_deps,
   sources : gen_sources)
 
 meson.override_dependency(pkg_name, gstd3d11_dep)
