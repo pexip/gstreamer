@@ -141,7 +141,7 @@ gst_osx_audio_device_provider_start (GstDeviceProvider * provider)
   if (devices) {
     GList *iter;
     for (iter = devices; iter; iter = g_list_next (iter)) {
-      gst_device_provider_device_add (provider, GST_DEVICE (iter->data));
+      gst_device_provider_device_add (provider, GST_DEVICE_CAST (iter->data));
     }
     g_list_free (devices);
   }
@@ -388,6 +388,11 @@ gst_osx_audio_device_provider_probe_internal (GstOsxAudioDeviceProvider * self,
     gchar *device_name;
 
     if ((device_name = _audio_device_get_name (osx_devices[i], FALSE))) {
+      if (g_strrstr (device_name, "VPAUAggregateAudioDevice")) {
+        GST_DEBUG ("Skipping VPAUAggregateAudioDevice from list");
+        goto cleanup;
+      }
+
       gboolean has_output = _audio_device_has_output (osx_devices[i]);
       gboolean has_input = _audio_device_has_input (osx_devices[i]);
 
@@ -465,7 +470,7 @@ gst_osx_audio_device_is_in_list (GList * list, GstDevice * device)
     AudioDeviceID other_device_id;
     gboolean other_device_is_default;
 
-    other_s = gst_device_get_properties (GST_DEVICE (iter->data));
+    other_s = gst_device_get_properties (GST_DEVICE_CAST (iter->data));
     g_assert (other_s);
 
     g_assert(gst_structure_get_int (other_s, "device-id", &other_device_id) == TRUE);
@@ -510,23 +515,23 @@ gst_osx_audio_device_provider_update_devices (GstOsxAudioDeviceProvider * self)
 
   /* Check newly added devices */
   for (iter = new_devices; iter; iter = g_list_next (iter)) {
-    if (!gst_osx_audio_device_is_in_list (prev_devices, GST_DEVICE (iter->data))) {
-      to_add = g_list_prepend (to_add, gst_object_ref (iter->data));
-    }
+    GstDevice *device = GST_DEVICE_CAST (iter->data);
+    if (!gst_osx_audio_device_is_in_list (prev_devices, device))
+      to_add = g_list_prepend (to_add, gst_object_ref (device));
   }
 
   /* Check removed device */
   for (iter = prev_devices; iter; iter = g_list_next (iter)) {
-    if (!gst_osx_audio_device_is_in_list (new_devices, GST_DEVICE (iter->data))) {
-      to_remove = g_list_prepend (to_remove, gst_object_ref (iter->data));
-    }
+    GstDevice *device = GST_DEVICE_CAST (iter->data);
+    if (!gst_osx_audio_device_is_in_list (new_devices, device))
+      to_remove = g_list_prepend (to_remove, gst_object_ref (device));
   }
 
   for (iter = to_remove; iter; iter = g_list_next (iter))
-    gst_device_provider_device_remove (provider, GST_DEVICE (iter->data));
+    gst_device_provider_device_remove (provider, GST_DEVICE_CAST (iter->data));
 
   for (iter = to_add; iter; iter = g_list_next (iter))
-    gst_device_provider_device_add (provider, GST_DEVICE (iter->data));
+    gst_device_provider_device_add (provider, GST_DEVICE_CAST (iter->data));
 
   if (prev_devices)
     g_list_free_full (prev_devices, (GDestroyNotify) gst_object_unref);
