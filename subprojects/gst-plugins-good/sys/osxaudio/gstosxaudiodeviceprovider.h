@@ -45,6 +45,20 @@ typedef struct _GstOsxAudioDeviceProviderClass GstOsxAudioDeviceProviderClass;
 struct _GstOsxAudioDeviceProvider
 {
   GstDeviceProvider parent;
+
+  GHashTable *device_id_map; 
+
+  GMutex mutex;
+  GCond cond;
+  GThread * thread;
+
+  gboolean running;
+  gboolean update_devices;
+
+  AudioDeviceID current_default_input;
+  AudioDeviceID current_default_output;
+
+  AudioObjectPropertyListenerBlock listenerBlock;
 };
 
 struct _GstOsxAudioDeviceProviderClass
@@ -78,6 +92,7 @@ struct _GstOsxAudioDevice
 
   const gchar *element;
   AudioDeviceID device_id;
+  gboolean is_default;
 };
 
 struct _GstOsxAudioDeviceClass

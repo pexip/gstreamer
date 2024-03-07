@@ -30,7 +30,7 @@
 #include <gst/audio/audio-channels.h>
 #ifdef HAVE_IOS
   #include <CoreAudio/CoreAudioTypes.h>
-  #define AudioDeviceID gint
+  #define AudioDeviceID guint32
   #define kAudioDeviceUnknown 0
 #else
   #include <CoreAudio/CoreAudio.h>
