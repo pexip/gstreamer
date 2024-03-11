@@ -45,6 +45,8 @@ typedef struct _GstOsxAudioDeviceProviderClass GstOsxAudioDeviceProviderClass;
 struct _GstOsxAudioDeviceProvider
 {
   GstDeviceProvider parent;
+
+  GMutex device_change_mutex;
 };
 
 struct _GstOsxAudioDeviceProviderClass

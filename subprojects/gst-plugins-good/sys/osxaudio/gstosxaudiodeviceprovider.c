@@ -64,14 +64,27 @@ static void
 gst_osx_audio_device_provider_update_devices (GstOsxAudioDeviceProvider * provider);
 
 static void
+gst_osx_audio_device_provider_finalize (GObject * object)
+{
+  GstOsxAudioDeviceProvider *provider = GST_OSX_AUDIO_DEVICE_PROVIDER_CAST (object);
+
+  g_mutex_clear (&provider->device_change_mutex);
+  
+  G_OBJECT_CLASS (gst_osx_audio_device_provider_parent_class)->finalize (object);
+}
+
+static void
 gst_osx_audio_device_provider_class_init (GstOsxAudioDeviceProviderClass *
     klass)
 {
+  GObjectClass *object_class = G_OBJECT_CLASS (klass);
   GstDeviceProviderClass *dm_class = GST_DEVICE_PROVIDER_CLASS (klass);
 
   dm_class->probe = gst_osx_audio_device_provider_probe;
   dm_class->start = gst_osx_audio_device_provider_start;
   dm_class->stop = gst_osx_audio_device_provider_stop;
+
+  object_class->finalize = gst_osx_audio_device_provider_finalize;
 
   gst_device_provider_class_set_static_metadata (dm_class,
       "OSX Audio Device Provider", "Source/Sink/Audio",
@@ -85,6 +98,7 @@ static OSStatus gst_osx_audio_device_change_cb(AudioObjectID inObjectID,
                        void* userdata) {
     GstOsxAudioDeviceProvider * provider = (GstOsxAudioDeviceProvider *) userdata;
 
+    g_mutex_lock (&provider->device_change_mutex);
     for (guint32 i = 0; i < inNumberAddresses; i++) {
         switch (inAddresses[i].mSelector) {
             case kAudioHardwarePropertyDefaultInputDevice:
@@ -100,12 +114,15 @@ static OSStatus gst_osx_audio_device_change_cb(AudioObjectID inObjectID,
                 break;
         }
     }
+    g_mutex_unlock (&provider->device_change_mutex);
+
     return noErr;
 }
 
 static void
 gst_osx_audio_device_provider_init (GstOsxAudioDeviceProvider * provider)
 {
+  g_mutex_init (&provider->device_change_mutex);
 }
 
 static gboolean
@@ -459,24 +476,35 @@ gst_osx_audio_device_is_in_list (GList * list, GstDevice * device)
   AudioDeviceID device_id;
   gboolean device_is_default;
   gboolean found = FALSE;
+  gboolean device_is_src;
+  gboolean device_is_sink;
 
   s = gst_device_get_properties (device);
   g_assert (s);
   g_assert(gst_structure_get_int (s, "device-id", &device_id) == TRUE);
   g_assert(gst_structure_get_boolean (s, "is-default", &device_is_default) == TRUE);
+  device_is_src = gst_device_has_classes (device, "Audio/Source");
+  device_is_sink = gst_device_has_classes (device, "Audio/Sink");
 
   for (iter = list; iter; iter = g_list_next (iter)) {
+    GstDevice *other_device = GST_DEVICE_CAST (iter->data);
     GstStructure *other_s;
     AudioDeviceID other_device_id;
     gboolean other_device_is_default;
+    gboolean other_is_same_class = FALSE;
 
-    other_s = gst_device_get_properties (GST_DEVICE_CAST (iter->data));
+    other_s = gst_device_get_properties (other_device);
     g_assert (other_s);
 
     g_assert(gst_structure_get_int (other_s, "device-id", &other_device_id) == TRUE);
     g_assert(gst_structure_get_boolean (other_s, "is-default", &other_device_is_default) == TRUE);
 
-    if (device_id == other_device_id && device_is_default == other_device_is_default) {
+    if (device_is_src && gst_device_has_classes (other_device, "Audio/Source"))
+      other_is_same_class = TRUE;
+    else if (device_is_sink && gst_device_has_classes (other_device, "Audio/Sink"))
+      other_is_same_class = TRUE;
+
+    if (device_id == other_device_id && device_is_default == other_device_is_default && other_is_same_class) {
       found = TRUE;
     }
 
