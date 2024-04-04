@@ -120,6 +120,9 @@ static gboolean gst_mf_video_src_query (GstBaseSrc * src, GstQuery * query);
 static GstFlowReturn gst_mf_video_src_create (GstPushSrc * pushsrc,
     GstBuffer ** buffer);
 
+static GstStateChangeReturn gst_mf_video_src_change_state (GstElement * element,
+    GstStateChange transition);
+
 #define gst_mf_video_src_parent_class parent_class
 G_DEFINE_TYPE (GstMFVideoSrc, gst_mf_video_src, GST_TYPE_PUSH_SRC);
 
@@ -175,6 +178,7 @@ gst_mf_video_src_class_init (GstMFVideoSrcClass * klass)
       "Seungha Yang <seungha.yang@navercorp.com>");
 
   gst_element_class_add_static_pad_template (element_class, &src_template);
+  element_class->change_state = gst_mf_video_src_change_state;
 
   basesrc_class->start = GST_DEBUG_FUNCPTR (gst_mf_video_src_start);
   basesrc_class->stop = GST_DEBUG_FUNCPTR (gst_mf_video_src_stop);
@@ -263,12 +267,8 @@ gst_mf_video_src_set_property (GObject * object, guint prop_id,
 }
 
 static gboolean
-gst_mf_video_src_start (GstBaseSrc * src)
+gst_mf_video_src_open_source (GstMFVideoSrc * self)
 {
-  GstMFVideoSrc *self = GST_MF_VIDEO_SRC (src);
-
-  GST_DEBUG_OBJECT (self, "Start");
-
   self->source = gst_mf_source_object_new (GST_MF_SOURCE_TYPE_VIDEO,
       self->device_index, self->device_name, self->device_path, nullptr);
 
@@ -294,18 +294,60 @@ gst_mf_video_src_start (GstBaseSrc * src)
   return TRUE;
 }
 
+static void
+gst_mf_video_src_close_source (GstMFVideoSrc * self)
+{
+  if (self->source) {
+    gst_mf_source_object_stop (self->source);
+    gst_object_unref (self->source);
+    self->source = nullptr;
+  }
+}
+
+static GstStateChangeReturn
+gst_mf_video_src_change_state (GstElement * element, GstStateChange transition)
+{
+  GstStateChangeReturn ret = GST_STATE_CHANGE_SUCCESS;
+  GstMFVideoSrc *self = GST_MF_VIDEO_SRC (element);
+
+  switch (transition) {
+    case GST_STATE_CHANGE_NULL_TO_READY:
+      if (!gst_mf_video_src_open_source (self))
+        return GST_STATE_CHANGE_FAILURE;
+      break;
+    default:
+      break;
+  }
+
+  ret = GST_ELEMENT_CLASS (parent_class)->change_state (element, transition);
+
+  switch (transition) {
+    case GST_STATE_CHANGE_READY_TO_NULL:
+      gst_mf_video_src_close_source (self);
+      break;
+    default:
+      break;
+  }
+
+  return ret;
+}
+
+static gboolean
+gst_mf_video_src_start (GstBaseSrc * src)
+{
+  GstMFVideoSrc *self = GST_MF_VIDEO_SRC (src);
+
+  GST_DEBUG_OBJECT (self, "Start");
+
+  return TRUE;
+}
+
 static gboolean
 gst_mf_video_src_stop (GstBaseSrc * src)
 {
   GstMFVideoSrc *self = GST_MF_VIDEO_SRC (src);
 
   GST_DEBUG_OBJECT (self, "Stop");
-
-  if (self->source) {
-    gst_mf_source_object_stop (self->source);
-    gst_object_unref (self->source);
-    self->source = nullptr;
-  }
 
   self->started = FALSE;
 
