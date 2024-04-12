@@ -46,6 +46,7 @@
 
 #include "gstrtprtxsend.h"
 #include "rtpstats.h"
+#include <gst/rtp/gstrtprepairmeta.h>
 
 GST_DEBUG_CATEGORY_STATIC (gst_rtp_rtx_send_debug);
 #define GST_CAT_DEFAULT gst_rtp_rtx_send_debug
@@ -765,21 +766,31 @@ gst_rtp_rtx_buffer_new (GstRtpRtxSend * rtx, GstBuffer * buffer, guint8 padlen)
   SSRCRtxData *data;
   guint32 ssrc;
   guint16 seqnum;
+  guint32 orig_ssrc;
+  guint16 orig_seqnum;
   guint8 fmtp;
 
   gst_rtp_buffer_map (buffer, GST_MAP_READ, &rtp);
 
   /* get needed data from GstRtpRtxSend */
-  ssrc = gst_rtp_buffer_get_ssrc (&rtp);
-  data = gst_rtp_rtx_send_get_ssrc_data (rtx, ssrc);
+  orig_ssrc = gst_rtp_buffer_get_ssrc (&rtp);
+  data = gst_rtp_rtx_send_get_ssrc_data (rtx, orig_ssrc);
   ssrc = data->rtx_ssrc;
   seqnum = data->next_seqnum++;
   fmtp = GPOINTER_TO_UINT (g_hash_table_lookup (rtx->rtx_pt_map,
           GUINT_TO_POINTER (gst_rtp_buffer_get_payload_type (&rtp))));
+  
+  orig_seqnum = gst_rtp_buffer_get_seq (&rtp);
 
   GST_DEBUG_OBJECT (rtx, "creating rtx buffer, orig seqnum: %u, "
-      "rtx seqnum: %u, rtx ssrc: %X", gst_rtp_buffer_get_seq (&rtp),
+      "rtx seqnum: %u, rtx ssrc: %X", orig_seqnum,
       seqnum, ssrc);
+
+  GstRTPRepairMeta *repair_meta = gst_buffer_add_rtp_repair_meta (new_buffer,
+      0, 1, orig_ssrc, &orig_seqnum, 1);
+  GST_DEBUG_OBJECT (rtx, "%p, %d", repair_meta->seqnums,
+      repair_meta->seqnums->len);
+
 
   /* gst_rtp_buffer_map does not map the payload so do it now */
   gst_rtp_buffer_get_payload (&rtp);
