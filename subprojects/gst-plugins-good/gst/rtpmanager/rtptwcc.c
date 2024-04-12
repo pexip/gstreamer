@@ -21,6 +21,7 @@
 
 #include "rtptwcc.h"
 #include <gst/rtp/gstrtcpbuffer.h>
+#include <gst/rtp/gstrtprepairmeta.h>
 #include <gst/base/gstbitreader.h>
 #include <gst/base/gstbitwriter.h>
 #include <gst/net/gsttxfeedback.h>
@@ -86,6 +87,8 @@ typedef struct
   gboolean lost;
   gint32 rtx_osn;
   guint32 rtx_ssrc;
+  guint32 protects_ssrc;
+  GArray * protects_seqnums;
 } SentPacket;
 
 typedef struct
@@ -165,6 +168,14 @@ _structure_take_value_array (GstStructure * s,
   g_value_take_boxed (&value, array);
   gst_structure_take_value (s, field_name, &value);
   g_value_unset (&value);
+}
+
+static void
+_free_sentpacket (SentPacket * pkt)
+{
+  if (pkt->protects_seqnums) {
+    g_array_unref (pkt->protects_seqnums);
+  }
 }
 
 static TWCCStatsCtx *
@@ -654,6 +665,7 @@ rtp_twcc_manager_init (RTPTWCCManager * twcc)
 
   twcc->recv_packets = g_array_new (FALSE, FALSE, sizeof (RecvPacket));
   twcc->sent_packets = g_array_new (FALSE, FALSE, sizeof (SentPacket));
+  g_array_set_clear_func (twcc->sent_packets, (GDestroyNotify)_free_sentpacket);
   twcc->parsed_packets = g_array_new (FALSE, FALSE, sizeof (ParsedPacket));
   g_mutex_init (&twcc->recv_lock);
 
@@ -782,9 +794,11 @@ _add_packet_to_stats (RTPTWCCManager * twcc,
   /* extra check to see if we can confirm the arrival of a recovery packet,
      and hence set the "original" packet as recovered */
   if (parsed_pkt->status != RTP_TWCC_PACKET_STATUS_NOT_RECV
-      && sent_pkt->rtx_osn != -1) {
+      && sent_pkt->protects_seqnums
+      && sent_pkt->protects_seqnums->len == 1) {
     gint32 recovered_seq =
-        _lookup_seqnum (twcc, sent_pkt->rtx_ssrc, sent_pkt->rtx_osn);
+        _lookup_seqnum (twcc, sent_pkt->protects_ssrc, 
+          *(guint16*)sent_pkt->protects_seqnums->data);
     if (recovered_seq != -1) {
       GST_LOG ("RTX Packet %u protects seqnum %d", sent_pkt->seqnum,
           recovered_seq);
@@ -883,6 +897,8 @@ sent_packet_init (SentPacket * packet, guint16 seqnum, RTPPacketInfo * pinfo,
   packet->lost = FALSE;
   packet->rtx_osn = pinfo->rtx_osn;
   packet->rtx_ssrc = pinfo->rtx_ssrc;
+  packet->protects_ssrc = 0;
+  packet->protects_seqnums = NULL;
 }
 
 static void
@@ -969,6 +985,8 @@ _set_twcc_seqnum_data (RTPTWCCManager * twcc, RTPPacketInfo * pinfo,
   GST_WRITE_UINT16_BE (data, seqnum);
   sent_packet_init (&packet, seqnum, pinfo, &rtp);
   gst_rtp_buffer_unmap (&rtp);
+  gst_buffer_get_repair_seqnums (buf, &(packet.protects_ssrc),
+    &(packet.protects_seqnums));
   g_array_append_val (twcc->sent_packets, packet);
   _prune_old_sent_packets (twcc);
   rtp_twcc_manager_register_seqnum (twcc, pinfo->ssrc, pinfo->seqnum, seqnum);
