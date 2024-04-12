@@ -96,8 +96,8 @@ if d3d11_winapi_app
 endif
 
 if d3d11_cppwinrt
-  d3d11_sources += ['gstd3d11window_swapchainpanel.cpp']
-  extra_dep += [windowsapp_lib]
+  d3d11_sources += ['gstd3d11window_swapchainpanel_cppwinrt.cpp']
+  extra_dep += [windowsapp_lib, runtimeobject_lib]
 endif
 
 if d3d11_winapi_desktop

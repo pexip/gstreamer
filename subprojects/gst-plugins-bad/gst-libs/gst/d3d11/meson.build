@@ -174,7 +174,7 @@ if d3d11_winapi_only_app
 endif
 
 if d3d11_cppwinrt
-  extra_deps += [windowsapp_lib]
+  extra_deps += [windowsapp_lib, runtimeobject_lib]
 endif
 
 # MinGW 32bits compiler seems to be complaining about redundant-decls

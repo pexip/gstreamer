@@ -1,6 +1,7 @@
 /*
  * GStreamer
  * Copyright (C) 2019 Seungha Yang <seungha.yang@navercorp.com>
+ * Copyright (C) 2024 Tulio Beloqui <tulio@pexip.com>
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Library General Public
