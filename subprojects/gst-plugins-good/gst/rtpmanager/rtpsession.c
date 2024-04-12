@@ -2390,14 +2390,6 @@ update_packet (GstBuffer ** buffer, guint idx, RTPPacketInfo * pinfo)
       /* RTP header extensions */
       pinfo->header_ext = gst_rtp_buffer_get_extension_bytes (&rtp,
           &pinfo->header_ext_bit_pattern);
-
-      /* if RTX, store the original seqnum (OSN) and SSRC */
-      if (GST_BUFFER_FLAG_IS_SET (*buffer, GST_RTP_BUFFER_FLAG_RETRANSMISSION)) {
-        guint8 *payload = gst_rtp_buffer_get_payload (&rtp);
-        if (payload) {
-          pinfo->rtx_osn = GST_READ_UINT16_BE (payload);
-        }
-      }
     }
 
     if (pinfo->ntp64_ext_id != 0 && pinfo->send && !pinfo->have_ntp64_ext) {
@@ -2468,8 +2460,6 @@ update_packet_info (RTPSession * sess, RTPPacketInfo * pinfo,
   pinfo->marker = FALSE;
   pinfo->ntp64_ext_id = send ? sess->send_ntp64_ext_id : 0;
   pinfo->have_ntp64_ext = FALSE;
-  pinfo->rtx_osn = -1;
-  pinfo->rtx_ssrc = 0;
 
   if (is_list) {
     GstBufferList *list = GST_BUFFER_LIST_CAST (data);
@@ -2482,11 +2472,6 @@ update_packet_info (RTPSession * sess, RTPPacketInfo * pinfo,
     res = update_packet (&buffer, 0, pinfo);
     pinfo->arrival_time = GST_BUFFER_DTS (buffer);
   }
-
-  if (pinfo->rtx_osn != -1)
-    pinfo->rtx_ssrc =
-        GPOINTER_TO_UINT (g_hash_table_lookup (sess->rtx_ssrc_to_ssrc,
-            GUINT_TO_POINTER (pinfo->ssrc)));
 
   return res;
 }

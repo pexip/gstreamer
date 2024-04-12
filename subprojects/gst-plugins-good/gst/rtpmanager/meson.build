@@ -23,6 +23,7 @@ rtpmanager_sources = [
   'rtpstats.c',
   'rtptimerqueue.c',
   'rtptwcc.c',
+  'rtpreceptionstats.c',
   'gstrtpsession.c',
   'gstrtpfunnel.c',
   'gstrtpst2022-1-fecdec.c',
