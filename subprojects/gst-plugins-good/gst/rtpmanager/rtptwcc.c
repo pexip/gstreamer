@@ -85,8 +85,6 @@ typedef struct
   guint8 pt;
   guint size;
   gboolean lost;
-  gint32 rtx_osn;
-  guint32 rtx_ssrc;
   guint32 protects_ssrc;
   GArray * protects_seqnums;
 } SentPacket;
@@ -895,8 +893,6 @@ sent_packet_init (SentPacket * packet, guint16 seqnum, RTPPacketInfo * pinfo,
   packet->remote_ts = GST_CLOCK_TIME_NONE;
   packet->socket_ts = GST_CLOCK_TIME_NONE;
   packet->lost = FALSE;
-  packet->rtx_osn = pinfo->rtx_osn;
-  packet->rtx_ssrc = pinfo->rtx_ssrc;
   packet->protects_ssrc = 0;
   packet->protects_seqnums = NULL;
 }
