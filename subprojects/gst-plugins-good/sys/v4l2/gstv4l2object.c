@@ -5582,15 +5582,16 @@ gst_v4l2_object_propose_allocation (GstV4l2Object * obj, GstQuery * query)
       goto different_caps;
     }
     gst_structure_free (config);
+
+    gst_v4l2_get_driver_min_buffers (obj);
+
+    min = MAX (obj->min_buffers, GST_V4L2_MIN_BUFFERS (obj));
+
+    gst_query_add_allocation_pool (query, pool, size, min, max);
+
+    /* we also support various metadata */
+    gst_query_add_allocation_meta (query, GST_VIDEO_META_API_TYPE, NULL);
   }
-  gst_v4l2_get_driver_min_buffers (obj);
-
-  min = MAX (obj->min_buffers, GST_V4L2_MIN_BUFFERS (obj));
-
-  gst_query_add_allocation_pool (query, pool, size, min, max);
-
-  /* we also support various metadata */
-  gst_query_add_allocation_meta (query, GST_VIDEO_META_API_TYPE, NULL);
 
   if (pool)
     gst_object_unref (pool);
