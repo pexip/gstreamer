@@ -46,8 +46,8 @@ add_device (GstDeviceProvider * provider, snd_ctl_t * info,
     snd_pcm_stream_t stream, gint card, gint dev)
 {
   GstCaps *caps, *template;
-  GstDevice *device;
-  snd_pcm_t *handle;
+  GstDevice *device = NULL;
+  snd_pcm_t *handle = NULL;
   snd_ctl_card_info_t *card_info;
   GstStructure *props;
   gchar *card_name, *longname = NULL;
@@ -56,15 +56,18 @@ add_device (GstDeviceProvider * provider, snd_ctl_t * info,
   if (snd_pcm_open (&handle, device_name, stream, SND_PCM_NONBLOCK) < 0) {
     GST_ERROR_OBJECT (provider, "Could not open device %s for inspection!",
         device_name);
-    g_free (device_name);
-
-    return NULL;
+    goto done;
   }
 
   template = gst_static_caps_get (&alsa_caps);
   caps = gst_alsa_probe_supported_formats (GST_OBJECT (provider),
       device_name, handle, template);
   gst_caps_unref (template);
+
+  if (caps == NULL) {
+    GST_ERROR_OBJECT (provider, "Got no caps from device: %s", device_name);
+    goto done;
+  }
 
   snd_card_get_name (card, &card_name);
   props = gst_structure_new ("alsa-proplist",
@@ -90,7 +93,10 @@ add_device (GstDeviceProvider * provider, snd_ctl_t * info,
   snd_card_get_longname (card, &longname);
   device = gst_alsa_device_new (longname, caps, device_name, stream, props);
 
-  snd_pcm_close (handle);
+done:
+  if (handle)
+    snd_pcm_close (handle);
+  g_free (device_name);
 
   return device;
 }
