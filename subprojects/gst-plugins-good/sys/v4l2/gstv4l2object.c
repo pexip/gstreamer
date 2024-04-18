@@ -6086,46 +6086,47 @@ gst_v4l2_object_propose_allocation (GstV4l2Object * obj, GstQuery * query)
       goto different_caps;
     }
     gst_structure_free (config);
-  }
-  gst_v4l2_get_driver_min_buffers (obj);
 
-  min = MAX (obj->min_buffers, GST_V4L2_MIN_BUFFERS (obj));
+    gst_v4l2_get_driver_min_buffers (obj);
 
-  /* If the driver has any size alignment requirements, suggest the difference
-   * between aligned size and actual size as extra padding to the upstream
-   * element */
-  if (V4L2_TYPE_IS_MULTIPLANAR (obj->type)) {
-    /* FIXME */
-  } else {
-    aligned_size = obj->format.fmt.pix.sizeimage;
-  }
+    min = MAX (obj->min_buffers, GST_V4L2_MIN_BUFFERS (obj));
 
-  gst_allocation_params_init (&allocation_params);
-  allocation_params.padding = aligned_size - size;
+    /* If the driver has any size alignment requirements, suggest the difference
+     * between aligned size and actual size as extra padding to the upstream
+     * element */
+    if (V4L2_TYPE_IS_MULTIPLANAR (obj->type)) {
+      /* FIXME */
+    } else {
+      aligned_size = obj->format.fmt.pix.sizeimage;
+    }
 
-  if (allocation_params.padding) {
-    gst_query_add_allocation_param (query, NULL, &allocation_params);
-    /* Update size to aligned size required by driver */
-    size = aligned_size;
-  }
+    gst_allocation_params_init (&allocation_params);
+    allocation_params.padding = aligned_size - size;
 
-  gst_query_add_allocation_pool (query, pool, size, min, max);
+    if (allocation_params.padding) {
+      gst_query_add_allocation_param (query, NULL, &allocation_params);
+      /* Update size to aligned size required by driver */
+      size = aligned_size;
+    }
 
-  if (obj->align.padding_top || obj->align.padding_bottom ||
+    gst_query_add_allocation_pool (query, pool, size, min, max);
+
+    if (obj->align.padding_top || obj->align.padding_bottom ||
       obj->align.padding_left || obj->align.padding_right) {
-    allocation_meta = gst_structure_new_empty ("video-meta");
-    gst_buffer_pool_config_set_video_alignment (allocation_meta, &obj->align);
-  }
 
-  /* we also support various metadata */
-  gst_query_add_allocation_meta (query, GST_VIDEO_META_API_TYPE,
+      allocation_meta = gst_structure_new_empty ("video-meta");
+      gst_buffer_pool_config_set_video_alignment (allocation_meta, &obj->align);
+    }
+
+    /* we also support various metadata */
+    gst_query_add_allocation_meta (query, GST_VIDEO_META_API_TYPE,
       allocation_meta);
 
-  if (allocation_meta)
-    gst_structure_free (allocation_meta);
+    if (allocation_meta)
+      gst_structure_free (allocation_meta);
 
-  if (pool)
     gst_object_unref (pool);
+  }
 
   return TRUE;
 
