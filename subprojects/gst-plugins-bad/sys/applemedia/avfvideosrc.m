@@ -41,6 +41,7 @@
 #define DEFAULT_ORIENTATION   GST_AVF_VIDEO_SOURCE_ORIENTATION_DEFAULT
 #define DEFAULT_DEVICE_TYPE   GST_AVF_VIDEO_SOURCE_DEVICE_TYPE_DEFAULT
 #define DEFAULT_DO_STATS      FALSE
+#define DEFAULT_LOCK FALSE
 
 #define DEVICE_FPS_N          25
 #define DEVICE_FPS_D          1
@@ -173,6 +174,7 @@ gst_avf_video_source_device_type_get_type (void)
   GstAVFVideoSourceOrientation orientation;
   GstAVFVideoSourceDeviceType deviceType;
   BOOL doStats;
+  BOOL lockDevice;
 
   AVCaptureSession *session;
   AVCaptureInput *input;
@@ -220,6 +222,7 @@ gst_avf_video_source_device_type_get_type (void)
 @property GstAVFVideoSourceOrientation orientation;
 @property GstAVFVideoSourceDeviceType deviceType;
 @property BOOL doStats;
+@property BOOL lockDevice;
 @property int fps;
 @property BOOL captureScreen;
 @property BOOL captureScreenCursor;
@@ -564,6 +567,9 @@ checked:
     output = nil;
 
     if (!captureScreen) {
+      if (device && [self lockDevice]) {
+        [device unlockForConfiguration];
+      }
       device = nil;
     }
 
@@ -776,9 +782,11 @@ checked:
     if (![session isRunning])
       [session startRunning];
 
-    /* Unlock device configuration only after session is started so the session
-     * won't reset the capture formats */
-    [device unlockForConfiguration];
+    if (![self lockDevice]) {
+      /* Unlock device configuration only after session is started so the session
+      * won't reset the capture formats */
+      [device unlockForConfiguration];
+    }
   });
 
   return success;
@@ -1131,6 +1139,7 @@ enum
   PROP_ORIENTATION,
   PROP_DEVICE_TYPE,
   PROP_DO_STATS,
+  PROP_LOCK_DEVICE,
   PROP_FPS,
 #ifndef HAVE_IOS
   PROP_CAPTURE_SCREEN,
@@ -1249,6 +1258,10 @@ gst_avf_video_src_class_init (GstAVFVideoSrcClass * klass)
   g_object_class_install_property (gobject_class, PROP_DO_STATS,
       g_param_spec_boolean ("do-stats", "Enable statistics",
           "Enable logging of statistics", DEFAULT_DO_STATS,
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+  g_object_class_install_property (gobject_class, PROP_LOCK_DEVICE,
+      g_param_spec_boolean ("lock-device", "Locks the device to a configuration",
+          "Keep the device locked to a configuration when the caps are set", DEFAULT_LOCK,
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
   g_object_class_install_property (gobject_class, PROP_FPS,
       g_param_spec_int ("fps", "Frames per second",
@@ -1400,6 +1413,9 @@ gst_avf_video_src_get_property (GObject * object, guint prop_id, GValue * value,
     case PROP_DO_STATS:
       g_value_set_boolean (value, impl.doStats);
       break;
+    case PROP_LOCK_DEVICE:
+      g_value_set_boolean (value, impl.lockDevice);
+      break;
     case PROP_FPS:
       GST_OBJECT_LOCK (object);
       g_value_set_int (value, impl.fps);
@@ -1459,6 +1475,9 @@ gst_avf_video_src_set_property (GObject * object, guint prop_id,
       break;
     case PROP_DO_STATS:
       impl.doStats = g_value_get_boolean (value);
+      break;
+    case PROP_LOCK_DEVICE:
+      impl.lockDevice = g_value_get_boolean (value);
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
