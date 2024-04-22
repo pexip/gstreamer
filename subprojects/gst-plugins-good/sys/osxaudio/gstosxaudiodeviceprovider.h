@@ -1,5 +1,7 @@
 /* GStreamer
  * Copyright (C) 2016 Hyunjun Ko <zzoon@igalia.com>
+ * Copyright (c) 2024, Pexip AS
+ *  @author: Tulio Beloqui <tulio@pexip.com>
  *
  * gstosxaudiodeviceeprovider.h: OSX audio probing and monitoring
  *
@@ -46,7 +48,8 @@ struct _GstOsxAudioDeviceProvider
 {
   GstDeviceProvider parent;
 
-  GMutex device_change_mutex;
+  GHashTable *device_id_map; 
+  GMutex mutex;
 };
 
 struct _GstOsxAudioDeviceProviderClass
@@ -66,13 +69,6 @@ typedef struct _GstOsxAudioDeviceClass GstOsxAudioDeviceClass;
 #define GST_OSX_AUDIO_DEVICE(obj)                 (G_TYPE_CHECK_INSTANCE_CAST ((obj), GST_TYPE_OSX_AUDIO_DEVICE, GstOsxAudioDevice))
 #define GST_OSX_AUDIO_DEVICE_CLASS(klass)         (G_TYPE_CHECK_CLASS_CAST ((klass), GST_TYPE_DEVICE, GstOsxAudioDeviceClass))
 #define GST_OSX_AUDIO_DEVICE_CAST(obj)            ((GstOsxAudioDevice *)(obj))
-
-typedef enum
-{
-  GST_OSX_AUDIO_DEVICE_TYPE_INVALID = 0,
-  GST_OSX_AUDIO_DEVICE_TYPE_SOURCE,
-  GST_OSX_AUDIO_DEVICE_TYPE_SINK
-} GstOsxAudioDeviceType;
 
 struct _GstOsxAudioDevice
 {
