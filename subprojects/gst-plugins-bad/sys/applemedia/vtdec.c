@@ -319,7 +319,7 @@ gst_vtdec_output_loop (GstVtdec * vtdec)
 
   /* push a buffer if there are enough frames to guarantee 
    * that we push in PTS order, or if we're draining/flushing */
-  while ((gst_vec_deque_get_length (vtdec->reorder_queue) >=
+  while ((gst_vec_deque_get_length (vtdec->reorder_queue) >
           vtdec->dbp_size) || vtdec->is_flushing || vtdec->is_draining) {
     frame = gst_vec_deque_pop_head (vtdec->reorder_queue);
     is_flushing = vtdec->is_flushing;
