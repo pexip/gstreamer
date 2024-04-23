@@ -1014,12 +1014,11 @@ gst_vtdec_push_frames_if_needed (GstVtdec * vtdec, gboolean drain,
   /* push a buffer if there are enough frames to guarantee that we push in PTS
    * order
    */
-  while ((g_async_queue_length (vtdec->reorder_queue) >=
+  while ((g_async_queue_length (vtdec->reorder_queue) >
           vtdec->reorder_queue_length) || drain || flush) {
     frame = (GstVideoCodecFrame *) g_async_queue_try_pop (vtdec->reorder_queue);
 
-    /* we need to check this in case reorder_queue_length=0 (jpeg for
-     * example) or we're draining/flushing
+    /* we need to check this in case we are draining/flushing
      */
     if (frame) {
       if (frame->flags & VTDEC_FRAME_FLAG_ERROR) {
