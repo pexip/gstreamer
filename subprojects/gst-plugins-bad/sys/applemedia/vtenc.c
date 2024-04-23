@@ -365,6 +365,7 @@ gst_vtenc_base_init (GstVTEncClass * klass)
     gst_structure_set_list (gst_caps_get_structure (src_caps, 0),
         "interlace-mode", arr);
     g_value_array_free (arr);
+    g_value_unset (&val);
     G_GNUC_END_IGNORE_DEPRECATIONS;
   }
 
