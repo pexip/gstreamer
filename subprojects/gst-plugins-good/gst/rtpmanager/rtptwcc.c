@@ -27,6 +27,7 @@
 #include <gst/net/gsttxfeedback.h>
 
 #include "gstrtputils.h"
+#include "rtpreceptionstats.h"
 
 GST_DEBUG_CATEGORY (rtp_twcc_debug);
 #define GST_CAT_DEFAULT rtp_twcc_debug
@@ -146,6 +147,13 @@ typedef struct
   gint64 avg_delta_of_delta;
   gdouble delta_of_delta_growth;
 } TWCCStatsCtx;
+
+/******************************************************************************/
+
+static void
+_update_stats_with_recovered (RTPTWCCManager * twcc, guint16 seqnum);
+
+/******************************************************************************/
 
 static void
 _append_structure_to_value_array (GValueArray * array, GstStructure * s)
@@ -606,6 +614,8 @@ struct _RTPTWCCManager
   TWCCStatsCtx *stats_ctx;
   GHashTable *stats_ctx_by_pt;
 
+  RTPReceptionStats * reception_stats_ctx;
+
   guint8 send_ext_id;
   guint8 recv_ext_id;
   guint16 send_seqnum;
@@ -688,6 +698,8 @@ rtp_twcc_manager_finalize (GObject * object)
 {
   RTPTWCCManager *twcc = RTP_TWCC_MANAGER_CAST (object);
 
+  rtp_reception_stats_free (twcc->reception_stats_ctx);
+
   g_hash_table_destroy (twcc->ssrc_to_seqmap);
   g_hash_table_destroy (twcc->pt_to_twcc_ext_id);
 
@@ -716,6 +728,8 @@ RTPTWCCManager *
 rtp_twcc_manager_new (guint mtu)
 {
   RTPTWCCManager *twcc = g_object_new (RTP_TYPE_TWCC_MANAGER, NULL);
+  twcc->reception_stats_ctx = rtp_reception_stats_new (
+    (RTPReceptionStatsRecoverCB)_update_stats_with_recovered, twcc);
 
   rtp_twcc_manager_set_mtu (twcc, mtu);
 
@@ -789,20 +803,20 @@ _add_packet_to_stats (RTPTWCCManager * twcc,
   ctx = _get_ctx_for_pt (twcc, pkt.pt);
   twcc_stats_ctx_add_packet (ctx, &pkt);
 
-  /* extra check to see if we can confirm the arrival of a recovery packet,
-     and hence set the "original" packet as recovered */
-  if (parsed_pkt->status != RTP_TWCC_PACKET_STATUS_NOT_RECV
-      && sent_pkt->protects_seqnums
-      && sent_pkt->protects_seqnums->len == 1) {
-    gint32 recovered_seq =
-        _lookup_seqnum (twcc, sent_pkt->protects_ssrc, 
-          *(guint16*)sent_pkt->protects_seqnums->data);
-    if (recovered_seq != -1) {
-      GST_LOG ("RTX Packet %u protects seqnum %d", sent_pkt->seqnum,
-          recovered_seq);
-      _update_stats_with_recovered (twcc, recovered_seq);
-    }
-  }
+  // /* extra check to see if we can confirm the arrival of a recovery packet,
+  //    and hence set the "original" packet as recovered */
+  // if (parsed_pkt->status != RTP_TWCC_PACKET_STATUS_NOT_RECV
+  //     && sent_pkt->protects_seqnums
+  //     && sent_pkt->protects_seqnums->len == 1) {
+  //   gint32 recovered_seq =
+  //       _lookup_seqnum (twcc, sent_pkt->protects_ssrc, 
+  //         *(guint16*)sent_pkt->protects_seqnums->data);
+  //   if (recovered_seq != -1) {
+  //     GST_LOG ("RTX Packet %u protects seqnum %d", sent_pkt->seqnum,
+  //         recovered_seq);
+  //     _update_stats_with_recovered (twcc, recovered_seq);
+  //   }
+  // }
 }
 
 
@@ -965,6 +979,8 @@ _set_twcc_seqnum_data (RTPTWCCManager * twcc, RTPPacketInfo * pinfo,
   GstRTPBuffer rtp = GST_RTP_BUFFER_INIT;
   gpointer data;
   guint16 seqnum;
+  GArray *protect_seqnums_array;
+  guint32 protect_ssrc;
 
   if (!gst_rtp_buffer_map (buf, GST_MAP_READWRITE, &rtp)) {
     GST_WARNING ("Couldn't map the buffer %" GST_PTR_FORMAT, buf);
@@ -981,8 +997,25 @@ _set_twcc_seqnum_data (RTPTWCCManager * twcc, RTPPacketInfo * pinfo,
   GST_WRITE_UINT16_BE (data, seqnum);
   sent_packet_init (&packet, seqnum, pinfo, &rtp);
   gst_rtp_buffer_unmap (&rtp);
-  gst_buffer_get_repair_seqnums (buf, &(packet.protects_ssrc),
-    &(packet.protects_seqnums));
+  if (gst_buffer_get_repair_seqnums (buf, &protect_ssrc,
+    &protect_seqnums_array)){
+    packet.protects_ssrc = protect_ssrc;
+    packet.protects_seqnums = protect_seqnums_array;
+    if (protect_seqnums_array && protect_seqnums_array->len > 0) {
+      /* We are expecting non-twcc seqnums in the buffer's meta here, so
+        change them to twcc seqnums. */
+      for (gsize i = 0; i < protect_seqnums_array->len; i++) {
+        guint16 *seqnum = &g_array_index (protect_seqnums_array, guint16, i);
+        gint32 twcc_seqnum = _lookup_seqnum (twcc, protect_ssrc, *seqnum);
+        if (twcc_seqnum != -1) {
+          *seqnum = twcc_seqnum;
+        }
+      }
+      rtp_reception_stats_add_redundant_packet (twcc->reception_stats_ctx, 
+          0, (guint16*)protect_seqnums_array->data, protect_seqnums_array->len,
+          0, seqnum);
+    }
+  }
   g_array_append_val (twcc->sent_packets, packet);
   _prune_old_sent_packets (twcc);
   rtp_twcc_manager_register_seqnum (twcc, pinfo->ssrc, pinfo->seqnum, seqnum);
@@ -1944,6 +1977,9 @@ rtp_twcc_manager_parse_fci (RTPTWCCManager * twcc,
       g_array_set_size (twcc->parsed_packets, 0);
       break;
     }
+
+    rtp_reception_stats_update_reception (twcc->reception_stats_ctx, 0,
+        pkt->seqnum, pkt->status != RTP_TWCC_PACKET_STATUS_NOT_RECV);
 
     if (pkt->status != RTP_TWCC_PACKET_STATUS_NOT_RECV) {
       delta_ts = delta * DELTA_UNIT;
