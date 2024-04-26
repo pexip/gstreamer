@@ -76,6 +76,7 @@ struct _GstOsxAudioDevice
 
   const gchar *element;
   AudioDeviceID device_id;
+  AudioObjectPropertyScope scope;
 };
 
 struct _GstOsxAudioDeviceClass
