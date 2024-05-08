@@ -93,12 +93,6 @@
   "svqversion = (int) 3, " \
   COMMON_VIDEO_CAPS
 
-#define VP9_CAPS \
-  "video/x-vp9, " \
-  "profile = (string) { 0, 1, 2, 3 }, " \
-  "chroma-format = (string) { 4:2:0, 4:2:2, 4:4:4 }, " \
-  COMMON_VIDEO_CAPS
-
 #define COMMON_AUDIO_CAPS(c, r) \
   "channels = (int) [ 1, " G_STRINGIFY (c) " ], " \
   "rate = (int) [ 1, " G_STRINGIFY (r) " ]"
@@ -207,7 +201,8 @@ GstQTMuxFormatProp gst_qt_mux_format_list[] = {
             COMMON_VIDEO_CAPS_NO_FRAMERATE "; "
             "video/x-vp8, "
             COMMON_VIDEO_CAPS "; "
-            VP9_CAPS "; "
+            "video/x-vp9, "
+            COMMON_VIDEO_CAPS "; "
             "video/x-dirac, "
             COMMON_VIDEO_CAPS "; " "video/x-qt-part, " COMMON_VIDEO_CAPS "; "
             "video/x-av1, " "stream-format = (string) \"obu-stream\", "
@@ -232,8 +227,7 @@ GstQTMuxFormatProp gst_qt_mux_format_list[] = {
         GST_STATIC_CAPS (MPEG4V_CAPS "; " H264_CAPS ";" H265_CAPS ";"
             "video/x-mp4-part," COMMON_VIDEO_CAPS "; "
             "video/x-av1, " "stream-format = (string) \"obu-stream\", "
-            "alignment = (string) \"tu\", " COMMON_VIDEO_CAPS "; " VP9_CAPS
-            "; "),
+            "alignment = (string) \"tu\", " COMMON_VIDEO_CAPS),
         GST_STATIC_CAPS (MP123_CAPS "; " AAC_CAPS " ; " AC3_CAPS " ; " ALAC_CAPS
             " ; " OPUS_CAPS),
         GST_STATIC_CAPS (TEXT_UTF8),
