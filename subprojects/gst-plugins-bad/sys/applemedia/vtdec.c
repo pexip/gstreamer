@@ -594,6 +594,8 @@ gst_vtdec_negotiate (GstVideoDecoder * decoder)
     }
   }
 
+  gst_video_codec_state_unref (output_state);
+
   if (vtdec->texture_cache != NULL
       && ((GST_IS_VIDEO_TEXTURE_CACHE_GL (vtdec->texture_cache)
               && !output_textures)
