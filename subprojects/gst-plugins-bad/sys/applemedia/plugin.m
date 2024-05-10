@@ -88,9 +88,6 @@ plugin_init (GstPlugin * plugin)
       GST_RANK_PRIMARY, GST_TYPE_AVF_DEVICE_PROVIDER);
 #endif
 
-  res &=
-      gst_element_register (plugin, "atdec", GST_RANK_MARGINAL, GST_TYPE_ATDEC);
-
 #ifdef HAVE_VIDEOTOOLBOX
   /* Check if the framework actually exists at runtime */
   if (&VTCompressionSessionCreate != NULL) {
