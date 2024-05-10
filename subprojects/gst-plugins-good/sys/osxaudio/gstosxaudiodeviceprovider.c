@@ -491,14 +491,15 @@ gst_osx_audio_device_provider_create_device_map ()
   AudioDeviceID *device_ids;
   gint i;
 
+  map = g_hash_table_new (NULL, NULL);
+
   ndevices = 0;
   device_ids = _audio_system_get_devices (&ndevices);
-  GST_INFO ("found %d  audio device(s)", ndevices);
+  GST_INFO ("found %d audio device(s)", ndevices);
 
   if (!device_ids || ndevices == 0)
-    return NULL;
+    return map;
 
-  map = g_hash_table_new_full (NULL, NULL, NULL, NULL);
   for (i = 0; i < ndevices; i++) {
     AudioDeviceID id = device_ids[i];
 
