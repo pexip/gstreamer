@@ -70,11 +70,18 @@ static GstDevice *
 gst_device_from_port_description (AVAudioSessionPortDescription *
     portDesc, const gchar * device_class)
 {
+  GstDevice *ret;
   gchar *name = g_strdup ([portDesc.portName UTF8String]);
   gchar *type = g_strdup ([portDesc.portType UTF8String]);
   gchar *uid = g_strdup ([portDesc.UID UTF8String]);
 
-  return gst_av_audio_device_new (name, type, uid, device_class);
+  ret = gst_av_audio_device_new (name, type, uid, device_class);
+
+  g_free (name);
+  g_free (type);
+  g_free (uid);
+
+  return ret;
 }
 
 static GList *
@@ -124,6 +131,8 @@ gst_av_audio_device_provider_probe (GstDeviceProvider * object)
     GstDevice *dev = gst_av_audio_device_new (name, type, NULL, "Audio/Sink");
 
     devices = g_list_append (devices, gst_object_ref_sink (dev));
+    g_free (type);
+    g_free (name);
   }
 
   if (!addedBuiltinRecv) {
@@ -132,6 +141,8 @@ gst_av_audio_device_provider_probe (GstDeviceProvider * object)
     GstDevice *dev = gst_av_audio_device_new (name, type, NULL, "Audio/Sink");
 
     devices = g_list_append (devices, gst_object_ref_sink (dev));
+    g_free (type);
+    g_free (name);
   }
 
   return devices;
