@@ -25,6 +25,7 @@
 #include <gst/base/gstbitreader.h>
 #include <gst/base/gstbitwriter.h>
 #include <gst/net/gsttxfeedback.h>
+#include <gst/base/gstqueuearray.h>
 
 #include "gstrtputils.h"
 #include "rtpreceptionstats.h"
@@ -44,6 +45,12 @@ GST_DEBUG_CATEGORY (rtp_twcc_debug);
 #define STATUS_VECTOR_TWO_BIT_MAX_CAPACITY 7
 
 #define MAX_PACKETS_PER_FEEDBACK 65536
+
+#define PACKETS_HIST_DUR (10 * GST_SECOND)
+/* How many packets should fit into the packets history by default.
+   Estimated a bundle throughput to 150 per packets at maximum in average
+   circumstances. */
+#define PACKETS_HIST_LEN_DEFAULT (300 * PACKETS_HIST_DUR / GST_SECOND)
 
 typedef enum
 {
@@ -626,7 +633,8 @@ struct _RTPTWCCManager
 
   guint64 fb_pkt_count;
 
-  GArray *sent_packets;
+  GstQueueArray *sent_packets;
+  gsize sent_packets_size;
   GArray *parsed_packets;
   GQueue *rtcp_buffers;
 
@@ -650,6 +658,31 @@ struct _RTPTWCCManager
   gpointer caps_ud;
 };
 
+static SentPacket *
+_find_sentpacket (RTPTWCCManager * twcc, guint16 seqnum)
+{
+  SentPacket * first = gst_queue_array_peek_head_struct (twcc->sent_packets);
+  SentPacket * result;
+
+  if (gst_queue_array_is_empty (twcc->sent_packets) == TRUE) {
+    return NULL;
+  }
+
+
+  const gint idx = gst_rtp_buffer_compare_seqnum (first->seqnum, seqnum);
+  if (idx < gst_queue_array_get_length (twcc->sent_packets) && idx >= 0) {
+    result = (SentPacket*)
+        gst_queue_array_peek_nth_struct (twcc->sent_packets, idx);
+  } else {
+    result = NULL;
+  }
+
+  if (result && result->seqnum == seqnum) {
+    return result;
+  }
+
+  return NULL;
+}
 
 static void rtp_twcc_manager_tx_feedback (GstTxFeedback * parent,
     guint64 buffer_id, GstClockTime ts);
@@ -672,8 +705,11 @@ rtp_twcc_manager_init (RTPTWCCManager * twcc)
   twcc->pt_to_twcc_ext_id = g_hash_table_new (NULL, NULL);
 
   twcc->recv_packets = g_array_new (FALSE, FALSE, sizeof (RecvPacket));
-  twcc->sent_packets = g_array_new (FALSE, FALSE, sizeof (SentPacket));
-  g_array_set_clear_func (twcc->sent_packets, (GDestroyNotify)_free_sentpacket);
+  twcc->sent_packets_size = PACKETS_HIST_LEN_DEFAULT;
+  twcc->sent_packets = gst_queue_array_new_for_struct (sizeof(SentPacket), 
+      twcc->sent_packets_size);
+  gst_queue_array_set_clear_func (twcc->sent_packets, (GDestroyNotify)_free_sentpacket);
+  
   twcc->parsed_packets = g_array_new (FALSE, FALSE, sizeof (ParsedPacket));
   g_mutex_init (&twcc->recv_lock);
 
@@ -704,7 +740,7 @@ rtp_twcc_manager_finalize (GObject * object)
   g_hash_table_destroy (twcc->pt_to_twcc_ext_id);
 
   g_array_unref (twcc->recv_packets);
-  g_array_unref (twcc->sent_packets);
+  gst_queue_array_free (twcc->sent_packets);
   g_array_unref (twcc->parsed_packets);
   g_queue_free_full (twcc->rtcp_buffers, (GDestroyNotify) gst_buffer_unref);
   g_mutex_clear (&twcc->recv_lock);
@@ -934,13 +970,32 @@ rtp_twcc_manager_register_seqnum (RTPTWCCManager * twcc,
 static void
 _prune_old_sent_packets (RTPTWCCManager * twcc)
 {
-  guint length;
-
-  if (twcc->sent_packets->len <= MAX_PACKETS_PER_FEEDBACK)
+  if (gst_queue_array_get_length (twcc->sent_packets) <= 
+      twcc->sent_packets_size)
     return;
 
-  length = twcc->sent_packets->len - MAX_PACKETS_PER_FEEDBACK;
-  g_array_remove_range (twcc->sent_packets, 0, length);
+  /* Walk through the history and pop every packet older than PACKETS_HIST_DUR
+    from now */
+  SentPacket *last_pkt = gst_queue_array_peek_tail_struct (twcc->sent_packets);
+  const GstClockTime last = last_pkt->local_ts;
+
+  /* Keep the queue under 
+    * PACKETS_HIST_DUR [s] of duration or 
+    * PACKETS_HIST_LEN_DEFAULT [n] of length
+  whatever is greater. */
+  while (
+    gst_queue_array_get_length (twcc->sent_packets) > PACKETS_HIST_LEN_DEFAULT)
+ {
+    SentPacket *pkt = (SentPacket*)
+        gst_queue_array_peek_head_struct (twcc->sent_packets);
+    if (!GST_CLOCK_TIME_IS_VALID(pkt->local_ts)
+      || !GST_CLOCK_TIME_IS_VALID (last)
+      || (last - pkt->local_ts > PACKETS_HIST_DUR)) {
+      gst_queue_array_pop_head_struct (twcc->sent_packets);
+    } else {
+      break;
+    }
+  }
 }
 
 /*
@@ -1016,8 +1071,14 @@ _set_twcc_seqnum_data (RTPTWCCManager * twcc, RTPPacketInfo * pinfo,
           0, seqnum);
     }
   }
-  g_array_append_val (twcc->sent_packets, packet);
   _prune_old_sent_packets (twcc);
+  if (gst_queue_array_get_length(twcc->sent_packets) == twcc->sent_packets_size) {
+    /* TODO: may be we'll have to allow it expand for some rare cases,
+      but just limit it for now
+    */
+    gst_queue_array_pop_head_struct (twcc->sent_packets);
+  }
+  gst_queue_array_push_tail_struct (twcc->sent_packets, &packet);
   rtp_twcc_manager_register_seqnum (twcc, pinfo->ssrc, pinfo->seqnum, seqnum);
 
   gst_buffer_add_tx_feedback_meta (pinfo->data, seqnum,
@@ -1736,27 +1797,10 @@ rtp_twcc_manager_tx_feedback (GstTxFeedback * parent, guint64 buffer_id,
     GstClockTime ts)
 {
   RTPTWCCManager *twcc = RTP_TWCC_MANAGER_CAST (parent);
-  guint16 seqnum = (guint16) buffer_id;
-  SentPacket *first = NULL;
-  SentPacket *pkt = NULL;
-  gint idx;
+  const guint16 seqnum = (guint16) buffer_id;
+  SentPacket *pkt = _find_sentpacket (twcc, seqnum);
 
-  first = &g_array_index (twcc->sent_packets, SentPacket, 0);
-  if (first == NULL) {
-    GST_WARNING ("Received a tx-feedback without having sent any packets?!?");
-    return;
-  }
-
-  idx = gst_rtp_buffer_compare_seqnum (first->seqnum, seqnum);
-  if (idx < 0) {
-    pkt =
-        &g_array_index (twcc->sent_packets, SentPacket,
-        twcc->sent_packets->len - 1);
-  } else if (idx < twcc->sent_packets->len) {
-    pkt = &g_array_index (twcc->sent_packets, SentPacket, idx);
-  }
-
-  if (pkt && pkt->seqnum == seqnum) {
+  if (pkt) {
     pkt->socket_ts = ts;
     GST_LOG ("packet #%u, setting socket-ts %" GST_TIME_FORMAT,
         seqnum, GST_TIME_ARGS (ts));
@@ -1820,16 +1864,6 @@ _parse_status_vector_chunk (GstBitReader * reader, GArray * parsed_packets,
   }
 
   return num_bits;
-}
-
-/* keep the last 1000 packets... FIXME: do something smarter */
-static void
-_prune_sent_packets (RTPTWCCManager * twcc)
-{
-  if (twcc->sent_packets->len > 1000) {
-    g_array_remove_range (twcc->sent_packets, 0,
-        twcc->sent_packets->len - 1000);
-  }
 }
 
 static void
@@ -1909,8 +1943,8 @@ rtp_twcc_manager_parse_fci (RTPTWCCManager * twcc,
   guint packets_parsed = 0;
   guint fci_parsed;
   guint i;
-  SentPacket *first_sent_pkt = NULL;
   GstClockTimeDiff rtt = GST_CLOCK_STIME_NONE;
+  SentPacket * found;
 
   if (fci_length < 10) {
     GST_WARNING ("Malformed TWCC RTCP feedback packet");
@@ -1955,9 +1989,6 @@ rtp_twcc_manager_parse_fci (RTPTWCCManager * twcc,
     fci_parsed += 2;
   }
 
-  if (twcc->sent_packets->len > 0)
-    first_sent_pkt = &g_array_index (twcc->sent_packets, SentPacket, 0);
-
   ts_rounded = base_time;
   for (i = 0; i < twcc->parsed_packets->len; i++) {
     ParsedPacket *pkt = &g_array_index (twcc->parsed_packets, ParsedPacket, i);
@@ -1978,9 +2009,6 @@ rtp_twcc_manager_parse_fci (RTPTWCCManager * twcc,
       break;
     }
 
-    rtp_reception_stats_update_reception (twcc->reception_stats_ctx, 0,
-        pkt->seqnum, pkt->status != RTP_TWCC_PACKET_STATUS_NOT_RECV);
-
     if (pkt->status != RTP_TWCC_PACKET_STATUS_NOT_RECV) {
       delta_ts = delta * DELTA_UNIT;
       ts_rounded += delta_ts;
@@ -1993,14 +2021,7 @@ rtp_twcc_manager_parse_fci (RTPTWCCManager * twcc,
           pkt->status);
       _add_parsed_packet_to_value_array (array, pkt);
     }
-
-    if (first_sent_pkt) {
-      SentPacket *found = NULL;
-      guint16 sent_idx =
-          gst_rtp_buffer_compare_seqnum (first_sent_pkt->seqnum, pkt->seqnum);
-      if (sent_idx < twcc->sent_packets->len)
-        found = &g_array_index (twcc->sent_packets, SentPacket, sent_idx);
-      if (found && found->seqnum == pkt->seqnum) {
+    if (found = _find_sentpacket (twcc, pkt->seqnum)) {
         found->remote_ts = pkt->remote_ts;
 
         GST_LOG ("matching pkt: #%u with local_ts: %" GST_TIME_FORMAT
@@ -2012,16 +2033,15 @@ rtp_twcc_manager_parse_fci (RTPTWCCManager * twcc,
 
         /* calculate the round-trip time */
         rtt = GST_CLOCK_DIFF (found->local_ts, current_time);
-
-      }
     }
+
+    rtp_reception_stats_update_reception (twcc->reception_stats_ctx, 0,
+        pkt->seqnum, pkt->status != RTP_TWCC_PACKET_STATUS_NOT_RECV);
   }
 
   if (GST_CLOCK_STIME_IS_VALID (rtt))
     twcc->avg_rtt = WEIGHT (rtt, twcc->avg_rtt, 0.1);
   twcc->last_report_time = current_time;
-
-  _prune_sent_packets (twcc);
 
   _structure_take_value_array (ret, "packets", array);
 
