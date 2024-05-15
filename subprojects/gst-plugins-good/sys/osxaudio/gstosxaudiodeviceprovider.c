@@ -104,8 +104,8 @@ beach:
   return device_name;
 }
 
-static UInt32
-_audio_device_get_transport_type (AudioDeviceID device_id)
+static OSStatus 
+_audio_device_get_transport_type (AudioDeviceID device_id, UInt32 * out_transportType)
 {
   OSStatus status = noErr;
   UInt32 propertySize = sizeof (UInt32);
@@ -121,10 +121,12 @@ _audio_device_get_transport_type (AudioDeviceID device_id)
       &addr, 0, NULL, &propertySize, &transportType);
   if (status != noErr) {
     GST_WARNING ("failed getting device property: %d", (int) status);
-    return 0;
+    return status;
   }
 
-  return transportType;
+  *out_transportType = transportType;
+
+  return status;
 }
 
 static gboolean
@@ -275,6 +277,21 @@ _audio_device_get_uuid (AudioDeviceID device_id)
       g_strdup (CFStringGetCStringPtr (device_UUID, kCFStringEncodingUTF8));
   CFRelease (device_UUID);
   return uuid;
+}
+
+static const gchar*
+_audio_object_scope_to_string (AudioObjectPropertyScope scope)
+{
+  switch (scope)
+  {
+    case kAudioDevicePropertyScopeInput:
+      return "input";
+    case kAudioDevicePropertyScopeOutput:
+      return "output";
+    default:
+      return "unknown";
+      break;
+  }
 }
 
 static void
@@ -450,8 +467,7 @@ gst_osx_audio_device_provider_probe_device (AudioDeviceID device_id,
   gchar *device_name = NULL;
 
   if (!_audio_device_has_scope (device_id, scope)) {
-    GST_DEBUG ("Device id: %u is missing the %s scope!", device_id,
-        scope == kAudioDevicePropertyScopeInput ? "input" : "output");
+    GST_DEBUG ("Device id: %u is missing the %s scope!", device_id, _audio_object_scope_to_string (scope));
     goto done;
   }
 
@@ -502,8 +518,12 @@ gst_osx_audio_device_provider_create_device_map ()
 
   for (i = 0; i < ndevices; i++) {
     AudioDeviceID id = device_ids[i];
+    UInt32 transport_type;
 
-    if (!_valid_transport_type (_audio_device_get_transport_type (id))) {
+    if (_audio_device_get_transport_type (id, &transport_type) != noErr)
+      continue;
+
+    if (!_valid_transport_type (transport_type)) {
       GST_DEBUG ("Skipping device id: %u invalid transport type from list", id);
       continue;
     }
@@ -538,12 +558,10 @@ gst_osx_audio_device_provider_probe_internal (GstOsxAudioDeviceProvider *self,
       continue;
     }
 
-    if (G_UNLIKELY (GST_LEVEL_DEBUG <= _gst_debug_min) &&
-        GST_LEVEL_DEBUG <= gst_debug_category_get_threshold (GST_CAT_DEFAULT)) {
+    if (G_UNLIKELY (GST_LEVEL_INFO <= _gst_debug_min) &&
+        GST_LEVEL_INFO <= gst_debug_category_get_threshold (GST_CAT_DEFAULT)) {
       gchar *device_name = gst_device_get_display_name (device);
-      GST_DEBUG ("%s Device ID: %u Name: %s",
-          scope == kAudioDevicePropertyScopeInput ? "Input" : "Output",
-          device_id, device_name);
+      GST_INFO ("%s Device ID: %u Name: %s", _audio_object_scope_to_string (scope), device_id, device_name);
       g_free (device_name);
     }
 
@@ -557,7 +575,8 @@ gst_osx_audio_device_provider_probe (GstDeviceProvider *provider)
   GstOsxAudioDeviceProvider *self = GST_OSX_AUDIO_DEVICE_PROVIDER (provider);
   GList *devices = NULL;
 
-  g_assert (self->device_id_map == NULL);
+  if (self->device_id_map)
+    g_hash_table_destroy (self->device_id_map);
   self->device_id_map = gst_osx_audio_device_provider_create_device_map ();
 
   gst_osx_audio_device_provider_probe_internal (self,
@@ -608,8 +627,30 @@ gst_osx_audio_device_provider_remove_device_by_id (GstDeviceProvider *provider,
   while ((device =
           gst_osx_audio_device_provider_find_device_by_id (provider,
               device_id, NULL)) != NULL) {
+
+    if (G_UNLIKELY (GST_LEVEL_INFO <= _gst_debug_min) &&
+        GST_LEVEL_INFO <= gst_debug_category_get_threshold (GST_CAT_DEFAULT)) {
+      gchar *device_name = gst_device_get_display_name (device);
+      GST_INFO ("Removing Device ID: %u Name: %s", device_id, device_name);
+      g_free (device_name);
+    }
+
     gst_device_provider_device_remove (provider, device);
   }
+}
+
+static void
+gst_osx_audio_device_provider_add (GstDeviceProvider * provider, AudioDeviceID device_id, GstDevice * device, AudioObjectPropertyScope scope)
+{
+  if (G_UNLIKELY (GST_LEVEL_INFO <= _gst_debug_min) &&
+      GST_LEVEL_INFO <= gst_debug_category_get_threshold (GST_CAT_DEFAULT)) {
+
+    gchar *device_name = gst_device_get_display_name (device);
+    GST_INFO ("Adding %s device ID: %u Name: %s", _audio_object_scope_to_string (scope), device_id, device_name);
+    g_free (device_name);
+  }
+
+  gst_device_provider_device_add (provider, device);
 }
 
 /* CALL with GstOsxAudioDeviceProvider mutex acquired */
@@ -646,6 +687,7 @@ gst_osx_audio_device_provider_update_devices (GstOsxAudioDeviceProvider *self)
   g_hash_table_iter_init (&iter, new_devices_map);
   while (g_hash_table_iter_next (&iter, &key, NULL)) {
     AudioDeviceID device_id;
+    UInt32 transport_type;
     GstDevice *device;
     gboolean to_add = !g_hash_table_contains (current_devices_map, key);
 
@@ -655,7 +697,9 @@ gst_osx_audio_device_provider_update_devices (GstOsxAudioDeviceProvider *self)
     }
 
     device_id = GPOINTER_TO_UINT (key);
-    if (!_valid_transport_type (_audio_device_get_transport_type (device_id))) {
+    if (_audio_device_get_transport_type (device_id, &transport_type) != noErr)
+      continue;
+    if (!_valid_transport_type (transport_type)) {
       GST_DEBUG ("Skipping device id: %u invalid transport type from list",
           device_id);
       continue;
@@ -665,14 +709,14 @@ gst_osx_audio_device_provider_update_devices (GstOsxAudioDeviceProvider *self)
         gst_osx_audio_device_provider_probe_device (device_id,
         kAudioDevicePropertyScopeInput);
     if (device) {
-      gst_device_provider_device_add (provider, GST_DEVICE_CAST (device));
+      gst_osx_audio_device_provider_add (provider, device_id, device, kAudioDevicePropertyScopeInput);
     }
 
     device =
         gst_osx_audio_device_provider_probe_device (device_id,
         kAudioDevicePropertyScopeOutput);
     if (device) {
-      gst_device_provider_device_add (provider, GST_DEVICE_CAST (device));
+      gst_osx_audio_device_provider_add (provider, device_id, device, kAudioDevicePropertyScopeOutput);
     }
   }
 
@@ -693,6 +737,13 @@ gst_osx_audio_device_provider_update_default_device (GstOsxAudioDeviceProvider
       device_class);
   GstDevice *new_device =
       gst_osx_audio_device_provider_probe_device (new_default_id, scope);
+
+  if (G_UNLIKELY (GST_LEVEL_INFO <= _gst_debug_min) &&
+      GST_LEVEL_INFO <= gst_debug_category_get_threshold (GST_CAT_DEFAULT)) {
+    gchar *name = _audio_device_get_name (new_default_id); 
+    GST_INFO ("default %s changed to id: %d name: %s", _audio_object_scope_to_string (scope), new_default_id, name);
+    g_free (name);
+  }
 
   gst_device_provider_device_changed (provider, new_device, old_device);
 }
