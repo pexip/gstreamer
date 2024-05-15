@@ -119,8 +119,6 @@ void rtp_reception_stats_update_reception(RTPReceptionStats *stats,
   Block * block;
   if (!g_hash_table_lookup_extended (stats->seqnum_2_blocks,
       GUINT_TO_POINTER (key), NULL, (gpointer *)&block)) {
-     GST_WARNING ("Got feedback for the data packet which was not yet covered with"
-    " any FEC block, seqnum: %u, ssrc: %u", seq, ssrc);
   } else {
     gsize idx = 0;
     // Try to find it among the data packets.
@@ -244,6 +242,8 @@ _update_block (RTPReceptionStats *stats, Block * block)
     // If we don't know the state of any packet in the block, let's
     // return unknown.
     if (cur_state == RTP_RECEPTION_PKT_UNKNOWN) {
+      GST_WARNING ("Unknown state of the packet, ssrc: %u, seq: %u", block->ssrc,
+          g_array_index (block->seqs, guint16, i));
       return RTP_RECEPTION_PKT_UNKNOWN;
     } else if (cur_state == RTP_RECEPTION_PKT_LOST) {
       loss_count++;
