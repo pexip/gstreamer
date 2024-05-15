@@ -52,6 +52,15 @@ GST_DEBUG_CATEGORY (rtp_twcc_debug);
    circumstances. */
 #define PACKETS_HIST_LEN_DEFAULT (300 * PACKETS_HIST_DUR / GST_SECOND)
 
+#define MAX_STATS_PACKETS 1000
+
+typedef enum {
+  RTP_TWCC_FECBLOCK_PKT_UNKNOWN,
+  RTP_TWCC_FECBLOCK_PKT_RECEIVED,
+  RTP_TWCC_FECBLOCK_PKT_RECOVERED,
+  RTP_TWCC_FECBLOCK_PKT_LOST
+} TWCCPktState;
+
 typedef enum
 {
   RTP_TWCC_CHUNK_TYPE_RUN_LENGTH = 0,
@@ -95,6 +104,8 @@ typedef struct
   gboolean lost;
   guint32 protects_ssrc;
   GArray * protects_seqnums;
+
+  TWCCPktState state;
 } SentPacket;
 
 typedef struct
@@ -106,42 +117,9 @@ typedef struct
 
 typedef struct
 {
-  GstClockTime org_ts;
-  GstClockTime local_ts;
-  GstClockTime remote_ts;
-  guint16 seqnum;
-  guint size;
-  guint8 pt;
-
-  GstClockTimeDiff local_delta;
-  GstClockTimeDiff remote_delta;
-  GstClockTimeDiff delta_delta;
-  gboolean recovered;
-} StatsPacket;
-
-static void
-stats_packet_init_from_sent_packet (StatsPacket * pkt, SentPacket * sent)
-{
-  pkt->org_ts = sent->local_ts;
-  pkt->local_ts = sent->local_ts;
-  pkt->remote_ts = sent->remote_ts;
-  pkt->seqnum = sent->seqnum;
-  pkt->size = sent->size;
-  pkt->pt = sent->pt;
-  pkt->recovered = FALSE;
-  pkt->local_delta = GST_CLOCK_STIME_NONE;
-  pkt->remote_delta = GST_CLOCK_STIME_NONE;
-  pkt->delta_delta = GST_CLOCK_STIME_NONE;
-
-  /* if we have a socket-timestamp, use that instead */
-  if (GST_CLOCK_TIME_IS_VALID (sent->socket_ts)) {
-    pkt->local_ts = sent->socket_ts;
-  }
-}
-
-typedef struct
-{
-  GArray *packets;
+  GstQueueArray *all_packets;
+  GstQueueArray *pt_packets;
+  SentPacket *last_pkt_fb;
   gint64 new_packets_idx;
 
   /* windowed stats */
@@ -196,7 +174,8 @@ twcc_stats_ctx_new (void)
 {
   TWCCStatsCtx *ctx = g_new0 (TWCCStatsCtx, 1);
 
-  ctx->packets = g_array_new (FALSE, FALSE, sizeof (StatsPacket));
+  ctx->pt_packets = gst_queue_array_new (MAX_STATS_PACKETS);
+  ctx->last_pkt_fb = NULL;
 
   return ctx;
 }
@@ -204,48 +183,62 @@ twcc_stats_ctx_new (void)
 static void
 twcc_stats_ctx_free (TWCCStatsCtx * ctx)
 {
-  g_array_unref (ctx->packets);
+  gst_queue_array_free (ctx->pt_packets);
   g_free (ctx);
+}
+
+static GstClockTime
+_pkt_stats_ts (SentPacket * pkt)
+{
+  return GST_CLOCK_TIME_IS_VALID (pkt->socket_ts) 
+      ? pkt->socket_ts 
+      : pkt->local_ts;
 }
 
 static GstClockTime
 twcc_stats_ctx_get_last_local_ts (TWCCStatsCtx * ctx)
 {
   GstClockTime ret = GST_CLOCK_TIME_NONE;
-  StatsPacket *pkt = NULL;
-  if (ctx->packets->len > 0)
-    pkt = &g_array_index (ctx->packets, StatsPacket, ctx->packets->len - 1);
-  if (pkt)
-    ret = pkt->local_ts;
+  SentPacket *pkt = ctx->last_pkt_fb;
+  if (pkt) {
+    ret = _pkt_stats_ts (pkt);
+  }
   return ret;
 }
 
 static gboolean
-_get_stats_packets_window (GArray * array,
+_get_stats_packets_window (GstQueueArray * array,
     GstClockTimeDiff start_time, GstClockTimeDiff end_time,
     guint * start_idx, guint * num_packets)
 {
   gboolean ret = FALSE;
   guint end_idx = 0;
   guint i;
+  const guint array_length = gst_queue_array_get_length (array); 
 
-  if (array->len < 2) {
+  if (array_length < 2) {
     GST_DEBUG ("Not enough starts to do a window");
     return FALSE;
   }
 
-  for (i = 0; i < array->len; i++) {
-    StatsPacket *pkt = &g_array_index (array, StatsPacket, i);
-    if (GST_CLOCK_TIME_IS_VALID (pkt->local_ts)) {
-      GstClockTimeDiff offset = GST_CLOCK_DIFF (pkt->local_ts, start_time);
+  for (i = 0; i < array_length; i++) {
+    SentPacket *pkt = (SentPacket*)gst_queue_array_peek_nth (array, i);
+    /* Do not process packets that were not reported about in feedbacks
+      yet. */
+    if (pkt->state == RTP_TWCC_FECBLOCK_PKT_UNKNOWN) {
+      continue;
+    }
+    const GstClockTime pkt_ts = _pkt_stats_ts (pkt);
+    if (GST_CLOCK_TIME_IS_VALID (pkt_ts)) {
+      GstClockTimeDiff offset = GST_CLOCK_DIFF (pkt_ts, start_time);
       *start_idx = i;
       /* positive number here means it is older than our start time */
       if (offset > 0) {
         GST_LOG ("Packet #%u is too old: %"
-            GST_TIME_FORMAT, pkt->seqnum, GST_TIME_ARGS (pkt->local_ts));
+            GST_TIME_FORMAT, pkt->seqnum, GST_TIME_ARGS (pkt_ts));
       } else {
         GST_LOG ("Setting first packet in our window to #%u: %"
-            GST_TIME_FORMAT, pkt->seqnum, GST_TIME_ARGS (pkt->local_ts));
+            GST_TIME_FORMAT, pkt->seqnum, GST_TIME_ARGS (pkt_ts));
         ret = TRUE;
         break;
       }
@@ -258,20 +251,21 @@ _get_stats_packets_window (GArray * array,
   }
 
   ret = FALSE;
-  for (i = 0; i < array->len - *start_idx - 1; i++) {
-    guint idx = array->len - 1 - i;
-    StatsPacket *pkt = &g_array_index (array, StatsPacket, idx);
-    if (GST_CLOCK_TIME_IS_VALID (pkt->local_ts)) {
-      GstClockTimeDiff offset = GST_CLOCK_DIFF (pkt->local_ts, end_time);
+  for (i = 0; i < array_length - *start_idx - 1; i++) {
+    guint idx = array_length - 1 - i;
+    SentPacket *pkt = (SentPacket*)gst_queue_array_peek_nth (array, idx);
+    const GstClockTime pkt_ts = _pkt_stats_ts (pkt);
+    if (pkt_ts) {
+      GstClockTimeDiff offset = GST_CLOCK_DIFF (pkt_ts, end_time);
       if (offset >= 0) {
         GST_LOG ("Setting last packet in our window to #%u: %"
-            GST_TIME_FORMAT, pkt->seqnum, GST_TIME_ARGS (pkt->local_ts));
+            GST_TIME_FORMAT, pkt->seqnum, GST_TIME_ARGS (pkt_ts));
         end_idx = idx;
         ret = TRUE;
         break;
       } else {
         GST_LOG ("Packet #%u is too new: %"
-            GST_TIME_FORMAT, pkt->seqnum, GST_TIME_ARGS (pkt->local_ts));
+            GST_TIME_FORMAT, pkt->seqnum, GST_TIME_ARGS (pkt_ts));
       }
     }
   }
@@ -290,15 +284,13 @@ static gboolean
 twcc_stats_ctx_calculate_windowed_stats (TWCCStatsCtx * ctx,
     GstClockTimeDiff start_time, GstClockTimeDiff end_time)
 {
-  GArray *packets = ctx->packets;
+  GstQueueArray *packets = ctx->pt_packets;
+  const guint packets_len = gst_queue_array_get_length (packets);
   guint start_idx;
   guint packets_sent = 0;
   guint packets_recv = 0;
   guint packets_recovered = 0;
   guint packets_lost = 0;
-
-  /* FIXME: property ? */
-  guint max_stats_packets = 1000;
 
   guint i;
   guint bits_sent = 0;
@@ -311,10 +303,10 @@ twcc_stats_ctx_calculate_windowed_stats (TWCCStatsCtx * ctx,
   GstClockTimeDiff last_delta_delta_sum = 0;
   guint last_delta_delta_count = 0;
 
-  StatsPacket *first_local_pkt = NULL;
-  StatsPacket *last_local_pkt = NULL;
-  StatsPacket *first_remote_pkt = NULL;
-  StatsPacket *last_remote_pkt = NULL;
+  SentPacket *first_local_pkt = NULL;
+  SentPacket *last_local_pkt = NULL;
+  SentPacket *first_remote_pkt = NULL;
+  SentPacket *last_remote_pkt = NULL;
 
   GstClockTimeDiff local_duration = 0;
   GstClockTimeDiff remote_duration = 0;
@@ -335,14 +327,19 @@ twcc_stats_ctx_calculate_windowed_stats (TWCCStatsCtx * ctx,
   }
 
   for (i = 0; i < packets_sent; i++) {
-    StatsPacket *pkt = &g_array_index (packets, StatsPacket, i + start_idx);
+    SentPacket *prev = NULL;
+    if (i + start_idx >= 1)
+      prev = (SentPacket*)gst_queue_array_peek_nth (packets, i + start_idx - 1);
+
+    SentPacket *pkt = (SentPacket*)gst_queue_array_peek_nth (packets,
+      i + start_idx);
     GST_LOG ("STATS WINDOW: %u/%u: pkt #%u, pt: %u, size: %u, arrived: %s, "
         "local-ts: %" GST_TIME_FORMAT ", remote-ts %" GST_TIME_FORMAT,
         i + 1, packets_sent, pkt->seqnum, pkt->pt, pkt->size * 8,
         GST_CLOCK_TIME_IS_VALID (pkt->remote_ts) ? "YES" : "NO",
-        GST_TIME_ARGS (pkt->local_ts), GST_TIME_ARGS (pkt->remote_ts));
+        GST_TIME_ARGS (_pkt_stats_ts (pkt)), GST_TIME_ARGS (pkt->remote_ts));
 
-    if (GST_CLOCK_TIME_IS_VALID (pkt->local_ts)) {
+    if (GST_CLOCK_TIME_IS_VALID (_pkt_stats_ts (pkt))) {
       /* don't count the bits for the first packet in the window */
       if (first_local_pkt == NULL) {
         first_local_pkt = pkt;
@@ -362,21 +359,43 @@ twcc_stats_ctx_calculate_windowed_stats (TWCCStatsCtx * ctx,
       last_remote_pkt = pkt;
       packets_recv++;
     } else {
-      GST_LOG ("Packet #%u is lost, recovered=%u", pkt->seqnum, pkt->recovered);
+      GST_LOG ("Packet #%u is lost, recovered=%u", pkt->seqnum,
+          pkt->state == RTP_TWCC_FECBLOCK_PKT_RECOVERED);
       packets_lost++;
-      if (pkt->recovered) {
+      if (pkt->state == RTP_TWCC_FECBLOCK_PKT_RECOVERED) {
         packets_recovered++;
       }
     }
 
-    if (GST_CLOCK_STIME_IS_VALID (pkt->delta_delta)) {
-      delta_delta_sum += pkt->delta_delta;
+    if (!prev)
+      continue;
+
+    GstClockTimeDiff local_delta = GST_CLOCK_STIME_NONE;
+    GstClockTimeDiff remote_delta = GST_CLOCK_STIME_NONE;
+    GstClockTimeDiff delta_delta = GST_CLOCK_STIME_NONE;
+
+    if (GST_CLOCK_TIME_IS_VALID (_pkt_stats_ts (pkt)) &&
+      GST_CLOCK_TIME_IS_VALID (_pkt_stats_ts (prev))) {
+        local_delta = GST_CLOCK_DIFF (_pkt_stats_ts (prev),
+            _pkt_stats_ts (pkt));
+    }
+
+    if (GST_CLOCK_TIME_IS_VALID (pkt->remote_ts) &&
+      GST_CLOCK_TIME_IS_VALID (prev->remote_ts)) {
+      remote_delta = GST_CLOCK_DIFF (prev->remote_ts, pkt->remote_ts);
+    }
+
+    if (GST_CLOCK_STIME_IS_VALID (local_delta) &&
+        GST_CLOCK_STIME_IS_VALID (remote_delta)) {
+      delta_delta = remote_delta - local_delta;
+    
+      delta_delta_sum += delta_delta;
       delta_delta_count++;
       if (i < packets_sent / 2) {
-        first_delta_delta_sum += pkt->delta_delta;
+        first_delta_delta_sum += delta_delta;
         first_delta_delta_count++;
       } else {
-        last_delta_delta_sum += pkt->delta_delta;
+        last_delta_delta_sum += delta_delta;
         last_delta_delta_count++;
       }
     }
@@ -387,7 +406,8 @@ twcc_stats_ctx_calculate_windowed_stats (TWCCStatsCtx * ctx,
 
   if (first_local_pkt && last_local_pkt) {
     local_duration =
-        GST_CLOCK_DIFF (first_local_pkt->local_ts, last_local_pkt->local_ts);
+        GST_CLOCK_DIFF (_pkt_stats_ts (first_local_pkt),
+            _pkt_stats_ts (last_local_pkt));
   }
   if (first_remote_pkt && last_remote_pkt) {
     remote_duration =
@@ -437,8 +457,10 @@ twcc_stats_ctx_calculate_windowed_stats (TWCCStatsCtx * ctx,
       GST_STIME_ARGS (ctx->avg_delta_of_delta), ctx->delta_of_delta_growth);
 
   /* trim the stats array down to max packets */
-  if (packets->len > max_stats_packets) {
-    g_array_remove_range (packets, 0, packets->len - max_stats_packets);
+  if (packets_len > MAX_STATS_PACKETS) {
+    for (i = 0; i < packets_len - MAX_STATS_PACKETS; i++) {
+      gst_queue_array_pop_head (packets);
+    }
   }
 
   return TRUE;
@@ -458,153 +480,27 @@ twcc_stats_ctx_get_structure (TWCCStatsCtx * ctx)
       "delta-of-delta-growth", G_TYPE_DOUBLE, ctx->delta_of_delta_growth, NULL);
 }
 
-
 static void
-_update_stats_for_packet_idx (GArray * array, gint packet_idx)
+twcc_stats_ctx_add_packet (TWCCStatsCtx * ctx, SentPacket * pkt)
 {
-  StatsPacket *pkt;
-  StatsPacket *prev;
+  SentPacket *last = NULL;
 
-  /* we need at least 2 packets to do any stats */
-  if (array->len < 2) {
-    GST_DEBUG ("Not yet 2 packets in stats");
-    return;
+  if (gst_queue_array_is_empty (ctx->pt_packets) == FALSE) {
+    last = (SentPacket*)gst_queue_array_peek_tail (ctx->pt_packets);
   }
-
-  /* we can't do stats on the first packet */
-  if (packet_idx == 0) {
-    GST_DEBUG ("First packet can't have stats calculated");
-    return;
-  }
-
-  /* packet_idx must be inside the array */
-  if (array->len <= packet_idx) {
-    GST_DEBUG ("Packet idx %u is outside of array!", packet_idx);
-    return;
-  }
-
-  pkt = &g_array_index (array, StatsPacket, packet_idx);
-  prev = &g_array_index (array, StatsPacket, packet_idx - 1);
-
-  if (GST_CLOCK_TIME_IS_VALID (pkt->local_ts) &&
-      GST_CLOCK_TIME_IS_VALID (prev->local_ts)) {
-    pkt->local_delta = GST_CLOCK_DIFF (prev->local_ts, pkt->local_ts);
-    GST_LOG ("Calculated local_delta for packet #%u to %" GST_STIME_FORMAT,
-        pkt->seqnum, GST_STIME_ARGS (pkt->local_delta));
-  }
-
-  if (GST_CLOCK_TIME_IS_VALID (pkt->remote_ts) &&
-      GST_CLOCK_TIME_IS_VALID (prev->remote_ts)) {
-    pkt->remote_delta = GST_CLOCK_DIFF (prev->remote_ts, pkt->remote_ts);
-    GST_LOG ("Calculated remote_delta for packet #%u to %" GST_STIME_FORMAT,
-        pkt->seqnum, GST_STIME_ARGS (pkt->remote_delta));
-  }
-
-  if (GST_CLOCK_STIME_IS_VALID (pkt->local_delta) &&
-      GST_CLOCK_STIME_IS_VALID (pkt->remote_delta)) {
-    pkt->delta_delta = pkt->remote_delta - pkt->local_delta;
-    GST_LOG ("Calculated delta-of-delta for packet #%u to %" GST_STIME_FORMAT,
-        pkt->seqnum, GST_STIME_ARGS (pkt->delta_delta));
-  }
-}
-
-static gint
-_get_packet_idx_for_seqnum (GArray * array, guint16 seqnum)
-{
-  guint i;
-
-  for (i = 0; i < array->len; i++) {
-    StatsPacket *pkt = &g_array_index (array, StatsPacket, i);
-    if (pkt->seqnum == seqnum) {
-      return (gint) i;
-    }
-  }
-
-  return -1;
-}
-
-/* assumes all seqnum are in order */
-static gint
-_get_packet_idx_for_seqnum_fast (GArray * array, guint16 seqnum)
-{
-  StatsPacket *first;
-  guint16 idx;
-
-  if (array->len == 0)
-    return -1;
-
-  first = &g_array_index (array, StatsPacket, 0);
-  idx = gst_rtp_buffer_compare_seqnum (first->seqnum, seqnum);
-
-  if (idx < array->len) {
-    StatsPacket *found = &g_array_index (array, StatsPacket, idx);
-    if (found->seqnum == seqnum) {
-      return (gint) idx;
-    }
-  }
-
-  return -1;
-}
-
-static gint
-twcc_stats_ctx_get_packet_idx_for_seqnum (TWCCStatsCtx * ctx, guint16 seqnum)
-{
-  gint ret;
-
-  /* assumes all packets seqnum are in order */
-  ret = _get_packet_idx_for_seqnum_fast (ctx->packets, seqnum);
-  if (ret != -1)
-    return ret;
-
-  return _get_packet_idx_for_seqnum (ctx->packets, seqnum);
-}
-
-static StatsPacket *
-twcc_stats_ctx_get_packet_for_seqnum (TWCCStatsCtx * ctx, guint16 seqnum)
-{
-  StatsPacket *ret = NULL;
-  gint idx = twcc_stats_ctx_get_packet_idx_for_seqnum (ctx, seqnum);
-  if (idx != -1)
-    ret = &g_array_index (ctx->packets, StatsPacket, idx);
-
-  return ret;
-}
-
-static void
-twcc_stats_ctx_add_packet (TWCCStatsCtx * ctx, StatsPacket * pkt)
-{
-  StatsPacket *last = NULL;
-  gint pkt_idx;
-
-  if (ctx->packets->len > 0)
-    last = &g_array_index (ctx->packets, StatsPacket, ctx->packets->len - 1);
 
   /* first a quick check to see if we are going forward in seqnum,
      in which case we simply append */
-  if (last == NULL || pkt->seqnum > last->seqnum) {
+  if (!last || gst_rtp_buffer_compare_seqnum (last->seqnum, pkt->seqnum)) {
     GST_LOG ("Appending #%u to stats packets", pkt->seqnum);
-    g_array_append_val (ctx->packets, *pkt);
-    /* and update the stats for this packet */
-    _update_stats_for_packet_idx (ctx->packets, ctx->packets->len - 1);
-    return;
-  }
-
-  /* here we are dealing with a reordered packet, we start by searching for it */
-  pkt_idx = twcc_stats_ctx_get_packet_idx_for_seqnum (ctx, pkt->seqnum);
-  if (pkt_idx != -1) {
-    StatsPacket *existing = &g_array_index (ctx->packets, StatsPacket, pkt_idx);
-    /* only update if we don't already have information about this packet, and
-       this packet brings something new */
-    if (!GST_CLOCK_TIME_IS_VALID (existing->remote_ts) &&
-        GST_CLOCK_TIME_IS_VALID (pkt->remote_ts)) {
-      GST_DEBUG ("Updating stats packet #%u", pkt->seqnum);
-      g_array_index (ctx->packets, StatsPacket, pkt_idx) = *pkt;
-
-      /* now update stats for this packet and the next one along */
-      _update_stats_for_packet_idx (ctx->packets, pkt_idx);
-      _update_stats_for_packet_idx (ctx->packets, pkt_idx + 1);
+    if (gst_queue_array_get_length(ctx->pt_packets) == MAX_STATS_PACKETS) {
+      gst_queue_array_pop_head (ctx->pt_packets);
     }
-    return;
+    gst_queue_array_push_tail (ctx->pt_packets, pkt);
+  } else if (last) {
+    GST_LOG ("Attempting to add packet #%u to stats queueu out of order",
+        pkt->seqnum);
+    g_assert_not_reached ();
   }
 }
 
@@ -614,6 +510,7 @@ struct _RTPTWCCManager
 {
   GObject object;
   GMutex recv_lock;
+  GMutex send_lock;
 
   GHashTable *ssrc_to_seqmap;
   GHashTable *pt_to_twcc_ext_id;
@@ -712,10 +609,12 @@ rtp_twcc_manager_init (RTPTWCCManager * twcc)
   
   twcc->parsed_packets = g_array_new (FALSE, FALSE, sizeof (ParsedPacket));
   g_mutex_init (&twcc->recv_lock);
+  g_mutex_init (&twcc->send_lock);
 
   twcc->rtcp_buffers = g_queue_new ();
 
   twcc->stats_ctx = twcc_stats_ctx_new ();
+  twcc->stats_ctx->all_packets = twcc->sent_packets;
   twcc->stats_ctx_by_pt = g_hash_table_new_full (NULL, NULL,
       NULL, (GDestroyNotify) twcc_stats_ctx_free);
 
@@ -744,6 +643,7 @@ rtp_twcc_manager_finalize (GObject * object)
   g_array_unref (twcc->parsed_packets);
   g_queue_free_full (twcc->rtcp_buffers, (GDestroyNotify) gst_buffer_unref);
   g_mutex_clear (&twcc->recv_lock);
+  g_mutex_clear (&twcc->send_lock);
 
   g_hash_table_destroy (twcc->stats_ctx_by_pt);
   twcc_stats_ctx_free (twcc->stats_ctx);
@@ -779,33 +679,47 @@ _get_ctx_for_pt (RTPTWCCManager * twcc, guint pt)
       g_hash_table_lookup (twcc->stats_ctx_by_pt, GUINT_TO_POINTER (pt));
   if (!ctx) {
     ctx = twcc_stats_ctx_new ();
+    ctx->all_packets = twcc->sent_packets;
     g_hash_table_insert (twcc->stats_ctx_by_pt, GUINT_TO_POINTER (pt), ctx);
+    ctx->last_pkt_fb = NULL;
   }
   return ctx;
 }
 
+static void
+_remove_packet_from_stats (RTPTWCCManager * twcc, SentPacket * pkt)
+{
+  TWCCStatsCtx *stats_ctx[] = {twcc->stats_ctx,
+      _get_ctx_for_pt (twcc, pkt->pt)};
+
+  for (guint i = 0; i < G_N_ELEMENTS (stats_ctx); i++) {
+    SentPacket * head = gst_queue_array_peek_head (stats_ctx[i]->pt_packets);
+    const gint idx = gst_rtp_buffer_compare_seqnum (head->seqnum, pkt->seqnum);
+    if (idx > 0) {
+      GST_WARNING ("Attempting to remove packet that has greater seqnum "
+        "than the head in stats context queue");
+      g_assert_not_reached ();
+    } else if (idx == 0) {
+      gst_queue_array_pop_head (stats_ctx[i]->pt_packets);
+    }
+    if (stats_ctx[i]->last_pkt_fb->seqnum == pkt->seqnum) {
+      stats_ctx[i]->last_pkt_fb = NULL;
+    }
+  }
+}
 
 static void
 _update_stats_with_recovered (RTPTWCCManager * twcc, guint16 seqnum)
 {
-  TWCCStatsCtx *ctx;
-  StatsPacket *pkt =
-      twcc_stats_ctx_get_packet_for_seqnum (twcc->stats_ctx, seqnum);
+  g_mutex_lock (&twcc->send_lock);
+  SentPacket *pkt = _find_sentpacket (twcc, seqnum);
 
   if (pkt == NULL) {
-    GST_INFO ("Could not find seqnum %u", seqnum);
+    GST_WARNING ("Could not find seqnum %u", seqnum);
     return;
   }
-
-  pkt->recovered = TRUE;
-
-  /* now find the equivalent packet in the payload */
-  ctx = _get_ctx_for_pt (twcc, pkt->pt);
-  pkt = twcc_stats_ctx_get_packet_for_seqnum (ctx, seqnum);
-
-  if (pkt) {
-    pkt->recovered = TRUE;
-  }
+  pkt->state = RTP_TWCC_FECBLOCK_PKT_RECOVERED;
+  g_mutex_unlock (&twcc->send_lock);
 }
 
 static gint32
@@ -816,9 +730,12 @@ _lookup_seqnum (RTPTWCCManager * twcc, guint32 ssrc, guint16 seqnum)
   GHashTable *seq_to_twcc =
       g_hash_table_lookup (twcc->ssrc_to_seqmap, GUINT_TO_POINTER (ssrc));
   if (seq_to_twcc) {
-    ret =
-        GPOINTER_TO_UINT (g_hash_table_lookup (seq_to_twcc,
-            GUINT_TO_POINTER (seqnum)));
+    if (g_hash_table_lookup_extended (seq_to_twcc, GUINT_TO_POINTER (seqnum),
+        NULL, (gpointer *)&ret)) {
+          return ret;
+    } else {
+      return -1;
+    }
   }
   return ret;
 }
@@ -828,16 +745,13 @@ _add_packet_to_stats (RTPTWCCManager * twcc,
     ParsedPacket * parsed_pkt, SentPacket * sent_pkt)
 {
   TWCCStatsCtx *ctx;
-  StatsPacket pkt;
-
-  stats_packet_init_from_sent_packet (&pkt, sent_pkt);
 
   /* add packet to the stats context */
-  twcc_stats_ctx_add_packet (twcc->stats_ctx, &pkt);
+  twcc_stats_ctx_add_packet (twcc->stats_ctx, sent_pkt);
 
   /* add packet to the payload specific stats context */
-  ctx = _get_ctx_for_pt (twcc, pkt.pt);
-  twcc_stats_ctx_add_packet (ctx, &pkt);
+  ctx = _get_ctx_for_pt (twcc, sent_pkt->pt);
+  twcc_stats_ctx_add_packet (ctx, sent_pkt);
 
   // /* extra check to see if we can confirm the arrival of a recovery packet,
   //    and hence set the "original" packet as recovered */
@@ -945,6 +859,7 @@ sent_packet_init (SentPacket * packet, guint16 seqnum, RTPPacketInfo * pinfo,
   packet->lost = FALSE;
   packet->protects_ssrc = 0;
   packet->protects_seqnums = NULL;
+  packet->state = RTP_TWCC_FECBLOCK_PKT_UNKNOWN;
 }
 
 static void
@@ -991,7 +906,9 @@ _prune_old_sent_packets (RTPTWCCManager * twcc)
     if (!GST_CLOCK_TIME_IS_VALID(pkt->local_ts)
       || !GST_CLOCK_TIME_IS_VALID (last)
       || (last - pkt->local_ts > PACKETS_HIST_DUR)) {
-      gst_queue_array_pop_head_struct (twcc->sent_packets);
+      _remove_packet_from_stats (twcc, pkt);
+      _free_sentpacket ((SentPacket*)gst_queue_array_pop_head_struct (
+          twcc->sent_packets));
     } else {
       break;
     }
@@ -1060,10 +977,10 @@ _set_twcc_seqnum_data (RTPTWCCManager * twcc, RTPPacketInfo * pinfo,
       /* We are expecting non-twcc seqnums in the buffer's meta here, so
         change them to twcc seqnums. */
       for (gsize i = 0; i < protect_seqnums_array->len; i++) {
-        guint16 *seqnum = &g_array_index (protect_seqnums_array, guint16, i);
-        gint32 twcc_seqnum = _lookup_seqnum (twcc, protect_ssrc, *seqnum);
+        guint16 *prot_seqnum = &g_array_index (protect_seqnums_array, guint16, i);
+        gint32 twcc_seqnum = _lookup_seqnum (twcc, protect_ssrc, *prot_seqnum);
         if (twcc_seqnum != -1) {
-          *seqnum = twcc_seqnum;
+          *prot_seqnum = twcc_seqnum;
         }
       }
       rtp_reception_stats_add_redundant_packet (twcc->reception_stats_ctx, 
@@ -1071,15 +988,22 @@ _set_twcc_seqnum_data (RTPTWCCManager * twcc, RTPPacketInfo * pinfo,
           0, seqnum);
     }
   }
-  _prune_old_sent_packets (twcc);
-  if (gst_queue_array_get_length(twcc->sent_packets) == twcc->sent_packets_size) {
-    /* TODO: may be we'll have to allow it expand for some rare cases,
-      but just limit it for now
-    */
-    gst_queue_array_pop_head_struct (twcc->sent_packets);
+  g_mutex_lock (&twcc->send_lock);
+  {
+    _prune_old_sent_packets (twcc);
+    if (gst_queue_array_get_length(twcc->sent_packets) == twcc->sent_packets_size) {
+      /* TODO: may be we'll have to allow it expand for some rare cases,
+        but just limit it for now
+      */
+      _free_sentpacket ((SentPacket*)gst_queue_array_pop_head_struct (
+          twcc->sent_packets));
+    }
+    gst_queue_array_push_tail_struct (twcc->sent_packets, &packet);
+    rtp_twcc_manager_register_seqnum (twcc, pinfo->ssrc, pinfo->seqnum, seqnum);
+    _add_packet_to_stats (twcc, NULL, 
+        (SentPacket*)gst_queue_array_peek_tail_struct (twcc->sent_packets));
   }
-  gst_queue_array_push_tail_struct (twcc->sent_packets, &packet);
-  rtp_twcc_manager_register_seqnum (twcc, pinfo->ssrc, pinfo->seqnum, seqnum);
+  g_mutex_unlock (&twcc->send_lock);
 
   gst_buffer_add_tx_feedback_meta (pinfo->data, seqnum,
       GST_TX_FEEDBACK_CAST (twcc));
@@ -2021,15 +1945,32 @@ rtp_twcc_manager_parse_fci (RTPTWCCManager * twcc,
           pkt->status);
       _add_parsed_packet_to_value_array (array, pkt);
     }
-    if (found = _find_sentpacket (twcc, pkt->seqnum)) {
+    if (!!(found = _find_sentpacket (twcc, pkt->seqnum))) {
         found->remote_ts = pkt->remote_ts;
+        found->state = pkt->status == RTP_TWCC_PACKET_STATUS_NOT_RECV
+            ? RTP_TWCC_FECBLOCK_PKT_LOST : RTP_TWCC_FECBLOCK_PKT_RECEIVED;
+        /* Update last pkt fb pointer in stats contexts */
+        SentPacket **last_pkt_stats = &twcc->stats_ctx->last_pkt_fb;
+        gint idx = *last_pkt_stats
+            ? gst_rtp_buffer_compare_seqnum (
+              (*last_pkt_stats)->seqnum, found->seqnum)
+            : 0;
+        if (*last_pkt_stats == NULL || idx < 0) {
+          *last_pkt_stats = found;
+        }
+        last_pkt_stats = &_get_ctx_for_pt (twcc, found->pt)->last_pkt_fb;
+        idx = *last_pkt_stats
+            ? gst_rtp_buffer_compare_seqnum (
+              (*last_pkt_stats)->seqnum, found->seqnum)
+            : 0;
+        if (*last_pkt_stats == NULL || idx < 0) {
+          *last_pkt_stats = found;
+        }
 
         GST_LOG ("matching pkt: #%u with local_ts: %" GST_TIME_FORMAT
             " size: %u, remote-ts: %" GST_TIME_FORMAT, pkt->seqnum,
             GST_TIME_ARGS (found->local_ts),
             found->size * 8, GST_TIME_ARGS (pkt->remote_ts));
-
-        _add_packet_to_stats (twcc, pkt, found);
 
         /* calculate the round-trip time */
         rtt = GST_CLOCK_DIFF (found->local_ts, current_time);
@@ -2074,6 +2015,8 @@ rtp_twcc_manager_get_windowed_stats (RTPTWCCManager * twcc,
       GST_STIME_ARGS (stats_window_size), GST_STIME_ARGS (start_time),
       GST_STIME_ARGS (end_time));
 
+  g_mutex_lock (&twcc->send_lock);
+
   twcc_stats_ctx_calculate_windowed_stats (twcc->stats_ctx, start_time,
       end_time);
   ret = twcc_stats_ctx_get_structure (twcc->stats_ctx);
@@ -2090,6 +2033,7 @@ rtp_twcc_manager_get_windowed_stats (RTPTWCCManager * twcc,
     _append_structure_to_value_array (array, s);
     GST_LOG ("Stats for pt %u: %" GST_PTR_FORMAT, pt, s);
   }
+  g_mutex_unlock (&twcc->send_lock);
 
   _structure_take_value_array (ret, "payload-stats", array);
 

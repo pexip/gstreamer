@@ -766,14 +766,15 @@ gst_rtp_rtx_buffer_new (GstRtpRtxSend * rtx, GstBuffer * buffer, guint8 padlen)
   SSRCRtxData *data;
   guint32 ssrc;
   guint16 seqnum;
+  guint32 orig_ssrc;
   guint16 orig_seqnum;
   guint8 fmtp;
 
   gst_rtp_buffer_map (buffer, GST_MAP_READ, &rtp);
 
   /* get needed data from GstRtpRtxSend */
-  ssrc = gst_rtp_buffer_get_ssrc (&rtp);
-  data = gst_rtp_rtx_send_get_ssrc_data (rtx, ssrc);
+  orig_ssrc = gst_rtp_buffer_get_ssrc (&rtp);
+  data = gst_rtp_rtx_send_get_ssrc_data (rtx, orig_ssrc);
   ssrc = data->rtx_ssrc;
   seqnum = data->next_seqnum++;
   fmtp = GPOINTER_TO_UINT (g_hash_table_lookup (rtx->rtx_pt_map,
@@ -785,7 +786,7 @@ gst_rtp_rtx_buffer_new (GstRtpRtxSend * rtx, GstBuffer * buffer, guint8 padlen)
       "rtx seqnum: %u, rtx ssrc: %X", orig_seqnum,
       seqnum, ssrc);
 
-  gst_buffer_add_rtp_repair_meta (new_buffer, ssrc, &orig_seqnum, 1);
+  gst_buffer_add_rtp_repair_meta (new_buffer, orig_ssrc, &orig_seqnum, 1);
 
   /* gst_rtp_buffer_map does not map the payload so do it now */
   gst_rtp_buffer_get_payload (&rtp);
