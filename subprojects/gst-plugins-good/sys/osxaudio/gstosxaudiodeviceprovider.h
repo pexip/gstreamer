@@ -49,7 +49,15 @@ struct _GstOsxAudioDeviceProvider
   GstDeviceProvider parent;
 
   GHashTable *device_id_map; 
+
   GMutex mutex;
+  GCond cond;
+  GThread * thread;
+
+  gboolean running;
+  gboolean devices_changed;
+  gboolean default_input_changed;
+  gboolean default_output_changed;
 };
 
 struct _GstOsxAudioDeviceProviderClass
