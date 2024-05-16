@@ -123,7 +123,7 @@ _audio_device_get_transport_type (AudioDeviceID device_id, UInt32 * out_transpor
   status = AudioObjectGetPropertyData (device_id,
       &addr, 0, NULL, &propertySize, &transportType);
   if (status != noErr) {
-    GST_WARNING ("failed getting device id: %u property: %d", device_id, (int) status);
+    GST_WARNING ("failed getting device transport-type property for id: %u status: %d", device_id, (int) status);
     return status;
   }
 
@@ -399,25 +399,35 @@ gst_osx_audio_device_provider_listener (gpointer data)
   g_mutex_lock (&self->mutex);
 
   while (self->running) {
+    gboolean update_devices = self->devices_changed;
+    gboolean input_changed = self->default_input_changed;
+    gboolean output_changed = self->default_output_changed;
 
-    if (self->default_input_changed) {
+    self->devices_changed = FALSE;
+    self->default_input_changed = FALSE;
+    self->default_output_changed = FALSE;
+
+    g_mutex_unlock (&self->mutex);
+
+    if (update_devices)
+      gst_osx_audio_device_provider_update_devices (self);
+
+    if (input_changed)
       gst_osx_audio_device_provider_update_default_device (self,
         kAudioDevicePropertyScopeInput, "Audio/Source");
-      self->default_input_changed = FALSE;
-    }
 
-    if (self->default_output_changed) {
+    if (output_changed)
       gst_osx_audio_device_provider_update_default_device (self,
         kAudioDevicePropertyScopeOutput, "Audio/Sink");
-      self->default_output_changed = FALSE;
-    }
 
-    if (self->devices_changed) {
-      gst_osx_audio_device_provider_update_devices (self);
-      self->devices_changed = FALSE;
-    }
+    g_mutex_lock (&self->mutex);
 
-    g_cond_wait (&self->cond, &self->mutex);
+    gboolean wait = self->running
+      && !self->devices_changed && !self->default_input_changed
+      && !self->default_output_changed;
+
+    if (wait)
+      g_cond_wait (&self->cond, &self->mutex);
   }
 
   g_mutex_unlock (&self->mutex);
