@@ -55,9 +55,10 @@ struct _GstOsxAudioDeviceProvider
   GThread * thread;
 
   gboolean running;
-  gboolean devices_changed;
-  gboolean default_input_changed;
-  gboolean default_output_changed;
+  gboolean update_devices;
+
+  AudioDeviceID current_default_input;
+  AudioDeviceID current_default_output;
 };
 
 struct _GstOsxAudioDeviceProviderClass
@@ -84,7 +85,7 @@ struct _GstOsxAudioDevice
 
   const gchar *element;
   AudioDeviceID device_id;
-  AudioObjectPropertyScope scope;
+  gboolean is_default;
 };
 
 struct _GstOsxAudioDeviceClass
