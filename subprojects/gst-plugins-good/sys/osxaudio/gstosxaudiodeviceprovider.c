@@ -823,7 +823,7 @@ gst_osx_audio_device_provider_update_device (GstDeviceProvider * provider, Audio
 
   changed_device = gst_osx_audio_device_provider_find_device_by_id (provider, device_id, device_class);
   if (!changed_device) {
-    GST_ERROR ("device id: %u marked to change but we don't have it in our list!", device_id);
+    GST_DEBUG ("device id: %u marked to change but we don't have it in our list!", device_id);
     return;
   }
 
