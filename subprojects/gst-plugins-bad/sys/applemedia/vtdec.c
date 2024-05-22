@@ -631,10 +631,6 @@ gst_vtdec_handle_frame (GstVideoDecoder * decoder, GstVideoCodecFrame * frame)
 
   GST_LOG_OBJECT (vtdec, "got input frame %d", decode_frame_number);
 
-  ret = gst_vtdec_push_frames_if_needed (vtdec, FALSE, FALSE);
-  if (ret != GST_FLOW_OK)
-    return ret;
-
   /* don't bother enabling kVTDecodeFrame_EnableTemporalProcessing at all since
    * it's not mandatory for the underlying VT codec to respect it. KISS and do
    * reordering ourselves.
@@ -650,6 +646,10 @@ gst_vtdec_handle_frame (GstVideoDecoder * decoder, GstVideoCodecFrame * frame)
     goto error;
 
   GST_LOG_OBJECT (vtdec, "submitted input frame %d", decode_frame_number);
+
+  ret = gst_vtdec_push_frames_if_needed (vtdec, FALSE, FALSE);
+  if (ret != GST_FLOW_OK)
+    return ret;
 
 out:
   if (cm_sample_buffer)
@@ -1010,8 +1010,7 @@ gst_vtdec_push_frames_if_needed (GstVtdec * vtdec, gboolean drain,
     }
   }
 
-  if (drain || flush)
-    VTDecompressionSessionWaitForAsynchronousFrames (vtdec->session);
+  VTDecompressionSessionWaitForAsynchronousFrames (vtdec->session);
 
   /* push a buffer if there are enough frames to guarantee that we push in PTS
    * order
@@ -1024,13 +1023,17 @@ gst_vtdec_push_frames_if_needed (GstVtdec * vtdec, gboolean drain,
      */
     if (frame) {
       if (frame->flags & VTDEC_FRAME_FLAG_ERROR) {
+        GST_ERROR_OBJECT (vtdec, "Frame error on frame: %p", frame);
         gst_video_decoder_release_frame (decoder, frame);
         ret = GST_FLOW_ERROR;
       } else if (flush || frame->flags & VTDEC_FRAME_FLAG_SKIP) {
+        GST_DEBUG_OBJECT (vtdec, "Skipping frame: %p", frame);
         gst_video_decoder_release_frame (decoder, frame);
       } else if (frame->flags & VTDEC_FRAME_FLAG_DROP) {
+        GST_DEBUG_OBJECT (vtdec, "Dropping frame: %p", frame);
         gst_video_decoder_drop_frame (decoder, frame);
       } else {
+        GST_LOG_OBJECT (vtdec, "Finishing frame: %p", frame);
         ret = gst_video_decoder_finish_frame (decoder, frame);
       }
     }

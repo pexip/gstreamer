@@ -181,6 +181,8 @@ static void gst_vtenc_session_configure_allow_frame_reordering (GstVTEnc * self,
     VTCompressionSessionRef session, gboolean allow_frame_reordering);
 static void gst_vtenc_session_configure_realtime (GstVTEnc * self,
     VTCompressionSessionRef session, gboolean realtime);
+static void gst_vtenc_session_configure_quality (GstVTEnc * self,
+    VTCompressionSessionRef session, gdouble quality);
 
 static GstFlowReturn gst_vtenc_encode_frame (GstVTEnc * self,
     GstVideoCodecFrame * frame);
@@ -554,10 +556,8 @@ gst_vtenc_set_quality (GstVTEnc * self, gdouble quality)
 {
   GST_OBJECT_LOCK (self);
   self->quality = quality;
-  GST_INFO_OBJECT (self, "setting quality %f", quality);
   if (self->session != NULL) {
-    gst_vtenc_session_configure_property_double (self, self->session,
-        kVTCompressionPropertyKey_Quality, quality);
+    gst_vtenc_session_configure_quality (self, self->session, quality);
   }
   GST_OBJECT_UNLOCK (self);
 }
@@ -791,7 +791,7 @@ gst_vtenc_start (GstVideoEncoder * enc)
   GstVTEnc *self = GST_VTENC_CAST (enc);
 
   /* DTS can be negative if b-frames are enabled */
-  gst_video_encoder_set_min_pts (enc, GST_SECOND * 60 * 60 * 1000);
+  //gst_video_encoder_set_min_pts (enc, GST_SECOND * 60 * 60 * 1000);
 
   self->is_flushing = FALSE;
   self->downstream_ret = GST_FLOW_OK;
@@ -1041,8 +1041,8 @@ gst_vtenc_set_format (GstVideoEncoder * enc, GstVideoCodecState * state)
 
   self->negotiate_downstream = TRUE;
 
-  session = gst_vtenc_create_session (self);
   GST_OBJECT_LOCK (self);
+  session = gst_vtenc_create_session (self);
   self->session = session;
   GST_OBJECT_UNLOCK (self);
 
@@ -1429,7 +1429,10 @@ gst_vtenc_create_session (GstVTEnc * self)
   }
 
   /* This was set in gst_vtenc_negotiate_specific_format_details() */
-  g_assert_cmpint (self->specific_format_id, !=, 0);
+  if (!self->specific_format_id) {
+    GST_ERROR_OBJECT (self, "No format id set!");
+    goto beach;
+  }
 
   if (self->profile_level) {
     if (!gst_vtenc_compute_dts_offset (self, self->video_info.fps_d,
@@ -1473,8 +1476,7 @@ gst_vtenc_create_session (GstVTEnc * self)
     gst_vtenc_session_configure_max_keyframe_interval_duration (self, session,
         self->max_keyframe_interval_duration / ((gdouble) GST_SECOND));
 
-    gst_vtenc_session_configure_bitrate (self, session,
-        gst_vtenc_get_bitrate (self));
+    gst_vtenc_session_configure_bitrate (self, session, self->bitrate);
   }
 
   /* Force encoder to not preserve alpha with 4444(XQ) ProRes formats if
@@ -1525,16 +1527,16 @@ gst_vtenc_create_session (GstVTEnc * self)
       g_assert_not_reached ();
   }
 
-  gst_vtenc_session_configure_realtime (self, session,
-      gst_vtenc_get_realtime (self));
+  gst_vtenc_session_configure_realtime (self, session, self->realtime);
   gst_vtenc_session_configure_allow_frame_reordering (self, session,
-      gst_vtenc_get_allow_frame_reordering (self));
-  gst_vtenc_set_quality (self, self->quality);
+      self->allow_frame_reordering);
+  gst_vtenc_session_configure_quality (self, session, self->quality);
 
   if (self->dump_properties) {
     gst_vtenc_session_dump_properties (self, session);
     self->dump_properties = FALSE;
   }
+
 #ifdef HAVE_VIDEOTOOLBOX_10_9_6
   if (VTCompressionSessionPrepareToEncodeFrames) {
     status = VTCompressionSessionPrepareToEncodeFrames (session);
@@ -1639,6 +1641,7 @@ static void
 gst_vtenc_session_configure_max_keyframe_interval (GstVTEnc * self,
     VTCompressionSessionRef session, gint interval)
 {
+  GST_INFO_OBJECT (self, "Setting MaxKeyFrameInterval to: %d", interval);
   gst_vtenc_session_configure_property_int (self, session,
       kVTCompressionPropertyKey_MaxKeyFrameInterval, interval);
 }
@@ -1647,6 +1650,7 @@ static void
 gst_vtenc_session_configure_max_keyframe_interval_duration (GstVTEnc * self,
     VTCompressionSessionRef session, gdouble duration)
 {
+  GST_INFO_OBJECT (self, "Setting MaxKeyFrameIntervalDuration to: %lf", duration);
   gst_vtenc_session_configure_property_double (self, session,
       kVTCompressionPropertyKey_MaxKeyFrameIntervalDuration, duration);
 }
@@ -1655,6 +1659,7 @@ static void
 gst_vtenc_session_configure_bitrate (GstVTEnc * self,
     VTCompressionSessionRef session, guint bitrate)
 {
+  GST_INFO_OBJECT (self, "setting bitrate %u", bitrate);
   gst_vtenc_session_configure_property_int (self, session,
       kVTCompressionPropertyKey_AverageBitRate, bitrate);
 }
@@ -1663,6 +1668,7 @@ static void
 gst_vtenc_session_configure_allow_frame_reordering (GstVTEnc * self,
     VTCompressionSessionRef session, gboolean allow_frame_reordering)
 {
+  GST_INFO_OBJECT (self, "setting allow-frame-reordering %d", allow_frame_reordering);
   VTSessionSetProperty (session, kVTCompressionPropertyKey_AllowFrameReordering,
       allow_frame_reordering ? kCFBooleanTrue : kCFBooleanFalse);
 }
@@ -1671,8 +1677,18 @@ static void
 gst_vtenc_session_configure_realtime (GstVTEnc * self,
     VTCompressionSessionRef session, gboolean realtime)
 {
+  GST_INFO_OBJECT (self, "setting realtime %d", realtime);
   VTSessionSetProperty (session, kVTCompressionPropertyKey_RealTime,
       realtime ? kCFBooleanTrue : kCFBooleanFalse);
+}
+
+static void
+gst_vtenc_session_configure_quality (GstVTEnc * self,
+    VTCompressionSessionRef session, gdouble quality)
+{
+  GST_INFO_OBJECT (self, "setting quality %lf", quality);
+  gst_vtenc_session_configure_property_double (self, session,
+        kVTCompressionPropertyKey_Quality, quality);
 }
 
 static OSStatus
@@ -1971,10 +1987,6 @@ gst_vtenc_encode_frame (GstVTEnc * self, GstVideoCodecFrame * frame)
   vt_status = VTCompressionSessionEncodeFrame (self->session,
       pbuf, ts, duration, frame_props,
       GINT_TO_POINTER (frame->system_frame_number), NULL);
-  GST_VIDEO_ENCODER_STREAM_LOCK (self);
-
-  gst_video_codec_frame_unref (frame);
-  CVPixelBufferRelease (pbuf);
 
   if (vt_status == kVTInvalidSessionErr) {
     GST_WARNING_OBJECT (self, "Invalid compression session, resetting.");
@@ -1985,6 +1997,20 @@ gst_vtenc_encode_frame (GstVTEnc * self, GstVideoCodecFrame * frame)
   } else if (vt_status != noErr) {
     GST_WARNING_OBJECT (self, "VTCompressionSessionEncodeFrame returned %d", (int) vt_status);
   }
+
+  vt_status =
+      VTCompressionSessionCompleteFrames (self->session,
+      kCMTimePositiveInfinity);
+  GST_DEBUG_OBJECT (self, "VTCompressionSessionCompleteFrames ended");
+  if (vt_status != noErr) {
+    GST_WARNING_OBJECT (self, "VTCompressionSessionCompleteFrames returned %d",
+        (int) vt_status);
+  }
+
+  GST_VIDEO_ENCODER_STREAM_LOCK (self);
+
+  gst_video_codec_frame_unref (frame);
+  CVPixelBufferRelease (pbuf);
 
   return ret;
 
@@ -2045,8 +2071,10 @@ gst_vtenc_enqueue_buffer (void *outputCallbackRefCon,
   if (sampleBuffer == NULL)
     goto beach;
 
-  if (gst_vtenc_buffer_is_keyframe (self, sampleBuffer))
+  if (gst_vtenc_buffer_is_keyframe (self, sampleBuffer)) {
+    GST_INFO_OBJECT (self, "Encoder produced keyframe");
     GST_VIDEO_CODEC_FRAME_SET_SYNC_POINT (frame);
+  }
 
   /* We are dealing with block buffers here, so we don't need
    * to enable the use of the video meta API on the core media buffer */
@@ -2132,7 +2160,8 @@ gst_vtenc_loop (GstVTEnc * self)
 
     gst_vtenc_update_latency (self);
 
-    GST_LOG_OBJECT (self, "finishing frame %d", outframe->system_frame_number);
+    GST_LOG_OBJECT (self, "finishing frame %d with buf: %"GST_PTR_FORMAT,
+        outframe->system_frame_number, outframe->output_buffer);
     GST_VIDEO_ENCODER_STREAM_UNLOCK (self);
     /* releases frame, even if it has no output buffer (i.e. failed to encode) */
     ret =
