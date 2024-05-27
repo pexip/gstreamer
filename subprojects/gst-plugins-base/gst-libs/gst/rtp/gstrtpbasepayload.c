@@ -2076,8 +2076,8 @@ gst_rtp_base_payload_allocate_output_buffer (GstRTPBasePayload * payload,
       idx = csrc_count;
       for (i = 0; i < meta->csrc_count && idx < 15; i++, idx++)
         gst_rtp_buffer_set_csrc (&rtp, idx, meta->csrc[i]);
-      if (meta->ssrc_valid && idx < 15)
-        gst_rtp_buffer_set_csrc (&rtp, idx, meta->ssrc);
+      // if (meta->ssrc_valid && idx < 15)
+      //   gst_rtp_buffer_set_csrc (&rtp, idx, meta->ssrc);
 
       gst_rtp_buffer_unmap (&rtp);
     }
