@@ -614,7 +614,10 @@ gst_vp9_enc_get_new_simple_caps (GstVPXEnc * enc)
   GstCaps *caps;
   gchar *profile_str = g_strdup_printf ("%d", enc->cfg.g_profile);
   caps = gst_caps_new_simple ("video/x-vp9",
-      "profile", G_TYPE_STRING, profile_str, NULL);
+      "profile", G_TYPE_STRING, profile_str,
+      "chroma-format", G_TYPE_STRING, "4:2:0",
+      "bit-depth-luma", G_TYPE_UINT, 12,
+      "bit-depth-chroma", G_TYPE_UINT, 12, NULL);
   g_free (profile_str);
   return caps;
 }
