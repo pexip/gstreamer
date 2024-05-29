@@ -3,6 +3,7 @@
 
 #include <gst/gstconfig.h>
 #include <gst/glib-compat.h>
+#include <dispatch/dispatch.h>
 
 G_BEGIN_DECLS
 
@@ -72,6 +73,8 @@ int              gst_macos_main                   (GstMainFunc main_func,
 GST_API
 int              gst_macos_main_simple            (GstMainFuncSimple main_func,
                                                    gpointer user_data);
+
+dispatch_queue_t gst_macos_get_core_audio_dispatch_queue();
 
 G_END_DECLS
 
