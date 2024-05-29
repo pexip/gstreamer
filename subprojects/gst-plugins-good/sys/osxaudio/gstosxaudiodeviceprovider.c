@@ -439,6 +439,30 @@ gst_osx_audio_device_provider_listener (gpointer data)
   return NULL;
 }
 
+static OSStatus
+gst_osx_audio_device_change_block (GstOsxAudioDeviceProvider * self,
+    guint32 inNumberAddresses, const AudioObjectPropertyAddress *inAddresses)
+{
+  g_mutex_lock (&self->mutex);
+  for (guint32 i = 0; i < inNumberAddresses; i++) {
+    switch (inAddresses[i].mSelector) {
+      case kAudioHardwarePropertyDevices:
+      case kAudioHardwarePropertyDefaultOutputDevice:
+      case kAudioHardwarePropertyDefaultInputDevice:
+      {
+        self->update_devices = TRUE;
+        g_cond_signal (&self->cond);
+        break;
+      }
+      default:
+        break;
+    }
+  }
+  g_mutex_unlock (&self->mutex);
+
+  return noErr;
+}
+
 static gboolean
 gst_osx_audio_device_provider_add_remove_listeners (GstDeviceProvider * provider, gboolean add)
 {
@@ -446,6 +470,11 @@ gst_osx_audio_device_provider_add_remove_listeners (GstDeviceProvider * provider
     kAudioHardwarePropertyDevices,
     kAudioHardwarePropertyDefaultInputDevice,
     kAudioHardwarePropertyDefaultOutputDevice
+  };
+
+  dispatch_queue_t inDispatchQueue = gst_macos_get_core_audio_dispatch_queue ();
+  AudioObjectPropertyListenerBlock listenerBlock = ^(UInt32 inNumberAddresses, const AudioObjectPropertyAddress inAddresses[]) {
+      gst_osx_audio_device_change_block (GST_OSX_AUDIO_DEVICE_PROVIDER_CAST (provider), inNumberAddresses, inAddresses);  
   };
 
   for (size_t i = 0; i < sizeof (event_ids) / sizeof (event_ids[0]); i++) {
@@ -457,16 +486,31 @@ gst_osx_audio_device_provider_add_remove_listeners (GstDeviceProvider * provider
 
     OSStatus status;
 
+
     if (add) {
+#if 0
       status = AudioObjectAddPropertyListener (kAudioObjectSystemObject,
         &deviceListAddr,
         gst_osx_audio_device_change_cb,
         (void *) provider);
+#else
+      status = AudioObjectAddPropertyListenerBlock (kAudioObjectSystemObject,
+        &deviceListAddr,
+        inDispatchQueue,
+        listenerBlock);
+#endif
     } else {
+#if 0
       status = AudioObjectRemovePropertyListener (kAudioObjectSystemObject,
         &deviceListAddr,
         gst_osx_audio_device_change_cb,
         (void *) provider); 
+#else
+      status = AudioObjectRemovePropertyListenerBlock (kAudioObjectSystemObject,
+        &deviceListAddr,
+        inDispatchQueue,
+        listenerBlock);
+#endif
     }
 
     if (status != noErr) {
