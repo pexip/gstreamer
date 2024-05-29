@@ -36,6 +36,7 @@ run_main_with_nsapp (ThreadArgs args)
   if ([NSApp activationPolicy] == NSApplicationActivationPolicyProhibited) {
     [NSApp setActivationPolicy:NSApplicationActivationPolicyAccessory];
   }
+
   gst_thread = g_thread_new ("macos-gst-thread", (GThreadFunc) gst_thread_func, &args);
   [NSApp run];
 
@@ -103,4 +104,15 @@ gst_macos_main_simple (GstMainFuncSimple main_func, gpointer user_data)
   args.is_simple = TRUE;
 
   return run_main_with_nsapp (args);
+}
+
+dispatch_queue_t
+gst_macos_get_core_audio_dispatch_queue()
+{
+  static dispatch_once_t queueCreationGuard;
+  static dispatch_queue_t queue;
+  dispatch_once(&queueCreationGuard, ^{
+      queue = dispatch_queue_create("com.gst.CoreAudioDispatchQueue", DISPATCH_QUEUE_SERIAL);
+  });
+  return queue;
 }
