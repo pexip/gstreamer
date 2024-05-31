@@ -198,6 +198,7 @@ gst_v4l2_device_provider_probe_device (GstV4l2DeviceProvider * provider,
       device_name ? device_name : (gchar *) v4l2obj->vcap.card, caps, type,
       props);
   gst_caps_unref (caps);
+  gst_object_ref_sink (device);
 
 close:
 
@@ -233,10 +234,8 @@ gst_v4l2_device_provider_probe (GstDeviceProvider * provider)
     device = gst_v4l2_device_provider_probe_device (self, it->device_path, NULL,
         props);
 
-    if (device) {
-      gst_object_ref_sink (device);
+    if (device)
       devices = g_list_append (devices, device);
-    }
   }
 
   gst_v4l2_iterator_free (it);
