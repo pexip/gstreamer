@@ -1456,7 +1456,7 @@ gst_v4l2_buffer_pool_acquire_buffer (GstBufferPool * bpool, GstBuffer ** buffer,
   GstBufferPoolClass *pclass = GST_BUFFER_POOL_CLASS (parent_class);
   GstV4l2Object *obj = pool->obj;
 
-  GST_DEBUG_OBJECT (pool, "acquire");
+  GST_LOG_OBJECT (pool, "acquire");
 
   /* If this is being called to resurrect a lost buffer */
   if (params && params->flags & GST_V4L2_BUFFER_POOL_ACQUIRE_FLAG_RESURRECT) {
@@ -1553,7 +1553,7 @@ gst_v4l2_buffer_pool_complete_release_buffer (GstBufferPool * bpool,
   GstBufferPoolClass *pclass = GST_BUFFER_POOL_CLASS (parent_class);
   GstV4l2Object *obj = pool->obj;
 
-  GST_DEBUG_OBJECT (pool, "complete release buffer %p (queued = %s)", buffer,
+  GST_LOG_OBJECT (pool, "complete release buffer %p (queued = %s)", buffer,
       queued ? "yes" : "no");
 
   switch (obj->type) {
@@ -1903,7 +1903,7 @@ gst_v4l2_buffer_pool_process (GstV4l2BufferPool * pool, GstBuffer ** buf,
   GstBufferPool *bpool = GST_BUFFER_POOL_CAST (pool);
   GstV4l2Object *obj = pool->obj;
 
-  GST_DEBUG_OBJECT (pool, "process buffer %p", *buf);
+  GST_LOG_OBJECT (pool, "process buffer %p", *buf);
 
   if (GST_BUFFER_POOL_IS_FLUSHING (pool))
     return GST_FLOW_FLUSHING;

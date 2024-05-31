@@ -1283,7 +1283,7 @@ retry:
     /* Save last timestamp for sanity checks */
     v4l2src->last_timestamp = timestamp;
 
-    GST_DEBUG_OBJECT (v4l2src, "ts: %" GST_TIME_FORMAT " now %" GST_TIME_FORMAT
+    GST_LOG_OBJECT (v4l2src, "ts: %" GST_TIME_FORMAT " now %" GST_TIME_FORMAT
         " delay %" GST_TIME_FORMAT, GST_TIME_ARGS (timestamp),
         GST_TIME_ARGS (gstnow), GST_TIME_ARGS (delay));
   } else {
