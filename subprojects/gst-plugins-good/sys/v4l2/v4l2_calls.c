@@ -135,10 +135,10 @@ gst_v4l2_fill_lists (GstV4l2Object * v4l2object)
 
   e = v4l2object->element;
 
-  GST_DEBUG_OBJECT (e, "getting enumerations");
+  GST_LOG_OBJECT (e, "getting enumerations");
   GST_V4L2_CHECK_OPEN (v4l2object);
 
-  GST_DEBUG_OBJECT (e, "  channels");
+  GST_LOG_OBJECT (e, "  channels");
   /* and now, the channels */
   for (n = 0;; n++) {
     struct v4l2_input input;
@@ -211,7 +211,7 @@ gst_v4l2_fill_lists (GstV4l2Object * v4l2object)
   }
   v4l2object->channels = g_list_reverse (v4l2object->channels);
 
-  GST_DEBUG_OBJECT (e, "  norms");
+  GST_LOG_OBJECT (e, "  norms");
   /* norms... */
   for (n = 0;; n++) {
     struct v4l2_standard standard = { 0, };
@@ -241,7 +241,7 @@ gst_v4l2_fill_lists (GstV4l2Object * v4l2object)
       }
     }
 
-    GST_DEBUG_OBJECT (e, "    '%s', fps: %d / %d",
+    GST_LOG_OBJECT (e, "    '%s', fps: %d / %d",
         standard.name, standard.frameperiod.denominator,
         standard.frameperiod.numerator);
 
@@ -252,14 +252,14 @@ gst_v4l2_fill_lists (GstV4l2Object * v4l2object)
         standard.frameperiod.denominator, standard.frameperiod.numerator);
     v4l2norm->index = standard.id;
 
-    GST_DEBUG_OBJECT (v4l2object->dbg_obj, "index=%08x, label=%s",
+    GST_LOG_OBJECT (v4l2object->dbg_obj, "index=%08x, label=%s",
         (unsigned int) v4l2norm->index, norm->label);
 
     v4l2object->norms = g_list_prepend (v4l2object->norms, (gpointer) norm);
   }
   v4l2object->norms = g_list_reverse (v4l2object->norms);
 
-  GST_DEBUG_OBJECT (e, "  controls+menus");
+  GST_LOG_OBJECT (e, "  controls+menus");
 
   /* and lastly, controls+menus (if appropriate) */
   next = V4L2_CTRL_FLAG_NEXT_CTRL;
@@ -276,20 +276,20 @@ gst_v4l2_fill_lists (GstV4l2Object * v4l2object)
   retry:
     /* when we reached the last official CID, continue with private CIDs */
     if (n == V4L2_CID_LASTP1) {
-      GST_DEBUG_OBJECT (e, "checking private CIDs");
+      GST_LOG_OBJECT (e, "checking private CIDs");
       n = V4L2_CID_PRIVATE_BASE;
     }
-    GST_DEBUG_OBJECT (e, "checking control %08x", n);
+    GST_LOG_OBJECT (e, "checking control %08x", n);
 
     control.id = n | next;
     if (v4l2object->ioctl (v4l2object->video_fd, VIDIOC_QUERYCTRL,
             &control) < 0) {
       if (next) {
         if (n > 0) {
-          GST_DEBUG_OBJECT (e, "controls finished");
+          GST_LOG_OBJECT (e, "controls finished");
           break;
         } else {
-          GST_DEBUG_OBJECT (e, "V4L2_CTRL_FLAG_NEXT_CTRL not supported.");
+          GST_LOG_OBJECT (e, "V4L2_CTRL_FLAG_NEXT_CTRL not supported.");
           next = 0;
           n = V4L2_CID_BASE;
           goto retry;
@@ -297,19 +297,19 @@ gst_v4l2_fill_lists (GstV4l2Object * v4l2object)
       }
       if (errno == EINVAL || errno == ENOTTY || errno == EIO || errno == ENOENT) {
         if (n < V4L2_CID_PRIVATE_BASE) {
-          GST_DEBUG_OBJECT (e, "skipping control %08x", n);
+          GST_LOG_OBJECT (e, "skipping control %08x", n);
           /* continue so that we also check private controls */
           n = V4L2_CID_PRIVATE_BASE - 1;
           continue;
         } else {
-          GST_DEBUG_OBJECT (e, "controls finished");
+          GST_LOG_OBJECT (e, "controls finished");
           break;
         }
       } else {
         GST_WARNING_OBJECT (e, "Failed querying control %d on device '%s'. "
             "(%d - %s)", n, v4l2object->videodev, errno, strerror (errno));
         if (n > (V4L2_CID_PRIVATE_BASE + V4L2_CID_MAX_CTRLS)) {
-          GST_DEBUG_OBJECT (e, "Finish control by reaching V4L2_CID_MAX_CTRLS");
+          GST_LOG_OBJECT (e, "Finish control by reaching V4L2_CID_MAX_CTRLS");
           break;
         }
         continue;
@@ -320,12 +320,12 @@ gst_v4l2_fill_lists (GstV4l2Object * v4l2object)
     if (next)
       n = control.id;
     if (control.flags & V4L2_CTRL_FLAG_DISABLED) {
-      GST_DEBUG_OBJECT (e, "skipping disabled control");
+      GST_LOG_OBJECT (e, "skipping disabled control");
       continue;
     }
 
     if (control.type == V4L2_CTRL_TYPE_CTRL_CLASS) {
-      GST_DEBUG_OBJECT (e, "starting control class '%s'", control.name);
+      GST_LOG_OBJECT (e, "starting control class '%s'", control.name);
       continue;
     }
 
@@ -345,7 +345,7 @@ gst_v4l2_fill_lists (GstV4l2Object * v4l2object)
         break;
       }
       default:
-        GST_DEBUG_OBJECT (e,
+        GST_LOG_OBJECT (e,
             "Control type for '%s' not supported for extra controls.",
             control.name);
         break;
@@ -388,7 +388,7 @@ gst_v4l2_fill_lists (GstV4l2Object * v4l2object)
         v4l2object->has_alpha_component = TRUE;
         break;
       default:
-        GST_DEBUG_OBJECT (e,
+        GST_LOG_OBJECT (e,
             "ControlID %s (%x) unhandled, FIXME", control.name, n);
         control.id++;
         break;
@@ -396,7 +396,7 @@ gst_v4l2_fill_lists (GstV4l2Object * v4l2object)
     if (n != control.id)
       continue;
 
-    GST_DEBUG_OBJECT (e, "Adding ControlID %s (%x)", control.name, n);
+    GST_LOG_OBJECT (e, "Adding ControlID %s (%x)", control.name, n);
     v4l2channel = g_object_new (GST_TYPE_V4L2_COLOR_BALANCE_CHANNEL, NULL);
     channel = GST_COLOR_BALANCE_CHANNEL (v4l2channel);
     channel->label = g_strdup ((const gchar *) control.name);
@@ -447,7 +447,7 @@ gst_v4l2_fill_lists (GstV4l2Object * v4l2object)
         /* FIXME we should find out how to handle V4L2_CTRL_TYPE_BUTTON.
            BUTTON controls like V4L2_CID_DO_WHITE_BALANCE can just be set (1) or
            unset (0), but can't be queried */
-        GST_DEBUG_OBJECT (e,
+        GST_LOG_OBJECT (e,
             "Control with non supported type %s (%x), type=%d",
             control.name, n, control.type);
         channel->min_value = channel->max_value = 0;
@@ -459,7 +459,7 @@ gst_v4l2_fill_lists (GstV4l2Object * v4l2object)
   }
   v4l2object->colors = g_list_reverse (v4l2object->colors);
 
-  GST_DEBUG_OBJECT (e, "done");
+  GST_LOG_OBJECT (e, "done");
   return TRUE;
 }
 
@@ -566,13 +566,17 @@ gst_v4l2_open (GstV4l2Object * v4l2object, GstV4l2Error * error)
     v4l2object->video_fd = libv4l2_fd;
 
   /* get capabilities, error will be posted */
-  if (!gst_v4l2_get_capabilities (v4l2object))
+  if (!gst_v4l2_get_capabilities (v4l2object)) {
+    GST_V4L2_ERROR (error, RESOURCE, OPEN_READ_WRITE,
+      (_("Could not open device '%s' for capabilities."),
+          v4l2object->videodev), GST_ERROR_SYSTEM);
     goto error;
+  }
 
   /* do we need to be a capture device? */
   if (GST_IS_V4L2SRC (v4l2object->element) &&
       !(v4l2object->device_caps & (V4L2_CAP_VIDEO_CAPTURE |
-              V4L2_CAP_VIDEO_CAPTURE_MPLANE)))
+              V4L2_CAP_VIDEO_CAPTURE_MPLANE | V4L2_CAP_META_CAPTURE)))
     goto not_capture;
 
   if (GST_IS_V4L2SINK (v4l2object->element) &&
@@ -587,8 +591,12 @@ gst_v4l2_open (GstV4l2Object * v4l2object, GstV4l2Error * error)
   gst_v4l2_adjust_buf_type (v4l2object);
 
   /* create enumerations, posts errors. */
-  if (!gst_v4l2_fill_lists (v4l2object))
+  if (!gst_v4l2_fill_lists (v4l2object)) {
+    GST_V4L2_ERROR (error, RESOURCE, OPEN_READ_WRITE,
+        (_("Could not open device '%s' for enumeration."),
+            v4l2object->videodev), GST_ERROR_SYSTEM);
     goto error;
+  }
 
   GST_INFO_OBJECT (v4l2object->dbg_obj,
       "Opened device '%s' (%s) successfully",
