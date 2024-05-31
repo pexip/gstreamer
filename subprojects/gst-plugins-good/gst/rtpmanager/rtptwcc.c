@@ -324,6 +324,11 @@ twcc_stats_ctx_calculate_windowed_stats (TWCCStatsCtx * ctx,
   if (!ret || packets_sent < 2) {
     GST_INFO ("Not enough packets to fill our window yet!");
     return FALSE;
+  } else {
+    GST_DEBUG_OBJECT (ctx, "Stats window: %u packets, pt: %d, %d->%d", packets_sent,
+      ((SentPacket*)gst_queue_array_peek_nth (packets, start_idx - 1))->pt,
+      ((SentPacket*)gst_queue_array_peek_nth (packets, start_idx - 1))->seqnum,
+      ((SentPacket*)gst_queue_array_peek_nth (packets, packets_sent + start_idx - 2))->seqnum);
   }
 
   for (i = 0; i < packets_sent; i++) {
@@ -711,7 +716,7 @@ _remove_packet_from_stats (RTPTWCCManager * twcc, SentPacket * pkt)
 static void
 _update_stats_with_recovered (RTPTWCCManager * twcc, guint16 seqnum)
 {
-  g_mutex_lock (&twcc->send_lock);
+  GST_DEBUG_OBJECT (twcc, "Recovered %d", seqnum);
   SentPacket *pkt = _find_sentpacket (twcc, seqnum);
 
   if (pkt == NULL) {
@@ -893,6 +898,7 @@ _prune_old_sent_packets (RTPTWCCManager * twcc)
     from now */
   SentPacket *last_pkt = gst_queue_array_peek_tail_struct (twcc->sent_packets);
   const GstClockTime last = last_pkt->local_ts;
+  gint32 sn_start=-1, sn_end=-1;
 
   /* Keep the queue under 
     * PACKETS_HIST_DUR [s] of duration or 
@@ -906,12 +912,20 @@ _prune_old_sent_packets (RTPTWCCManager * twcc)
     if (!GST_CLOCK_TIME_IS_VALID(pkt->local_ts)
       || !GST_CLOCK_TIME_IS_VALID (last)
       || (last - pkt->local_ts > PACKETS_HIST_DUR)) {
-      _remove_packet_from_stats (twcc, pkt);
-      _free_sentpacket ((SentPacket*)gst_queue_array_pop_head_struct (
-          twcc->sent_packets));
+        if (sn_start == -1) {
+          sn_start = pkt->seqnum;
+        }
+        sn_end = pkt->seqnum;
+        _remove_packet_from_stats (twcc, pkt);
+        _free_sentpacket ((SentPacket*)gst_queue_array_pop_head_struct (
+            twcc->sent_packets));
     } else {
       break;
     }
+  }
+
+  if (sn_start != -1) {
+    GST_DEBUG_OBJECT (twcc, "Pruned packets from %d to %d", sn_start, sn_end);
   }
 }
 
@@ -971,21 +985,27 @@ _set_twcc_seqnum_data (RTPTWCCManager * twcc, RTPPacketInfo * pinfo,
   gst_rtp_buffer_unmap (&rtp);
   if (gst_buffer_get_repair_seqnums (buf, &protect_ssrc,
     &protect_seqnums_array)){
+      const GArray *seqnum_array = protect_seqnums_array;
+      const gsize seqnum_array_len = seqnum_array->len;
     packet.protects_ssrc = protect_ssrc;
-    packet.protects_seqnums = protect_seqnums_array;
-    if (protect_seqnums_array && protect_seqnums_array->len > 0) {
+    packet.protects_seqnums = seqnum_array;
+    if (seqnum_array && seqnum_array_len > 0) {
+      GST_DEBUG_OBJECT (twcc, "Send RTX sn: %d for SSRC: %d", 
+          gst_rtp_buffer_get_seq (&rtp),
+          protect_ssrc);
       /* We are expecting non-twcc seqnums in the buffer's meta here, so
         change them to twcc seqnums. */
-      for (gsize i = 0; i < protect_seqnums_array->len; i++) {
-        guint16 *prot_seqnum = &g_array_index (protect_seqnums_array, guint16, i);
-        gint32 twcc_seqnum = _lookup_seqnum (twcc, protect_ssrc, *prot_seqnum);
+      for (gsize i = 0; i < seqnum_array_len; i++) {
+        const guint16 prot_seqnum = g_array_index (seqnum_array, guint16, i);
+        gint32 twcc_seqnum = _lookup_seqnum (twcc, protect_ssrc, prot_seqnum);
         if (twcc_seqnum != -1) {
-          *prot_seqnum = twcc_seqnum;
+          g_array_index (seqnum_array, guint16, i) = (guint16)twcc_seqnum;
         }
       }
       rtp_reception_stats_add_redundant_packet (twcc->reception_stats_ctx, 
-          0, (guint16*)protect_seqnums_array->data, protect_seqnums_array->len,
+          0, (guint16*)seqnum_array->data, seqnum_array_len,
           0, seqnum);
+      g_array_unref (seqnum_array);
     }
   }
   g_mutex_lock (&twcc->send_lock);
@@ -995,6 +1015,8 @@ _set_twcc_seqnum_data (RTPTWCCManager * twcc, RTPPacketInfo * pinfo,
       /* TODO: may be we'll have to allow it expand for some rare cases,
         but just limit it for now
       */
+      GST_DEBUG_OBJECT (twcc, "Sent packets queue is full, dropping the oldest packet %d",
+        ((SentPacket*)gst_queue_array_pop_head_struct (twcc->sent_packets))->seqnum);
       _free_sentpacket ((SentPacket*)gst_queue_array_pop_head_struct (
           twcc->sent_packets));
     }
