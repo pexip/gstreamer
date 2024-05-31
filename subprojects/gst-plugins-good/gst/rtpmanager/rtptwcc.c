@@ -724,7 +724,6 @@ _update_stats_with_recovered (RTPTWCCManager * twcc, guint16 seqnum)
     return;
   }
   pkt->state = RTP_TWCC_FECBLOCK_PKT_RECOVERED;
-  g_mutex_unlock (&twcc->send_lock);
 }
 
 static gint32
@@ -982,7 +981,6 @@ _set_twcc_seqnum_data (RTPTWCCManager * twcc, RTPPacketInfo * pinfo,
   seqnum = twcc->send_seqnum++;
   GST_WRITE_UINT16_BE (data, seqnum);
   sent_packet_init (&packet, seqnum, pinfo, &rtp);
-  gst_rtp_buffer_unmap (&rtp);
   if (gst_buffer_get_repair_seqnums (buf, &protect_ssrc,
     &protect_seqnums_array)){
       const GArray *seqnum_array = protect_seqnums_array;
@@ -1008,7 +1006,8 @@ _set_twcc_seqnum_data (RTPTWCCManager * twcc, RTPPacketInfo * pinfo,
       g_array_unref (seqnum_array);
     }
   }
-  g_mutex_lock (&twcc->send_lock);
+  gst_rtp_buffer_unmap (&rtp);
+
   {
     _prune_old_sent_packets (twcc);
     if (gst_queue_array_get_length(twcc->sent_packets) == twcc->sent_packets_size) {
@@ -1025,7 +1024,6 @@ _set_twcc_seqnum_data (RTPTWCCManager * twcc, RTPPacketInfo * pinfo,
     _add_packet_to_stats (twcc, NULL, 
         (SentPacket*)gst_queue_array_peek_tail_struct (twcc->sent_packets));
   }
-  g_mutex_unlock (&twcc->send_lock);
 
   gst_buffer_add_tx_feedback_meta (pinfo->data, seqnum,
       GST_TX_FEEDBACK_CAST (twcc));
@@ -2037,7 +2035,6 @@ rtp_twcc_manager_get_windowed_stats (RTPTWCCManager * twcc,
       GST_STIME_ARGS (stats_window_size), GST_STIME_ARGS (start_time),
       GST_STIME_ARGS (end_time));
 
-  g_mutex_lock (&twcc->send_lock);
 
   twcc_stats_ctx_calculate_windowed_stats (twcc->stats_ctx, start_time,
       end_time);
@@ -2055,7 +2052,6 @@ rtp_twcc_manager_get_windowed_stats (RTPTWCCManager * twcc,
     _append_structure_to_value_array (array, s);
     GST_LOG ("Stats for pt %u: %" GST_PTR_FORMAT, pt, s);
   }
-  g_mutex_unlock (&twcc->send_lock);
 
   _structure_take_value_array (ret, "payload-stats", array);
 
