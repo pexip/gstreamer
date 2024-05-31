@@ -346,7 +346,7 @@ _add_redundant_packet (RTPReceptionStats *stats, guint32 ssrc, guint16 *seq,
     gsize seq_len, guint32 fec_ssrc, guint16 fec_seq)
 {
   const RTPReceptionPktState unknown_state = RTP_RECEPTION_PKT_UNKNOWN;
-  const BlockKey * key = _block_key_new (ssrc, seq, seq_len);
+  BlockKey * key = _block_key_new (ssrc, seq, seq_len);
   
   Block * block = NULL;
   if (g_hash_table_lookup_extended(stats->redund_2_blocks,
