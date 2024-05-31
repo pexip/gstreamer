@@ -786,7 +786,11 @@ gst_rtp_rtx_buffer_new (GstRtpRtxSend * rtx, GstBuffer * buffer, guint8 padlen)
       "rtx seqnum: %u, rtx ssrc: %X", orig_seqnum,
       seqnum, ssrc);
 
-  gst_buffer_add_rtp_repair_meta (new_buffer, orig_ssrc, &orig_seqnum, 1);
+  GstRTPRepairMeta *repair_meta = gst_buffer_add_rtp_repair_meta (new_buffer,
+      orig_ssrc, &orig_seqnum, 1);
+  GST_DEBUG_OBJECT (rtx, "%p, %d", repair_meta->seqnums,
+      repair_meta->seqnums->len);
+
 
   /* gst_rtp_buffer_map does not map the payload so do it now */
   gst_rtp_buffer_get_payload (&rtp);

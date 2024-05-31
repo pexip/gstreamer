@@ -76,8 +76,7 @@ GstRTPRepairMeta *gst_buffer_add_rtp_repair_meta(GstBuffer *buffer,
   }
 
   repair_meta->ssrc = ssrc;
-  g_array_set_size(repair_meta->seqnums, seqnum_count);
-  memcpy(repair_meta->seqnums->data, seqnum, seqnum_count * sizeof(guint16));
+  g_array_insert_vals (repair_meta->seqnums, 0, seqnum, seqnum_count);
 
   return repair_meta;
 }
