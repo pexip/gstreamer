@@ -38,6 +38,9 @@
 #include <gudev/gudev.h>
 #endif
 
+GST_DEBUG_CATEGORY_EXTERN (v4l2_debug);
+#define GST_CAT_DEFAULT v4l2_debug
+
 static GstV4l2Device *gst_v4l2_device_new (const gchar * device_path,
     const gchar * device_name, GstCaps * caps, GstV4l2DeviceType type,
     GstStructure * props);
@@ -119,8 +122,10 @@ gst_v4l2_device_provider_probe_device (GstV4l2DeviceProvider * provider,
   v4l2obj = gst_v4l2_object_new (NULL, GST_OBJECT (provider),
       V4L2_BUF_TYPE_VIDEO_CAPTURE, device_path, NULL, NULL, NULL);
 
-  if (!gst_v4l2_open (v4l2obj, NULL))
+  if (!gst_v4l2_open (v4l2obj, NULL)) {
+    GST_DEBUG_OBJECT (provider, "gst_v4l2_open() failed");
     goto destroy;
+  }
 
   gst_structure_set (props, "device.api", G_TYPE_STRING, "v4l2", NULL);
   gst_structure_set (props, "device.path", G_TYPE_STRING, device_path, NULL);
@@ -141,8 +146,10 @@ gst_v4l2_device_provider_probe_device (GstV4l2DeviceProvider * provider,
   if (v4l2obj->device_caps &
       (V4L2_CAP_VIDEO_CAPTURE | V4L2_CAP_VIDEO_CAPTURE_MPLANE)) {
     /* We ignore touch sensing devices; those are't really video */
-    if (v4l2obj->device_caps & V4L2_CAP_TOUCH)
+    if (v4l2obj->device_caps & V4L2_CAP_TOUCH) {
+      GST_DEBUG_OBJECT (provider, "Ignoring V4L2_CAP_TOUCH device");
       goto close;
+    }
 
     type = GST_V4L2_DEVICE_TYPE_SOURCE;
     v4l2obj->skip_try_fmt_probes = TRUE;
@@ -152,8 +159,10 @@ gst_v4l2_device_provider_probe_device (GstV4l2DeviceProvider * provider,
       (V4L2_CAP_VIDEO_OUTPUT | V4L2_CAP_VIDEO_OUTPUT_MPLANE)) {
     /* We ignore M2M devices that are both capture and output for now
      * The provider is not for them */
-    if (type != GST_V4L2_DEVICE_TYPE_INVALID)
+    if (type != GST_V4L2_DEVICE_TYPE_INVALID) {
+      GST_DEBUG_OBJECT (provider, "Ignoring M2M device");
       goto close;
+    }
 
     type = GST_V4L2_DEVICE_TYPE_SINK;
 
@@ -165,17 +174,25 @@ gst_v4l2_device_provider_probe_device (GstV4l2DeviceProvider * provider,
       v4l2obj->type = V4L2_BUF_TYPE_VIDEO_OUTPUT;
   }
 
-  if (type == GST_V4L2_DEVICE_TYPE_INVALID)
+  if (type == GST_V4L2_DEVICE_TYPE_INVALID) {
+    GST_DEBUG_OBJECT (provider, "Ignoring device, invalid type");
     goto close;
+  }
 
   caps = gst_v4l2_object_get_caps (v4l2obj, NULL);
 
-  if (caps == NULL)
-    goto close;
-  if (gst_caps_is_empty (caps)) {
-    gst_caps_unref (caps);
+  if (caps == NULL) {
+    GST_DEBUG_OBJECT (provider, "Ignoring device, no caps!");
     goto close;
   }
+  if (gst_caps_is_empty (caps)) {
+    gst_caps_unref (caps);
+    GST_DEBUG_OBJECT (provider, "Ignoring device, empty caps!");
+    goto close;
+  }
+
+  GST_INFO_OBJECT (provider, "Adding %s, %s", device_path,
+      device_name ? device_name : (gchar *) v4l2obj->vcap.card);
 
   device = gst_v4l2_device_new (device_path,
       device_name ? device_name : (gchar *) v4l2obj->vcap.card, caps, type,
