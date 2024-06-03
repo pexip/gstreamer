@@ -946,6 +946,42 @@ ctrl_failed:
   }
 }
 
+/******************************************************
+ * gst_v4l2_get_attribute_range():
+ *   try to get the min and max of one specific attribute
+ * return value: TRUE on success, FALSE on error
+ ******************************************************/
+gboolean
+gst_v4l2_get_attribute_range (GstV4l2Object * v4l2object,
+    int attribute_num, int *min, int *max)
+{
+  struct v4l2_queryctrl control = { 0, };
+
+  GST_DEBUG_OBJECT (v4l2object->dbg_obj, "getting range of attribute %d",
+      attribute_num);
+
+  if (!GST_V4L2_IS_OPEN (v4l2object))
+    return FALSE;
+
+  control.id = attribute_num;
+
+  if (v4l2object->ioctl (v4l2object->video_fd, VIDIOC_QUERYCTRL, &control) < 0)
+    goto ctrl_failed;
+
+  *min = control.minimum;
+  *max = control.maximum;
+
+  return TRUE;
+
+  /* ERRORS */
+ctrl_failed:
+  {
+    GST_WARNING_OBJECT (v4l2object->dbg_obj,
+        _("Failed to get range for control %d on device '%s'."),
+        attribute_num, v4l2object->videodev);
+    return FALSE;
+  }
+}
 
 /******************************************************
  * gst_v4l2_set_attribute():
