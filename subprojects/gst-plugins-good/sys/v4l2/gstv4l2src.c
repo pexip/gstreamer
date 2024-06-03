@@ -77,6 +77,9 @@ enum
   PROP_CROP_BOTTOM,
   PROP_CROP_RIGHT,
   PROP_CROP_BOUNDS,
+  PROP_PAN,
+  PROP_TILT,
+  PROP_ZOOM,
   PROP_LAST
 };
 
@@ -237,6 +240,22 @@ gst_v4l2src_class_init (GstV4l2SrcClass * klass)
               G_PARAM_READABLE | G_PARAM_STATIC_STRINGS),
           G_PARAM_READABLE | G_PARAM_STATIC_STRINGS));
 
+
+  g_object_class_install_property (gobject_class, PROP_PAN,
+      g_param_spec_float ("pan", "Pan",
+          "The panning of the camera, from 0 to 1, 0.5 being middle", 0.0, 1.0,
+          0.0, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+
+  g_object_class_install_property (gobject_class, PROP_TILT,
+      g_param_spec_float ("tilt", "Tilt",
+          "The tilt of the camera, from 0 to 1, 0.5 being middle", 0.0, 1.0,
+          0.0, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+
+  g_object_class_install_property (gobject_class, PROP_ZOOM,
+      g_param_spec_float ("zoom", "Zoom",
+          "The zoom of the camera, from 0 to 1", 0.0, 1.0,
+          0.0, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+
   /**
    * GstV4l2Src::prepare-format:
    * @v4l2src: the v4l2src instance
@@ -306,6 +325,99 @@ gst_v4l2src_finalize (GstV4l2Src * v4l2src)
   G_OBJECT_CLASS (parent_class)->finalize ((GObject *) (v4l2src));
 }
 
+static void
+_set_attribute_as_fraction (GstV4l2Src * v4l2src, gint attribute,
+    gfloat fraction)
+{
+  GstV4l2Object *v4l2object = v4l2src->v4l2object;
+  gint min, max, range, pos, value;
+
+  if (!v4l2object) {
+    GST_ERROR_OBJECT (v4l2src, "No object yet");
+    return;
+  }
+
+  if (!gst_v4l2_get_attribute_range (v4l2object, attribute, &min, &max)) {
+    GST_ERROR_OBJECT (v4l2object, "Could not get range for attribute %d",
+        attribute);
+    return;
+  }
+
+  range = max - min;
+  pos = (gint) ((gfloat) range * fraction);
+  value = min + pos;
+
+  if (!gst_v4l2_set_attribute (v4l2object, attribute, value)) {
+    GST_ERROR_OBJECT (v4l2object, "Could not set attribute %d", attribute);
+    return;
+  }
+
+  GST_INFO_OBJECT (v4l2src, "Setting attribute: %d to %d, (min: %d, max: %d)",
+      attribute, value, min, max);
+}
+
+static gfloat
+_get_attribute_as_fraction (GstV4l2Src * v4l2src, gint attribute)
+{
+  GstV4l2Object *v4l2object = v4l2src->v4l2object;
+  gint min, max, range, pos, value;
+
+  if (!v4l2object) {
+    GST_ERROR_OBJECT (v4l2src, "No object yet");
+    return 0.0f;
+  }
+
+  if (!gst_v4l2_get_attribute_range (v4l2object, attribute, &min, &max)) {
+    GST_ERROR_OBJECT (v4l2object, "Could not get range for attribute %d",
+        attribute);
+    return 0.0f;
+  }
+
+  if (!gst_v4l2_get_attribute (v4l2object, attribute, &value)) {
+    GST_ERROR_OBJECT (v4l2object, "Could not get attribute %d", attribute);
+    return 0.0f;
+  }
+
+  range = max - min;
+  pos = value - min;
+  return (gfloat) pos / (gfloat) range;
+}
+
+static void
+gst_v4l2src_set_pan (GstV4l2Src * v4l2src, gfloat pan)
+{
+  _set_attribute_as_fraction (v4l2src, V4L2_CID_PAN_ABSOLUTE, pan);
+}
+
+static gfloat
+gst_v4l2src_get_pan (GstV4l2Src * v4l2src)
+{
+  return _get_attribute_as_fraction (v4l2src, V4L2_CID_PAN_ABSOLUTE);
+}
+
+static void
+gst_v4l2src_set_tilt (GstV4l2Src * v4l2src, gfloat tilt)
+{
+  _set_attribute_as_fraction (v4l2src, V4L2_CID_TILT_ABSOLUTE, tilt);
+}
+
+static gfloat
+gst_v4l2src_get_tilt (GstV4l2Src * v4l2src)
+{
+  return _get_attribute_as_fraction (v4l2src, V4L2_CID_TILT_ABSOLUTE);
+}
+
+static void
+gst_v4l2src_set_zoom (GstV4l2Src * v4l2src, gfloat zoom)
+{
+  _set_attribute_as_fraction (v4l2src, V4L2_CID_ZOOM_ABSOLUTE, zoom);
+}
+
+static gfloat
+gst_v4l2src_get_zoom (GstV4l2Src * v4l2src)
+{
+  return _get_attribute_as_fraction (v4l2src, V4L2_CID_ZOOM_ABSOLUTE);
+}
 
 static void
 gst_v4l2src_set_property (GObject * object,
@@ -327,6 +439,15 @@ gst_v4l2src_set_property (GObject * object,
         break;
       case PROP_CROP_RIGHT:
         v4l2src->crop_right = g_value_get_uint (value);
+        break;
+      case PROP_PAN:
+        gst_v4l2src_set_pan (v4l2src, g_value_get_float (value));
+        break;
+      case PROP_TILT:
+        gst_v4l2src_set_tilt (v4l2src, g_value_get_float (value));
+        break;
+      case PROP_ZOOM:
+        gst_v4l2src_set_zoom (v4l2src, g_value_get_float (value));
         break;
       default:
         G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
@@ -381,6 +502,15 @@ gst_v4l2src_get_property (GObject * object,
         break;
       case PROP_CROP_BOUNDS:
         gst_v4l2src_set_rect_value (value, &v4l2src->crop_bounds);
+        break;
+      case PROP_PAN:
+        g_value_set_float (value, gst_v4l2src_get_pan (v4l2src));
+        break;
+      case PROP_TILT:
+        g_value_set_float (value, gst_v4l2src_get_tilt (v4l2src));
+        break;
+      case PROP_ZOOM:
+        g_value_set_float (value, gst_v4l2src_get_zoom (v4l2src));
         break;
       default:
         G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
