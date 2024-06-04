@@ -326,10 +326,16 @@ gst_v4l2src_finalize (GstV4l2Src * v4l2src)
 }
 
 static void
-_set_attribute_as_fraction (GstV4l2Object *v4l2object, gint attribute,
+_set_attribute_as_fraction (GstV4l2Src * v4l2src, gint attribute,
     gfloat fraction)
 {
+  GstV4l2Object *v4l2object = v4l2src->v4l2object;
   gint min, max, range, pos, value;
+
+  if (!v4l2object) {
+    GST_ERROR_OBJECT (v4l2src, "No object yet");
+    return;
+  }
 
   if (!gst_v4l2_get_attribute_range (v4l2object, attribute, &min, &max)) {
     GST_ERROR_OBJECT (v4l2object, "Could not get range for attribute %d",
@@ -345,12 +351,21 @@ _set_attribute_as_fraction (GstV4l2Object *v4l2object, gint attribute,
     GST_ERROR_OBJECT (v4l2object, "Could not set attribute %d", attribute);
     return;
   }
+
+  GST_INFO_OBJECT (v4l2src, "Setting attribute: %d to %d, (min: %d, max: %d)",
+      attribute, value, min, max);
 }
 
 static gfloat
-_get_attribute_as_fraction (GstV4l2Object *v4l2object, gint attribute)
+_get_attribute_as_fraction (GstV4l2Src * v4l2src, gint attribute)
 {
+  GstV4l2Object *v4l2object = v4l2src->v4l2object;
   gint min, max, range, pos, value;
+
+  if (!v4l2object) {
+    GST_ERROR_OBJECT (v4l2src, "No object yet");
+    return 0.0f;
+  }
 
   if (!gst_v4l2_get_attribute_range (v4l2object, attribute, &min, &max)) {
     GST_ERROR_OBJECT (v4l2object, "Could not get range for attribute %d",
@@ -371,42 +386,38 @@ _get_attribute_as_fraction (GstV4l2Object *v4l2object, gint attribute)
 static void
 gst_v4l2src_set_pan (GstV4l2Src *v4l2src, gfloat pan)
 {
-  _set_attribute_as_fraction (v4l2src->v4l2object, V4L2_CID_PAN_ABSOLUTE, pan);
+  _set_attribute_as_fraction (v4l2src, V4L2_CID_PAN_ABSOLUTE, pan);
 }
 
 static gfloat
 gst_v4l2src_get_pan (GstV4l2Src *v4l2src)
 {
-  return _get_attribute_as_fraction (v4l2src->v4l2object,
-      V4L2_CID_PAN_ABSOLUTE);
+  return _get_attribute_as_fraction (v4l2src, V4L2_CID_PAN_ABSOLUTE);
 }
 
 static void
 gst_v4l2src_set_tilt (GstV4l2Src *v4l2src, gfloat tilt)
 {
-  _set_attribute_as_fraction (v4l2src->v4l2object, V4L2_CID_TILT_ABSOLUTE,
+  _set_attribute_as_fraction (v4l2src, V4L2_CID_TILT_ABSOLUTE,
       tilt);
 }
 
 static gfloat
 gst_v4l2src_get_tilt (GstV4l2Src *v4l2src)
 {
-  return _get_attribute_as_fraction (v4l2src->v4l2object,
-      V4L2_CID_TILT_ABSOLUTE);
+  return _get_attribute_as_fraction (v4l2src, V4L2_CID_TILT_ABSOLUTE);
 }
 
 static void
 gst_v4l2src_set_zoom (GstV4l2Src *v4l2src, gfloat zoom)
 {
-  _set_attribute_as_fraction (v4l2src->v4l2object, V4L2_CID_ZOOM_ABSOLUTE,
-      zoom);
+  _set_attribute_as_fraction (v4l2src, V4L2_CID_ZOOM_ABSOLUTE, zoom);
 }
 
 static gfloat
 gst_v4l2src_get_zoom (GstV4l2Src *v4l2src)
 {
-  return _get_attribute_as_fraction (v4l2src->v4l2object,
-      V4L2_CID_ZOOM_ABSOLUTE);
+  return _get_attribute_as_fraction (v4l2src, V4L2_CID_ZOOM_ABSOLUTE);
 }
 
 static void
