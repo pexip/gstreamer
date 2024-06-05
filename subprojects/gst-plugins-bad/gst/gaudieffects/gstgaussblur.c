@@ -85,12 +85,12 @@ GST_DEBUG_CATEGORY_STATIC (gst_gauss_blur_debug);
 #define GST_CAT_DEFAULT gst_gauss_blur_debug
 
 #if G_BYTE_ORDER == G_LITTLE_ENDIAN
-#define CAPS_STR_RGB GST_VIDEO_CAPS_MAKE ("{  BGRx, RGBx }")
+#define CAPS_STR GST_VIDEO_CAPS_MAKE ("{  BGRx, RGBx }")
 #else
-#define CAPS_STR_RGB GST_VIDEO_CAPS_MAKE ("{  xBGR, xRGB }")
+#define CAPS_STR GST_VIDEO_CAPS_MAKE ("{  xBGR, xRGB }")
 #endif
 
-#define CAPS_STR GST_VIDEO_CAPS_MAKE ("AYUV")
+// #define CAPS_STR GST_VIDEO_CAPS_MAKE ("AYUV")
 
 /* The capabilities of the inputs and outputs. */
 static GstStaticPadTemplate gst_gaussianblur_sink_template =
