@@ -37,7 +37,7 @@
 /* --- GstParamSpecFraction --- */
 
 static void
-_gst_param_fraction_init (GParamSpec * pspec)
+_gst_param_fraction_init (GParamSpec * pspec, G_GNUC_UNUSED gpointer unused)
 {
   GstParamSpecFraction *fspec = GST_PARAM_SPEC_FRACTION (pspec);
 
@@ -208,7 +208,7 @@ gst_param_spec_fraction (const gchar * name, const gchar * nick,
 }
 
 static void
-_gst_param_array_init (GParamSpec * pspec)
+_gst_param_array_init (GParamSpec * pspec, G_GNUC_UNUSED gpointer unused)
 {
   GstParamSpecArray *aspec = GST_PARAM_SPEC_ARRAY_LIST (pspec);
 
@@ -372,7 +372,7 @@ gst_param_spec_array (const gchar * name,
 /* --- GstParamSpecIntRange --- */
 
 static void
-_gst_param_int_range_init (GParamSpec * pspec)
+_gst_param_int_range_init (GParamSpec * pspec, G_GNUC_UNUSED gpointer unused)
 {
   GstParamSpecIntRange *irspec = GST_PARAM_SPEC_INT_RANGE (pspec);
 

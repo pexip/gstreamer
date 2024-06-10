@@ -135,7 +135,7 @@ if glib_checks.disabled() or (glib_checks.auto() and not gst_version_is_dev)
 endif
 
 cdata = configuration_data()
-cdata.set('ENABLE_NLS', 1)
+cdata.set('ENABLE_NLS', get_option('nls').enabled())
 
 check_headers = [
   ['HAVE_DLFCN_H', 'dlfcn.h'],

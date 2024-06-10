@@ -109,7 +109,7 @@ if cc.has_link_argument('-Wl,-z,nodelete')
 endif
 
 core_conf = configuration_data()
-core_conf.set('ENABLE_NLS', 1)
+core_conf.set('ENABLE_NLS', get_option('nls').enabled())
 
 # Symbol visibility
 if cc.has_argument('-fvisibility=hidden')
@@ -324,7 +324,7 @@ x11_dep = dependency('x11', required : get_option('x11'))
 # GIO is used by the GIO plugin, and by the TCP, SDP, and RTSP plugins
 gio_dep = dependency('gio-2.0', version: glib_req)
 giounix_dep = dependency('', required: false)
-if host_system != 'windows'
+if host_system not in ['windows', 'emscripten']
   giounix_dep = dependency('gio-unix-2.0')
 endif
 gmodule_dep = dependency('gmodule-no-export-2.0')

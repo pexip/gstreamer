@@ -1,18 +1,6 @@
 subdir('ptp')
 
-gst_helpers = {
-  'gst-plugin-scanner': {
-    'files': files('gst-plugin-scanner.c'),
-    'deps': [gst_dep, mathlib, gmodule_dep],
-    'env': ['GST_PLUGIN_SCANNER', 'exe-full-path'],
-    'install_dir': helpers_install_dir,
-  },
-  'gst-completion-helper': {
-    'files': files('gst-completion-helper.c'),
-    'deps': [gst_dep],
-    'install_dir': helpers_install_dir,
-  },
-}
+gst_helpers = {}
 
 if not get_option('tools').disabled() and not static_build
   foreach helper, data: gst_helpers

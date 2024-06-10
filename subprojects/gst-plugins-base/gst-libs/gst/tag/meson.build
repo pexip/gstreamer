@@ -136,10 +136,10 @@ if have_iso_codes
     install: false)
 endif
 
-executable('mklicensestables', 'mklicensestables.c',
-  c_args : gst_plugins_base_args,
-  include_directories: [configinc],
-  dependencies : [tag_dep, gst_base_dep],
-  install : false)
+# executable('mklicensestables', 'mklicensestables.c',
+#   c_args : gst_plugins_base_args,
+#   include_directories: [configinc],
+#   dependencies : [tag_dep, gst_base_dep],
+#   install : false)
 
 gst_tag_dir = meson.current_source_dir()
