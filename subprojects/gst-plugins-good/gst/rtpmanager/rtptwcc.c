@@ -325,16 +325,16 @@ twcc_stats_ctx_calculate_windowed_stats (TWCCStatsCtx * ctx,
     GST_INFO ("Not enough packets to fill our window yet!");
     return FALSE;
   } else {
-    GST_DEBUG_OBJECT (ctx, "Stats window: %u packets, pt: %d, %d->%d", packets_sent,
-      ((SentPacket*)gst_queue_array_peek_nth (packets, start_idx - 1))->pt,
-      ((SentPacket*)gst_queue_array_peek_nth (packets, start_idx - 1))->seqnum,
-      ((SentPacket*)gst_queue_array_peek_nth (packets, packets_sent + start_idx - 2))->seqnum);
+    GST_DEBUG (ctx, "Stats window: %u packets, pt: %d, %d->%d", packets_sent,
+      ((SentPacket*)gst_queue_array_peek_nth (packets, start_idx))->pt,
+      ((SentPacket*)gst_queue_array_peek_nth (packets, start_idx))->seqnum,
+      ((SentPacket*)gst_queue_array_peek_nth (packets, packets_sent + start_idx - 1))->seqnum);
   }
 
   for (i = 0; i < packets_sent; i++) {
     SentPacket *prev = NULL;
     if (i + start_idx >= 1)
-      prev = (SentPacket*)gst_queue_array_peek_nth (packets, i + start_idx - 1);
+      prev = (SentPacket*)gst_queue_array_peek_nth (packets, i + start_idx);
 
     SentPacket *pkt = (SentPacket*)gst_queue_array_peek_nth (packets,
       i + start_idx);
@@ -496,7 +496,7 @@ twcc_stats_ctx_add_packet (TWCCStatsCtx * ctx, SentPacket * pkt)
 
   /* first a quick check to see if we are going forward in seqnum,
      in which case we simply append */
-  if (!last || gst_rtp_buffer_compare_seqnum (last->seqnum, pkt->seqnum)) {
+  if (!last || gst_rtp_buffer_compare_seqnum (last->seqnum, pkt->seqnum) > 0) {
     GST_LOG ("Appending #%u to stats packets", pkt->seqnum);
     if (gst_queue_array_get_length(ctx->pt_packets) == MAX_STATS_PACKETS) {
       gst_queue_array_pop_head (ctx->pt_packets);
@@ -1975,7 +1975,7 @@ rtp_twcc_manager_parse_fci (RTPTWCCManager * twcc,
             ? gst_rtp_buffer_compare_seqnum (
               (*last_pkt_stats)->seqnum, found->seqnum)
             : 0;
-        if (*last_pkt_stats == NULL || idx < 0) {
+        if (*last_pkt_stats == NULL || idx > 0) {
           *last_pkt_stats = found;
         }
         last_pkt_stats = &_get_ctx_for_pt (twcc, found->pt)->last_pkt_fb;
@@ -1983,7 +1983,7 @@ rtp_twcc_manager_parse_fci (RTPTWCCManager * twcc,
             ? gst_rtp_buffer_compare_seqnum (
               (*last_pkt_stats)->seqnum, found->seqnum)
             : 0;
-        if (*last_pkt_stats == NULL || idx < 0) {
+        if (*last_pkt_stats == NULL || idx > 0) {
           *last_pkt_stats = found;
         }
 
