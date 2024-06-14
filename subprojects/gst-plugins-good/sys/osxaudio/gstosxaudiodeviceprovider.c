@@ -226,7 +226,7 @@ _audio_system_get_default_device (AudioObjectPropertySelector selector)
   //sets which property to check
   propertyAddress.mSelector = selector;
   propertyAddress.mScope = kAudioObjectPropertyScopeGlobal;
-  propertyAddress.mElement = 0;
+  propertyAddress.mElement = kAudioObjectPropertyElementMain;
   propertySize = sizeof (AudioDeviceID);
 
   //gets property (system output device)
@@ -459,58 +459,31 @@ gst_osx_audio_device_change_block (GstOsxAudioDeviceProvider * self,
 static gboolean
 gst_osx_audio_device_provider_add_remove_listeners (GstDeviceProvider * provider, gboolean add)
 {
-  AudioObjectID event_ids[] = {
-    kAudioHardwarePropertyDevices,
-    kAudioHardwarePropertyDefaultInputDevice,
-    kAudioHardwarePropertyDefaultOutputDevice
-  };
-
+  GstOsxAudioDeviceProvider *self = GST_OSX_AUDIO_DEVICE_PROVIDER_CAST (provider);
   dispatch_queue_t inDispatchQueue = gst_macos_get_core_audio_dispatch_queue ();
-  AudioObjectPropertyListenerBlock listenerBlock = ^(UInt32 inNumberAddresses, const AudioObjectPropertyAddress inAddresses[]) {
-      gst_osx_audio_device_change_block (GST_OSX_AUDIO_DEVICE_PROVIDER_CAST (provider), inNumberAddresses, inAddresses);  
+  AudioObjectPropertyAddress deviceListAddr = {
+    .mSelector = kAudioObjectPropertySelectorWildcard,
+    .mScope = kAudioObjectPropertyScopeGlobal,
+    .mElement = kAudioObjectPropertyElementMain
   };
 
-  for (size_t i = 0; i < sizeof (event_ids) / sizeof (event_ids[0]); i++) {
-    AudioObjectPropertyAddress deviceListAddr = {
-      .mSelector = event_ids[i],
-      .mScope = kAudioObjectPropertyScopeGlobal,
-      .mElement = kAudioObjectPropertyElementMain
-    };
+  OSStatus status;
 
-    OSStatus status;
+  if (add) {
+    status = AudioObjectAddPropertyListenerBlock (kAudioObjectSystemObject,
+      &deviceListAddr,
+      inDispatchQueue,
+      self->listenerBlock);
+  } else {
+    status = AudioObjectRemovePropertyListenerBlock (kAudioObjectSystemObject,
+      &deviceListAddr,
+      inDispatchQueue,
+      self->listenerBlock);
+  }
 
-
-    if (add) {
-#if 0
-      status = AudioObjectAddPropertyListener (kAudioObjectSystemObject,
-        &deviceListAddr,
-        gst_osx_audio_device_change_cb,
-        (void *) provider);
-#else
-      status = AudioObjectAddPropertyListenerBlock (kAudioObjectSystemObject,
-        &deviceListAddr,
-        inDispatchQueue,
-        listenerBlock);
-#endif
-    } else {
-#if 0
-      status = AudioObjectRemovePropertyListener (kAudioObjectSystemObject,
-        &deviceListAddr,
-        gst_osx_audio_device_change_cb,
-        (void *) provider); 
-#else
-      status = AudioObjectRemovePropertyListenerBlock (kAudioObjectSystemObject,
-        &deviceListAddr,
-        inDispatchQueue,
-        listenerBlock);
-#endif
-    }
-
-    if (status != noErr) {
-      GST_ERROR ("Failed to register AudioObjectAddPropertyListener(%u) %d",
-          event_ids[i], status);
-      return FALSE;
-    }
+  if (status != noErr) {
+    GST_ERROR ("Failed to register AudioObjectAddPropertyListener %d", status);
+    return FALSE;
   }
 
   return TRUE;
@@ -519,6 +492,10 @@ gst_osx_audio_device_provider_add_remove_listeners (GstDeviceProvider * provider
 static gboolean 
 gst_osx_audio_device_provider_register_listeners (GstDeviceProvider * provider)
 {
+  GstOsxAudioDeviceProvider *self = GST_OSX_AUDIO_DEVICE_PROVIDER_CAST (provider);
+  self->listenerBlock = Block_copy(^(UInt32 inNumberAddresses, const AudioObjectPropertyAddress inAddresses[]) {
+      gst_osx_audio_device_change_block (self, inNumberAddresses, inAddresses);  
+  });
   return gst_osx_audio_device_provider_add_remove_listeners (provider, TRUE);
 }
 
@@ -526,6 +503,9 @@ static void
 gst_osx_audio_device_provider_unregister_listeners (GstDeviceProvider * provider)
 {
   gst_osx_audio_device_provider_add_remove_listeners (provider, FALSE);
+  GstOsxAudioDeviceProvider *self = GST_OSX_AUDIO_DEVICE_PROVIDER_CAST (provider);
+  Block_release (self->listenerBlock);
+  self->listenerBlock = NULL;
 }
 
 static gboolean
@@ -1052,7 +1032,6 @@ gst_osx_audio_device_get_property (GObject *object, guint prop_id,
       break;
   }
 }
-
 
 static void
 gst_osx_audio_device_set_property (GObject *object, guint prop_id,

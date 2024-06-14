@@ -59,6 +59,8 @@ struct _GstOsxAudioDeviceProvider
 
   AudioDeviceID current_default_input;
   AudioDeviceID current_default_output;
+
+  AudioObjectPropertyListenerBlock listenerBlock;
 };
 
 struct _GstOsxAudioDeviceProviderClass
