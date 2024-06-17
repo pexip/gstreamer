@@ -241,6 +241,7 @@ typedef struct
   gboolean running;
   GMutex lock;
   GstStructure *last_twcc_stats;
+  guint timeout_ssrc;
 } SessionHarness;
 
 static GstCaps *
@@ -254,6 +255,13 @@ _pt_map_requested (G_GNUC_UNUSED GstElement * element, guint pt, gpointer data)
     return gst_caps_copy (caps);
 
   return gst_caps_copy (h->caps);
+}
+
+static void
+_on_timeout (G_GNUC_UNUSED GstElement * element, guint ssrc, gpointer data)
+{
+  SessionHarness *h = data;
+  h->timeout_ssrc = ssrc;
 }
 
 static void
@@ -318,6 +326,8 @@ session_harness_new (void)
 
   g_signal_connect (h->session, "request-pt-map",
       (GCallback) _pt_map_requested, h);
+
+  g_signal_connect (h->session, "on-timeout", (GCallback) _on_timeout, h);
 
   g_signal_connect (h->session, "notify::twcc-stats",
       (GCallback) _notify_twcc_stats, h);
@@ -921,6 +931,9 @@ GST_START_TEST (test_internal_sources_timeout)
     gst_buffer_unref (buf);
   }
   fail_unless_equals_int (0x7, j);      /* verify we got both all BYE and RR */
+
+  /* verify the received SSRC times out as well */
+  fail_unless_equals_int (0xBEEFDEAD, h->timeout_ssrc);
 
   session_harness_free (h);
 }
