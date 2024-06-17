@@ -163,9 +163,17 @@ static GQuark quark_source_stats;
 
 G_DEFINE_TYPE (RTPSession, rtp_session, G_TYPE_OBJECT);
 
+typedef enum
+{
+  PACKET_TYPE_RTP,
+  PACKET_TYPE_SDES,
+  PACKET_TYPE_RTCP_SR,
+  PACKET_TYPE_RTCP_RR,
+} PacketType;
+
 static guint32 rtp_session_create_new_ssrc (RTPSession * sess);
 static RTPSource *obtain_source (RTPSession * sess, guint32 ssrc,
-    gboolean * created, RTPPacketInfo * pinfo, gboolean rtp);
+    gboolean * created, RTPPacketInfo * pinfo, PacketType packet_type);
 static RTPSource *obtain_internal_source (RTPSession * sess,
     guint32 ssrc, gboolean * created, GstClockTime current_time);
 static GstFlowReturn rtp_session_schedule_bye_locked (RTPSession * sess,
@@ -908,6 +916,7 @@ rtp_session_init (RTPSession * sess)
 
   sess->twcc = rtp_twcc_manager_new (sess->mtu);
   sess->rtx_ssrc_to_ssrc = g_hash_table_new (NULL, NULL);
+  sess->timedout_ssrcs = g_hash_table_new (NULL, NULL);
 }
 
 static void
@@ -933,6 +942,7 @@ rtp_session_finalize (GObject * object)
   if (sess->rtx_ssrc_map)
     gst_structure_free (sess->rtx_ssrc_map);
   g_hash_table_destroy (sess->rtx_ssrc_to_ssrc);
+  g_hash_table_destroy (sess->timedout_ssrcs);
 
   g_mutex_clear (&sess->lock);
 
@@ -2098,20 +2108,36 @@ add_source (RTPSession * sess, RTPSource * src)
 static RTPSource *
 find_source (RTPSession * sess, guint32 ssrc)
 {
-  return g_hash_table_lookup (sess->ssrcs[sess->mask_idx],
+  RTPSource *source = g_hash_table_lookup (sess->ssrcs[sess->mask_idx],
       GINT_TO_POINTER (ssrc));
+  if (source && source->closing)
+    return NULL;
+  return source;
 }
 
 /* must be called with the session lock, the returned source needs to be
  * unreffed after usage. */
 static RTPSource *
 obtain_source (RTPSession * sess, guint32 ssrc, gboolean * created,
-    RTPPacketInfo * pinfo, gboolean rtp)
+    RTPPacketInfo * pinfo, PacketType packet_type)
 {
   RTPSource *source;
 
   source = find_source (sess, ssrc);
   if (source == NULL) {
+    gboolean ssrc_has_timedout =
+        g_hash_table_contains (sess->timedout_ssrcs, GUINT_TO_POINTER (ssrc));
+
+    if (ssrc_has_timedout) {
+      /* return NULL for rtcp sources that has already timedout */
+      if (packet_type != PACKET_TYPE_RTP && packet_type != PACKET_TYPE_RTCP_RR) {
+        return NULL;
+      }
+
+      /* unmark this ssrc as timed-out */
+      g_hash_table_remove (sess->timedout_ssrcs, GUINT_TO_POINTER (ssrc));
+    }
+
     /* make new Source in probation and insert */
     source = rtp_source_new (ssrc);
 
@@ -2120,13 +2146,14 @@ obtain_source (RTPSession * sess, guint32 ssrc, gboolean * created,
     /* for RTP packets we need to set the source in probation. Receiving RTCP
      * packets of an SSRC, on the other hand, is a strong indication that we
      * are dealing with a valid source. */
-    g_object_set (source, "probation", rtp ? sess->probation : RTP_NO_PROBATION,
+    g_object_set (source, "probation",
+        (packet_type == PACKET_TYPE_RTP) ? sess->probation : RTP_NO_PROBATION,
         "max-dropout-time", sess->max_dropout_time, "max-misorder-time",
         sess->max_misorder_time, NULL);
 
     /* store from address, if any */
     if (pinfo->address) {
-      if (rtp)
+      if (packet_type == PACKET_TYPE_RTP)
         rtp_source_set_rtp_from (source, pinfo->address);
       else
         rtp_source_set_rtcp_from (source, pinfo->address);
@@ -2140,21 +2167,22 @@ obtain_source (RTPSession * sess, guint32 ssrc, gboolean * created,
   } else {
     *created = FALSE;
     /* check for collision, this updates the address when not previously set */
-    if (check_collision (sess, source, pinfo, rtp)) {
+    if (check_collision (sess, source, pinfo, (packet_type == PACKET_TYPE_RTP))) {
       return NULL;
     }
     /* Receiving RTCP packets of an SSRC is a strong indication that we
      * are dealing with a valid source. */
-    if (!rtp)
+    if (packet_type != PACKET_TYPE_RTP)
       g_object_set (source, "probation", RTP_NO_PROBATION, NULL);
   }
   /* update last activity */
   source->last_activity = pinfo->current_time;
-  if (rtp) {
+  if (packet_type == PACKET_TYPE_RTP) {
     source->last_rtp_activity = pinfo->current_time;
     if (source->first_rtp_activity == GST_CLOCK_TIME_NONE)
       source->first_rtp_activity = pinfo->current_time;
   }
+
   g_object_ref (source);
 
   return source;
@@ -2635,7 +2663,7 @@ rtp_session_process_rtp (RTPSession * sess, GstBuffer * buffer,
 
   ssrc = pinfo.ssrc;
 
-  source = obtain_source (sess, ssrc, &created, &pinfo, TRUE);
+  source = obtain_source (sess, ssrc, &created, &pinfo, PACKET_TYPE_RTP);
   if (!source)
     goto collision;
 
@@ -2674,7 +2702,7 @@ rtp_session_process_rtp (RTPSession * sess, GstBuffer * buffer,
       csrc = pinfo.csrcs[i];
 
       /* get source */
-      csrc_src = obtain_source (sess, csrc, &created, &pinfo, TRUE);
+      csrc_src = obtain_source (sess, csrc, &created, &pinfo, PACKET_TYPE_RTP);
       if (!csrc_src)
         continue;
 
@@ -2803,7 +2831,8 @@ rtp_session_process_sr (RTPSession * sess, GstRTCPPacket * packet,
   GST_DEBUG ("got SR packet: SSRC %08x, time %" GST_TIME_FORMAT,
       senderssrc, GST_TIME_ARGS (pinfo->current_time));
 
-  source = obtain_source (sess, senderssrc, &created, pinfo, FALSE);
+  source =
+      obtain_source (sess, senderssrc, &created, pinfo, PACKET_TYPE_RTCP_SR);
   if (!source)
     return;
 
@@ -2853,7 +2882,8 @@ rtp_session_process_rr (RTPSession * sess, GstRTCPPacket * packet,
 
   GST_DEBUG ("got RR packet: SSRC %08x", senderssrc);
 
-  source = obtain_source (sess, senderssrc, &created, pinfo, FALSE);
+  source =
+      obtain_source (sess, senderssrc, &created, pinfo, PACKET_TYPE_RTCP_RR);
   if (!source)
     return;
 
@@ -2897,7 +2927,7 @@ rtp_session_process_sdes (RTPSession * sess, GstRTCPPacket * packet,
     changed = FALSE;
 
     /* find src, no probation when dealing with RTCP */
-    source = obtain_source (sess, ssrc, &created, pinfo, FALSE);
+    source = obtain_source (sess, ssrc, &created, pinfo, PACKET_TYPE_SDES);
     if (!source)
       return;
 
@@ -4487,6 +4517,7 @@ update_source (const gchar * key, RTPSource * source, ReportData * data)
   RTPSession *sess = data->sess;
   GstClockTime interval, binterval;
   GstClockTime btime;
+  GstClockTimeDiff activity_delta;
 
   GST_DEBUG ("look at %08x, generation %u", source->ssrc, source->generation);
 
@@ -4548,27 +4579,40 @@ update_source (const gchar * key, RTPSource * source, ReportData * data)
     remove = TRUE;
   }
 
+  /* mind old time that might pre-date last time going to PLAYING */
+  if (source->last_rtp_activity != GST_CLOCK_TIME_NONE)
+    btime = MAX (source->last_rtp_activity, sess->start_time);
+  else
+    btime = sess->start_time;
+
+  activity_delta = GST_CLOCK_DIFF (btime, data->current_time);
+
   if (data->timeout_inactive_sources) {
-    /* sources that were inactive for more than 5 times the deterministic reporting
-     * interval get timed out. the min timeout is 5 seconds. */
-    /* mind old time that might pre-date last time going to PLAYING */
-    btime = MAX (source->last_activity, sess->start_time);
+    /* sources that were inactive for more than 5 times the deterministic
+     * reporting interval get timed out. the min timeout is 5 seconds. */
+
     if (data->current_time > btime) {
       interval = MAX (binterval * 5, 5 * GST_SECOND);
-      if (data->current_time - btime > interval) {
-        GST_INFO ("removing timeout source %08x, last %" GST_TIME_FORMAT,
-            source->ssrc, GST_TIME_ARGS (btime));
+      if (activity_delta > interval) {
         if (source->internal) {
           /* this is an internal source that is not using our suggested ssrc.
            * since there must be another source using this ssrc, we can remove
            * this one instead of making it a receiver forever */
           if (source->ssrc != sess->suggested_ssrc
               && source->media_ssrc != sess->suggested_ssrc) {
+            GST_INFO ("sending BYE for internal source %08x, "
+                "time since last activity: %" GST_STIME_FORMAT,
+                source->ssrc, GST_STIME_ARGS (activity_delta));
+
             rtp_source_mark_bye (source, "timed out");
+
             /* do not schedule bye here, since we are inside the RTCP timeout
              * processing and scheduling bye will interfere with SR/RR sending */
           }
         } else {
+          GST_INFO ("removing timeout non-internal source %08x, "
+              "time since last activity: %" GST_STIME_FORMAT,
+              source->ssrc, GST_STIME_ARGS (activity_delta));
           remove = TRUE;
         }
       }
@@ -4578,22 +4622,18 @@ update_source (const gchar * key, RTPSource * source, ReportData * data)
   /* senders that did not send for a long time become a receiver, this also
    * holds for our own sources. */
   if (is_sender) {
-    /* mind old time that might pre-date last time going to PLAYING */
-    if (source->last_rtp_activity != GST_CLOCK_TIME_NONE)
-      btime = MAX (source->last_rtp_activity, sess->start_time);
-    else
-      btime = sess->start_time;
-    if (data->current_time > btime) {
-      interval = MAX (binterval * 2, 5 * GST_SECOND);
-      if (data->current_time - btime > interval) {
-        GST_DEBUG ("sender source %08x timed out and became receiver, last %"
-            GST_TIME_FORMAT, source->ssrc, GST_TIME_ARGS (btime));
-        sendertimeout = TRUE;
-      }
+    interval = MAX (binterval * 2, 5 * GST_SECOND);
+    if (activity_delta > interval) {
+      GST_INFO ("sender source %08x timed out and became receiver. "
+          "time since last activity: %" GST_STIME_FORMAT,
+          source->ssrc, GST_STIME_ARGS (activity_delta));
+      sendertimeout = TRUE;
     }
   }
 
   if (remove) {
+    GST_INFO ("removing source %08x", source->ssrc);
+    source->closing = TRUE;
     sess->total_sources--;
     if (is_sender) {
       sess->stats.sender_sources--;
@@ -4606,10 +4646,15 @@ update_source (const gchar * key, RTPSource * source, ReportData * data)
     if (source->internal)
       sess->stats.internal_sources--;
 
-    if (byetimeout)
+    if (byetimeout) {
       on_bye_timeout (sess, source);
-    else
+
+    } else if (!g_hash_table_contains (sess->timedout_ssrcs,
+            GUINT_TO_POINTER (source->ssrc))) {
+      g_hash_table_add (sess->timedout_ssrcs, GUINT_TO_POINTER (source->ssrc));
       on_timeout (sess, source);
+    }
+
   } else {
     if (sendertimeout) {
       source->is_sender = FALSE;

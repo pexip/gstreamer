@@ -576,8 +576,7 @@ gst_rtp_pt_demux_chain (GstPad * pad, GstObject * parent, GstBuffer * buf)
   if (pt != rtpdemux->last_pt) {
     /* our own signal with an extra flag that this is the only pad */
     rtpdemux->last_pt = pt;
-    GST_DEBUG_OBJECT (rtpdemux, "emitting payload-type-changed for pt %d",
-        pt);
+    GST_DEBUG_OBJECT (rtpdemux, "emitting payload-type-changed for pt %d", pt);
     g_signal_emit (G_OBJECT (rtpdemux),
         gst_rtp_pt_demux_signals[SIGNAL_PAYLOAD_TYPE_CHANGE], 0, pt);
   }
