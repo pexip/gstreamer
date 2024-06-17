@@ -985,6 +985,9 @@ _set_twcc_seqnum_data (RTPTWCCManager * twcc, RTPPacketInfo * pinfo,
     &protect_seqnums_array)){
       const GArray *seqnum_array = protect_seqnums_array;
       const gsize seqnum_array_len = seqnum_array->len;
+    /* The array is referenced inside gst_buffer_get_repair_seqnums
+      and unreferenced when sent_packets are cleared.
+     */
     packet.protects_ssrc = protect_ssrc;
     packet.protects_seqnums = seqnum_array;
     if (seqnum_array && seqnum_array_len > 0) {
@@ -1003,7 +1006,6 @@ _set_twcc_seqnum_data (RTPTWCCManager * twcc, RTPPacketInfo * pinfo,
       rtp_reception_stats_add_redundant_packet (twcc->reception_stats_ctx, 
           0, (guint16*)seqnum_array->data, seqnum_array_len,
           0, seqnum);
-      g_array_unref (seqnum_array);
     }
   }
   gst_rtp_buffer_unmap (&rtp);
