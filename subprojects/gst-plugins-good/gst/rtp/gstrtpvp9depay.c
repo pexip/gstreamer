@@ -24,6 +24,7 @@
 #endif
 
 #include "gstrtpelements.h"
+#include "gstrtpvpxelement.h"
 #include "gstrtpvp9depay.h"
 #include "gstrtputils.h"
 
@@ -46,7 +47,7 @@ static gboolean gst_rtp_vp9_depay_packet_lost (GstRTPBaseDepayload * depay,
 
 G_DEFINE_TYPE (GstRtpVP9Depay, gst_rtp_vp9_depay, GST_TYPE_RTP_BASE_DEPAYLOAD);
 GST_ELEMENT_REGISTER_DEFINE_WITH_CODE (rtpvp9depay, "rtpvp9depay",
-    GST_RANK_MARGINAL, GST_TYPE_RTP_VP9_DEPAY, rtp_element_init (plugin));
+    GST_RANK_MARGINAL, GST_TYPE_RTP_VP9_DEPAY, rtp_vpx_element_init (plugin));
 
 static GstStaticPadTemplate gst_rtp_vp9_depay_src_template =
 GST_STATIC_PAD_TEMPLATE ("src",
