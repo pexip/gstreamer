@@ -3,6 +3,7 @@ rtp_sources = [
   'fnv1hash.c',
   'gstbuffermemory.c',
   'gstrtpelement.c',
+  'gstrtpvpxelement.c',
   'gstrtp.c',
   'gstrtpchannels.c',
   'gstrtpac3depay.c',
