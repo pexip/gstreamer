@@ -875,9 +875,6 @@ rtpvp8_suite (void)
   TCase *tc_chain;
   static const gchar *tags[] = { NULL };
 
-  /* Register custom GstVP8Meta manually */
-  gst_meta_register_custom ("GstVP8Meta", tags, NULL, NULL, NULL);
-
   suite_add_tcase (s, (tc_chain = tcase_create ("vp8pay")));
   tcase_add_loop_test (tc_chain, test_pay_no_meta, 0,
       G_N_ELEMENTS (no_meta_test_data));
