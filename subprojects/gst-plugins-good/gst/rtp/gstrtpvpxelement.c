@@ -1,6 +1,5 @@
-/* VPX
- * Copyright (C) 2006 David Schleef <ds@schleef.org>
- * Copyright (C) 2010 Entropy Wave Inc
+/* GStreamer
+ * Copyright (C) <2024> Will Miller <will.miller@pexip.com>
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Library General Public
@@ -16,29 +15,28 @@
  * License along with this library; if not, write to the
  * Free Software Foundation, Inc., 51 Franklin St, Fifth Floor,
  * Boston, MA 02110-1301, USA.
- *
  */
 
 #ifdef HAVE_CONFIG_H
-#include <config.h>
+#include "config.h"
 #endif
 
-#include "gstvpxelements.h"
-
-#include <gst/tag/tag.h>
+#include "gstrtpelements.h"
+#include "gstrtpvpxelement.h"
 
 #define VP8_META_NAME "GstVP8Meta"
 
 void
-vpx_element_init (GstPlugin * plugin)
+rtp_vpx_element_init (GstPlugin * plugin)
 {
   static gsize res = FALSE;
   static const gchar *tags[] = { NULL };
-
   if (g_once_init_enter (&res)) {
     if (!gst_meta_get_info (VP8_META_NAME)) {
       gst_meta_register_custom (VP8_META_NAME, tags, NULL, NULL, NULL);
     }
     g_once_init_leave (&res, TRUE);
   }
+
+  rtp_element_init (plugin);
 }
