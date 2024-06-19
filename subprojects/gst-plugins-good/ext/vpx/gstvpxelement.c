@@ -27,12 +27,18 @@
 
 #include <gst/tag/tag.h>
 
+#define VP8_META_NAME "GstVP8Meta"
+
 void
 vpx_element_init (GstPlugin * plugin)
 {
   static gsize res = FALSE;
+  static const gchar *tags[] = { NULL };
+
   if (g_once_init_enter (&res)) {
-    gst_meta_register_custom_simple ("GstVP8Meta");
+    if (!gst_meta_get_info (VP8_META_NAME)) {
+      gst_meta_register_custom (VP8_META_NAME, tags, NULL, NULL, NULL);
+    }
     g_once_init_leave (&res, TRUE);
   }
 }

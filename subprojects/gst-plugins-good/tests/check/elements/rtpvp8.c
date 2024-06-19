@@ -872,9 +872,6 @@ rtpvp8_suite (void)
   Suite *s = suite_create ("rtpvp8");
   TCase *tc_chain;
 
-  /* Register custom GstVP8Meta manually */
-  gst_meta_register_custom_simple ("GstVP8Meta");
-
   suite_add_tcase (s, (tc_chain = tcase_create ("vp8pay")));
   tcase_add_loop_test (tc_chain, test_pay_no_meta, 0,
       G_N_ELEMENTS (no_meta_test_data));
