@@ -31,7 +31,6 @@ rtp_vpx_element_init (GstPlugin * plugin)
 {
   static gsize res = FALSE;
   static const gchar *tags[] = { NULL };
-  GST_ERROR ("XXX rtp before once");
   if (g_once_init_enter (&res)) {
     if (!gst_meta_get_info (VP8_META_NAME)) {
       gst_meta_register_custom (VP8_META_NAME, tags, NULL, NULL, NULL);
