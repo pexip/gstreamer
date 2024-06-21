@@ -583,10 +583,13 @@ gst_rtp_ssrc_demux_clear_ssrc (GstRtpSsrcDemux * demux, guint32 ssrc)
 {
   GstRtpSsrcDemuxPads *dpads;
 
+  INTERNAL_STREAM_LOCK (demux);
+
   GST_OBJECT_LOCK (demux);
   dpads = find_demux_pads_for_ssrc (demux, ssrc);
   if (dpads == NULL) {
     GST_OBJECT_UNLOCK (demux);
+    INTERNAL_STREAM_UNLOCK (demux);
     goto unknown_pad;
   }
 
@@ -600,6 +603,8 @@ gst_rtp_ssrc_demux_clear_ssrc (GstRtpSsrcDemux * demux, guint32 ssrc)
       dpads->rtp_pad);
 
   gst_rtp_ssrc_demux_pads_free (dpads);
+
+  INTERNAL_STREAM_UNLOCK (demux);
 
   return;
 
