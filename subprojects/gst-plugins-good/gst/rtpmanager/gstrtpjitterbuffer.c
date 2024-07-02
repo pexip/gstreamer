@@ -2762,8 +2762,7 @@ calculate_packet_spacing (GstRtpJitterBuffer * jitterbuffer, guint32 rtptime)
           gst_util_uint64_scale_int (rtpdiff, GST_SECOND, priv->clock_rate);
 
       if (new_packet_spacing != priv->packet_spacing) {
-        if (priv->prev_packet_spacing == new_packet_spacing
-            || !GST_CLOCK_TIME_IS_VALID (priv->prev_packet_spacing)) {
+        if (priv->prev_packet_spacing == new_packet_spacing) {
           /* we received two consecutive packets with the same spacing, update */
           GST_DEBUG_OBJECT (jitterbuffer,
               "new packet spacing %" GST_TIME_FORMAT
