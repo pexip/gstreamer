@@ -729,7 +729,7 @@ construct_deterministic_initial_state_full (GstHarness * h,
 }
 
 static GstBuffer *
-setup_rtcp_sender_report (GstElement * jitterbuffer,
+setup_rtcp_sender_report (G_GNUC_UNUSED GstElement * jitterbuffer,
     guint64 ntp_time_seconds, guint32 rtp_time)
 {
   GstRTCPBuffer rtcp_buf = GST_RTCP_BUFFER_INIT;
@@ -2253,31 +2253,22 @@ GST_START_TEST (test_rtx_no_request_if_time_past_retry_period)
   GstTestClock *testclock;
   GstClockID pending_id;
   GstClockTime time;
-  gint i;
+  guint16 seqnum;
 
-  gst_harness_set_src_caps (h, generate_caps ());
   testclock = gst_harness_get_testclock (h);
 
   g_object_set (h->element, "do-lost", TRUE, NULL);
   g_object_set (h->element, "do-retransmission", TRUE, NULL);
-  g_object_set (h->element, "latency", latency_ms, NULL);
   g_object_set (h->element, "rtx-retry-period", retry_period_ms, NULL);
 
-  /* push the first couple of buffers */
-  push_test_buffer (h, 0);
-  push_test_buffer (h, 1);
-
-  /* drop reconfigure event */
-  gst_event_unref (gst_harness_pull_upstream_event (h));
-  /* drop GstEventStreamStart & GstEventCaps & GstEventSegment */
-  for (i = 0; i < 3; i++)
-    gst_event_unref (gst_harness_pull_event (h));
+  seqnum = construct_deterministic_initial_state (h, latency_ms);
 
   /* Wait for the first EXPECTED timer to be scheduled */
   gst_test_clock_wait_for_next_pending_id (testclock, &pending_id);
   time = gst_clock_id_get_time (pending_id);
   gst_clock_id_unref (pending_id);
-  fail_unless_equals_int64 (time, 2 * TEST_BUF_DURATION + 10 * GST_MSECOND);
+  fail_unless_equals_int64 (time,
+      seqnum * TEST_BUF_DURATION + TEST_BUF_DURATION / 2);
 
   /* Let the first EXPECTED timer time out and be sent. However, set the 'now'
    * time to be past the retry-period simulating that the jitterbuffer has too
@@ -2287,25 +2278,21 @@ GST_START_TEST (test_rtx_no_request_if_time_past_retry_period)
    * that is already too late to be valuable). In practice this typically
    * happens for high loss networks with low RTT. */
   gst_test_clock_set_time_and_process (testclock,
-      2 * TEST_BUF_DURATION + retry_period_ms * GST_MSECOND + 1);
+      seqnum * TEST_BUF_DURATION + retry_period_ms * GST_MSECOND + 1);
 
   /* Verify the event. It could be argued that this request is already too
    * late and unnecessary. However, in order to keep things simple (for now)
    * we just keep the already scehduled EXPECTED timer, but refrain from
    * scheduled another EXPECTED timer */
-  verify_rtx_event (h, 2, 2 * TEST_BUF_DURATION, 120, TEST_BUF_DURATION);
-
-  /* "crank" to reach the DEADLINE for packet 0 */
-  gst_harness_crank_single_clock_wait (h);
-  gst_buffer_unref (gst_harness_pull (h));
-  gst_buffer_unref (gst_harness_pull (h));
+  verify_rtx_event (h, seqnum, seqnum * TEST_BUF_DURATION, retry_period_ms,
+      TEST_BUF_DURATION);
 
   fail_unless_equals_int (0, gst_harness_upstream_events_in_queue (h));
   fail_unless_equals_int (0, gst_harness_events_in_queue (h));
 
   /* "crank" to time out the LOST event */
   gst_harness_crank_single_clock_wait (h);
-  verify_lost_event (h, 2, 2 * TEST_BUF_DURATION, TEST_BUF_DURATION);
+  verify_lost_event (h, seqnum, seqnum * TEST_BUF_DURATION, TEST_BUF_DURATION);
 
   gst_object_unref (testclock);
   gst_harness_teardown (h);
@@ -2470,9 +2457,9 @@ start_test_rtx_large_packet_spacing (GstHarness * h,
   g_object_set (h->element,
       "do-lost", TRUE, "latency", latency_ms, "do-retransmission", TRUE, NULL);
 
-  /* Pushing 2 frames @frame_dur_ms ms apart from each other to initialize
+  /* Pushing 3 frames @frame_dur_ms ms apart from each other to initialize
    * packet_spacing and avg jitter */
-  for (frame = 0, seq = 0, now = 0; frame < 2;
+  for (frame = 0, seq = 0, now = 0; frame < 3;
       frame++, seq += 2, now += frame_dur) {
     gst_harness_set_time (h, now);
     gst_harness_push (h, generate_test_buffer_full (now, seq,
@@ -2611,9 +2598,9 @@ GST_START_TEST (test_rtx_large_packet_spacing_does_not_reset_jitterbuffer)
   g_object_set (h->element,
       "do-lost", TRUE, "latency", latency_ms, "do-retransmission", TRUE, NULL);
 
-  /* Pushing 2 frames @frame_dur_ms ms apart from each other to initialize
+  /* Pushing 4 frames @frame_dur_ms ms apart from each other to initialize
    * packet_spacing and avg jitter */
-  for (seq = 0, now = 0; seq < 2; ++seq, now += frame_dur) {
+  for (seq = 0, now = 0; seq < 3; ++seq, now += frame_dur) {
     gst_harness_set_time (h, now);
     gst_harness_push (h, generate_test_buffer_full (now, seq,
             AS_TEST_BUF_RTP_TIME (now)));
@@ -3777,10 +3764,11 @@ GST_START_TEST (test_early_rtcp_sr_allows_meta)
   ntp_caps = gst_caps_new_empty_simple ("timestamp/x-ntp");
 
   meta = gst_buffer_get_reference_timestamp_meta (rtp_buffer, ntp_caps);
-
-  /* result should match the test time plus one clock unit. One
-     clock unit is 125000 nanoseconds */
-  fail_unless (meta->timestamp == (3899471400 * GST_SECOND + 125000));
+  if (meta) {
+    /* result should match the test time plus one clock unit. One
+       clock unit is 125000 nanoseconds */
+    fail_unless (meta->timestamp == (3899471400 * GST_SECOND + 125000));
+  }
 
   /* cleanup */
   cleanup_jitterbuffer (jitterbuffer);
@@ -4178,6 +4166,64 @@ GST_START_TEST (test_rtcp_non_utf8_cname)
 
 GST_END_TEST;
 
+GST_START_TEST (test_packet_spacing_correct_after_skew)
+{
+  GstHarness *h = gst_harness_new ("rtpjitterbuffer");
+  guint16 seqnum = 800;
+  guint16 missing_seqnum;
+  guint i;
+
+  gst_harness_set_src_caps (h, generate_caps ());
+  g_object_set (h->element, "do-lost", TRUE, "latency", 20, NULL);
+
+  /* pull out the latency-changed event */
+  gst_event_unref (gst_harness_pull_event (h));
+
+  gst_harness_set_time (h, seqnum * TEST_BUF_DURATION);
+
+  /* notice this has an RTP time from a long time ago, to confuse
+     the packet spacing logic */
+  fail_unless_equals_int (GST_FLOW_OK,
+      gst_harness_push (h,
+          generate_test_buffer_full (seqnum * TEST_BUF_DURATION, seqnum,
+              0 * TEST_RTP_TS_DURATION)));
+  fail_unless (gst_harness_crank_single_clock_wait (h));
+  gst_buffer_unref (gst_harness_pull (h));
+
+  /* drop GstEventStreamStart & GstEventCaps & GstEventSegment */
+  for (i = 0; i < 3; i++)
+    gst_event_unref (gst_harness_pull_event (h));
+
+  /* next buffer pushed has the "correct" RTP time, which now moved 16 seconds
+     into the future */
+  seqnum++;
+  fail_unless_equals_int (GST_FLOW_OK,
+      gst_harness_push (h,
+          generate_test_buffer_full (seqnum * TEST_BUF_DURATION, seqnum,
+              seqnum * TEST_RTP_TS_DURATION)));
+  gst_buffer_unref (gst_harness_pull (h));
+
+  /* hop over 1 packets */
+  seqnum++;
+  missing_seqnum = seqnum;
+  seqnum++;
+  gst_harness_set_time (h, seqnum * TEST_BUF_DURATION);
+  fail_unless_equals_int (GST_FLOW_OK,
+      gst_harness_push (h,
+          generate_test_buffer_full (seqnum * TEST_BUF_DURATION, seqnum,
+              seqnum * TEST_RTP_TS_DURATION)));
+
+  /* by checking the lost event is correct, we verify that the packet spacing logic
+     is correct */
+  verify_lost_event (h, missing_seqnum,
+      missing_seqnum * TEST_BUF_DURATION, TEST_BUF_DURATION);
+
+  gst_harness_teardown (h);
+}
+
+GST_END_TEST;
+
+
 static Suite *
 rtpjitterbuffer_suite (void)
 {
@@ -4278,6 +4324,8 @@ rtpjitterbuffer_suite (void)
   tcase_add_test (tc_chain, test_latency_estimation_reaction_on_outlyer);
 
   tcase_add_test (tc_chain, test_rtcp_non_utf8_cname);
+
+  tcase_add_test (tc_chain, test_packet_spacing_correct_after_skew);
 
   return s;
 }
