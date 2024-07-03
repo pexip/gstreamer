@@ -111,6 +111,9 @@ gboolean gst_buffer_get_repair_seqnums(GstBuffer *buffer, guint32 *ssrc,
       *seqnums = g_array_ref (repair_meta->seqnums);
     }
     return TRUE;
+  } else {
+    *ssrc = 0;
+    *seqnums = NULL;
   }
   return FALSE;
 }
