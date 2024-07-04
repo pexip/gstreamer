@@ -928,6 +928,9 @@ rtp_twcc_manager_finalize (GObject * object)
   g_mutex_clear (&twcc->send_lock);
 
   g_hash_table_destroy (twcc->stats_ctx_by_pt);
+  g_hash_table_destroy (twcc->seqnum_2_redblocks);
+  g_hash_table_destroy (twcc->redund_2_redblocks);
+  
   twcc_stats_ctx_free (twcc->stats_ctx);
 
   G_OBJECT_CLASS (rtp_twcc_manager_parent_class)->finalize (object);
