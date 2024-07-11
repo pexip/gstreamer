@@ -1169,6 +1169,25 @@ GST_START_TEST (test_strict)
 
 GST_END_TEST;
 
+GST_START_TEST (test_get_string_winpath)
+{
+  GstStructure *s;
+  const gchar *path = "C:\\Windows\\System32\\drivers\\etc";
+  const gchar *s_path;
+  gchar *s_str = g_strdup_printf ("test-struct, path=(string)\"%s\"", path);
+
+  s = gst_structure_from_string (s_str, NULL);
+  fail_unless (s);
+
+  s_path = gst_structure_get_string (s, "path");
+  fail_unless_equals_string (path, s_path);
+
+  g_free (s_str);
+  gst_structure_free (s);
+}
+
+GST_END_TEST;
+
 static Suite *
 gst_structure_suite (void)
 {
@@ -1203,6 +1222,7 @@ gst_structure_suite (void)
   tcase_add_test (tc_chain, test_flagset);
   tcase_add_test (tc_chain, test_flags);
   tcase_add_test (tc_chain, test_strict);
+  tcase_add_test (tc_chain, test_get_string_winpath);
   return s;
 }
 
