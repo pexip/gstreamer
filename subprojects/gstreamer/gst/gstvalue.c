@@ -3974,8 +3974,15 @@ gst_string_unwrap (const gchar * s)
         read += 3;
       } else {
         /* if we run into a \0 here, we definitely won't get a quote later */
-        if (*read == 0)
+        if (*read == 0) {
           goto beach;
+
+        /* if we ran into an ascii, go back and do not skip the '\', that
+           could be used in a Windows path for example */
+        } else if (GST_ASCII_IS_STRING (*read)) {
+          read--;
+        }
+
         /* else copy \X sequence */
         *write++ = *read++;
       }
