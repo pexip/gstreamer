@@ -908,6 +908,7 @@ rtp_session_init (RTPSession * sess)
 
   sess->twcc = rtp_twcc_manager_new (sess->mtu);
   sess->rtx_ssrc_to_ssrc = g_hash_table_new (NULL, NULL);
+  sess->timedout_ssrcs = g_hash_table_new (NULL, NULL);
 }
 
 static void
@@ -933,6 +934,7 @@ rtp_session_finalize (GObject * object)
   if (sess->rtx_ssrc_map)
     gst_structure_free (sess->rtx_ssrc_map);
   g_hash_table_destroy (sess->rtx_ssrc_to_ssrc);
+  g_hash_table_destroy (sess->timedout_ssrcs);
 
   g_mutex_clear (&sess->lock);
 
@@ -2112,6 +2114,18 @@ obtain_source (RTPSession * sess, guint32 ssrc, gboolean * created,
 
   source = find_source (sess, ssrc);
   if (source == NULL) {
+      gboolean ssrc_has_timedout = g_hash_table_contains (sess->timedout_ssrcs, GUINT_TO_POINTER (ssrc));
+
+    if (ssrc_has_timedout) {
+      /* return NULL for rtcp sources that has already timedout */
+      if (!rtp) {
+        return NULL;
+      }
+
+      /* unmark this ssrc as timed-out */
+      g_hash_table_remove (sess->timedout_ssrcs, GUINT_TO_POINTER (ssrc));
+    }
+
     /* make new Source in probation and insert */
     source = rtp_source_new (ssrc);
 
@@ -4606,10 +4620,14 @@ update_source (const gchar * key, RTPSource * source, ReportData * data)
     if (source->internal)
       sess->stats.internal_sources--;
 
-    if (byetimeout)
+    if (byetimeout) {
       on_bye_timeout (sess, source);
-    else
+
+    } else if (!g_hash_table_contains (sess->timedout_ssrcs, GUINT_TO_POINTER (source->ssrc))) {
       on_timeout (sess, source);
+      g_hash_table_add (sess->timedout_ssrcs, GUINT_TO_POINTER (source->ssrc));
+    }
+
   } else {
     if (sendertimeout) {
       source->is_sender = FALSE;
