@@ -148,9 +148,15 @@ GST_ELEMENT_REGISTER_DEFINE (pcapparse, "pcapparse", GST_RANK_NONE,
     GST_TYPE_PCAP_PARSE);
 
 #define ETH_HEADER_LEN    14
+#define ETH_MAC_ADDRESSES_LEN    12
+#define ETH_VLAN_HEADER_LEN    4
 #define SLL_HEADER_LEN    16
+#define SLL2_HEADER_LEN    20
 #define IP_HEADER_MIN_LEN 20
 #define UDP_HEADER_LEN     8
+
+/* RFC 4571 */
+#define RTP_FRAMING_LEN  2
 
 #define IP_PROTO_UDP      17
 #define IP_PROTO_TCP      6
@@ -197,15 +203,6 @@ gst_pcap_parse_read_uint32 (GstPcapParse * self, const guint8 * p)
     return val;
   }
 }
-
-#define ETH_MAC_ADDRESSES_LEN    12
-#define ETH_HEADER_LEN    14
-#define ETH_VLAN_HEADER_LEN    4
-#define SLL_HEADER_LEN    16
-#define SLL2_HEADER_LEN    20
-#define IP_HEADER_MIN_LEN 20
-#define UDP_HEADER_LEN     8
-
 
 static GValueArray *
 gst_pcap_parse_get_stats (GstPcapParse * self)
@@ -356,6 +353,34 @@ gst_pcap_parse_add_stats (GstPcapParse * self,
 }
 
 static gboolean
+gst_pcap_parse_scan_frame_rtp (GstPcapParse * self,
+    const guint8 * tcp_payload,
+    gint tcp_payload_size, const guint8 ** payload, gint * payload_size)
+{
+  guint16 rtp_frame_len;
+
+  /* check if we can go on with the parsing */
+  if (tcp_payload_size < RTP_FRAMING_LEN)
+    return FALSE;
+
+  /* first 16 bits is the length of the rtp frame */
+  rtp_frame_len = GUINT16_FROM_BE (*((const guint16 *) (tcp_payload)));
+
+  /* check for invalid or NULL rtp packet */
+  if (rtp_frame_len == 0)
+    return FALSE;
+  if (rtp_frame_len != (tcp_payload_size - RTP_FRAMING_LEN))
+    return FALSE;
+
+  *payload = tcp_payload + RTP_FRAMING_LEN;
+  *payload_size = rtp_frame_len;
+
+  GST_LOG_OBJECT (self, "found framing rtp with size %u", rtp_frame_len);
+
+  return TRUE;
+}
+
+static gboolean
 gst_pcap_parse_scan_frame (GstPcapParse * self,
     const guint8 * buf,
     gint buf_size, const guint8 ** payload, gint * payload_size)
@@ -479,9 +504,17 @@ gst_pcap_parse_scan_frame (GstPcapParse * self,
     if (buf_proto + len > buf + buf_size)
       goto done;
 
-    /* all remaining data following tcp header is payload */
-    *payload = buf_proto + len;
-    *payload_size = ip_packet_len - ip_header_size - len;
+    const guint8 *tcp_payload = buf_proto + len;
+    gint tcp_payload_size = ip_packet_len - ip_header_size - len;
+
+    /* scan for RTP framing, RFC 4571 */
+    if (!gst_pcap_parse_scan_frame_rtp (self, tcp_payload, tcp_payload_size,
+            payload, payload_size)) {
+
+      /* if we don't find any RTP, all remaining data following tcp header is payload */
+      *payload = tcp_payload;
+      *payload_size = tcp_payload_size;
+    }
   }
 
   src_ip = get_ip_address_as_string (ip_src_addr);
@@ -516,6 +549,8 @@ gst_pcap_parse_scan_frame (GstPcapParse * self,
   }
 
   ret = TRUE;
+
+  GST_MEMDUMP_OBJECT (self, "payload", *payload, *payload_size);
 
 done:
   g_free (src_ip);
