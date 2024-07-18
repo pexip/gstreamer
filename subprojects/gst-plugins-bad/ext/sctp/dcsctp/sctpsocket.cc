@@ -29,7 +29,7 @@
 
 #include <iostream>
 #include <memory>
-#include <sstream>
+#include <cstdio>
 
 #include "net/dcsctp/public/dcsctp_options.h"
 #include "net/dcsctp/socket/dcsctp_socket.h"
@@ -312,11 +312,11 @@ sctp_socket_new (SctpSocket_Options * opts, SctpSocket_Callbacks * callbacks)
     packet_observer = std::make_unique<GstPacketObserver> (callbacks->on_sent_packet, callbacks->on_received_packet);
   }
 
-  auto name = std::stringstream ();
-  name << "SctpSocket (assoc:" << callbacks->user_data << ")";
+  char name[32];
+  std::snprintf (name, sizeof(name), "SctpSocket assoc: %p", callbacks->user_data);
 
   auto socket =
-    std::make_unique<dcsctp::DcSctpSocket> (name.str (), *callbacksHandler, std::move (packet_observer), options);
+    std::make_unique<dcsctp::DcSctpSocket> (name, *callbacksHandler, std::move (packet_observer), options);
   return new _SctpSocket (std::move (socket), callbacksHandler);
 }
 
