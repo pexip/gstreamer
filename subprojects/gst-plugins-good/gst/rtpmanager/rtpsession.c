@@ -163,9 +163,16 @@ static GQuark quark_source_stats;
 
 G_DEFINE_TYPE (RTPSession, rtp_session, G_TYPE_OBJECT);
 
+typedef enum {
+  PACKET_TYPE_RTP,
+  PACKET_TYPE_SDES,
+  PACKET_TYPE_RTCP_SR,
+  PACKET_TYPE_RTCP_RR,
+} PacketType;
+
 static guint32 rtp_session_create_new_ssrc (RTPSession * sess);
 static RTPSource *obtain_source (RTPSession * sess, guint32 ssrc,
-    gboolean * created, RTPPacketInfo * pinfo, gboolean rtp);
+    gboolean * created, RTPPacketInfo * pinfo, PacketType packet_type);
 static RTPSource *obtain_internal_source (RTPSession * sess,
     guint32 ssrc, gboolean * created, GstClockTime current_time);
 static GstFlowReturn rtp_session_schedule_bye_locked (RTPSession * sess,
@@ -2108,7 +2115,7 @@ find_source (RTPSession * sess, guint32 ssrc)
  * unreffed after usage. */
 static RTPSource *
 obtain_source (RTPSession * sess, guint32 ssrc, gboolean * created,
-    RTPPacketInfo * pinfo, gboolean rtp)
+    RTPPacketInfo * pinfo, PacketType packet_type)
 {
   RTPSource *source;
 
@@ -2118,7 +2125,7 @@ obtain_source (RTPSession * sess, guint32 ssrc, gboolean * created,
 
     if (ssrc_has_timedout) {
       /* return NULL for rtcp sources that has already timedout */
-      if (!rtp) {
+      if (packet_type != PACKET_TYPE_RTP && packet_type != PACKET_TYPE_RTCP_RR) {
         return NULL;
       }
 
@@ -2134,13 +2141,13 @@ obtain_source (RTPSession * sess, guint32 ssrc, gboolean * created,
     /* for RTP packets we need to set the source in probation. Receiving RTCP
      * packets of an SSRC, on the other hand, is a strong indication that we
      * are dealing with a valid source. */
-    g_object_set (source, "probation", rtp ? sess->probation : RTP_NO_PROBATION,
+    g_object_set (source, "probation", (packet_type == PACKET_TYPE_RTP) ? sess->probation : RTP_NO_PROBATION,
         "max-dropout-time", sess->max_dropout_time, "max-misorder-time",
         sess->max_misorder_time, NULL);
 
     /* store from address, if any */
     if (pinfo->address) {
-      if (rtp)
+      if (packet_type == PACKET_TYPE_RTP)
         rtp_source_set_rtp_from (source, pinfo->address);
       else
         rtp_source_set_rtcp_from (source, pinfo->address);
@@ -2154,21 +2161,22 @@ obtain_source (RTPSession * sess, guint32 ssrc, gboolean * created,
   } else {
     *created = FALSE;
     /* check for collision, this updates the address when not previously set */
-    if (check_collision (sess, source, pinfo, rtp)) {
+    if (check_collision (sess, source, pinfo, (packet_type == PACKET_TYPE_RTP))) {
       return NULL;
     }
     /* Receiving RTCP packets of an SSRC is a strong indication that we
      * are dealing with a valid source. */
-    if (!rtp)
+    if (packet_type != PACKET_TYPE_RTP)
       g_object_set (source, "probation", RTP_NO_PROBATION, NULL);
   }
   /* update last activity */
   source->last_activity = pinfo->current_time;
-  if (rtp) {
+  if (packet_type == PACKET_TYPE_RTP) {
     source->last_rtp_activity = pinfo->current_time;
     if (source->first_rtp_activity == GST_CLOCK_TIME_NONE)
       source->first_rtp_activity = pinfo->current_time;
   }
+
   g_object_ref (source);
 
   return source;
@@ -2649,7 +2657,7 @@ rtp_session_process_rtp (RTPSession * sess, GstBuffer * buffer,
 
   ssrc = pinfo.ssrc;
 
-  source = obtain_source (sess, ssrc, &created, &pinfo, TRUE);
+  source = obtain_source (sess, ssrc, &created, &pinfo, PACKET_TYPE_RTP);
   if (!source)
     goto collision;
 
@@ -2688,7 +2696,7 @@ rtp_session_process_rtp (RTPSession * sess, GstBuffer * buffer,
       csrc = pinfo.csrcs[i];
 
       /* get source */
-      csrc_src = obtain_source (sess, csrc, &created, &pinfo, TRUE);
+      csrc_src = obtain_source (sess, csrc, &created, &pinfo, PACKET_TYPE_RTP);
       if (!csrc_src)
         continue;
 
@@ -2813,7 +2821,7 @@ rtp_session_process_sr (RTPSession * sess, GstRTCPPacket * packet,
   GST_DEBUG ("got SR packet: SSRC %08x, time %" GST_TIME_FORMAT,
       senderssrc, GST_TIME_ARGS (pinfo->current_time));
 
-  source = obtain_source (sess, senderssrc, &created, pinfo, FALSE);
+  source = obtain_source (sess, senderssrc, &created, pinfo, PACKET_TYPE_RTCP_SR);
   if (!source)
     return;
 
@@ -2863,7 +2871,7 @@ rtp_session_process_rr (RTPSession * sess, GstRTCPPacket * packet,
 
   GST_DEBUG ("got RR packet: SSRC %08x", senderssrc);
 
-  source = obtain_source (sess, senderssrc, &created, pinfo, FALSE);
+  source = obtain_source (sess, senderssrc, &created, pinfo, PACKET_TYPE_RTCP_RR);
   if (!source)
     return;
 
@@ -2907,7 +2915,7 @@ rtp_session_process_sdes (RTPSession * sess, GstRTCPPacket * packet,
     changed = FALSE;
 
     /* find src, no probation when dealing with RTCP */
-    source = obtain_source (sess, ssrc, &created, pinfo, FALSE);
+    source = obtain_source (sess, ssrc, &created, pinfo, PACKET_TYPE_SDES);
     if (!source)
       return;
 
@@ -4557,9 +4565,10 @@ update_source (const gchar * key, RTPSource * source, ReportData * data)
 
   /* mind old time that might pre-date last time going to PLAYING */
   if (source->last_rtp_activity != GST_CLOCK_TIME_NONE)
-    btime = MAX (source->last_rtp_activity, sess->start_time);
+    btime = MAX (source->last_rtp_activity, sess->start_time);    
   else
-    btime = sess->start_time;
+    btime = sess->start_time;    
+
   activity_delta = GST_CLOCK_DIFF (btime, data->current_time);
 
   if (data->timeout_inactive_sources) {
