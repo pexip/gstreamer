@@ -955,7 +955,7 @@ generate_rtcp_sr_buffer (guint ssrc)
   return buf;
 }
 
-GST_START_TEST (test_internal_sources_timeout_rtcp)
+GST_START_TEST (test_internal_sources_timeout_rtcp_sr)
 {
   SessionHarness *h = session_harness_new ();
   GstBuffer *buf;
@@ -993,6 +993,64 @@ GST_START_TEST (test_internal_sources_timeout_rtcp)
   session_harness_free (h);
 }
 
+GST_END_TEST;
+
+static GstBuffer *
+generate_rtcp_rr_buffer (guint ssrc)
+{
+  GstBuffer *buf;
+  GstRTCPBuffer rtcp = GST_RTCP_BUFFER_INIT;
+  GstRTCPPacket packet;
+
+  buf = gst_rtcp_buffer_new (1000);
+  fail_unless (gst_rtcp_buffer_map (buf, GST_MAP_READWRITE, &rtcp));
+  fail_unless (gst_rtcp_buffer_add_packet (&rtcp, GST_RTCP_TYPE_RR, &packet));
+  gst_rtcp_packet_rr_set_ssrc(&packet, ssrc);
+  gst_rtcp_buffer_unmap (&rtcp);
+  return buf;
+}
+
+GST_START_TEST (test_internal_sources_timeout_rtcp_rr)
+{
+  SessionHarness *h = session_harness_new ();
+  GstBuffer *buf;
+  gint i;
+
+  /* receive some rtcp_rr packets from deadbeef */ 
+  for (i = 1; i < 4; i++) {
+    buf = generate_rtcp_rr_buffer (0xDEADBEEF);
+    fail_unless_equals_int (GST_FLOW_OK, session_harness_recv_rtcp (h, buf));
+  }
+
+  /* verify deadbeef is NOT reported as timed out */
+  fail_unless_equals_int (0, h->timeout_ssrc);
+
+  /* push some more rtcp-rr packets, while making the clock tick */
+  for (i = 0 ; i < 20 ; i++){
+    GST_ERROR("Crank and push rtcp-rr (1) %d", i);
+    buf = generate_rtcp_rr_buffer (0xDEADBEEF);
+    fail_unless_equals_int (GST_FLOW_OK, session_harness_recv_rtcp (h, buf));
+    session_harness_crank_clock (h);
+  }
+
+  /* verify deadbeef is reported as timed out */
+  fail_unless_equals_int (0xDEADBEEF, h->timeout_ssrc);
+
+  /* reset the expectations */
+  h->timeout_ssrc = 0;
+
+  /* push a single rtcp-rr packet, while making the clock tick, and check that it triggers timeout */  
+  buf = generate_rtcp_rr_buffer (0xDEADBEEF);
+  fail_unless_equals_int (GST_FLOW_OK, session_harness_recv_rtcp (h, buf));
+  /* advance the clock over the timeout time */
+  for (i = 0 ; i < 20 ; i++)
+    session_harness_crank_clock (h);
+
+  /* verify deadbeef is reported as timed out */
+  fail_unless_equals_int (0xDEADBEEF, h->timeout_ssrc);
+
+  session_harness_free (h);
+}
 GST_END_TEST;
 
 typedef struct
@@ -5927,7 +5985,8 @@ rtpsession_suite (void)
   tcase_add_test (tc_chain, test_multiple_senders_roundrobin_rbs);
   tcase_add_test (tc_chain, test_no_rbs_for_internal_senders);
   tcase_add_test (tc_chain, test_internal_sources_timeout);
-  tcase_add_test (tc_chain, test_internal_sources_timeout_rtcp);
+  tcase_add_test (tc_chain, test_internal_sources_timeout_rtcp_sr);
+  tcase_add_test (tc_chain, test_internal_sources_timeout_rtcp_rr);
   tcase_add_test (tc_chain, test_receive_rtcp_app_packet);
   tcase_add_test (tc_chain, test_dont_lock_on_stats);
   tcase_add_test (tc_chain, test_ignore_suspicious_bye);
