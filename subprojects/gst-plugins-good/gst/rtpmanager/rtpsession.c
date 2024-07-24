@@ -4556,10 +4556,14 @@ update_source (const gchar * key, RTPSource * source, ReportData * data)
   }
 
   /* mind old time that might pre-date last time going to PLAYING */
-  if (source->last_rtp_activity != GST_CLOCK_TIME_NONE)
-    btime = MAX (source->last_rtp_activity, sess->start_time);
-  else
-    btime = sess->start_time;
+  if (source->last_rtp_activity != GST_CLOCK_TIME_NONE || source->last_activity != GST_CLOCK_TIME_NONE){
+    GstClockTime last_rtp_activity = (source->last_rtp_activity == GST_CLOCK_TIME_NONE) ? 0 : source->last_rtp_activity;
+    GstClockTime last_rtcp_activity = (source->last_activity == GST_CLOCK_TIME_NONE) ? 0 : source->last_activity;
+    GstClockTime last_activity = MAX(last_rtp_activity, last_rtcp_activity);
+    btime = MAX (last_activity, sess->start_time);    
+  } else {
+    btime = sess->start_time;    
+  }
   activity_delta = GST_CLOCK_DIFF (btime, data->current_time);
 
   if (data->timeout_inactive_sources) {
