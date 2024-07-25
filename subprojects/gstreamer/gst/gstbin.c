@@ -1183,7 +1183,7 @@ gst_bin_add_func (GstBin * bin, GstElement * element)
    * we can safely take the lock here. This check is probably bogus because
    * you can safely change the element name after this check and before setting
    * the object parent. The window is very small though... */
-  if (!GST_OBJECT_FLAG_IS_SET (element, GST_ELEMENT_FLAG_NO_UNIQUE_CHECK))
+  if (!GST_OBJECT_FLAG_IS_SET (bin, GST_ELEMENT_FLAG_NO_UNIQUE_CHECK))
     if (G_UNLIKELY (!gst_object_check_uniqueness (bin->children, elem_name)))
       goto duplicate_name;
 
