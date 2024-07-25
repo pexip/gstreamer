@@ -214,6 +214,31 @@ GST_START_TEST (test_interface)
 
 GST_END_TEST;
 
+GST_START_TEST (test_duplicate_element)
+{
+  GstBin *bin;
+  GstElement *filesrc, *filesrc2;
+
+  bin = GST_BIN (gst_bin_new (NULL));
+  fail_unless (bin != NULL, "Could not create bin");
+
+  filesrc = gst_element_factory_make ("filesrc", "commonname");
+  fail_unless (filesrc != NULL, "Could not create filesrc");
+  fail_unless (GST_IS_URI_HANDLER (filesrc), "Filesrc not a URI handler");
+  fail_unless (gst_bin_add (bin, filesrc) == TRUE);
+
+  filesrc2 = gst_element_factory_make ("filesrc", "commonname");
+  fail_unless (filesrc2 != NULL, "Could not create filesrc2");
+  fail_unless (GST_IS_URI_HANDLER (filesrc2), "Filesrc not a URI handler");
+  fail_unless (gst_bin_add (bin, filesrc) == FALSE);
+
+  fail_unless (gst_bin_get_by_name(bin, "commonname") == filesrc);
+
+  gst_object_unref (bin);
+}
+
+GST_END_TEST;
+
 GST_START_TEST (test_iterate_all_by_element_factory_name)
 {
   GstBin *bin, *bin2;
@@ -2050,6 +2075,7 @@ gst_bin_suite (void)
 
   suite_add_tcase (s, tc_chain);
   tcase_add_test (tc_chain, test_interface);
+  tcase_add_test (tc_chain, test_duplicate_element);
   tcase_add_test (tc_chain, test_iterate_all_by_element_factory_name);
   tcase_add_test (tc_chain, test_eos);
   tcase_add_test (tc_chain, test_eos_recheck);
