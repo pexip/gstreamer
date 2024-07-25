@@ -172,6 +172,7 @@ struct _GstBinPrivate
   gboolean posted_eos;
   gboolean posted_playing;
   GstElementFlags suppressed_flags;
+  GHashTable    *children_name;
 };
 
 typedef struct
@@ -501,6 +502,8 @@ gst_bin_init (GstBin * bin)
       NULL);
 
   bin->priv = gst_bin_get_instance_private (bin);
+  bin->priv->children_name =
+      g_hash_table_new_full (g_str_hash, g_str_equal, g_free, NULL);
   bin->priv->asynchandling = DEFAULT_ASYNC_HANDLING;
   bin->priv->structure_cookie = 0;
   bin->priv->message_forward = DEFAULT_MESSAGE_FORWARD;
@@ -513,6 +516,7 @@ gst_bin_dispose (GObject * object)
   GstBus **child_bus_p = &bin->child_bus;
   GstClock **provided_clock_p = &bin->provided_clock;
   GstElement **clock_provider_p = &bin->clock_provider;
+  GstElement *element;
 
   GST_CAT_DEBUG_OBJECT (GST_CAT_REFCOUNTING, object, "%p dispose", object);
 
@@ -524,12 +528,19 @@ gst_bin_dispose (GObject * object)
   GST_OBJECT_UNLOCK (object);
 
   while (bin->children) {
-    gst_bin_remove (bin, GST_ELEMENT_CAST (bin->children->data));
+    element = GST_ELEMENT_CAST (bin->children->data);
+    g_hash_table_remove (bin->priv->children_name, GST_ELEMENT_NAME (element));
+    gst_bin_remove (bin, element);
   }
+
   if (G_UNLIKELY (bin->children != NULL)) {
     g_critical ("could not remove elements from bin '%s'",
         GST_STR_NULL (GST_OBJECT_NAME (object)));
   }
+
+  g_hash_table_destroy (bin->priv->children_name);
+
+  bin->priv->children_name = NULL;
 
   G_OBJECT_CLASS (parent_class)->dispose (object);
 }
@@ -1175,17 +1186,18 @@ gst_bin_add_func (GstBin * bin, GstElement * element)
       GST_OBJECT_FLAG_IS_SET (element, GST_ELEMENT_FLAG_PROVIDE_CLOCK);
   requires_clock =
       GST_OBJECT_FLAG_IS_SET (element, GST_ELEMENT_FLAG_REQUIRE_CLOCK);
-  GST_OBJECT_UNLOCK (element);
 
   GST_OBJECT_LOCK (bin);
 
-  /* then check to see if the element's name is already taken in the bin,
-   * we can safely take the lock here. This check is probably bogus because
-   * you can safely change the element name after this check and before setting
-   * the object parent. The window is very small though... */
-  if (!GST_OBJECT_FLAG_IS_SET (element, GST_ELEMENT_FLAG_NO_UNIQUE_CHECK))
-    if (G_UNLIKELY (!gst_object_check_uniqueness (bin->children, elem_name)))
-      goto duplicate_name;
+  /* Use the hash table to look up whether we already have an element with that
+   * name */
+
+  if (g_hash_table_contains (bin->priv->children_name, elem_name)) {
+    GST_OBJECT_UNLOCK (element);
+    goto duplicate_name;
+  }
+
+  GST_OBJECT_UNLOCK (element);
 
   /* set the element's parent and add the element to the bin's list of children */
   if (G_UNLIKELY (!gst_object_set_parent (GST_OBJECT_CAST (element),
@@ -1217,6 +1229,9 @@ gst_bin_add_func (GstBin * bin, GstElement * element)
   }
 
   bin->children = g_list_prepend (bin->children, element);
+
+  g_hash_table_insert (bin->priv->children_name, g_strdup (elem_name), element);
+
   bin->numchildren++;
   bin->children_cookie++;
   if (!GST_BIN_IS_NO_RESYNC (bin))
@@ -1601,6 +1616,7 @@ gst_bin_remove_func (GstBin * bin, GstElement * element)
     if (child == element) {
       found = TRUE;
       /* remove the element */
+      g_hash_table_remove (bin->priv->children_name, elem_name);
       bin->children = g_list_delete_link (bin->children, walk);
     } else {
       gboolean child_sink, child_source, child_provider, child_requirer;
@@ -4383,29 +4399,21 @@ compare_name (const GValue * velement, const gchar * name)
  * Returns: (transfer full) (nullable): the #GstElement with the given
  * name
  */
+
 GstElement *
 gst_bin_get_by_name (GstBin * bin, const gchar * name)
 {
-  GstIterator *children;
-  GValue result = { 0, };
   GstElement *element;
-  gboolean found;
 
   g_return_val_if_fail (GST_IS_BIN (bin), NULL);
 
   GST_CAT_INFO (GST_CAT_PARENTAGE, "[%s]: looking up child element %s",
       GST_ELEMENT_NAME (bin), name);
 
-  children = gst_bin_iterate_recurse (bin);
-  found = gst_iterator_find_custom (children,
-      (GCompareFunc) compare_name, &result, (gpointer) name);
-  gst_iterator_free (children);
+  element = g_hash_table_lookup (bin->priv->children_name, name);
 
-  if (found) {
-    element = g_value_dup_object (&result);
-    g_value_unset (&result);
-  } else {
-    element = NULL;
+  if (element) {
+    gst_object_ref (element);
   }
 
   return element;
