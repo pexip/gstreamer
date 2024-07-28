@@ -325,6 +325,16 @@ void            gst_bin_set_suppressed_flags (GstBin * bin, GstElementFlags flag
 GST_API
 GstElementFlags gst_bin_get_suppressed_flags (GstBin * bin);
 
+/* set and get information about hash usage */
+GST_API
+gboolean        gst_bin_get_using_hash (GstBin * bin);
+
+GST_API
+void            gst_bin_set_hash_level (GstBin * bin, gint value);
+
+GST_API
+gint            gst_bin_get_hash_level (GstBin * bin);
+
 G_DEFINE_AUTOPTR_CLEANUP_FUNC(GstBin, gst_object_unref)
 
 G_END_DECLS
