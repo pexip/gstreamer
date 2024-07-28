@@ -214,6 +214,111 @@ GST_START_TEST (test_interface)
 
 GST_END_TEST;
 
+GST_START_TEST (test_hash_switchover_never)
+{
+  GstBin *bin;
+  GstElement *filesrc, *filesrc2, *filesrc3;
+
+  bin = GST_BIN (gst_bin_new (NULL));
+  fail_unless (bin != NULL, "Could not create bin");
+  gst_bin_set_hash_level(bin, -1);
+
+  /* We should never switch to a list.  Test this with three elements (!) */
+  fail_unless (gst_bin_get_using_hash(bin) == FALSE);
+
+  filesrc = gst_element_factory_make ("filesrc", "testname1");
+  fail_unless (filesrc != NULL, "Could not create filesrc");
+  fail_unless (GST_IS_URI_HANDLER (filesrc), "Filesrc not a URI handler");
+  fail_unless (gst_bin_add (bin, filesrc) == TRUE);
+  fail_unless (gst_bin_get_using_hash(bin) == FALSE);
+  fail_unless (gst_bin_get_by_name(bin, "testname1") == filesrc);
+
+  filesrc2 = gst_element_factory_make ("filesrc", "testname2");
+  fail_unless (filesrc2 != NULL, "Could not create filesrc");
+  fail_unless (GST_IS_URI_HANDLER (filesrc2), "Filesrc not a URI handler");
+  fail_unless (gst_bin_add (bin, filesrc2) == TRUE);
+  fail_unless (gst_bin_get_using_hash(bin) == FALSE);
+  fail_unless (gst_bin_get_by_name(bin, "testname1") == filesrc);
+  fail_unless (gst_bin_get_by_name(bin, "testname2") == filesrc2);
+
+  filesrc3 = gst_element_factory_make ("filesrc", "testname3");
+  fail_unless (filesrc3 != NULL, "Could not create filesrc");
+  fail_unless (GST_IS_URI_HANDLER (filesrc3), "Filesrc not a URI handler");
+  fail_unless (gst_bin_add (bin, filesrc3) == TRUE);
+  fail_unless (gst_bin_get_using_hash(bin) == FALSE);
+  fail_unless (gst_bin_get_by_name(bin, "testname1") == filesrc);
+  fail_unless (gst_bin_get_by_name(bin, "testname2") == filesrc2);
+  fail_unless (gst_bin_get_by_name(bin, "testname3") == filesrc3);
+
+  gst_object_unref (bin);
+}
+
+GST_END_TEST;
+
+GST_START_TEST (test_hash_switchover_immediate)
+{
+  GstBin *bin;
+  GstElement *filesrc, *filesrc2;
+
+  bin = GST_BIN (gst_bin_new (NULL));
+  fail_unless (bin != NULL, "Could not create bin");
+  gst_bin_set_hash_level(bin, 0);
+
+  /* We should immediately move to using a hash as soon as we add one thing */
+  fail_unless (gst_bin_get_using_hash(bin) == FALSE);
+
+  filesrc = gst_element_factory_make ("filesrc", "testname1");
+  fail_unless (filesrc != NULL, "Could not create filesrc");
+  fail_unless (GST_IS_URI_HANDLER (filesrc), "Filesrc not a URI handler");
+  fail_unless (gst_bin_add (bin, filesrc) == TRUE);
+  fail_unless (gst_bin_get_using_hash(bin) == TRUE);
+  fail_unless (gst_bin_get_by_name(bin, "testname1") == filesrc);
+
+  filesrc2 = gst_element_factory_make ("filesrc", "testname2");
+  fail_unless (filesrc2 != NULL, "Could not create filesrc");
+  fail_unless (GST_IS_URI_HANDLER (filesrc2), "Filesrc not a URI handler");
+  fail_unless (gst_bin_add (bin, filesrc2) == TRUE);
+  fail_unless (gst_bin_get_using_hash(bin) == TRUE);
+  fail_unless (gst_bin_get_by_name(bin, "testname1") == filesrc);
+  fail_unless (gst_bin_get_by_name(bin, "testname2") == filesrc2);
+
+  gst_object_unref (bin);
+}
+
+GST_END_TEST;
+
+GST_START_TEST (test_hash_switchover_2)
+{
+  GstBin *bin;
+  GstElement *filesrc, *filesrc2;
+
+  bin = GST_BIN (gst_bin_new (NULL));
+  fail_unless (bin != NULL, "Could not create bin");
+  gst_bin_set_hash_level(bin, 2);
+
+  /* We should switch to using a hash when we hit two elements */
+  fail_unless (gst_bin_get_using_hash(bin) == FALSE);
+
+  filesrc = gst_element_factory_make ("filesrc", "testname1");
+  fail_unless (filesrc != NULL, "Could not create filesrc");
+  fail_unless (GST_IS_URI_HANDLER (filesrc), "Filesrc not a URI handler");
+  fail_unless (gst_bin_add (bin, filesrc) == TRUE);
+  fail_unless (gst_bin_get_using_hash(bin) == FALSE);
+  fail_unless (gst_bin_get_by_name(bin, "testname1") == filesrc);
+
+  filesrc2 = gst_element_factory_make ("filesrc", "testname2");
+  fail_unless (filesrc2 != NULL, "Could not create filesrc");
+  fail_unless (GST_IS_URI_HANDLER (filesrc2), "Filesrc not a URI handler");
+  fail_unless (gst_bin_add (bin, filesrc2) == TRUE);
+  fail_unless (gst_bin_get_using_hash(bin) == TRUE);
+  fail_unless (gst_bin_get_by_name(bin, "testname1") == filesrc);
+  fail_unless (gst_bin_get_by_name(bin, "testname2") == filesrc2);
+
+  gst_object_unref (bin);
+}
+
+GST_END_TEST;
+
 GST_START_TEST (test_duplicate_element)
 {
   GstBin *bin;
@@ -230,7 +335,7 @@ GST_START_TEST (test_duplicate_element)
   filesrc2 = gst_element_factory_make ("filesrc", "commonname");
   fail_unless (filesrc2 != NULL, "Could not create filesrc2");
   fail_unless (GST_IS_URI_HANDLER (filesrc2), "Filesrc not a URI handler");
-  fail_unless (gst_bin_add (bin, filesrc) == FALSE);
+  fail_unless (gst_bin_add (bin, filesrc2) == FALSE);
 
   fail_unless (gst_bin_get_by_name(bin, "commonname") == filesrc);
 
@@ -2075,6 +2180,9 @@ gst_bin_suite (void)
 
   suite_add_tcase (s, tc_chain);
   tcase_add_test (tc_chain, test_interface);
+  tcase_add_test (tc_chain, test_hash_switchover_never);
+  tcase_add_test (tc_chain, test_hash_switchover_immediate);
+  tcase_add_test (tc_chain, test_hash_switchover_2);
   tcase_add_test (tc_chain, test_duplicate_element);
   tcase_add_test (tc_chain, test_iterate_all_by_element_factory_name);
   tcase_add_test (tc_chain, test_eos);

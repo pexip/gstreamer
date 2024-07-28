@@ -145,6 +145,10 @@
 GST_DEBUG_CATEGORY_STATIC (bin_debug);
 #define GST_CAT_DEFAULT bin_debug
 
+/* Default to switching over to use a hash at 8 children
+ * Can be overriden on a per-bin basis by calling gst_bin_set_hash_level */
+#define GST_BIN_DEFAULT_HASH_SWITCH_POINT 8
+
 /* a bin is toplevel if it has no parent or when it is configured to behave like
  * a toplevel bin */
 #define BIN_IS_TOPLEVEL(bin) ((GST_OBJECT_PARENT (bin) == NULL) || bin->priv->asynchandling)
@@ -172,7 +176,13 @@ struct _GstBinPrivate
   gboolean posted_eos;
   gboolean posted_playing;
   GstElementFlags suppressed_flags;
-  GHashTable    *children_name;
+  GHashTable    *children_hash;
+  /* Number of children at which to switch to using a hash to
+   * store info.  -1 will disable use of hash, 0 will always use
+   * the hash, >= 1 will use it only when the number of elements
+   * hits this number */
+  gint numchildren_use_hash;
+
 };
 
 typedef struct
@@ -502,8 +512,8 @@ gst_bin_init (GstBin * bin)
       NULL);
 
   bin->priv = gst_bin_get_instance_private (bin);
-  bin->priv->children_name =
-      g_hash_table_new_full (g_str_hash, g_str_equal, g_free, NULL);
+  bin->priv->children_hash = NULL;
+  bin->priv->numchildren_use_hash = GST_BIN_DEFAULT_HASH_SWITCH_POINT;
   bin->priv->asynchandling = DEFAULT_ASYNC_HANDLING;
   bin->priv->structure_cookie = 0;
   bin->priv->message_forward = DEFAULT_MESSAGE_FORWARD;
@@ -529,7 +539,9 @@ gst_bin_dispose (GObject * object)
 
   while (bin->children) {
     element = GST_ELEMENT_CAST (bin->children->data);
-    g_hash_table_remove (bin->priv->children_name, GST_ELEMENT_NAME (element));
+    if (bin->priv->children_hash != NULL) {
+      g_hash_table_remove (bin->priv->children_hash, GST_ELEMENT_NAME (element));
+    }
     gst_bin_remove (bin, element);
   }
 
@@ -538,9 +550,10 @@ gst_bin_dispose (GObject * object)
         GST_STR_NULL (GST_OBJECT_NAME (object)));
   }
 
-  g_hash_table_destroy (bin->priv->children_name);
-
-  bin->priv->children_name = NULL;
+  if (bin->priv->children_hash != NULL) {
+    g_hash_table_destroy (bin->priv->children_hash);
+    bin->priv->children_hash = NULL;
+  }
 
   G_OBJECT_CLASS (parent_class)->dispose (object);
 }
@@ -1170,12 +1183,11 @@ gst_bin_add_func (GstBin * bin, GstElement * element)
 {
   gchar *elem_name;
   GstIterator *it;
+  GList *walk;
   gboolean is_sink, is_source, provides_clock, requires_clock;
   GstMessage *clock_message = NULL, *async_message = NULL;
   GstStateChangeReturn ret;
   GList *l, *elem_contexts, *need_context_messages;
-
-  GST_DEBUG_OBJECT (bin, "element :%s", GST_ELEMENT_NAME (element));
 
   /* get the element name to make sure it is unique in this bin. */
   GST_OBJECT_LOCK (element);
@@ -1187,17 +1199,45 @@ gst_bin_add_func (GstBin * bin, GstElement * element)
   requires_clock =
       GST_OBJECT_FLAG_IS_SET (element, GST_ELEMENT_FLAG_REQUIRE_CLOCK);
 
+  GST_DEBUG_OBJECT (bin, "element :%s", GST_ELEMENT_NAME (element));
+
+  /* Check whether we need to switch to using the hash */
   GST_OBJECT_LOCK (bin);
+  if ((bin->priv->children_hash == NULL) &&
+      (bin->priv->numchildren_use_hash >= 0) &&
+      (bin->numchildren + 1) >= (bin->priv->numchildren_use_hash)) {
+      /* Time to switch to using the hash */
+      bin->priv->children_hash = g_hash_table_new_full (g_str_hash, g_str_equal, g_free, NULL);
 
-  /* Use the hash table to look up whether we already have an element with that
-   * name */
-
-  if (g_hash_table_contains (bin->priv->children_name, elem_name)) {
-    GST_OBJECT_UNLOCK (element);
-    goto duplicate_name;
+      /* Initialise each existing element into the hash */
+      walk = bin->children;
+      for (; walk; walk = g_list_next (walk)) {
+        GstElement *child;
+        child = GST_ELEMENT_CAST (walk->data);
+        g_hash_table_insert (bin->priv->children_hash, g_strdup (GST_OBJECT_NAME(child)), child);
+      }
   }
 
   GST_OBJECT_UNLOCK (element);
+
+  if (!GST_OBJECT_FLAG_IS_SET (element, GST_ELEMENT_FLAG_NO_UNIQUE_CHECK)) {
+    /* Check to see if the element's name is already taken in the bin,
+     * we can safely take the lock here. This check is probably bogus because
+     * you can safely change the element name after this check and before setting
+     * the object parent. The window is very small though... */
+
+    if (bin->priv->children_hash != NULL) {
+        /* Use the hash table to look up whether we already have an element with that
+         * name */
+        if (g_hash_table_contains (bin->priv->children_hash, elem_name)) {
+          goto duplicate_name;
+        }
+    } else {
+        /* Need to use the list to look up the name */
+       if (G_UNLIKELY (!gst_object_check_uniqueness (bin->children, elem_name)))
+         goto duplicate_name;
+    }
+  }
 
   /* set the element's parent and add the element to the bin's list of children */
   if (G_UNLIKELY (!gst_object_set_parent (GST_OBJECT_CAST (element),
@@ -1230,7 +1270,9 @@ gst_bin_add_func (GstBin * bin, GstElement * element)
 
   bin->children = g_list_prepend (bin->children, element);
 
-  g_hash_table_insert (bin->priv->children_name, g_strdup (elem_name), element);
+  if (bin->priv->children_hash != NULL) {
+    g_hash_table_insert (bin->priv->children_hash, g_strdup (elem_name), element);
+  }
 
   bin->numchildren++;
   bin->children_cookie++;
@@ -1616,7 +1658,9 @@ gst_bin_remove_func (GstBin * bin, GstElement * element)
     if (child == element) {
       found = TRUE;
       /* remove the element */
-      g_hash_table_remove (bin->priv->children_name, elem_name);
+      if (bin->priv->children_hash != NULL) {
+        g_hash_table_remove (bin->priv->children_hash, elem_name);
+      }
       bin->children = g_list_delete_link (bin->children, walk);
     } else {
       gboolean child_sink, child_source, child_provider, child_requirer;
@@ -4403,17 +4447,35 @@ compare_name (const GValue * velement, const gchar * name)
 GstElement *
 gst_bin_get_by_name (GstBin * bin, const gchar * name)
 {
-  GstElement *element;
+  GstElement *element = NULL;
 
   g_return_val_if_fail (GST_IS_BIN (bin), NULL);
 
   GST_CAT_INFO (GST_CAT_PARENTAGE, "[%s]: looking up child element %s",
       GST_ELEMENT_NAME (bin), name);
 
-  element = g_hash_table_lookup (bin->priv->children_name, name);
 
-  if (element) {
-    gst_object_ref (element);
+  if (bin->priv->children_hash != NULL) {
+    /* Can use the hash for lookup */
+    element = g_hash_table_lookup (bin->priv->children_hash, name);
+    if (element) {
+      gst_object_ref (element);
+    }
+  } else {
+    /* Need to iterate the list for lookup */
+    GstIterator *children;
+    GValue result = { 0, };
+    gboolean found;
+
+    children = gst_bin_iterate_recurse (bin);
+    found = gst_iterator_find_custom (children,
+        (GCompareFunc) compare_name, &result, (gpointer) name);
+    gst_iterator_free (children);
+
+    if (found) {
+      element = g_value_dup_object (&result);
+      g_value_unset (&result);
+    }
   }
 
   return element;
@@ -4598,4 +4660,47 @@ gst_bin_iterate_all_by_element_factory_name (GstBin * bin,
   g_value_unset (&factory_name_val);
 
   return result;
+}
+
+/**
+ * gst_bin_get_using_hash:
+ * @bin: a #GstBin
+ * Returns: %TRUE if the bin is using a hash to track children
+ *
+ * Since: 1.xx
+ */
+gboolean
+gst_bin_get_using_hash (GstBin * bin) {
+  return (bin->priv->children_hash != NULL);
+}
+
+/**
+ * gst_bin_set_hash_level:
+ * @bin: a #GstBin
+ * @value: the level at which to switch to using a hash to track child element
+ *         names -1 will disable use of hash, 0 will always use the hash, >= 1
+ *         will use it only when the number of elements hits this number
+ *
+ * Note that if the bin is already using a hash, setting this to a lower level
+ * will not cause it to switch back to a list.  This should almost always be
+ * called before adding elements to the bin.
+ *
+ * Since: 1.xx
+ */
+void gst_bin_set_hash_level (GstBin * bin, gint value) {
+  bin->priv->numchildren_use_hash = value;
+}
+
+/**
+ * gst_bin_get_hash_level:
+ * @bin: a #GstBin
+ *
+ * Returns: *the level at which to this bin switches to using a hash to track
+ * child element names
+ *
+ * Since: 1.xx
+ */
+
+gint gst_bin_get_hash_level (GstBin * bin) {
+  return bin->priv->numchildren_use_hash;
 }
