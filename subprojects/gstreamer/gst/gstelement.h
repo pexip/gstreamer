@@ -722,6 +722,8 @@ G_STMT_START {                                                          \
 #define GST_STATE_SIGNAL(elem)                 g_cond_signal (GST_STATE_GET_COND (elem));
 #define GST_STATE_BROADCAST(elem)              g_cond_broadcast (GST_STATE_GET_COND (elem));
 
+typedef struct _GstElementPrivate GstElementPrivate;
+
 /**
  * GstElement:
  * @state_lock: Used to serialize execution of gst_element_set_state()
@@ -791,7 +793,9 @@ struct _GstElement
   GList                *contexts;
 
   /*< private >*/
-  gpointer _gst_reserved[GST_PADDING-1];
+  GstElementPrivate    *priv;
+
+  gpointer _gst_reserved[GST_PADDING-2];
 };
 
 /**
@@ -1202,6 +1206,16 @@ GST_API
 GList*                  gst_element_get_pad_template_list      (GstElement *element);
 GST_API
 const gchar *           gst_element_get_metadata               (GstElement * element, const gchar * key);
+
+/* set and get information about hash usage */
+GST_API
+gboolean        gst_element_get_using_hash (GstElement * element);
+
+GST_API
+void            gst_element_set_hash_level (GstElement * element, gint value);
+
+GST_API
+gint            gst_element_get_hash_level (GstElement * element);
 
 G_DEFINE_AUTOPTR_CLEANUP_FUNC(GstElement, gst_object_unref)
 
