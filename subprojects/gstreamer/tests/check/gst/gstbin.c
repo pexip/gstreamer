@@ -250,6 +250,14 @@ GST_START_TEST (test_hash_switchover_never)
   fail_unless (gst_bin_get_by_name(bin, "testname2") == filesrc2);
   fail_unless (gst_bin_get_by_name(bin, "testname3") == filesrc3);
 
+  /* Test a couple of removals */
+  fail_unless(gst_bin_remove(bin, filesrc2), TRUE);
+  fail_unless(gst_bin_remove(bin, filesrc3), TRUE);
+  fail_unless(gst_bin_get_using_hash(bin) == FALSE);
+  fail_unless (gst_bin_get_by_name(bin, "testname1") == filesrc);
+  fail_unless (gst_bin_get_by_name(bin, "testname2") == NULL);
+  fail_unless (gst_bin_get_by_name(bin, "testname3") == NULL);
+
   gst_object_unref (bin);
 }
 
@@ -282,6 +290,12 @@ GST_START_TEST (test_hash_switchover_immediate)
   fail_unless (gst_bin_get_by_name(bin, "testname1") == filesrc);
   fail_unless (gst_bin_get_by_name(bin, "testname2") == filesrc2);
 
+  /* Test a removal */
+  fail_unless(gst_bin_remove(bin, filesrc2), TRUE);
+  fail_unless(gst_bin_get_using_hash(bin) == TRUE);
+  fail_unless (gst_bin_get_by_name(bin, "testname1") == filesrc);
+  fail_unless (gst_bin_get_by_name(bin, "testname2") == NULL);
+
   gst_object_unref (bin);
 }
 
@@ -313,6 +327,12 @@ GST_START_TEST (test_hash_switchover_2)
   fail_unless (gst_bin_get_using_hash(bin) == TRUE);
   fail_unless (gst_bin_get_by_name(bin, "testname1") == filesrc);
   fail_unless (gst_bin_get_by_name(bin, "testname2") == filesrc2);
+
+  /* Test a removal */
+  fail_unless(gst_bin_remove(bin, filesrc2), TRUE);
+  fail_unless(gst_bin_get_using_hash(bin) == TRUE);
+  fail_unless (gst_bin_get_by_name(bin, "testname1") == filesrc);
+  fail_unless (gst_bin_get_by_name(bin, "testname2") == NULL);
 
   gst_object_unref (bin);
 }
