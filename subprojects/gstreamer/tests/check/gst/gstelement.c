@@ -1119,6 +1119,17 @@ GST_START_TEST (test_hash_switchover_never)
   fail_unless(gst_element_get_static_pad(e, "source4") == p4);
   fail_unless(gst_element_get_static_pad(e, "source5") == p5);
 
+  /* Test a couple of removals */
+  fail_unless(gst_element_remove_pad(e, p3), TRUE);
+  fail_unless(gst_element_remove_pad(e, p5), TRUE);
+  fail_unless(gst_element_get_using_hash(e) == FALSE);
+  fail_unless(gst_element_get_static_pad(e, "src") == src);
+  fail_unless(gst_element_get_static_pad(e, "source1") == p1);
+  fail_unless(gst_element_get_static_pad(e, "source2") == p2);
+  fail_unless(gst_element_get_static_pad(e, "source3") == NULL);
+  fail_unless(gst_element_get_static_pad(e, "source4") == p4);
+  fail_unless(gst_element_get_static_pad(e, "source5") == NULL);
+
   gst_object_unref (e);
 }
 GST_END_TEST;
@@ -1182,6 +1193,17 @@ GST_START_TEST (test_hash_switchover_immediate)
   fail_unless(gst_element_get_static_pad(e, "source4") == p4);
   fail_unless(gst_element_get_static_pad(e, "source5") == p5);
 
+  /* Test a couple of removals */
+  fail_unless(gst_element_remove_pad(e, p3), TRUE);
+  fail_unless(gst_element_remove_pad(e, p5), TRUE);
+  fail_unless(gst_element_get_using_hash(e) == TRUE);
+  fail_unless(gst_element_get_static_pad(e, "src") == src);
+  fail_unless(gst_element_get_static_pad(e, "source1") == p1);
+  fail_unless(gst_element_get_static_pad(e, "source2") == p2);
+  fail_unless(gst_element_get_static_pad(e, "source3") == NULL);
+  fail_unless(gst_element_get_static_pad(e, "source4") == p4);
+  fail_unless(gst_element_get_static_pad(e, "source5") == NULL);
+
   gst_object_unref (e);
 }
 GST_END_TEST;
@@ -1244,6 +1266,17 @@ GST_START_TEST (test_hash_switchover_3)
   fail_unless(gst_element_get_static_pad(e, "source3") == p3);
   fail_unless(gst_element_get_static_pad(e, "source4") == p4);
   fail_unless(gst_element_get_static_pad(e, "source5") == p5);
+
+  /* Test a couple of removals */
+  fail_unless(gst_element_remove_pad(e, p3), TRUE);
+  fail_unless(gst_element_remove_pad(e, p5), TRUE);
+  fail_unless(gst_element_get_using_hash(e) == TRUE);
+  fail_unless(gst_element_get_static_pad(e, "src") == src);
+  fail_unless(gst_element_get_static_pad(e, "source1") == p1);
+  fail_unless(gst_element_get_static_pad(e, "source2") == p2);
+  fail_unless(gst_element_get_static_pad(e, "source3") == NULL);
+  fail_unless(gst_element_get_static_pad(e, "source4") == p4);
+  fail_unless(gst_element_get_static_pad(e, "source5") == NULL);
 
   gst_object_unref (e);
 }
