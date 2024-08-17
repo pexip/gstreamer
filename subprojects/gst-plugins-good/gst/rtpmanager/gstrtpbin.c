@@ -916,12 +916,19 @@ free_session (GstRtpBinSession * sess, GstRtpBin * bin)
 {
   GST_DEBUG_OBJECT (bin, "freeing session %p", sess);
 
-  gst_element_set_locked_state (sess->demux, TRUE);
   gst_element_set_locked_state (sess->session, TRUE);
+  gst_element_set_locked_state (sess->demux, TRUE);
   gst_element_set_locked_state (sess->storage, TRUE);
 
-  gst_element_set_state (sess->demux, GST_STATE_NULL);
+  /* the rtcp-thread inside rtpsession could end up trying to
+     take the GST_RTP_BIN_LOCK() through various paths, so
+     to avoid a deadlock we need to unlock while
+     stopping the session */
+  GST_RTP_BIN_UNLOCK (bin);
   gst_element_set_state (sess->session, GST_STATE_NULL);
+  GST_RTP_BIN_LOCK (bin);
+
+  gst_element_set_state (sess->demux, GST_STATE_NULL);
   gst_element_set_state (sess->storage, GST_STATE_NULL);
 
   remove_recv_rtp (bin, sess);
@@ -1548,7 +1555,7 @@ gst_rtp_bin_associate (GstRtpBin * bin, GstRtpBinStream * stream, guint8 len,
   running_time += base_time;
 
   /* A sender that has no notion of wallclock or elapsed time MAY set the NTP
-     timestamp to zero. It makes sense to not synchronize this stream.*/
+     timestamp to zero. It makes sense to not synchronize this stream. */
   if (ntpnstime != 0)
     stream->have_sync = TRUE;
 
@@ -2080,39 +2087,42 @@ no_demux:
 static void
 free_stream (GstRtpBinStream * stream, GstRtpBin * bin)
 {
+  GstRtpBinPrivate *priv = bin->priv;
   GstRtpBinSession *sess = stream->session;
   GSList *clients, *next_client;
+  GstElement *buffer = stream->buffer;
+  GstElement *demux = stream->demux;
+  GList *find;
 
   GST_DEBUG_OBJECT (bin, "freeing stream %p", stream);
 
-  gst_element_set_locked_state (stream->buffer, TRUE);
-  if (stream->demux)
-    gst_element_set_locked_state (stream->demux, TRUE);
-
-  gst_element_set_state (stream->buffer, GST_STATE_NULL);
-  if (stream->demux)
-    gst_element_set_state (stream->demux, GST_STATE_NULL);
-
-  if (stream->demux) {
-    g_signal_handler_disconnect (stream->demux, stream->demux_newpad_sig);
-    g_signal_handler_disconnect (stream->demux, stream->demux_ptreq_sig);
-    g_signal_handler_disconnect (stream->demux, stream->demux_ptchange_sig);
-    g_signal_handler_disconnect (stream->demux, stream->demux_padremoved_sig);
+  sess->elements = g_slist_remove (sess->elements, buffer);
+  find = g_list_find (priv->elements, buffer);
+  if (find) {
+    priv->elements = g_list_delete_link (priv->elements, find);
   }
 
-  if (stream->buffer_handlesync_sig)
-    g_signal_handler_disconnect (stream->buffer, stream->buffer_handlesync_sig);
-  if (stream->buffer_ptreq_sig)
-    g_signal_handler_disconnect (stream->buffer, stream->buffer_ptreq_sig);
-  if (stream->buffer_ntpstop_sig)
-    g_signal_handler_disconnect (stream->buffer, stream->buffer_ntpstop_sig);
+  /* It is important to unlock before shutting down our stream elements,
+     because some of them might be interacting with GstRTPBin through
+     signals that might be taking the GST_RTP_BIN_LOCK(), and that would
+     cause a deadlock if we are not unlocked here */
+  GST_RTP_BIN_UNLOCK (bin);
 
-  sess->elements = g_slist_remove (sess->elements, stream->buffer);
-  remove_bin_element (stream->buffer, bin);
-  gst_object_unref (stream->buffer);
+  gst_element_set_locked_state (buffer, TRUE);
+  if (demux)
+    gst_element_set_locked_state (demux, TRUE);
 
-  if (stream->demux)
-    gst_bin_remove (GST_BIN_CAST (bin), stream->demux);
+  gst_element_set_state (buffer, GST_STATE_NULL);
+  if (demux)
+    gst_element_set_state (demux, GST_STATE_NULL);
+
+  gst_bin_remove (GST_BIN_CAST (bin), buffer);
+  if (demux)
+    gst_bin_remove (GST_BIN_CAST (bin), demux);
+
+  gst_object_unref (buffer);
+
+  GST_RTP_BIN_LOCK (bin);
 
   for (clients = bin->clients; clients; clients = next_client) {
     GstRtpBinClient *client = (GstRtpBinClient *) clients->data;
@@ -3881,7 +3891,13 @@ session_request_element_full (GstRtpBinSession * session, guint signal,
     guint ssrc, guint8 pt)
 {
   GstElement *element = NULL;
-  GstRtpBin *bin = session->bin;
+  GstRtpBin *bin;
+
+  if (!session) {
+    goto no_session;
+  }
+
+  bin = session->bin;
 
   g_signal_emit (bin, gst_rtp_bin_signals[signal], 0, session->id, ssrc, pt,
       &element);
@@ -3898,6 +3914,11 @@ manage_failed:
   {
     GST_WARNING_OBJECT (bin, "unable to manage element");
     gst_object_unref (element);
+    return NULL;
+  }
+no_session:
+  {
+    GST_WARNING ("no session");
     return NULL;
   }
 }

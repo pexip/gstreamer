@@ -538,8 +538,7 @@ gst_rtp_ssrc_demux_init (GstRtpSsrcDemux * demux)
 static void
 gst_rtp_ssrc_demux_pads_free (GstRtpSsrcDemuxPads * dpads)
 {
-  gst_pad_set_active (dpads->rtp_pad, FALSE);
-  gst_pad_set_active (dpads->rtcp_pad, FALSE);
+  GST_DEBUG ("Freeing pads for ssrc %u", dpads->ssrc);
 
   gst_element_remove_pad (GST_PAD_PARENT (dpads->rtp_pad), dpads->rtp_pad);
   gst_element_remove_pad (GST_PAD_PARENT (dpads->rtcp_pad), dpads->rtcp_pad);
@@ -582,6 +581,7 @@ static void
 gst_rtp_ssrc_demux_clear_ssrc (GstRtpSsrcDemux * demux, guint32 ssrc)
 {
   GstRtpSsrcDemuxPads *dpads;
+  GstPad *rtp_pad;
 
   INTERNAL_STREAM_LOCK (demux);
 
@@ -596,15 +596,16 @@ gst_rtp_ssrc_demux_clear_ssrc (GstRtpSsrcDemux * demux, guint32 ssrc)
   GST_DEBUG_OBJECT (demux, "clearing pad for SSRC %08x", ssrc);
 
   demux->srcpads = g_slist_remove (demux->srcpads, dpads);
+  rtp_pad = gst_object_ref (dpads->rtp_pad);
   GST_OBJECT_UNLOCK (demux);
-
-  g_signal_emit (G_OBJECT (demux),
-      gst_rtp_ssrc_demux_signals[SIGNAL_REMOVED_SSRC_PAD], 0, ssrc,
-      dpads->rtp_pad);
 
   gst_rtp_ssrc_demux_pads_free (dpads);
 
   INTERNAL_STREAM_UNLOCK (demux);
+
+  g_signal_emit (G_OBJECT (demux),
+      gst_rtp_ssrc_demux_signals[SIGNAL_REMOVED_SSRC_PAD], 0, ssrc, rtp_pad);
+  gst_object_unref (rtp_pad);
 
   return;
 
