@@ -2107,8 +2107,11 @@ add_source (RTPSession * sess, RTPSource * src)
 static RTPSource *
 find_source (RTPSession * sess, guint32 ssrc)
 {
-  return g_hash_table_lookup (sess->ssrcs[sess->mask_idx],
+  RTPSource * source = g_hash_table_lookup (sess->ssrcs[sess->mask_idx],
       GINT_TO_POINTER (ssrc));
+  if (source && source->closing)
+    return NULL;
+  return source;
 }
 
 /* must be called with the session lock, the returned source needs to be
@@ -4617,6 +4620,7 @@ update_source (const gchar * key, RTPSource * source, ReportData * data)
 
   if (remove) {
     GST_INFO ("removing source %08x", source->ssrc);
+    source->closing = TRUE;
     sess->total_sources--;
     if (is_sender) {
       sess->stats.sender_sources--;
@@ -4633,8 +4637,8 @@ update_source (const gchar * key, RTPSource * source, ReportData * data)
       on_bye_timeout (sess, source);
 
     } else if (!g_hash_table_contains (sess->timedout_ssrcs, GUINT_TO_POINTER (source->ssrc))) {
-      on_timeout (sess, source);
       g_hash_table_add (sess->timedout_ssrcs, GUINT_TO_POINTER (source->ssrc));
+      on_timeout (sess, source);
     }
 
   } else {
