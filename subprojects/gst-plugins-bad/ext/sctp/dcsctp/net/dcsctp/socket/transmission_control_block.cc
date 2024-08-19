@@ -90,7 +90,6 @@ TransmissionControlBlock::TransmissionControlBlock(
       tx_error_counter_(log_prefix, options),
       data_tracker_(log_prefix, delayed_ack_timer_.get(), peer_initial_tsn),
       reassembly_queue_(log_prefix,
-                        peer_initial_tsn,
                         options.max_receiver_window_buffer_size,
                         capabilities.message_interleaving),
       retransmission_queue_(
@@ -211,9 +210,7 @@ void TransmissionControlBlock::MaybeSendFastRetransmit() {
 
 void TransmissionControlBlock::SendBufferedPackets(SctpPacket::Builder& builder,
                                                    Timestamp now) {
-  for (int packet_idx = 0;
-       packet_idx < options_.max_burst && retransmission_queue_.can_send_data();
-       ++packet_idx) {
+  for (int packet_idx = 0; packet_idx < options_.max_burst; ++packet_idx) {
     // Only add control chunks to the first packet that is sent, if sending
     // multiple packets in one go (as allowed by the congestion window).
     if (packet_idx == 0) {
@@ -245,6 +242,13 @@ void TransmissionControlBlock::SendBufferedPackets(SctpPacket::Builder& builder,
 
     auto chunks =
         retransmission_queue_.GetChunksToSend(now, builder.bytes_remaining());
+
+    if (!chunks.empty()) {
+      // https://datatracker.ietf.org/doc/html/rfc9260#section-8.3
+      // Sending DATA means that the path is not idle - restart heartbeat timer.
+      heartbeat_handler_.RestartTimer();
+    }
+
     for (auto& [tsn, data] : chunks) {
       if (capabilities_.message_interleaving) {
         builder.Add(IDataChunk(tsn, std::move(data), false));
