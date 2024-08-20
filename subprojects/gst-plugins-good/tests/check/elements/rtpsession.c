@@ -934,61 +934,6 @@ GST_START_TEST (test_internal_sources_timeout)
 
   /* verify the received SSRC times out as well */
   fail_unless_equals_int (0xBEEFDEAD, h->timeout_ssrc);
-  
-  session_harness_free (h);
-}
-
-GST_END_TEST;
-
-static GstBuffer *
-generate_rtcp_sr_buffer (guint ssrc)
-{
-  GstBuffer *buf;
-  GstRTCPBuffer rtcp = GST_RTCP_BUFFER_INIT;
-  GstRTCPPacket packet;
-
-  buf = gst_rtcp_buffer_new (1000);
-  fail_unless (gst_rtcp_buffer_map (buf, GST_MAP_READWRITE, &rtcp));
-  fail_unless (gst_rtcp_buffer_add_packet (&rtcp, GST_RTCP_TYPE_SR, &packet));
-  gst_rtcp_packet_sr_set_sender_info (&packet, ssrc, 0, 0, 1, 1);
-  gst_rtcp_buffer_unmap (&rtcp);
-  return buf;
-}
-
-GST_START_TEST (test_internal_sources_timeout_rtcp)
-{
-  SessionHarness *h = session_harness_new ();
-  GstBuffer *buf;
-  GstFlowReturn res;
-  gint i;
-
-  /* receive some packets from deadbeef */ 
-  for (i = 1; i < 4; i++) {
-    buf = generate_test_buffer (i, 0xDEADBEEF);
-    res = session_harness_recv_rtp (h, buf);
-    fail_unless_equals_int (GST_FLOW_OK, res);
-  }
-
-  /* advance the clock over the timeout time */
-  for (i = 0 ; i < 20 ; i++)
-    session_harness_crank_clock (h);
-
-  /* verify deadbeef is reported as timed out */
-  fail_unless_equals_int (0xDEADBEEF, h->timeout_ssrc);
-
-  /* reset the expectations */
-  h->timeout_ssrc = 0;
-
-  /* receive a rtcp message from deadbeef */
-  buf = generate_rtcp_sr_buffer (0xDEADBEEF);
-  fail_unless_equals_int (GST_FLOW_OK, session_harness_recv_rtcp (h, buf));
-
-  /* advance the clock over the timeout time */
-  for (i = 0 ; i < 20 ; i++)
-    session_harness_crank_clock (h);
-
-  /* the rtcp packet should not resurrect the timeout ssrcs */
-  fail_unless_equals_int (0, h->timeout_ssrc);
 
   session_harness_free (h);
 }
@@ -5927,7 +5872,6 @@ rtpsession_suite (void)
   tcase_add_test (tc_chain, test_multiple_senders_roundrobin_rbs);
   tcase_add_test (tc_chain, test_no_rbs_for_internal_senders);
   tcase_add_test (tc_chain, test_internal_sources_timeout);
-  tcase_add_test (tc_chain, test_internal_sources_timeout_rtcp);
   tcase_add_test (tc_chain, test_receive_rtcp_app_packet);
   tcase_add_test (tc_chain, test_dont_lock_on_stats);
   tcase_add_test (tc_chain, test_ignore_suspicious_bye);

@@ -262,7 +262,6 @@ struct _RTPSession {
   guint32       suggested_ssrc;
   gboolean      internal_ssrc_set;
   gboolean      internal_ssrc_from_caps_or_property;
-  GHashTable    *timedout_ssrcs;
 
   /* for sender/receiver counting */
   guint32       key;
