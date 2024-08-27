@@ -791,7 +791,10 @@ struct _GstElement
   GList                *contexts;
 
   /*< private >*/
-  gpointer _gst_reserved[GST_PADDING-1];
+  GHashTable           *pads_hash;
+  gint32               numpads_use_hash;
+
+  gpointer _gst_reserved[GST_PADDING-3];
 };
 
 /**
@@ -1202,6 +1205,16 @@ GST_API
 GList*                  gst_element_get_pad_template_list      (GstElement *element);
 GST_API
 const gchar *           gst_element_get_metadata               (GstElement * element, const gchar * key);
+
+/* set and get information about hash usage */
+GST_API
+gboolean        gst_element_get_using_hash (GstElement * element);
+
+GST_API
+void            gst_element_set_hash_level (GstElement * element, gint value);
+
+GST_API
+gint            gst_element_get_hash_level (GstElement * element);
 
 G_DEFINE_AUTOPTR_CLEANUP_FUNC(GstElement, gst_object_unref)
 
