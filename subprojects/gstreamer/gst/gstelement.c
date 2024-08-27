@@ -122,6 +122,10 @@ enum
       /* FILL ME */
 };
 
+/* Default to switching over to use a hash at 8 pads
+ * Can be overriden on a per-element basis by calling gst_bin_set_hash_level */
+#define GST_ELEMENT_DEFAULT_HASH_SWITCH_POINT 8
+
 static void gst_element_class_init (GstElementClass * klass);
 static void gst_element_init (GstElement * element);
 static void gst_element_base_class_init (gpointer g_class);
@@ -197,6 +201,7 @@ gst_element_get_type (void)
         g_quark_from_static_string ("GST_ELEMENTCLASS_SKIP_DOCUMENTATION");
     g_once_init_leave (&gst_element_type, _type);
   }
+
   return gst_element_type;
 }
 
@@ -312,6 +317,7 @@ gst_element_base_class_init (gpointer g_class)
   element_class->elementfactory =
       g_type_get_qdata (G_TYPE_FROM_CLASS (element_class),
       __gst_elementclass_factory);
+
   GST_CAT_DEBUG (GST_CAT_ELEMENT_PADS, "type %s : factory %p",
       G_OBJECT_CLASS_NAME (element_class), element_class->elementfactory);
 }
@@ -327,6 +333,9 @@ gst_element_init (GstElement * element)
 
   g_rec_mutex_init (&element->state_lock);
   g_cond_init (&element->state_cond);
+
+  element->pads_hash = NULL;
+  element->numpads_use_hash = GST_ELEMENT_DEFAULT_HASH_SWITCH_POINT;
 }
 
 static void
@@ -745,6 +754,7 @@ gst_element_get_index (GstElement * element)
 gboolean
 gst_element_add_pad (GstElement * element, GstPad * pad)
 {
+  GList *walk;
   gchar *pad_name;
   gboolean active;
   gboolean should_activate;
@@ -761,11 +771,39 @@ gst_element_add_pad (GstElement * element, GstPad * pad)
   GST_OBJECT_FLAG_SET (pad, GST_PAD_FLAG_NEED_PARENT);
   GST_OBJECT_UNLOCK (pad);
 
+  /* Check whether we need to switch to using the hash */
+  if ((element->pads_hash == NULL) &&
+      (element->numpads_use_hash >= 0) &&
+      (element->numpads + 1) >= (element->numpads_use_hash)) {
+
+      /* Time to switch to using the hash */
+      element->pads_hash = g_hash_table_new_full (g_str_hash, g_str_equal, g_free, NULL);
+
+      /* Initialise each existing element into the hash */
+      walk = element->pads;
+      for (; walk; walk = g_list_next (walk)) {
+        GstPad *child_pad;
+        child_pad = GST_PAD_CAST (walk->data);
+        g_hash_table_insert (element->pads_hash, g_strdup (GST_PAD_NAME(child_pad)), child_pad);
+      }
+  }
+
   /* then check to see if there's already a pad by that name here */
   GST_OBJECT_LOCK (element);
-  if (!GST_OBJECT_FLAG_IS_SET (element, GST_ELEMENT_FLAG_NO_UNIQUE_CHECK))
-    if (G_UNLIKELY (!gst_object_check_uniqueness (element->pads, pad_name)))
-      goto name_exists;
+
+  if (!GST_OBJECT_FLAG_IS_SET (element, GST_ELEMENT_FLAG_NO_UNIQUE_CHECK)) {
+    if (element->pads_hash != NULL) {
+      /* Use the hash table to look up whether we already have an pad with that
+       * name */
+      if (g_hash_table_contains (element->pads_hash, pad_name)) {
+        goto name_exists;
+      }
+    } else {
+      /* Need to use the list to look up the name */
+      if (G_UNLIKELY (!gst_object_check_uniqueness (element->pads, pad_name)))
+        goto name_exists;
+    }
+  }
 
   /* try to set the pad's parent */
   if (G_UNLIKELY (!gst_object_set_parent (GST_OBJECT_CAST (pad),
@@ -794,6 +832,10 @@ gst_element_add_pad (GstElement * element, GstPad * pad)
   element->pads = g_list_append (element->pads, pad);
   element->numpads++;
   element->pads_cookie++;
+  if (element->pads_hash != NULL) {
+    g_hash_table_insert (element->pads_hash, g_strdup (GST_PAD_NAME(pad)), pad);
+  }
+
   GST_OBJECT_UNLOCK (element);
 
   if (should_activate)
@@ -918,6 +960,12 @@ gst_element_remove_pad (GstElement * element, GstPad * pad)
       g_critical ("Removing pad without direction???");
       break;
   }
+
+  /* Remove from the hash if necessary */
+  if (element->pads_hash != NULL) {
+    g_hash_table_remove (element->pads_hash, GST_PAD_NAME (pad));
+  }
+
   element->pads = g_list_remove (element->pads, pad);
   element->numpads--;
   element->pads_cookie++;
@@ -1003,10 +1051,20 @@ gst_element_get_static_pad (GstElement * element, const gchar * name)
   g_return_val_if_fail (name != NULL, NULL);
 
   GST_OBJECT_LOCK (element);
-  find =
-      g_list_find_custom (element->pads, name, (GCompareFunc) pad_compare_name);
-  if (find) {
-    result = GST_PAD_CAST (find->data);
+
+  if (element->pads_hash != NULL) {
+    /* Can use the hash for lookup */
+    result = g_hash_table_lookup (element->pads_hash, name);
+  } else {
+    /* Need to iterate the list for lookup */
+    find =
+        g_list_find_custom (element->pads, name, (GCompareFunc) pad_compare_name);
+    if (find) {
+      result = GST_PAD_CAST (find->data);
+    }
+  }
+
+  if (result) {
     gst_object_ref (result);
   }
 
@@ -3411,12 +3469,16 @@ gst_element_dispose (GObject * object)
   walk = element->pads;
   while (walk) {
     GstPad *pad = GST_PAD_CAST (walk->data);
-
     walk = walk->next;
 
     if (oclass->release_pad && GST_PAD_PAD_TEMPLATE (pad) &&
         GST_PAD_TEMPLATE_PRESENCE (GST_PAD_PAD_TEMPLATE (pad))
         == GST_PAD_REQUEST) {
+
+      if (element->pads_hash != NULL) {
+        g_hash_table_remove(element->pads_hash, GST_PAD_NAME(pad));
+      }
+
       GST_CAT_DEBUG_OBJECT (GST_CAT_ELEMENT_PADS, element,
           "removing request pad %s:%s", GST_DEBUG_PAD_NAME (pad));
       oclass->release_pad (element, pad);
@@ -3429,6 +3491,11 @@ gst_element_dispose (GObject * object)
   /* remove the remaining pads */
   while (element->pads) {
     GstPad *pad = GST_PAD_CAST (element->pads->data);
+
+    if (element->pads_hash != NULL) {
+        g_hash_table_remove(element->pads_hash, GST_PAD_NAME(pad));
+    }
+
     GST_CAT_DEBUG_OBJECT (GST_CAT_ELEMENT_PADS, element,
         "removing pad %s:%s", GST_DEBUG_PAD_NAME (pad));
     if (!gst_element_remove_pad (element, pad)) {
@@ -3449,6 +3516,11 @@ gst_element_dispose (GObject * object)
 
   GST_CAT_INFO_OBJECT (GST_CAT_REFCOUNTING, element, "%p parent class dispose",
       element);
+
+  if (element->pads_hash != NULL) {
+    g_hash_table_destroy (element->pads_hash);
+    element->pads_hash = NULL;
+  }
 
   G_OBJECT_CLASS (parent_class)->dispose (object);
 
@@ -3924,4 +3996,47 @@ gst_make_element_message_details (const char *name, ...)
   va_end (varargs);
 
   return structure;
+}
+
+/**
+ * gst_element_get_using_hash:
+ * @element: a #GstElement
+ * Returns: %TRUE if the element is using a hash to track pads
+ *
+ * Since: 1.xx
+ */
+gboolean
+gst_element_get_using_hash (GstElement * element) {
+  return (element->pads_hash != NULL);
+}
+
+/**
+ * gst_element_set_hash_level:
+ * @element: a #GstElement
+ * @value: the level at which to switch to using a hash to track pad
+ *         names -1 will disable use of hash, 0 will always use the hash, >= 1
+ *         will use it only when the number of pads hits this number
+ *
+ * Note that if the element is already using a hash, setting this to a lower level
+ * will not cause it to switch back to a list.  This should almost always be
+ * called before adding pads to the element.
+ *
+ * Since: 1.xx
+ */
+void gst_element_set_hash_level (GstElement * element, gint value) {
+  element->numpads_use_hash = value;
+}
+
+/**
+ * gst_element_get_hash_level:
+ * @element: a #GstElement
+ *
+ * Returns: *the level at which to this element switches to using a hash to track
+ * pad names
+ *
+ * Since: 1.xx
+ */
+
+gint gst_element_get_hash_level (GstElement * element) {
+  return element->numpads_use_hash;
 }
