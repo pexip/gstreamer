@@ -1044,6 +1044,51 @@ GST_START_TEST (test_call_async)
 
 GST_END_TEST;
 
+GST_START_TEST (test_add_remove_pad_performance)
+{
+  gint num_pads = 50000;
+  GstElement *el = gst_element_factory_make ("identity", NULL);
+  GstPad **pads = g_new0 (GstPad *, num_pads);
+  gint i;
+  gint64 t[4];
+
+  for (i = 0; i < num_pads; i += 2) {
+    gchar *srcname = g_strdup_printf ("src-%d", i);
+    gchar *sinkname = g_strdup_printf ("sink-%d", i);
+    pads[i + 0] = gst_pad_new (srcname, GST_PAD_SRC);
+    pads[i + 1] = gst_pad_new (sinkname, GST_PAD_SINK);
+    g_free (srcname);
+    g_free (sinkname);
+  }
+
+  t[0] = g_get_monotonic_time ();
+
+  for (i = 0; i < num_pads; i++) {
+    gst_element_add_pad (el, pads[i]);
+  }
+  t[1] = g_get_monotonic_time ();
+
+  for (i = 0; i < num_pads / 2; i++) {
+    gst_element_remove_pad (el, pads[i]);
+  }
+  t[2] = g_get_monotonic_time ();
+
+  for (i = 0; i < num_pads / 2; i++) {
+    gst_element_remove_pad (el, pads[num_pads - i - 1]);
+  }
+  t[3] = g_get_monotonic_time ();
+
+  for (i = 0; i < 3; i++) {
+    double dur = (t[i + 1] - t[i]) / (double) G_TIME_SPAN_SECOND;
+    GST_ERROR ("stage %d took %lf seconds", i, dur);
+  }
+
+  g_free (pads);
+  gst_object_unref (el);
+}
+
+GST_END_TEST;
+
 static Suite *
 gst_element_suite (void)
 {
@@ -1063,6 +1108,7 @@ gst_element_suite (void)
   tcase_add_test (tc_chain, test_forbidden_pad_template_names);
   tcase_add_test (tc_chain, test_foreach_pad);
   tcase_add_test (tc_chain, test_call_async);
+  tcase_add_test (tc_chain, test_add_remove_pad_performance);
 
   return s;
 }

@@ -121,6 +121,19 @@ enum
       /* FILL ME */
 };
 
+struct _GstElementPrivate
+{
+  GHashTable *pads_hash;
+
+  GList *pads_last;
+  GList *srcpads_last;
+  GList *sinkpads_last;
+
+  GHashTable *pads_links;
+  GHashTable *srcpads_links;
+  GHashTable *sinkpads_links;
+};
+
 static void gst_element_class_init (GstElementClass * klass);
 static void gst_element_init (GstElement * element);
 static void gst_element_base_class_init (gpointer g_class);
@@ -153,6 +166,7 @@ static GstPadTemplate
     element_class, const gchar * name);
 
 static GstObjectClass *parent_class = NULL;
+static gint private_offset = 0;
 static guint gst_element_signals[LAST_SIGNAL] = { 0 };
 
 /* this is used in gstelementfactory.c:gst_element_register() */
@@ -185,6 +199,9 @@ gst_element_get_type (void)
     _type = g_type_register_static (GST_TYPE_OBJECT, "GstElement",
         &element_info, G_TYPE_FLAG_ABSTRACT);
 
+    private_offset =
+        g_type_add_instance_private (_type, sizeof (GstElementPrivate));
+
     __gst_elementclass_factory =
         g_quark_from_static_string ("GST_ELEMENTCLASS_FACTORY");
     __gst_elementclass_skip_doc =
@@ -194,12 +211,21 @@ gst_element_get_type (void)
   return gst_element_type;
 }
 
+static inline GstElementPrivate *
+gst_element_get_instance_private (GstElement * self)
+{
+  return (G_STRUCT_MEMBER_P (self, private_offset));
+}
+
 static void
 gst_element_class_init (GstElementClass * klass)
 {
   GObjectClass *gobject_class;
 
   gobject_class = (GObjectClass *) klass;
+
+  if (private_offset != 0)
+    g_type_class_adjust_private_offset (klass, &private_offset);
 
   parent_class = g_type_class_peek_parent (klass);
 
@@ -295,6 +321,8 @@ gst_element_base_class_init (gpointer g_class)
 static void
 gst_element_init (GstElement * element)
 {
+  GstElementPrivate *priv;
+
   GST_STATE (element) = GST_STATE_NULL;
   GST_STATE_TARGET (element) = GST_STATE_NULL;
   GST_STATE_NEXT (element) = GST_STATE_VOID_PENDING;
@@ -303,6 +331,14 @@ gst_element_init (GstElement * element)
 
   g_rec_mutex_init (&element->state_lock);
   g_cond_init (&element->state_cond);
+
+  element->priv = priv = gst_element_get_instance_private (element);
+
+  priv->pads_hash =
+      g_hash_table_new_full (g_str_hash, g_str_equal, g_free, NULL);
+  priv->pads_links = g_hash_table_new (NULL, NULL);
+  priv->srcpads_links = g_hash_table_new (NULL, NULL);
+  priv->sinkpads_links = g_hash_table_new (NULL, NULL);
 }
 
 static void
@@ -721,12 +757,15 @@ gst_element_get_index (GstElement * element)
 gboolean
 gst_element_add_pad (GstElement * element, GstPad * pad)
 {
+  GstElementPrivate *priv;
   gchar *pad_name;
   gboolean active;
   gboolean should_activate;
 
   g_return_val_if_fail (GST_IS_ELEMENT (element), FALSE);
   g_return_val_if_fail (GST_IS_PAD (pad), FALSE);
+
+  priv = element->priv;
 
   /* locking pad to look at the name */
   GST_OBJECT_LOCK (pad);
@@ -737,11 +776,13 @@ gst_element_add_pad (GstElement * element, GstPad * pad)
   GST_OBJECT_FLAG_SET (pad, GST_PAD_FLAG_NEED_PARENT);
   GST_OBJECT_UNLOCK (pad);
 
-  /* then check to see if there's already a pad by that name here */
   GST_OBJECT_LOCK (element);
-  if (G_UNLIKELY (!gst_object_check_uniqueness (element->pads, pad_name)))
-    goto name_exists;
 
+  /* Use the hash table to look up whether we already have an pad with that
+   * name */
+  if (g_hash_table_contains (priv->pads_hash, pad_name)) {
+    goto name_exists;
+  }
   /* try to set the pad's parent */
   if (G_UNLIKELY (!gst_object_set_parent (GST_OBJECT_CAST (pad),
               GST_OBJECT_CAST (element))))
@@ -756,19 +797,43 @@ gst_element_add_pad (GstElement * element, GstPad * pad)
   /* add it to the list */
   switch (gst_pad_get_direction (pad)) {
     case GST_PAD_SRC:
-      element->srcpads = g_list_append (element->srcpads, pad);
+      if (!element->srcpads) {
+        element->srcpads = g_list_append (NULL, pad);
+        priv->srcpads_last = element->srcpads;
+      } else {
+        priv->srcpads_last = g_list_append (priv->srcpads_last, pad);
+        priv->srcpads_last = priv->srcpads_last->next;
+      }
+      g_hash_table_insert (priv->srcpads_links, pad, priv->srcpads_last);
       element->numsrcpads++;
       break;
     case GST_PAD_SINK:
-      element->sinkpads = g_list_append (element->sinkpads, pad);
+      if (!element->sinkpads) {
+        element->sinkpads = g_list_append (NULL, pad);
+        priv->sinkpads_last = element->sinkpads;
+      } else {
+        priv->sinkpads_last = g_list_append (priv->sinkpads_last, pad);
+        priv->sinkpads_last = priv->sinkpads_last->next;
+      }
+      g_hash_table_insert (priv->sinkpads_links, pad, priv->sinkpads_last);
       element->numsinkpads++;
       break;
     default:
       goto no_direction;
   }
-  element->pads = g_list_append (element->pads, pad);
+  if (!element->pads) {
+    element->pads = g_list_append (NULL, pad);
+    priv->pads_last = element->pads;
+  } else {
+    priv->pads_last = g_list_append (priv->pads_last, pad);
+    priv->pads_last = priv->pads_last->next;
+  }
+  g_hash_table_insert (priv->pads_links, pad, priv->pads_last);
+
   element->numpads++;
   element->pads_cookie++;
+  g_hash_table_insert (priv->pads_hash, g_strdup (GST_PAD_NAME (pad)), pad);
+
   GST_OBJECT_UNLOCK (element);
 
   if (should_activate)
@@ -841,10 +906,15 @@ no_direction:
 gboolean
 gst_element_remove_pad (GstElement * element, GstPad * pad)
 {
+  GstElementPrivate *priv;
   GstPad *peer;
+  GList *link;
+  gboolean ret;
 
   g_return_val_if_fail (GST_IS_ELEMENT (element), FALSE);
   g_return_val_if_fail (GST_IS_PAD (pad), FALSE);
+
+  priv = element->priv;
 
   /* locking pad to look at the name and parent */
   GST_OBJECT_LOCK (pad);
@@ -879,21 +949,45 @@ gst_element_remove_pad (GstElement * element, GstPad * pad)
   }
 
   GST_OBJECT_LOCK (element);
+
+  g_hash_table_remove (priv->pads_hash, GST_PAD_NAME (pad));
+
   /* remove it from the list */
   switch (gst_pad_get_direction (pad)) {
     case GST_PAD_SRC:
-      element->srcpads = g_list_remove (element->srcpads, pad);
+      ret =
+          g_hash_table_steal_extended (priv->srcpads_links, pad, NULL,
+          (gpointer *) & link);
+      g_assert (ret);
+      if (link == priv->srcpads_last) {
+        priv->srcpads_last = link->prev;
+      }
+      element->srcpads = g_list_delete_link (element->srcpads, link);
       element->numsrcpads--;
       break;
     case GST_PAD_SINK:
-      element->sinkpads = g_list_remove (element->sinkpads, pad);
+      ret =
+          g_hash_table_steal_extended (priv->sinkpads_links, pad, NULL,
+          (gpointer *) & link);
+      g_assert (ret);
+      if (link == priv->sinkpads_last) {
+        priv->sinkpads_last = link->prev;
+      }
+      element->sinkpads = g_list_delete_link (element->sinkpads, link);
       element->numsinkpads--;
       break;
     default:
       g_critical ("Removing pad without direction???");
       break;
   }
-  element->pads = g_list_remove (element->pads, pad);
+
+  ret = g_hash_table_steal_extended (priv->pads_links, pad, NULL,
+      (gpointer *) & link);
+  g_assert (ret);
+  if (link == priv->pads_last) {
+    priv->pads_last = link->prev;
+  }
+  element->pads = g_list_delete_link (element->pads, link);
   element->numpads--;
   element->pads_cookie++;
   GST_OBJECT_UNLOCK (element);
@@ -943,18 +1037,6 @@ gst_element_no_more_pads (GstElement * element)
   g_signal_emit (element, gst_element_signals[NO_MORE_PADS], 0);
 }
 
-static gint
-pad_compare_name (GstPad * pad1, const gchar * name)
-{
-  gint result;
-
-  GST_OBJECT_LOCK (pad1);
-  result = strcmp (GST_PAD_NAME (pad1), name);
-  GST_OBJECT_UNLOCK (pad1);
-
-  return result;
-}
-
 /**
  * gst_element_get_static_pad:
  * @element: a #GstElement to find a static pad of.
@@ -971,17 +1053,15 @@ pad_compare_name (GstPad * pad1, const gchar * name)
 GstPad *
 gst_element_get_static_pad (GstElement * element, const gchar * name)
 {
-  GList *find;
   GstPad *result = NULL;
 
   g_return_val_if_fail (GST_IS_ELEMENT (element), NULL);
   g_return_val_if_fail (name != NULL, NULL);
 
   GST_OBJECT_LOCK (element);
-  find =
-      g_list_find_custom (element->pads, name, (GCompareFunc) pad_compare_name);
-  if (find) {
-    result = GST_PAD_CAST (find->data);
+
+  result = g_hash_table_lookup (element->priv->pads_hash, name);
+  if (result) {
     gst_object_ref (result);
   }
 
@@ -3359,6 +3439,7 @@ static void
 gst_element_dispose (GObject * object)
 {
   GstElement *element = GST_ELEMENT_CAST (object);
+  GstElementPrivate *priv = element->priv;
   GstClock **clock_p;
   GstBus **bus_p;
   GstElementClass *oclass;
@@ -3382,6 +3463,7 @@ gst_element_dispose (GObject * object)
     if (oclass->release_pad && GST_PAD_PAD_TEMPLATE (pad) &&
         GST_PAD_TEMPLATE_PRESENCE (GST_PAD_PAD_TEMPLATE (pad))
         == GST_PAD_REQUEST) {
+
       GST_CAT_DEBUG_OBJECT (GST_CAT_ELEMENT_PADS, element,
           "removing request pad %s:%s", GST_DEBUG_PAD_NAME (pad));
       oclass->release_pad (element, pad);
@@ -3411,6 +3493,22 @@ gst_element_dispose (GObject * object)
   g_list_free_full (element->contexts, (GDestroyNotify) gst_context_unref);
   element->contexts = NULL;
   GST_OBJECT_UNLOCK (element);
+
+  g_hash_table_destroy (priv->pads_hash);
+  priv->pads_hash = NULL;
+
+  if (priv->pads_links != NULL) {
+    g_hash_table_destroy (priv->pads_links);
+    priv->pads_links = NULL;
+  }
+  if (priv->srcpads_links != NULL) {
+    g_hash_table_destroy (priv->srcpads_links);
+    priv->srcpads_links = NULL;
+  }
+  if (priv->sinkpads_links != NULL) {
+    g_hash_table_destroy (priv->sinkpads_links);
+    priv->sinkpads_links = NULL;
+  }
 
   GST_CAT_INFO_OBJECT (GST_CAT_REFCOUNTING, element, "%p parent class dispose",
       element);

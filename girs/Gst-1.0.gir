@@ -18326,8 +18326,11 @@ state will yield the running_time against the clock.</doc>
           <type name="Context"/>
         </type>
       </field>
+      <field name="priv" readable="0" private="1">
+        <type name="ElementPrivate" c:type="GstElementPrivate*"/>
+      </field>
       <field name="_gst_reserved" readable="0" private="1">
-        <array zero-terminated="0" fixed-size="3">
+        <array zero-terminated="0" fixed-size="2">
           <type name="gpointer" c:type="gpointer"/>
         </array>
       </field>
@@ -19618,6 +19621,9 @@ gst_element_foreach_src_pad(), or gst_element_foreach_pad().</doc>
         </parameter>
       </parameters>
     </callback>
+    <record name="ElementPrivate" c:type="GstElementPrivate" disguised="1" opaque="1">
+      <source-position filename="../subprojects/gstreamer/gst/gstelement.h"/>
+    </record>
     <record name="Event" c:type="GstEvent" glib:type-name="GstEvent" glib:get-type="gst_event_get_type" c:symbol-prefix="event">
       <doc xml:space="preserve" filename="../subprojects/gstreamer/gst/gstevent.c">The event class provides factory methods to construct events for sending
 and functions to query (parse) received events.
