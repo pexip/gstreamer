@@ -4479,7 +4479,6 @@ update_source (const gchar * key, RTPSource * source, ReportData * data)
   RTPSession *sess = data->sess;
   GstClockTime interval, binterval;
   GstClockTime btime;
-  GstClockTimeDiff activity_delta;
 
   GST_DEBUG ("look at %08x, generation %u", source->ssrc, source->generation);
 
@@ -4541,39 +4540,27 @@ update_source (const gchar * key, RTPSource * source, ReportData * data)
     remove = TRUE;
   }
 
-  /* mind old time that might pre-date last time going to PLAYING */
-  if (source->last_rtp_activity != GST_CLOCK_TIME_NONE)
-    btime = MAX (source->last_rtp_activity, sess->start_time);
-  else
-    btime = sess->start_time;
-  activity_delta = GST_CLOCK_DIFF (btime, data->current_time);
-
   if (data->timeout_inactive_sources) {
-    /* sources that were inactive for more than 5 times the deterministic
-     * reporting interval get timed out. the min timeout is 5 seconds. */
-
+    /* sources that were inactive for more than 5 times the deterministic reporting
+     * interval get timed out. the min timeout is 5 seconds. */
+    /* mind old time that might pre-date last time going to PLAYING */
+    btime = MAX (source->last_activity, sess->start_time);
     if (data->current_time > btime) {
       interval = MAX (binterval * 5, 5 * GST_SECOND);
-      if (activity_delta > interval) {
+      if (data->current_time - btime > interval) {
+        GST_INFO ("removing timeout source %08x, last %" GST_TIME_FORMAT,
+            source->ssrc, GST_TIME_ARGS (btime));
         if (source->internal) {
           /* this is an internal source that is not using our suggested ssrc.
            * since there must be another source using this ssrc, we can remove
            * this one instead of making it a receiver forever */
           if (source->ssrc != sess->suggested_ssrc
               && source->media_ssrc != sess->suggested_ssrc) {
-            GST_INFO ("sending BYE for internal source %08x, "
-                "time since last activity: %" GST_STIME_FORMAT,
-                source->ssrc, GST_STIME_ARGS (activity_delta));
-
             rtp_source_mark_bye (source, "timed out");
-
             /* do not schedule bye here, since we are inside the RTCP timeout
              * processing and scheduling bye will interfere with SR/RR sending */
           }
         } else {
-          GST_INFO ("removing timeout non-internal source %08x, "
-              "time since last activity: %" GST_STIME_FORMAT,
-              source->ssrc, GST_STIME_ARGS (activity_delta));
           remove = TRUE;
         }
       }
@@ -4583,17 +4570,22 @@ update_source (const gchar * key, RTPSource * source, ReportData * data)
   /* senders that did not send for a long time become a receiver, this also
    * holds for our own sources. */
   if (is_sender) {
-    interval = MAX (binterval * 2, 5 * GST_SECOND);
-    if (activity_delta > interval) {
-      GST_INFO ("sender source %08x timed out and became receiver. "
-          "time since last activity: %" GST_STIME_FORMAT,
-          source->ssrc, GST_STIME_ARGS (activity_delta));
-      sendertimeout = TRUE;
+    /* mind old time that might pre-date last time going to PLAYING */
+    if (source->last_rtp_activity != GST_CLOCK_TIME_NONE)
+      btime = MAX (source->last_rtp_activity, sess->start_time);
+    else
+      btime = sess->start_time;
+    if (data->current_time > btime) {
+      interval = MAX (binterval * 2, 5 * GST_SECOND);
+      if (data->current_time - btime > interval) {
+        GST_DEBUG ("sender source %08x timed out and became receiver, last %"
+            GST_TIME_FORMAT, source->ssrc, GST_TIME_ARGS (btime));
+        sendertimeout = TRUE;
+      }
     }
   }
 
   if (remove) {
-    GST_INFO ("removing source %08x", source->ssrc);
     sess->total_sources--;
     if (is_sender) {
       sess->stats.sender_sources--;
