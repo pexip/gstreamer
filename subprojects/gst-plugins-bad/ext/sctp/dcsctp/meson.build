@@ -131,8 +131,8 @@ else
   dcsctp_cppargs += [
     '-DWEBRTC_POSIX',
     '-std=c++17',
-     '-Wall',
-    '-Werror',
+    '-Wall',
+    '-Wno-deprecated-declarations',
     '-Wno-comment',
   ]
 
