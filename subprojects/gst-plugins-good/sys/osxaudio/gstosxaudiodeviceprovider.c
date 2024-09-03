@@ -585,7 +585,9 @@ gst_osx_audio_device_provider_probe_device (AudioDeviceID device_id,
 
   device = gst_osx_audio_device_new (device_id, device_name, is_default, scope, core_audio);
   gst_object_ref_sink (device);
-  gst_core_audio_close (core_audio);
+  if (core_audio) {
+    gst_core_audio_close (core_audio);
+  }
 
 done:
   if (core_audio)
