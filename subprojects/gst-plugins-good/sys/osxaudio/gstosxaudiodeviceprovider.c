@@ -572,13 +572,15 @@ gst_osx_audio_device_provider_probe_device (AudioDeviceID device_id,
     goto done;
   }
 
-  core_audio = gst_core_audio_new (NULL);
-  core_audio->is_src = scope == kAudioDevicePropertyScopeInput ? TRUE : FALSE;
-  core_audio->device_id = device_id;
+  if (0) {
+    core_audio = gst_core_audio_new (NULL);
+    core_audio->is_src = scope == kAudioDevicePropertyScopeInput ? TRUE : FALSE;
+    core_audio->device_id = device_id;
 
-  if (!gst_core_audio_open (core_audio)) {
-    GST_ERROR ("CoreAudio device could not be opened");
-    goto done;
+    if (!gst_core_audio_open (core_audio)) {
+      GST_ERROR ("CoreAudio device could not be opened");
+      goto done;
+    }
   }
 
   device = gst_osx_audio_device_new (device_id, device_name, is_default, scope, core_audio);
@@ -980,7 +982,11 @@ gst_osx_audio_device_new (AudioDeviceID device_id, const gchar *device_name,
       klass = "Audio/Source";
 
       template_caps = gst_static_pad_template_get_caps (&src_factory);
-      caps = gst_core_audio_probe_caps (core_audio, template_caps);
+      if (core_audio) {
+        caps = gst_core_audio_probe_caps (core_audio, template_caps);
+      } else {
+        caps = gst_caps_ref (template_caps);
+      }
       gst_caps_unref (template_caps);
       break;
     case kAudioDevicePropertyScopeOutput:
@@ -988,7 +994,11 @@ gst_osx_audio_device_new (AudioDeviceID device_id, const gchar *device_name,
       klass = "Audio/Sink";
 
       template_caps = gst_static_pad_template_get_caps (&sink_factory);
-      caps = gst_core_audio_probe_caps (core_audio, template_caps);
+      if (core_audio) {
+        caps = gst_core_audio_probe_caps (core_audio, template_caps);
+      } else {
+        caps = gst_caps_ref (template_caps);
+      }
       gst_caps_unref (template_caps);
 
       break;
