@@ -254,6 +254,30 @@ _audio_system_get_default_output ()
   return _audio_system_get_default_device (kAudioHardwarePropertyDefaultOutputDevice);
 }
 
+static inline gboolean
+_audio_system_set_runloop (CFRunLoopRef runLoop)
+{
+  OSStatus status = noErr;
+
+  gboolean res = FALSE;
+
+  AudioObjectPropertyAddress runloopAddress = {
+    kAudioHardwarePropertyRunLoop,
+    kAudioObjectPropertyScopeGlobal,
+    kAudioObjectPropertyElementMain
+  };
+
+  status = AudioObjectSetPropertyData (kAudioObjectSystemObject,
+      &runloopAddress, 0, NULL, sizeof (CFRunLoopRef), &runLoop);
+  if (status == noErr) {
+    res = TRUE;
+  } else {
+    GST_ERROR ("failed to set runloop to %p: %d", runLoop, (int) status);
+  }
+
+  return res;
+}
+
 static gchar *
 _audio_device_get_uuid (AudioDeviceID device_id)
 {
@@ -330,6 +354,8 @@ gst_osx_audio_device_provider_class_init (GstOsxAudioDeviceProviderClass *klass)
 
   GST_DEBUG_CATEGORY_INIT (osx_audio_device_provider_debug,
       "osxaudiodeviceprovider", 0, "OSX Audio Device Provider");
+
+  _audio_system_set_runloop (NULL);
 }
 
 static void
