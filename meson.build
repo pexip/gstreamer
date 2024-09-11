@@ -75,6 +75,12 @@ if not meson.is_subproject() and cc.get_id() == 'msvc'
   endif
 endif
 
+if not meson.is_subproject() and cc.get_id() == 'msvc'
+  add_global_arguments(
+    cc.get_supported_arguments(['/FS']), # enable parallel compilation
+    language:  ['c', 'cpp'])
+endif
+
 # Ensure that MSVC interprets all source code as UTF-8. Only do this when we're
 # not a subproject, because subprojects are not allowed to call
 # add_global_arguments().
