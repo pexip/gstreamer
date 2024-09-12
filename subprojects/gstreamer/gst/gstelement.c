@@ -946,6 +946,12 @@ gst_element_remove_pad (GstElement * element, GstPad * pad)
   }
 
   GST_OBJECT_LOCK (element);
+
+  /* Remove from the hash if necessary */
+  /*if (element->pads_hash != NULL) {
+    g_hash_table_remove (element->pads_hash, GST_PAD_NAME (pad));
+  }*/
+
   /* remove it from the list */
   switch (gst_pad_get_direction (pad)) {
     case GST_PAD_SRC:

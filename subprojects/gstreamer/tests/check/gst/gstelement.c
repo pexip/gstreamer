@@ -1135,6 +1135,36 @@ GST_START_TEST (test_hash_switchover_never)
 GST_END_TEST;
 
 
+GST_START_TEST (test_hash_stress)
+{
+  GstElement *e;
+  gint num_pads = 1000;
+  GstPad *pads[num_pads];
+
+  /* Try many times */
+  for (int cnt=0; cnt <= 10000; cnt++) {
+
+    /* getting an existing element class is cheating, but easier */
+    e = gst_element_factory_make ("fakesrc", "source");
+
+    /* Set the hash switchover level */
+    gst_element_set_hash_level(e, 0);
+
+    for (int padcnt=0; padcnt <num_pads; padcnt++) {
+      pads[padcnt] = gst_pad_new (NULL, GST_PAD_SRC);
+      gst_element_add_pad(e, pads[padcnt]);
+    }
+
+    for (int padcnt=num_pads-1; padcnt >= 0; padcnt--) {
+        gst_element_remove_pad(e, pads[padcnt]);
+    }
+
+    gst_object_unref (e);
+  }
+}
+GST_END_TEST;
+
+
 GST_START_TEST (test_hash_switchover_immediate)
 {
   GstElement *e;
@@ -1302,6 +1332,7 @@ gst_element_suite (void)
   tcase_add_test (tc_chain, test_foreach_pad);
   tcase_add_test (tc_chain, test_release_pads_during_dispose);
   tcase_add_test (tc_chain, test_add_srcpad_deadlock);
+  tcase_add_test (tc_chain, test_hash_stress);
   tcase_add_test (tc_chain, test_hash_switchover_never);
   tcase_add_test (tc_chain, test_hash_switchover_immediate);
   tcase_add_test (tc_chain, test_hash_switchover_3);

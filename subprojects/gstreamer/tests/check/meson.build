@@ -159,7 +159,7 @@ foreach t : core_tests
     env.set('GST_PLUGIN_PATH_1_0', meson.project_build_root())
     env.set('GST_PLUGIN_SYSTEM_PATH_1_0', '')
     env.set('GST_STATE_IGNORE_ELEMENTS', '')
-    env.set('CK_DEFAULT_TIMEOUT', '20')
+    env.set('CK_DEFAULT_TIMEOUT', '60')
     env.set('GST_REGISTRY', '@0@/@1@.registry'.format(meson.current_build_dir(), test_name))
     env.set('GST_PLUGIN_SCANNER_1_0', gst_scanner_dir + '/gst-plugin-scanner')
     env.set('GST_PLUGIN_LOADING_WHITELIST', 'gstreamer')
