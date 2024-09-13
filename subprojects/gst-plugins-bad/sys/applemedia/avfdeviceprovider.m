@@ -213,7 +213,7 @@ gst_avf_device_provider_probe (GstDeviceProvider * provider)
   GList *result = NULL;
 
   NSMutableArray<AVCaptureDeviceType> *deviceTypes = [NSMutableArray arrayWithArray:@[
-#if defined(HOST_IOS)
+#if defined(HAVE_IOS)
                                                 AVCaptureDeviceTypeBuiltInUltraWideCamera,
                                                 AVCaptureDeviceTypeBuiltInDualWideCamera,
                                                 AVCaptureDeviceTypeBuiltInTelephotoCamera,
@@ -224,12 +224,12 @@ gst_avf_device_provider_probe (GstDeviceProvider * provider)
                                                 ]];
 
   if (@available(iOS 17, macOS 14, *)) {
-#if ((HOST_DARWIN && __MAC_OS_X_VERSION_MAX_ALLOWED >= 101300) || HOST_IOS)
+#if ((__MAC_OS_X_VERSION_MAX_ALLOWED >= 101300) || HAVE_IOS)
     [deviceTypes addObject:AVCaptureDeviceTypeContinuityCamera];
     [deviceTypes addObject:AVCaptureDeviceTypeExternal];
 #endif
   } else {
-#if defined(HOST_DARWIN)
+#if !defined(HAVE_IOS)
     [deviceTypes addObject:AVCaptureDeviceTypeExternalUnknown];
 #endif
   }
