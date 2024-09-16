@@ -776,6 +776,8 @@ gst_element_add_pad (GstElement * element, GstPad * pad)
       (element->numpads_use_hash >= 0) &&
       (element->numpads + 1) >= (element->numpads_use_hash)) {
 
+      GST_OBJECT_LOCK (element);
+
       /* Time to switch to using the hash */
       element->pads_hash = g_hash_table_new_full (g_str_hash, g_str_equal, g_free, NULL);
 
@@ -786,6 +788,8 @@ gst_element_add_pad (GstElement * element, GstPad * pad)
         child_pad = GST_PAD_CAST (walk->data);
         g_hash_table_insert (element->pads_hash, g_strdup (GST_PAD_NAME(child_pad)), child_pad);
       }
+
+      GST_OBJECT_UNLOCK (element);
   }
 
   /* then check to see if there's already a pad by that name here */
@@ -946,6 +950,12 @@ gst_element_remove_pad (GstElement * element, GstPad * pad)
   }
 
   GST_OBJECT_LOCK (element);
+
+  /* Remove from the hash if necessary */
+  if (element->pads_hash != NULL) {
+    g_hash_table_remove (element->pads_hash, GST_PAD_NAME (pad));
+  }
+
   /* remove it from the list */
   switch (gst_pad_get_direction (pad)) {
     case GST_PAD_SRC:
@@ -959,11 +969,6 @@ gst_element_remove_pad (GstElement * element, GstPad * pad)
     default:
       g_critical ("Removing pad without direction???");
       break;
-  }
-
-  /* Remove from the hash if necessary */
-  if (element->pads_hash != NULL) {
-    g_hash_table_remove (element->pads_hash, GST_PAD_NAME (pad));
   }
 
   element->pads = g_list_remove (element->pads, pad);
@@ -3476,7 +3481,9 @@ gst_element_dispose (GObject * object)
         == GST_PAD_REQUEST) {
 
       if (element->pads_hash != NULL) {
+        GST_OBJECT_LOCK (element);
         g_hash_table_remove(element->pads_hash, GST_PAD_NAME(pad));
+        GST_OBJECT_UNLOCK (element);
       }
 
       GST_CAT_DEBUG_OBJECT (GST_CAT_ELEMENT_PADS, element,
