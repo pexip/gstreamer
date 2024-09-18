@@ -540,23 +540,19 @@ gst_bin_dispose (GObject * object)
   while (bin->children) {
     element = GST_ELEMENT_CAST (bin->children->data);
     if (bin->priv->children_hash != NULL) {
-      GST_OBJECT_LOCK (object);
       g_hash_table_remove (bin->priv->children_hash, GST_ELEMENT_NAME (element));
-      GST_OBJECT_UNLOCK (object);
     }
     gst_bin_remove (bin, element);
-  }
-
-  if (bin->priv->children_hash != NULL) {
-    GST_OBJECT_LOCK (object);
-    g_hash_table_destroy (bin->priv->children_hash);
-    GST_OBJECT_UNLOCK (object);
-    bin->priv->children_hash = NULL;
   }
 
   if (G_UNLIKELY (bin->children != NULL)) {
     g_critical ("could not remove elements from bin '%s'",
         GST_STR_NULL (GST_OBJECT_NAME (object)));
+  }
+
+  if (bin->priv->children_hash != NULL) {
+    g_hash_table_destroy (bin->priv->children_hash);
+    bin->priv->children_hash = NULL;
   }
 
   G_OBJECT_CLASS (parent_class)->dispose (object);
@@ -4461,12 +4457,10 @@ gst_bin_get_by_name (GstBin * bin, const gchar * name)
 
   if (bin->priv->children_hash != NULL) {
     /* Can use the hash for lookup */
-    GST_OBJECT_LOCK (bin);
     element = g_hash_table_lookup (bin->priv->children_hash, name);
     if (element) {
       gst_object_ref (element);
     }
-    GST_OBJECT_UNLOCK (bin);
   } else {
     /* Need to iterate the list for lookup */
     GstIterator *children;
