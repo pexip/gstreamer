@@ -1022,7 +1022,7 @@ add_rtcp_sdes_packet (GstBuffer * gstbuf, guint32 ssrc, const char *cname)
           &packet) == TRUE);
   fail_unless (gst_rtcp_packet_sdes_add_item (&packet, ssrc) == TRUE);
   fail_unless (gst_rtcp_packet_sdes_add_entry (&packet, GST_RTCP_SDES_CNAME,
-          strlen (cname), (const guint8 *) cname));
+          (guint8) strlen (cname), (const guint8 *) cname));
 
   gst_rtcp_buffer_unmap (&buffer);
 }
@@ -1159,6 +1159,102 @@ GST_START_TEST (test_autoremove_race)
 
 GST_END_TEST;
 
+
+static void
+rtpbin_pad_added (G_GNUC_UNUSED GstElement *rtpbin, GstPad *srcpad,
+    GstHarness *h)
+{
+  gst_harness_add_element_src_pad (h, srcpad);
+}
+
+static void
+rtpbin_pad_removed (G_GNUC_UNUSED GstElement *rtpbin, GstPad *srcpad,
+    GstHarness *h)
+{
+  if (GST_PAD_PEER (srcpad) == h->sinkpad)
+    gst_pad_unlink (GST_PAD_PEER (h->sinkpad), h->sinkpad);
+}
+
+void
+ptdemux_pad_removed_delay (G_GNUC_UNUSED GstElement *ptdemux,
+    G_GNUC_UNUSED GstPad *srcpad, G_GNUC_UNUSED gpointer user_data)
+{
+  g_usleep (G_USEC_PER_SEC / 100);
+}
+
+static void
+rtpbin_element_added (G_GNUC_UNUSED GstElement *rtpbin, GstElement *el,
+    G_GNUC_UNUSED gpointer user_data)
+{
+  GstPluginFeature *feature = GST_PLUGIN_FEATURE (gst_element_get_factory (el));
+  if (!g_strcmp0 ("rtpptdemux", gst_plugin_feature_get_name (feature))) {
+    g_signal_connect (el, "pad-removed", G_CALLBACK (ptdemux_pad_removed_delay),
+        NULL);
+  }
+}
+
+GST_START_TEST (test_timeout_then_readd)
+{
+  GstHarness *h_rtp;
+  GstTestClock *testclock;
+  guint32 ssrc = 1111;
+
+  /* we need to take control of the rtcp-thread, so setting
+     the system-clock to our testclock *before* creating
+     the harnesses is crucial */
+  testclock = GST_TEST_CLOCK_CAST (gst_test_clock_new ());
+  gst_system_clock_set_default (GST_CLOCK_CAST (testclock));
+
+  h_rtp = gst_harness_new_with_padnames ("rtpbin", "recv_rtp_sink_0", NULL);
+
+  g_signal_connect (h_rtp->element, "pad-added", G_CALLBACK (rtpbin_pad_added),
+      h_rtp);
+  g_signal_connect (h_rtp->element, "pad-removed",
+      G_CALLBACK (rtpbin_pad_removed), h_rtp);
+  g_signal_connect (h_rtp->element, "element-added",
+      G_CALLBACK (rtpbin_element_added), NULL);
+
+  /* autoremove will automatically remove the receive-pipelines
+     after ssrcdemux when a receive-pad times out */
+  g_object_set (h_rtp->element, "autoremove", TRUE, NULL);
+
+  gst_harness_set_src_caps (h_rtp,
+      gst_caps_new_simple ("application/x-rtp",
+          "clock-rate", G_TYPE_INT, 8000, "payload", G_TYPE_INT, 100, NULL));
+
+  /* push two buffers and crank to activate the jitterbuffer */
+  gst_harness_push (h_rtp, generate_rtp_buffer (GST_SECOND / 50 * 0, 0,
+          8000 / 50 * 0, 100, ssrc));
+  gst_harness_push (h_rtp, generate_rtp_buffer (GST_SECOND / 50 * 1, 1,
+          8000 / 50 * 1, 100, ssrc));
+  gst_harness_crank_single_clock_wait (h_rtp);
+
+  gst_buffer_unref (gst_harness_pull (h_rtp));
+  gst_buffer_unref (gst_harness_pull (h_rtp));
+
+  gst_test_clock_set_time (testclock, 50 * GST_SECOND);
+  gst_test_clock_crank (testclock);
+
+  g_usleep (G_USEC_PER_SEC / 100);
+
+  gst_harness_push (h_rtp, generate_rtp_buffer (GST_SECOND / 50 * 2, 2,
+          8000 / 50 * 2, 100, ssrc));
+  gst_harness_push (h_rtp, generate_rtp_buffer (GST_SECOND / 50 * 3, 3,
+          8000 / 50 * 3, 100, ssrc));
+  gst_harness_crank_single_clock_wait (h_rtp);
+
+  gst_buffer_unref (gst_harness_pull (h_rtp));
+  gst_buffer_unref (gst_harness_pull (h_rtp));
+
+  gst_harness_teardown (h_rtp);
+
+  /* reset the systemclock */
+  gst_object_unref (testclock);
+  gst_system_clock_set_default (NULL);
+}
+
+GST_END_TEST;
+
 static Suite *
 rtpbin_suite (void)
 {
@@ -1179,6 +1275,7 @@ rtpbin_suite (void)
   tcase_add_test (tc_chain, test_quick_shutdown);
   tcase_add_test (tc_chain, test_recv_rtp_and_rtcp_simultaneously);
   tcase_add_test (tc_chain, test_autoremove_race);
+  tcase_add_test (tc_chain, test_timeout_then_readd);
 
   return s;
 }
