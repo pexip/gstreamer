@@ -485,9 +485,12 @@ struct _GstRtpBinStream
   gulong demux_ptreq_sig;
   gulong demux_ptchange_sig;
 
-  /* if we have synced this stream */
-  GstRtpBinStreamSynced have_sync;
+  /* a HashTable of our PT demux srcpads as keys,
+     and the corresponding ghosted rtpbin recv srcpad as values */
+  GHashTable *ptpad_to_ghostpad;
 
+  /* if we have calculated a valid rt_delta for this stream */
+  gboolean have_sync;
   /* mapping to local RTP and NTP time */
   gint64 rt_delta;              /* based on RTCP */
   gint64 rtp_delta;             /* based on RTP-Info */
@@ -738,16 +741,16 @@ ssrc_demux_pad_removed (GstElement * element, guint ssrc, GstPad * pad,
   rtpbin = session->bin;
 
   GST_RTP_BIN_LOCK (rtpbin);
-
   GST_RTP_SESSION_LOCK (session);
   if ((stream = find_stream_by_ssrc (session, ssrc)))
     session->streams = g_slist_remove (session->streams, stream);
   GST_RTP_SESSION_UNLOCK (session);
+  GST_RTP_BIN_UNLOCK (rtpbin);
 
+  GST_RTP_BIN_DYN_LOCK (rtpbin);
   if (stream)
     free_stream (stream, rtpbin);
-
-  GST_RTP_BIN_UNLOCK (rtpbin);
+  GST_RTP_BIN_DYN_UNLOCK (rtpbin);
 }
 
 /* create a session with the given id.  Must be called with RTP_BIN_LOCK */
@@ -964,8 +967,12 @@ free_session (GstRtpBinSession * sess, GstRtpBin * bin)
   g_slist_free (sess->elements);
   sess->elements = NULL;
 
+  GST_RTP_BIN_UNLOCK (bin);
+  GST_RTP_BIN_DYN_LOCK (bin);
   g_slist_foreach (sess->streams, (GFunc) free_stream, bin);
   g_slist_free (sess->streams);
+  GST_RTP_BIN_DYN_UNLOCK (bin);
+  GST_RTP_BIN_LOCK (bin);
 
   g_mutex_clear (&sess->lock);
   g_hash_table_destroy (sess->ptmap);
@@ -2158,6 +2165,17 @@ out:
   gst_rtcp_buffer_unmap (&rtcp);
 }
 
+
+static void
+_remove_ghost_pad (GstPad * gpad)
+{
+  GstElement *parent = GST_PAD_PARENT (gpad);
+  gst_pad_set_active (gpad, FALSE);
+  if (parent) {
+    gst_element_remove_pad (parent, gpad);
+  }
+}
+
 /* create a new stream with @ssrc in @session. Must be called with
  * RTP_SESSION_LOCK. */
 static GstRtpBinStream *
@@ -2189,6 +2207,9 @@ create_stream (GstRtpBinSession * session, guint32 ssrc)
   stream->session = session;
   stream->buffer = gst_object_ref (buffer);
   stream->demux = demux;
+  stream->ptpad_to_ghostpad =
+      g_hash_table_new_full (NULL, NULL, NULL,
+      (GDestroyNotify) _remove_ghost_pad);
 
   stream->have_sync = GST_RTP_BIN_STREAM_SYNCED_NONE;
   stream->rt_delta = G_MININT64;
@@ -2315,7 +2336,7 @@ free_stream (GstRtpBinStream * stream, GstRtpBin * bin)
   GstElement *demux = stream->demux;
   GList *find;
 
-  GST_DEBUG_OBJECT (bin, "freeing stream %p", stream);
+  GST_INFO_OBJECT (bin, "freeing stream %p", stream);
 
   sess->elements = g_slist_remove (sess->elements, buffer);
   find = g_list_find (priv->elements, buffer);
@@ -2323,11 +2344,14 @@ free_stream (GstRtpBinStream * stream, GstRtpBin * bin)
     priv->elements = g_list_delete_link (priv->elements, find);
   }
 
+  /* remove all ghostpads for this stream */
+  g_hash_table_remove_all (stream->ptpad_to_ghostpad);
+
   /* It is important to unlock before shutting down our stream elements,
      because some of them might be interacting with GstRTPBin through
-     signals that might be taking the GST_RTP_BIN_LOCK(), and that would
+     signals that might be taking the GST_RTP_BIN_DYN_LOCK(), and that would
      cause a deadlock if we are not unlocked here */
-  GST_RTP_BIN_UNLOCK (bin);
+  GST_RTP_BIN_DYN_UNLOCK (bin);
 
   gst_element_set_locked_state (buffer, TRUE);
   if (demux)
@@ -2343,8 +2367,9 @@ free_stream (GstRtpBinStream * stream, GstRtpBin * bin)
 
   gst_object_unref (buffer);
 
-  GST_RTP_BIN_LOCK (bin);
+  GST_RTP_BIN_DYN_LOCK (bin);
 
+  GST_RTP_BIN_LOCK (bin);
   for (clients = bin->clients; clients; clients = next_client) {
     GstRtpBinClient *client = (GstRtpBinClient *) clients->data;
     GSList *streams, *next_stream;
@@ -2368,6 +2393,9 @@ free_stream (GstRtpBinStream * stream, GstRtpBin * bin)
       }
     }
   }
+  GST_RTP_BIN_UNLOCK (bin);
+
+  g_hash_table_destroy (stream->ptpad_to_ghostpad);
   g_free (stream);
 }
 
@@ -4279,9 +4307,10 @@ expose_recv_src_pad (GstRtpBin * rtpbin, GstPad * pad, GstRtpBinStream * stream,
       stream->session->id, stream->ssrc, pt);
   gpad = gst_ghost_pad_new_from_template (padname, pad, templ);
   g_free (padname);
-  g_object_set_data (G_OBJECT (pad), "GstRTPBin.ghostpad", gpad);
 
   gst_pad_set_active (gpad, TRUE);
+  g_hash_table_insert (stream->ptpad_to_ghostpad, pad, gpad);
+
   GST_RTP_BIN_SHUTDOWN_UNLOCK (rtpbin);
 
   gst_pad_sticky_events_foreach (pad, copy_sticky_events, gpad);
@@ -4337,19 +4366,12 @@ payload_pad_removed (GstElement * element, GstPad * pad,
     GstRtpBinStream * stream)
 {
   GstRtpBin *rtpbin;
-  GstPad *gpad;
-
   rtpbin = stream->bin;
 
   GST_DEBUG ("payload pad removed");
 
   GST_RTP_BIN_DYN_LOCK (rtpbin);
-  if ((gpad = g_object_get_data (G_OBJECT (pad), "GstRTPBin.ghostpad"))) {
-    g_object_set_data (G_OBJECT (pad), "GstRTPBin.ghostpad", NULL);
-
-    gst_pad_set_active (gpad, FALSE);
-    gst_element_remove_pad (GST_ELEMENT_CAST (rtpbin), gpad);
-  }
+  g_hash_table_remove (stream->ptpad_to_ghostpad, pad);
   GST_RTP_BIN_DYN_UNLOCK (rtpbin);
 }
 
