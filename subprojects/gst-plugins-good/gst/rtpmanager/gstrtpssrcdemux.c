@@ -612,7 +612,7 @@ gst_rtp_ssrc_demux_clear_ssrc (GstRtpSsrcDemux * demux, guint32 ssrc)
   /* ERRORS */
 unknown_pad:
   {
-    GST_WARNING_OBJECT (demux, "unknown SSRC %08x", ssrc);
+    GST_LOG_OBJECT (demux, "unknown SSRC %08x", ssrc);
     return;
   }
 }
