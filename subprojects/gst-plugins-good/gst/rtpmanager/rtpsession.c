@@ -4609,12 +4609,14 @@ update_source (const gchar * key, RTPSource * source, ReportData * data)
   /* senders that did not send for a long time become a receiver, this also
    * holds for our own sources. */
   if (is_sender) {
-    interval = MAX (binterval * 2, 5 * GST_SECOND);
-    if (activity_delta > interval) {
-      GST_INFO ("sender source %08x timed out and became receiver. "
-          "time since last activity: %" GST_STIME_FORMAT,
-          source->ssrc, GST_STIME_ARGS (activity_delta));
-      sendertimeout = TRUE;
+    if (data->current_time > btime) {
+      interval = MAX (binterval * 2, 5 * GST_SECOND);
+      if (activity_delta > interval) {
+        GST_INFO ("sender source %08x timed out and became receiver. "
+            "time since last activity: %" GST_STIME_FORMAT,
+            source->ssrc, GST_STIME_ARGS (activity_delta));
+        sendertimeout = TRUE;
+      }
     }
   }
 
