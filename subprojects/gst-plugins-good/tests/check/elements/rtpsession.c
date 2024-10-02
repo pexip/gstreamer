@@ -242,6 +242,7 @@ typedef struct
   GMutex lock;
   GstStructure *last_twcc_stats;
   guint timeout_ssrc;
+  guint timeout_sender_ssrc;
 } SessionHarness;
 
 static GstCaps *
@@ -265,8 +266,16 @@ _on_timeout (G_GNUC_UNUSED GstElement * element, guint ssrc, gpointer data)
 }
 
 static void
-_notify_twcc_stats (GParamSpec * spec G_GNUC_UNUSED,
-    GObject * object G_GNUC_UNUSED, gpointer data)
+_on_sender_timeout (G_GNUC_UNUSED GstElement *element,
+    guint ssrc, gpointer data)
+{
+  SessionHarness *h = data;
+  h->timeout_sender_ssrc = ssrc;
+}
+
+static void
+_notify_twcc_stats (GParamSpec *spec G_GNUC_UNUSED,
+    GObject *object G_GNUC_UNUSED, gpointer data)
 {
   SessionHarness *h = data;
   GstStructure *stats;
@@ -328,6 +337,8 @@ session_harness_new (void)
       (GCallback) _pt_map_requested, h);
 
   g_signal_connect (h->session, "on-timeout", (GCallback) _on_timeout, h);
+
+  g_signal_connect (h->session, "on-sender-timeout", (GCallback) _on_sender_timeout, h);
 
   g_signal_connect (h->session, "notify::twcc-stats",
       (GCallback) _notify_twcc_stats, h);
@@ -2560,6 +2571,76 @@ GST_START_TEST (test_request_nack)
   gst_buffer_unref (session_harness_pull_rtcp (h));
 
   /* request NACK immediately */
+  session_harness_rtp_retransmission_request (h, 0x12345678, 1234, 0, 0, 0);
+
+  /* NACK should be produced immediately as early RTCP is allowed. Pull buffer
+     without advancing the clock to ensure this is the case */
+  buf = session_harness_pull_rtcp (h);
+
+  fail_unless (gst_rtcp_buffer_validate (buf));
+  gst_rtcp_buffer_map (buf, GST_MAP_READ, &rtcp);
+  fail_unless_equals_int (3, gst_rtcp_buffer_get_packet_count (&rtcp));
+  fail_unless (gst_rtcp_buffer_get_first_packet (&rtcp, &rtcp_packet));
+
+  /* first a Receiver Report */
+  fail_unless_equals_int (GST_RTCP_TYPE_RR,
+      gst_rtcp_packet_get_type (&rtcp_packet));
+  fail_unless (gst_rtcp_packet_move_to_next (&rtcp_packet));
+
+  /* then a SDES */
+  fail_unless_equals_int (GST_RTCP_TYPE_SDES,
+      gst_rtcp_packet_get_type (&rtcp_packet));
+  fail_unless (gst_rtcp_packet_move_to_next (&rtcp_packet));
+
+  /* and then our NACK */
+  fail_unless_equals_int (GST_RTCP_TYPE_RTPFB,
+      gst_rtcp_packet_get_type (&rtcp_packet));
+  fail_unless_equals_int (GST_RTCP_RTPFB_TYPE_NACK,
+      gst_rtcp_packet_fb_get_type (&rtcp_packet));
+
+  fail_unless_equals_int (0xDEADBEEF,
+      gst_rtcp_packet_fb_get_sender_ssrc (&rtcp_packet));
+  fail_unless_equals_int (0x12345678,
+      gst_rtcp_packet_fb_get_media_ssrc (&rtcp_packet));
+
+  fci_data = gst_rtcp_packet_fb_get_fci (&rtcp_packet);
+  fci_length =
+      gst_rtcp_packet_fb_get_fci_length (&rtcp_packet) * sizeof (guint32);
+  fail_unless_equals_int (4, fci_length);
+  fail_unless_equals_int (GST_READ_UINT32_BE (fci_data), 1234L << 16);
+
+  gst_rtcp_buffer_unmap (&rtcp);
+  gst_buffer_unref (buf);
+
+  session_harness_free (h);
+}
+
+GST_END_TEST;
+
+/* Sends several nack requests and check if they all lead to OutOfOrder
+   RTCP packets.
+*/
+GST_START_TEST (test_request_multiple_ooo_nack)
+{
+  SessionHarness *h = session_harness_new ();
+  GstBuffer *buf;
+  GstRTCPBuffer rtcp = GST_RTCP_BUFFER_INIT;
+  GstRTCPPacket rtcp_packet;
+  guint8 *fci_data;
+  guint32 fci_length;
+
+  g_object_set (h->internal_session, "internal-ssrc", 0xDEADBEEF, NULL);
+
+  /* Receive a RTP buffer from the wire */
+  fail_unless_equals_int (GST_FLOW_OK,
+      session_harness_recv_rtp (h, generate_test_buffer (0, 0x12345678)));
+
+  /* Wait for first regular RTCP to be sent so that we are clear to send early RTCP */
+  session_harness_produce_rtcp (h, 1);
+  gst_buffer_unref (session_harness_pull_rtcp (h));
+
+  /* request NACK immediately */
+  session_harness_rtp_retransmission_request (h, 0x12345678, 1234, 34, 150, 100);
   session_harness_rtp_retransmission_request (h, 0x12345678, 1234, 0, 0, 0);
 
   /* NACK should be produced immediately as early RTCP is allowed. Pull buffer
@@ -6223,6 +6304,43 @@ GST_START_TEST (test_stats_transmission_duration_reordering)
 
 GST_END_TEST;
 
+GST_START_TEST (test_sender_timeout)
+{
+  SessionHarness *h = session_harness_new ();
+  GstFlowReturn res;
+  GstBuffer *buf;
+  GstCaps *caps;
+  GstClockTime ts = 0, rtp_ts = 0;
+  gint i;
+
+  caps = generate_caps (TEST_BUF_PT);
+  gst_caps_set_simple (caps,
+      "ssrc", G_TYPE_UINT, TEST_BUF_SSRC, NULL);
+  gst_harness_set_src_caps (h->send_rtp_h, caps);
+
+  for (i = 0; i < 5; i++) {
+    ts = i * TEST_BUF_DURATION;
+    rtp_ts = i * TEST_RTP_TS_DURATION;
+    buf = generate_test_buffer_timed (ts, i, rtp_ts);
+    res = session_harness_send_rtp (h, buf);
+    fail_unless_equals_int (GST_FLOW_OK, res);
+    session_harness_crank_clock (h);
+  }
+  
+  /* expect no timeout yet */
+  fail_unless_equals_int (0, h->timeout_sender_ssrc);
+
+  while (h->timeout_sender_ssrc == 0)
+    session_harness_crank_clock (h);
+
+  /* verify TEST_BUF_SSRC is reported as a timed out sender */
+  fail_unless_equals_int (TEST_BUF_SSRC, h->timeout_sender_ssrc);
+
+  session_harness_free (h);
+}
+
+GST_END_TEST;
+
 static Suite *
 rtpsession_suite (void)
 {
@@ -6256,6 +6374,7 @@ rtpsession_suite (void)
   tcase_add_test (tc_chain, test_request_pli);
   tcase_add_test (tc_chain, test_request_fir_after_pli_in_caps);
   tcase_add_test (tc_chain, test_request_nack);
+  tcase_add_test (tc_chain, test_request_multiple_ooo_nack);
   tcase_add_test (tc_chain, test_request_nack_surplus);
   tcase_add_test (tc_chain, test_request_nack_packing);
   tcase_add_test (tc_chain, test_illegal_rtcp_fb_packet);
@@ -6331,6 +6450,7 @@ rtpsession_suite (void)
   tcase_add_test (tc_chain, test_report_stats_only_on_regular_rtcp);
   tcase_add_test (tc_chain, test_stats_transmission_duration);
   tcase_add_test (tc_chain, test_stats_transmission_duration_reordering);
+  tcase_add_test (tc_chain, test_sender_timeout);
   return s;
 }
 
