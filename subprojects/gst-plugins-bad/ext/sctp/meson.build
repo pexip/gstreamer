@@ -1,5 +1,5 @@
 
-sctp_option = get_option('sctp').enable_if(get_option('webrtc').enabled(), error_message: 'webrtc option is enabled')
+sctp_option = get_option('sctp') #.enable_if(get_option('webrtc').enabled(), error_message: 'webrtc option is enabled')
 if sctp_option.disabled()
   subdir_done()
 endif

@@ -1,6 +1,6 @@
 project('gstreamer-full', 'c',
   version : '1.25.0.1',
-  meson_version : '>= 1.1',
+  meson_version : '>= 0.63.99',
   default_options : ['buildtype=debugoptimized',
                      # Needed due to https://github.com/mesonbuild/meson/issues/1889,
                      # but this can cause problems in the future. Remove it
@@ -114,7 +114,7 @@ elif host_system == 'darwin'
 endif
 
 # Disable gst-python if we've disabled introspection
-gst_python_option = get_option('python').disable_if(get_option('introspection').disabled())
+gst_python_option = get_option('python')# .disable_if(get_option('introspection').disabled())
 
 # Ordered list of subprojects (dict has no ordering guarantees)
 subprojects = [

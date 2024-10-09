@@ -7,7 +7,7 @@ srtp_sources = [
 ]
 
 srtp_cargs = []
-srtp_option = get_option('srtp').enable_if(get_option('webrtc').enabled(), error_message: 'webrtc option is enabled')
+srtp_option = get_option('srtp')#.enable_if(get_option('webrtc').enabled(), error_message: 'webrtc option is enabled')
 if srtp_option.disabled()
   srtp_dep = dependency('', required : false)
   subdir_done()
