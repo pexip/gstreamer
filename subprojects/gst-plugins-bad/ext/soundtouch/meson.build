@@ -5,6 +5,7 @@ soundtouch_sources = [
 ]
 
 soundtouch_cargs = ['-DHAVE_SOUNDTOUCH']
+soundtouch_dep = dependency('', required : false)
 if get_option('soundtouch').disabled()
   subdir_done()
 endif
