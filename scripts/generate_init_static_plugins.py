@@ -21,6 +21,7 @@ $giomodules_declaration
  static
 gboolean register_features_full (GstPlugin* plugin)
 {
+    (void) plugin;
     $elements_registration
     $typefind_funcs_registration
     $device_providers_registration
