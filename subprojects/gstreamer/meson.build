@@ -505,7 +505,7 @@ endif
 
 gst_debug = get_option('gst_debug')
 if not gst_debug
-  if cc.get_argument_syntax() == 'msvc'
+  if cc.get_argument_syntax() == 'msvc' and get_option('glib-checks').enabled()
     msvc_args = cc.get_supported_arguments([
       '/wd4101', # 'identifier' : unreferenced local variable
       '/wd4189', # 'identifier' : local variable is initialized but not referenced
@@ -515,7 +515,7 @@ if not gst_debug
     add_project_arguments(['-Wno-unused'], language: 'c')
   endif
 else
-  if cc.get_argument_syntax() == 'msvc' and gst_version_is_dev
+  if cc.get_argument_syntax() == 'msvc' and get_option('glib-checks').enabled()
     msvc_args = cc.get_supported_arguments([
       '/we4101', # 'identifier' : unreferenced local variable
       '/we4189', # 'identifier' : local variable is initialized but not referenced

@@ -53,7 +53,7 @@ if cc.get_id() == 'msvc'
       cc.get_supported_arguments(['/utf-8']), # set the input encoding to utf-8
   ]
 
-  if gst_version_is_dev
+  if get_option('glib-checks').enabled()
     # Enable some warnings on MSVC to match GCC/Clang behaviour
     msvc_args += cc.get_supported_arguments([
       '/we4002', # too many actual parameters for macro 'identifier'
@@ -456,7 +456,7 @@ endif
 
 if gst_debug_disabled
   message('GStreamer debug system is disabled')
-  if cc.get_argument_syntax() == 'msvc'
+  if cc.get_argument_syntax() == 'msvc' and get_option('glib-checks').enabled()
     msvc_args = cc.get_supported_arguments([
       '/wd4101', # 'identifier' : unreferenced local variable
       '/wd4189', # 'identifier' : local variable is initialized but not referenced
