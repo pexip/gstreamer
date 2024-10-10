@@ -28,8 +28,6 @@ glslang = find_program('glslang', required: false)
 if not glslc.found() and not glslang.found()
   if get_option('vulkan').enabled()
     error('GStreamer Vulkan plugin required via options, but glslc or glslang was not found.')
-  else
-    subdir_done()
   endif
   vulkan_compiled_shader_sources = []
 else
