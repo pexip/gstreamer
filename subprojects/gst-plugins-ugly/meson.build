@@ -56,7 +56,7 @@ if cc.get_id() == 'msvc'
       ]),
   ]
 
-  if gst_version_is_dev
+  if get_option('glib-checks').enabled()
     # Enable some warnings on MSVC to match GCC/Clang behaviour
     msvc_args += cc.get_supported_arguments([
       '/we4002', # too many actual parameters for macro 'identifier'
