@@ -65,7 +65,7 @@ if cc.get_id() == 'msvc'
       cc.get_supported_arguments(['/utf-8']), # set the input encoding to utf-8
   ]
 
-  if gst_version_is_dev
+  if get_option('glib-checks').enabled()
     # Enable some warnings on MSVC to match GCC/Clang behaviour
     msvc_args += cc.get_supported_arguments([
       '/we4002', # too many actual parameters for macro 'identifier'
@@ -459,7 +459,7 @@ if gst_debug_disabled
     add_project_arguments(['-Wno-unused'], language: 'c')
   endif
 else
-  if cc.get_argument_syntax() == 'msvc' and gst_version_is_dev
+  if cc.get_argument_syntax() == 'msvc' and get_option('glib-checks').enabled()
     msvc_args = cc.get_supported_arguments([
       '/we4101', # 'identifier' : unreferenced local variable
       '/we4189', # 'identifier' : local variable is initialized but not referenced
