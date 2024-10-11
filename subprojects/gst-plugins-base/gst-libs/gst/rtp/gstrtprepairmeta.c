@@ -67,6 +67,7 @@ GstRTPRepairMeta *gst_buffer_get_rtp_repair_meta(GstBuffer *buffer)
 }
 
 GstRTPRepairMeta *gst_buffer_add_rtp_repair_meta(GstBuffer *buffer,
+  const guint16 idx_red_packets, const guint16 num_red_packets,
   const guint32 ssrc, const guint16 *seqnum, guint seqnum_count)
 {
   GstRTPRepairMeta *repair_meta = (GstRTPRepairMeta *) gst_buffer_add_meta (buffer,
@@ -75,6 +76,8 @@ GstRTPRepairMeta *gst_buffer_add_rtp_repair_meta(GstBuffer *buffer,
     return NULL;
   }
 
+  repair_meta->idx_red_packets = idx_red_packets;
+  repair_meta->num_red_packets = num_red_packets;
   repair_meta->ssrc = ssrc;
   g_array_insert_vals (repair_meta->seqnums, 0, seqnum, seqnum_count);
 
@@ -97,6 +100,24 @@ gboolean gst_buffer_repairs_seqnum(GstBuffer *buffer, guint16 seqnum, guint32 ss
     }
   }
   return FALSE;
+}
+
+gint gst_buffer_get_repair_idx(GstBuffer *buffer)
+{
+  GstRTPRepairMeta *repair_meta = gst_buffer_get_rtp_repair_meta(buffer);
+  if (repair_meta) {
+    return repair_meta->idx_red_packets;
+  }
+  return -1;
+}
+
+gint gst_buffer_get_repair_num(GstBuffer *buffer)
+{
+  GstRTPRepairMeta *repair_meta = gst_buffer_get_rtp_repair_meta(buffer);
+  if (repair_meta) {
+    return repair_meta->num_red_packets;
+  }
+  return -1;
 }
 
 gboolean gst_buffer_get_repair_seqnums(GstBuffer *buffer, guint32 *ssrc,
@@ -122,6 +143,8 @@ static gboolean
 gst_rtp_repair_meta_init(GstRTPRepairMeta * meta, G_GNUC_UNUSED gpointer params, 
     G_GNUC_UNUSED GstBuffer * buffer)
 {
+  meta->idx_red_packets = 0;
+  meta->num_red_packets = 0;
   meta->ssrc = 0;
   meta->seqnums = g_array_new(FALSE, FALSE, sizeof(guint16));
 

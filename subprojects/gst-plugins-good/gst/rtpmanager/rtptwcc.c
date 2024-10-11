@@ -29,6 +29,19 @@
 
 #include "gstrtputils.h"
 
+/** XXX: FIXME: TODO: rm this */
+typedef struct _GRealArray
+{
+  guint8 *data;
+  guint   len;
+  guint   elt_capacity;
+  guint   elt_size;
+  guint   zero_terminated : 1;
+  guint   clear : 1;
+  gatomicrefcount ref_count;
+  GDestroyNotify clear_func;
+} GRealArray;
+
 GST_DEBUG_CATEGORY (rtp_twcc_debug);
 #define GST_CAT_DEFAULT rtp_twcc_debug
 
@@ -120,6 +133,8 @@ typedef struct
   guint8 pt;
   guint size;
   gboolean lost;
+  gint redundant_idx;
+  gint redundant_num;
   guint32 protects_ssrc;
   GArray * protects_seqnums;
   gboolean stats_processed;
@@ -261,7 +276,8 @@ static guint _redund_hash (gconstpointer key);
 static gboolean _redund_equal (gconstpointer a, gconstpointer b);
 
 static RedBlock *
-_redblock_new(GArray* seq, guint16 fec_seq)
+_redblock_new(GArray* seq, guint16 fec_seq,
+    guint16 idx_redundant_packets, guint16 num_redundant_packets)
 {
   RedBlock *block = g_malloc (sizeof (RedBlock));
   block->seqs = g_array_ref (seq);
@@ -272,14 +288,27 @@ _redblock_new(GArray* seq, guint16 fec_seq)
     g_array_index (block->states, TWCCPktState, i) =
       RTP_TWCC_FECBLOCK_PKT_UNKNOWN;
   }
-  block->num_redundant_packets = 1;
+  block->num_redundant_packets = num_redundant_packets;
 
   block->fec_seqs = g_array_new (FALSE, FALSE, sizeof (guint16));
-  g_array_set_size (block->fec_seqs, 1);
-  g_array_index (block->fec_seqs, guint16, 0) = fec_seq;
+  if (num_redundant_packets < 1 || idx_redundant_packets >= num_redundant_packets) {
+    GST_ERROR ("Incorrect redundant packet index or number: %hu/%hu",
+        idx_redundant_packets, num_redundant_packets);
+    g_assert_not_reached ();
+  }
+  g_array_set_size (block->fec_seqs, num_redundant_packets);
   block->fec_states = g_array_new (FALSE, FALSE, sizeof (TWCCPktState));
-  g_array_set_size (block->fec_states, 1);
-  g_array_index (block->fec_states, TWCCPktState, 0) = RTP_TWCC_FECBLOCK_PKT_UNKNOWN;
+  g_array_set_size (block->fec_states, num_redundant_packets);
+  g_array_index (block->fec_states, TWCCPktState, idx_redundant_packets) 
+    = RTP_TWCC_FECBLOCK_PKT_UNKNOWN;
+  for (guint16 i = 0; i < num_redundant_packets; i++)
+  {
+    g_array_index (block->fec_states, TWCCPktState, i) 
+      = RTP_TWCC_FECBLOCK_PKT_UNKNOWN;
+    g_array_index (block->fec_seqs, guint16, i) = 0;
+  }
+  g_array_index (block->fec_seqs, guint16, idx_redundant_packets) 
+    = fec_seq;
   return block;
 }
 
@@ -348,6 +377,7 @@ _redblock_reconsider (RTPTWCCManager * twcc, RedBlock * block)
   gboolean recovered = FALSE;
   gboolean unknowns = FALSE;
   gsize nrecovered = 0;
+  gsize lost = 0;
 
   /* Special case for RTX: lost RTX introduces extra complexity which 
     is easier to handle separately
@@ -383,6 +413,8 @@ _redblock_reconsider (RTPTWCCManager * twcc, RedBlock * block)
       nreceived++;
     } else if (pkt->state == RTP_TWCC_FECBLOCK_PKT_RECOVERED) {
       recovered = TRUE;
+    } else if (pkt->state == RTP_TWCC_FECBLOCK_PKT_LOST) {
+      lost++;
     }
 
     if (pkt) {
@@ -392,6 +424,11 @@ _redblock_reconsider (RTPTWCCManager * twcc, RedBlock * block)
 
   /* Walk through all fec packets */
   for (gsize i = 0; i < block->fec_seqs->len; ++i) {
+    if (g_array_index (block->fec_states, TWCCPktState, i) 
+        == RTP_TWCC_FECBLOCK_PKT_UNKNOWN) {
+      unknowns = TRUE;
+      continue;
+    }
     SentPacket *pkt = _find_stats_sentpacket (twcc,
         g_array_index (block->fec_seqs, guint16, i));
     if (!pkt || pkt->state == RTP_TWCC_FECBLOCK_PKT_UNKNOWN) {
@@ -400,6 +437,8 @@ _redblock_reconsider (RTPTWCCManager * twcc, RedBlock * block)
       nreceived++;
     } else if (pkt->state == RTP_TWCC_FECBLOCK_PKT_RECOVERED) {
       recovered = TRUE;
+    } else if (pkt->state == RTP_TWCC_FECBLOCK_PKT_LOST) {
+      lost++;
     }
 
     if (pkt) {
@@ -412,10 +451,11 @@ _redblock_reconsider (RTPTWCCManager * twcc, RedBlock * block)
     return 0;
   }
 
-  const gsize lost = block->seqs->len + block->fec_seqs->len - nreceived;
   /* Error: it's not possible to recover a part of a block */
-  if (lost > 0 && recovered) {
-    GST_ERROR ("The FEC block is partly recovered, abort");
+  if ((lost + nreceived != block->seqs->len + block->fec_seqs->len)
+      || (lost > 0 && recovered)) {
+    GST_ERROR ("The FEC block is partly recovered, abort: %lu lost, %lu/%lu received",
+        lost, nreceived, block->seqs->len + block->fec_seqs->len);
     g_assert_not_reached ();
   }
 
@@ -776,10 +816,12 @@ twcc_stats_ctx_calculate_windowed_stats (RTPTWCCManager * twcc, TWCCStatsCtx * c
 
   GST_INFO ("Got stats: bits_sent: %u, bits_recv: %u, packets_sent = %u, "
       "packets_recv: %u, packetlost_pct = %lf, recovery_pct = %lf, "
-      "local_duration=%" GST_TIME_FORMAT ", remote_duration=%" GST_TIME_FORMAT
-      ", " "sent_bitrate = %u, " "recv_bitrate = %u, delta-delta-avg = %"
+      "recovered: %u, local_duration=%" GST_TIME_FORMAT ", "
+      "remote_duration=%" GST_TIME_FORMAT ", " 
+      "sent_bitrate = %u, " "recv_bitrate = %u, delta-delta-avg = %"
       GST_STIME_FORMAT ", delta-delta-growth=%lf", bits_sent, bits_recv,
       packets_sent, packets_recv, ctx->packet_loss_pct, ctx->recovery_pct,
+      packets_recovered,
       GST_TIME_ARGS (local_duration), GST_TIME_ARGS (remote_duration),
       ctx->bitrate_sent, ctx->bitrate_recv,
       GST_STIME_ARGS (ctx->avg_delta_of_delta), ctx->delta_of_delta_growth);
@@ -1165,7 +1207,8 @@ _get_twcc_seqnum_data (RTPPacketInfo * pinfo, guint8 ext_id, gpointer * data)
 
 static void
 sent_packet_init (SentPacket * packet, guint16 seqnum, RTPPacketInfo * pinfo,
-    GstRTPBuffer * rtp, guint32 protect_ssrc, GArray *protect_seqnums_array)
+    GstRTPBuffer * rtp, gint redundant_idx, gint redundant_num,
+    guint32 protect_ssrc, GArray *protect_seqnums_array)
 {
   packet->seqnum = seqnum;
   packet->orig_seqnum = gst_rtp_buffer_get_seq (rtp);
@@ -1177,6 +1220,8 @@ sent_packet_init (SentPacket * packet, guint16 seqnum, RTPPacketInfo * pinfo,
   packet->socket_ts = GST_CLOCK_TIME_NONE;
   packet->lost = FALSE;
   packet->state = RTP_TWCC_FECBLOCK_PKT_UNKNOWN;
+  packet->redundant_idx = redundant_idx;
+  packet->redundant_num = redundant_num;
   packet->protects_ssrc = protect_ssrc;
   packet->protects_seqnums = protect_seqnums_array;
   packet->stats_processed = FALSE;
@@ -1246,8 +1291,10 @@ _set_twcc_seqnum_data (RTPTWCCManager * twcc, RTPPacketInfo * pinfo,
   GstRTPBuffer rtp = GST_RTP_BUFFER_INIT;
   gpointer data;
   guint16 seqnum;
-  GArray *protect_seqnums_array;
-  guint32 protect_ssrc;
+  GArray *protect_seqnums_array = NULL;
+  guint32 protect_ssrc = 0;
+  gint redundant_pkt_idx = -1;
+  gint redundant_pkt_num = -1;
 
   if (!gst_rtp_buffer_map (buf, GST_MAP_READWRITE, &rtp)) {
     GST_WARNING ("Couldn't map the buffer %" GST_PTR_FORMAT, buf);
@@ -1262,12 +1309,31 @@ _set_twcc_seqnum_data (RTPTWCCManager * twcc, RTPPacketInfo * pinfo,
 
   seqnum = twcc->send_seqnum++;
   GST_WRITE_UINT16_BE (data, seqnum);
-  /* The array is referenced inside gst_buffer_get_repair_seqnums
-    and unreferenced when sent_packets are cleared.
-    */
-  gst_buffer_get_repair_seqnums (buf, &protect_ssrc, &protect_seqnums_array);
-  sent_packet_init (&packet, seqnum, pinfo, &rtp, protect_ssrc, 
-      protect_seqnums_array);
+
+  /* In oreder to be able to map rtp seqnum to twcc seqnum in future, we
+    store it in certain hash tables (e.g. it might be needed to process
+    received feedback on a FEC packet) */
+  rtp_twcc_manager_register_seqnum (twcc, pinfo->ssrc, pinfo->seqnum,
+          seqnum);
+
+  /* If this packet is RTX/FEC packet, keep track of its meta */
+  GstRTPRepairMeta *repair_meta = NULL;
+  if (repair_meta = gst_buffer_get_rtp_repair_meta (buf)) {
+    protect_ssrc = repair_meta->ssrc;
+    protect_seqnums_array = g_array_ref (repair_meta->seqnums);
+    redundant_pkt_idx = repair_meta->idx_red_packets;
+    redundant_pkt_num = repair_meta->num_red_packets;
+  }
+  
+  sent_packet_init (&packet, seqnum, pinfo, &rtp, 
+      redundant_pkt_idx, redundant_pkt_num,
+      protect_ssrc, protect_seqnums_array);
+
+  GRealArray *protect_seqnums_array_real = (GRealArray*)protect_seqnums_array;
+  for (guint i = 0; protect_seqnums_array_real && i < protect_seqnums_array_real->len; i++) {
+    const guint16 prot_seqnum_ = g_array_index (protect_seqnums_array_real, guint16, i);
+    GST_DEBUG_OBJECT(twcc, "%u protects seqnum: %u", seqnum, prot_seqnum_);
+  }
   gst_rtp_buffer_unmap (&rtp);
 
   {
@@ -1302,8 +1368,13 @@ _set_twcc_seqnum_data (RTPTWCCManager * twcc, RTPPacketInfo * pinfo,
       GST_TX_FEEDBACK_CAST (twcc));
 
   GST_DEBUG_OBJECT
-      (twcc, "Send: twcc-seqnum: %u, seqnum: %u, pt: %u, marker: %d, size: %u, ts: %"
+      (twcc, "Send: twcc-seqnum: %u, seqnum: %u, pt: %u, marker: %d, "
+      "redundant_idx: %d, redundant_num: %d, protected_seqnums: %u, protect_seqnums_refcnt: %d"
+      "size: %u, ts: %"
       GST_TIME_FORMAT, packet.seqnum, pinfo->seqnum, packet.pt, pinfo->marker,
+      packet.redundant_idx, packet.redundant_num,
+      packet.protects_seqnums ? packet.protects_seqnums->len : 0,
+      protect_seqnums_array_real ? protect_seqnums_array_real->ref_count : -666,
       packet.size, GST_TIME_ARGS (pinfo->current_time));
 }
 
@@ -2325,14 +2396,23 @@ rtp_twcc_manager_get_windowed_stats (RTPTWCCManager * twcc,
       GST_LOG ("Processing #%u packet in stats, state: %s", pkt->seqnum,
         _pkt_state_s (pkt->state));
 
-      rtp_twcc_manager_register_seqnum (twcc, pkt->ssrc, pkt->orig_seqnum,
-          pkt->seqnum);
       twcc_stats_ctx_add_packet (twcc, pkt);
 
       /* This is either RTX or FEC packet */
       if (pkt->protects_seqnums && pkt->protects_seqnums->len > 0) {
         /* We are expecting non-twcc seqnums in the buffer's meta here, so
           change them to twcc seqnums. */
+
+        GRealArray *protect_seqnums_array_real = (GRealArray*)pkt->protects_seqnums;
+        GST_WARNING_OBJECT (twcc, "protect_seqnums refcount: %d",
+            protect_seqnums_array_real->ref_count);
+
+        if (pkt->redundant_idx < 0 || pkt->redundant_num <= 0
+            || pkt->redundant_idx >= pkt->redundant_num) {
+              GST_ERROR ("Invalid FEC packet: idx: %d, num: %d",
+                  pkt->redundant_idx, pkt->redundant_num);
+              g_assert_not_reached ();
+        }
         
         for (gsize i = 0; i < pkt->protects_seqnums->len; i++) {
           const guint16 prot_seqnum = g_array_index (pkt->protects_seqnums,
@@ -2353,12 +2433,21 @@ rtp_twcc_manager_get_windowed_stats (RTPTWCCManager * twcc,
         if (g_hash_table_lookup_extended (twcc->redund_2_redblocks, key, NULL,
             (gpointer*)&block)) {
               /* Add redundant packet to the existent block */
-              g_array_set_size (block->fec_seqs, block->fec_seqs->len + 1);
-              g_array_index (block->fec_seqs, guint16, block->fec_seqs->len - 1) 
+              if (block->fec_seqs->len != pkt->redundant_num
+                  || block->fec_states->len != pkt->redundant_num
+                  || g_array_index (block->fec_seqs, guint16, (gsize)pkt->redundant_idx) != 0
+                  || g_array_index (block->fec_states, TWCCPktState, (gsize)pkt->redundant_idx) != RTP_TWCC_FECBLOCK_PKT_UNKNOWN) {
+
+                GST_WARNING_OBJECT (twcc, "Got contradictory FEC block: "
+                    "seqs: %u, states: %u, redundant_num: %d, redundant_idx: %d",
+                    block->fec_seqs->len, block->fec_states->len, pkt->redundant_num, pkt->redundant_idx);
+                _redblock_key_free (key);
+                continue;
+              }
+              g_array_index (block->fec_seqs, guint16, (gsize)pkt->redundant_idx) 
                   = pkt->seqnum;
-              g_array_set_size (block->fec_states, block->fec_states->len + 1);
-              g_array_index (block->fec_states, guint8,
-                  block->fec_states->len - 1) = RTP_TWCC_FECBLOCK_PKT_UNKNOWN;
+              g_array_index (block->fec_states, TWCCPktState,
+                  (gsize)pkt->redundant_idx) = pkt->state;
               
               _redblock_key_free (key);
 
@@ -2368,7 +2457,8 @@ rtp_twcc_manager_get_windowed_stats (RTPTWCCManager * twcc,
                   GUINT_TO_POINTER(pkt->seqnum), block);
         } else {
           /* Add every data packet into seqnum_2_redblocks  */
-          block = _redblock_new (pkt->protects_seqnums, pkt->seqnum);
+          block = _redblock_new (pkt->protects_seqnums, pkt->seqnum,
+              pkt->redundant_idx, pkt->redundant_num);
           g_hash_table_insert (twcc->redund_2_redblocks, key, block);
           /* Link this seqnum to the block in order to be able to 
             release the block once this packet leave its lifetime */
@@ -2402,6 +2492,13 @@ rtp_twcc_manager_get_windowed_stats (RTPTWCCManager * twcc,
         RedBlock * block;
         if (g_hash_table_lookup_extended (twcc->seqnum_2_redblocks,
             GUINT_TO_POINTER(pkt->seqnum), NULL, (gpointer *)&block)) {
+
+          for (gsize i = 0; i < block->seqs->len; ++i) {
+            if (g_array_index (block->seqs, guint16, i) == pkt->seqnum) {
+              g_array_index (block->states, TWCCPktState, i) = pkt->state;
+              break;
+            }
+          }
           const gsize packets_recovered = _redblock_reconsider (twcc, block);
           if (packets_recovered > 0) {
             GST_LOG ("Reconsider block because of packet #%u, "

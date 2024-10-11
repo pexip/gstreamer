@@ -34,6 +34,8 @@ struct _GstRTPRepairMeta
 {
   GstMeta meta;
 
+  guint16 idx_red_packets;
+  guint16 num_red_packets;
   guint32 ssrc;
   GArray *seqnums;
 };
@@ -42,8 +44,9 @@ GST_RTP_API
 GType               gst_rtp_repair_meta_api_get_type     (void);
 
 GST_RTP_API
-GstRTPRepairMeta *  gst_buffer_add_rtp_repair_meta       (GstBuffer *buffer, const guint32 ssrc,
-                                                          const guint16 *seqnum, guint seqnum_count);
+GstRTPRepairMeta *gst_buffer_add_rtp_repair_meta(GstBuffer *buffer,
+      const guint16 idx_red_packets, const guint16 num_red_packets,
+      const guint32 ssrc, const guint16 *seqnum, guint seqnum_count);
 
 GST_RTP_API
 GstRTPRepairMeta *  gst_buffer_get_rtp_repair_meta       (GstBuffer * buffer);
@@ -54,6 +57,14 @@ gboolean gst_buffer_repairs_seqnum(GstBuffer *buffer, guint16 seqnum, guint32 ss
 GST_RTP_API
 gboolean gst_buffer_get_repair_seqnums(GstBuffer *buffer, guint32 * ssrc,
     GArray ** seqnums);
+
+/* If this packet is a FEC/RTX packet, what is it sequential number a block */
+GST_RTP_API
+gint gst_buffer_get_repair_idx(GstBuffer *buffer);
+
+/* If this packet is a FEC/RTX packet, how many redundancy packets are in a block */
+GST_RTP_API
+gint gst_buffer_get_repair_num(GstBuffer *buffer);
 
 GST_RTP_API
 const GstMetaInfo * gst_rtp_repair_meta_get_info         (void);
