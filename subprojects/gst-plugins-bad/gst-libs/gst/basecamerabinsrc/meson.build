@@ -1,3 +1,9 @@
+camerabin_option = get_option('camerabin')
+if camerabin_option.disabled()
+  gstbasecamerabin_dep = dependency('', required: false)
+  subdir_done()
+endif
+
 camerabin_sources = files(
   'gstcamerabin-enum.c',
   'gstcamerabinpreview.c',
