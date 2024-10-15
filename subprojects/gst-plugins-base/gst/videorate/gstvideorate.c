@@ -100,8 +100,6 @@ enum
 #define DEFAULT_MAX_RATE        G_MAXINT
 #define DEFAULT_RATE            1.0
 #define DEFAULT_MAX_DUPLICATION_TIME      0
-#define DEFAULT_MAX_CLOSING_SEGMENT_DUPLICATION_DURATION   GST_SECOND
-#define DEFAULT_DROP_OUT_OF_SEGMENT       FALSE
 
 enum
 {
@@ -117,9 +115,7 @@ enum
   PROP_AVERAGE_PERIOD,
   PROP_MAX_RATE,
   PROP_RATE,
-  PROP_MAX_DUPLICATION_TIME,
-  PROP_MAX_CLOSING_SEGMENT_DUPLICATION_DURATION,
-  PROP_DROP_OUT_OF_SEGMENT
+  PROP_MAX_DUPLICATION_TIME
 };
 
 static GstStaticPadTemplate gst_video_rate_src_template =
@@ -297,40 +293,6 @@ gst_video_rate_class_init (GstVideoRateClass * klass)
           "Do not duplicate frames if the gap exceeds this period "
           "(in ns) (0 = disabled)",
           0, G_MAXUINT64, DEFAULT_MAX_DUPLICATION_TIME,
-          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
-
-  /**
-   * GstVideoRate:max-closing-segment-duplication-duration:
-   *
-   * Limits the maximum duration for which the last buffer is duplicated when
-   * finalizing a segment or on EOS. When receiving an EOS event or a new
-   * segment, videorate duplicates the last frame to close the configured
-   * segment (copying the last buffer until its #GstSegment.stop time (or
-   * #GstSegment.start time for reverse playback) is reached), this property
-   * ensures that it won't push buffers covering a duration longer than
-   * specified.
-   *
-   * Since: 1.22
-   */
-  g_object_class_install_property (object_class,
-      PROP_MAX_CLOSING_SEGMENT_DUPLICATION_DURATION,
-      g_param_spec_uint64 ("max-closing-segment-duplication-duration",
-          "Maximum closing segment duplication duration",
-          "Maximum duration of duplicated buffers to close current segment", 0,
-          G_MAXUINT64, DEFAULT_MAX_CLOSING_SEGMENT_DUPLICATION_DURATION,
-          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
-
-  /**
-   * GstVideoRate:drop-out-of-segment:
-   *
-   * Drop all frames that are out of segment
-   *
-   * Since: 1.24
-   */
-  g_object_class_install_property (object_class, PROP_DROP_OUT_OF_SEGMENT,
-      g_param_spec_boolean ("drop-out-of-segment",
-          "Drop out of segment buffers", "Drop out of segment buffers",
-          DEFAULT_DROP_OUT_OF_SEGMENT,
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 
   gst_element_class_set_static_metadata (element_class,
@@ -633,15 +595,21 @@ gst_video_rate_setcaps (GstBaseTransform * trans, GstCaps * in_caps,
    * https://github.com/pexip/mcu/commit/f819d921773ab222ee0fb950e9808c48b3794156
    */
   {
-    gint in_fps = (videorate->from_rate_numerator * 1000) / videorate->from_rate_denominator;
-    gint out_fps = (videorate->to_rate_numerator * 1000) / videorate->to_rate_denominator;
+    gint in_fps =
+        (videorate->from_rate_numerator * 1000) /
+        videorate->from_rate_denominator;
+    gint out_fps =
+        (videorate->to_rate_numerator * 1000) / videorate->to_rate_denominator;
     if (in_fps >= out_fps)
       videorate->drop_only = TRUE;
   }
 done:
-  if (ret) {
-    gst_caps_replace (&videorate->in_caps, in_caps);
-  }
+  /* After a setcaps, our caps may have changed. In that case, we can't use
+   * the old buffer, if there was one (it might have different dimensions) */
+  GST_DEBUG_OBJECT (videorate, "swapping old buffers");
+  gst_video_rate_swap_prev (videorate, NULL, GST_CLOCK_TIME_NONE);
+  videorate->last_ts = GST_CLOCK_TIME_NONE;
+  videorate->average = 0;
 
   return ret;
 
@@ -654,7 +622,7 @@ no_framerate:
 }
 
 static void
-gst_video_rate_reset (GstVideoRate * videorate, gboolean on_flush)
+gst_video_rate_reset (GstVideoRate * videorate)
 {
   GST_DEBUG_OBJECT (videorate, "resetting internal variables");
 
@@ -669,10 +637,6 @@ gst_video_rate_reset (GstVideoRate * videorate, gboolean on_flush)
   videorate->discont = TRUE;
   videorate->average = 0;
   videorate->force_variable_rate = FALSE;
-  if (!on_flush) {
-    /* Do not clear caps on flush events as those are still valid */
-    gst_clear_caps (&videorate->in_caps);
-  }
   gst_video_rate_swap_prev (videorate, NULL, 0);
 
   gst_segment_init (&videorate->segment, GST_FORMAT_TIME);
@@ -681,19 +645,16 @@ gst_video_rate_reset (GstVideoRate * videorate, gboolean on_flush)
 static void
 gst_video_rate_init (GstVideoRate * videorate)
 {
-  gst_video_rate_reset (videorate, FALSE);
+  gst_video_rate_reset (videorate);
   videorate->silent = DEFAULT_SILENT;
   videorate->new_pref = DEFAULT_NEW_PREF;
   videorate->drop_only = DEFAULT_DROP_ONLY;
-  videorate->drop_out_of_segment = DEFAULT_DROP_OUT_OF_SEGMENT;
   videorate->average_period = DEFAULT_AVERAGE_PERIOD;
   videorate->average_period_set = DEFAULT_AVERAGE_PERIOD;
   videorate->max_rate = DEFAULT_MAX_RATE;
   videorate->rate = DEFAULT_RATE;
   videorate->pending_rate = DEFAULT_RATE;
   videorate->max_duplication_time = DEFAULT_MAX_DUPLICATION_TIME;
-  videorate->max_closing_segment_duplication_duration =
-      DEFAULT_MAX_CLOSING_SEGMENT_DUPLICATION_DURATION;
 
   videorate->from_rate_numerator = 0;
   videorate->from_rate_denominator = 0;
@@ -706,9 +667,9 @@ gst_video_rate_init (GstVideoRate * videorate)
 /* @outbuf: (transfer full) needs to be writable */
 static GstFlowReturn
 gst_video_rate_push_buffer (GstVideoRate * videorate, GstBuffer * outbuf,
-    gboolean duplicate, GstClockTime next_intime, gboolean invalid_duration)
+    gboolean duplicate, GstClockTime next_intime)
 {
-  GstFlowReturn res = GST_FLOW_OK;
+  GstFlowReturn res;
   GstClockTime push_ts;
 
   GST_BUFFER_OFFSET (outbuf) = videorate->out;
@@ -733,7 +694,9 @@ gst_video_rate_push_buffer (GstVideoRate * videorate, GstBuffer * outbuf,
   if (videorate->segment.rate < 0.0) {
     if (videorate->to_rate_numerator) {
       /* interpolate next expected timestamp in the segment */
-      GstClockTimeDiff next_ts = videorate->base_ts -
+      GstClockTimeDiff next_ts =
+          videorate->segment.base + videorate->segment.stop -
+          videorate->base_ts -
           gst_util_uint64_scale (videorate->out_frame_count + 1,
           videorate->to_rate_denominator * GST_SECOND,
           videorate->to_rate_numerator);
@@ -755,12 +718,14 @@ gst_video_rate_push_buffer (GstVideoRate * videorate, GstBuffer * outbuf,
   } else {
     if (videorate->to_rate_numerator) {
       /* interpolate next expected timestamp in the segment */
-      videorate->next_ts = videorate->base_ts +
+      videorate->next_ts =
+          videorate->segment.base + videorate->segment.start +
+          videorate->base_ts +
           gst_util_uint64_scale (videorate->out_frame_count,
           videorate->to_rate_denominator * GST_SECOND,
           videorate->to_rate_numerator);
       GST_BUFFER_DURATION (outbuf) = videorate->next_ts - push_ts;
-    } else if (!invalid_duration) {
+    } else {
       /* There must always be a valid duration on prevbuf if rate > 0,
        * it is ensured in the transform_ip function */
       g_assert (GST_BUFFER_PTS_IS_VALID (outbuf));
@@ -774,23 +739,13 @@ gst_video_rate_push_buffer (GstVideoRate * videorate, GstBuffer * outbuf,
 
   /* We do not need to update time in VFR (variable frame rate) mode */
   if (!videorate->drop_only) {
-    GST_BUFFER_PTS (outbuf) = push_ts;
+    /* adapt for looping, bring back to time in current segment. */
+    GST_BUFFER_TIMESTAMP (outbuf) = push_ts - videorate->segment.base;
   }
 
   GST_LOG_OBJECT (videorate,
       "old is best, dup, pushing buffer outgoing ts %" GST_TIME_FORMAT,
       GST_TIME_ARGS (push_ts));
-
-  if (videorate->drop_out_of_segment
-      && !gst_segment_clip (&videorate->segment, GST_FORMAT_TIME,
-          GST_BUFFER_PTS (outbuf),
-          GST_BUFFER_PTS (outbuf) + GST_BUFFER_DURATION (outbuf), NULL, NULL)) {
-    GST_INFO_OBJECT (videorate, "Buffer is out of segment, dropping");
-
-    gst_buffer_unref (outbuf);
-
-    return res;
-  }
 
   res = gst_pad_push (GST_BASE_TRANSFORM_SRC_PAD (videorate), outbuf);
 
@@ -800,7 +755,7 @@ gst_video_rate_push_buffer (GstVideoRate * videorate, GstBuffer * outbuf,
 /* flush the oldest buffer */
 static GstFlowReturn
 gst_video_rate_flush_prev (GstVideoRate * videorate, gboolean duplicate,
-    GstClockTime next_intime, gboolean invalid_duration)
+    GstClockTime next_intime)
 {
   GstBuffer *outbuf;
 
@@ -811,8 +766,7 @@ gst_video_rate_flush_prev (GstVideoRate * videorate, gboolean duplicate,
   /* make sure we can write to the metadata */
   outbuf = gst_buffer_make_writable (outbuf);
 
-  return gst_video_rate_push_buffer (videorate, outbuf, duplicate, next_intime,
-      invalid_duration);
+  return gst_video_rate_push_buffer (videorate, outbuf, duplicate, next_intime);
 
   /* WARNINGS */
 eos_before_buffers:
@@ -827,14 +781,9 @@ gst_video_rate_swap_prev (GstVideoRate * videorate, GstBuffer * buffer,
     gint64 time)
 {
   GST_LOG_OBJECT (videorate, "swap_prev: storing buffer %p in prev", buffer);
-
-  gst_buffer_replace (&videorate->prevbuf, buffer);
-  /* Ensure that ->prev_caps always match ->prevbuf */
-  if (!buffer)
-    gst_caps_replace (&videorate->prev_caps, NULL);
-  else if (videorate->prev_caps != videorate->in_caps)
-    gst_caps_replace (&videorate->prev_caps, videorate->in_caps);
-
+  if (videorate->prevbuf)
+    gst_buffer_unref (videorate->prevbuf);
+  videorate->prevbuf = buffer != NULL ? gst_buffer_ref (buffer) : NULL;
   videorate->prev_ts = time;
 }
 
@@ -850,139 +799,7 @@ gst_video_rate_notify_duplicate (GstVideoRate * videorate)
   g_object_notify_by_pspec ((GObject *) videorate, pspec_duplicate);
 }
 
-static gboolean
-gst_video_rate_check_duplicate_to_close_segment (GstVideoRate * videorate,
-    GstClockTime last_input_ts, gboolean is_first)
-{
-  GstClockTime next_stream_time = videorate->next_ts;
-  GstClockTime max_closing_segment_duplication_duration =
-      videorate->max_closing_segment_duplication_duration;
-
-  if (!GST_CLOCK_TIME_IS_VALID (videorate->next_ts))
-    return FALSE;
-
-  if (videorate->segment.rate > 0.0) {
-
-    if (!GST_CLOCK_TIME_IS_VALID (videorate->segment.stop)) {
-      /* Ensure that if no 'stop' is set, we push the last frame anyway */
-      return is_first;
-    }
-
-    if (next_stream_time >= videorate->segment.stop)
-      return FALSE;
-
-    if (GST_CLOCK_TIME_IS_VALID (max_closing_segment_duplication_duration)) {
-      if (last_input_ts > videorate->next_ts)
-        return TRUE;
-
-      return (videorate->next_ts - last_input_ts <
-          max_closing_segment_duplication_duration);
-    }
-
-    return TRUE;
-  }
-
-  /* Reverse playback */
-
-  if (!GST_CLOCK_TIME_IS_VALID (videorate->segment.start)) {
-    /* Ensure that if no 'start' is set, we push the last frame anyway */
-    return is_first;
-  }
-
-  if (next_stream_time < videorate->segment.start)
-    return FALSE;
-
-  if (GST_CLOCK_TIME_IS_VALID (max_closing_segment_duplication_duration)) {
-    if (last_input_ts < videorate->next_ts)
-      return TRUE;
-
-    return (last_input_ts - videorate->next_ts <
-        max_closing_segment_duplication_duration);
-  }
-
-  return TRUE;
-}
-
-static gint
-gst_video_rate_duplicate_to_close_segment (GstVideoRate * videorate)
-{
-  gint count = 0;
-  GstFlowReturn res;
-  GstClockTime last_input_ts = videorate->prev_ts;
-
-  if (videorate->drop_only)
-    return count;
-
-  if (!videorate->prevbuf) {
-    GST_INFO_OBJECT (videorate, "got EOS before any buffer was received");
-
-    return count;
-  }
-
-  GST_DEBUG_OBJECT (videorate, "Pushing buffers to close segment");
-
-  res = GST_FLOW_OK;
-  /* fill up to the end of current segment */
-  while (res == GST_FLOW_OK
-      && gst_video_rate_check_duplicate_to_close_segment (videorate,
-          last_input_ts, count < 1)) {
-    res =
-        gst_video_rate_flush_prev (videorate, count > 0, GST_CLOCK_TIME_NONE,
-        FALSE);
-
-    count++;
-  }
-  GST_DEBUG_OBJECT (videorate, "----> Pushed %d buffers to close segment",
-      count);
-
-  return count;
-}
-
-/* WORKAROUND: This works around BaseTransform limitation as instead of rolling
- * back caps, we should be able to push caps only when we are sure we are ready
- * to do so. Right now, BaseTransform doesn't let us do anything like that
- * so we rollback to previous caps when strictly required (though we now it
- * might not be so safe).
- *
- * To be used only when wanting to 'close' a segment, this function will reset
- * caps to previous caps, which will match the content of `prevbuf` in that case
- *
- * Returns: The previous GstCaps if we rolled back to previous buffers, NULL
- * otherwise.
- *
- * NOTE: When some caps are returned, we should reset them back after
- * closing the segment is done.
- */
-static GstCaps *
-gst_video_rate_rollback_to_prev_caps_if_needed (GstVideoRate * videorate)
-{
-  GstCaps *prev_caps = NULL;
-
-  if (videorate->prev_caps && videorate->prev_caps != videorate->in_caps) {
-    if (videorate->in_caps)
-      prev_caps = gst_caps_ref (videorate->in_caps);
-
-    GST_DEBUG_OBJECT (videorate, "rollback to previous caps %" GST_PTR_FORMAT,
-        prev_caps);
-
-    if (!gst_pad_send_event (GST_BASE_TRANSFORM_SINK_PAD (videorate),
-            gst_event_new_caps (videorate->prev_caps)
-        )) {
-
-      GST_WARNING_OBJECT (videorate, "Could not send previous caps to close "
-          " segment, not closing it");
-
-      gst_video_rate_swap_prev (videorate, NULL, GST_CLOCK_TIME_NONE);
-      videorate->last_ts = GST_CLOCK_TIME_NONE;
-      videorate->average = 0;
-    }
-
-    gst_clear_caps (&videorate->prev_caps);
-  }
-
-  return prev_caps;
-}
-
+#define MAGIC_LIMIT  25
 static gboolean
 gst_video_rate_sink_event (GstBaseTransform * trans, GstEvent * event)
 {
@@ -995,11 +812,16 @@ gst_video_rate_sink_event (GstBaseTransform * trans, GstEvent * event)
     {
       GstSegment segment;
       gint seqnum;
-      GstCaps *rolled_back_caps;
+      GstClockTime base_ts, next_ts;
+      gboolean reset_base_ts = FALSE;
 
       gst_event_copy_segment (event, &segment);
       if (segment.format != GST_FORMAT_TIME)
         goto format_error;
+
+      GST_DEBUG_OBJECT (videorate, "handle SEGMENT event");
+
+      /* We just want to update the accumulated stream_time  */
 
       segment.start = (gint64) (segment.start / videorate->rate);
       segment.position = (gint64) (segment.position / videorate->rate);
@@ -1007,14 +829,45 @@ gst_video_rate_sink_event (GstBaseTransform * trans, GstEvent * event)
         segment.stop = (gint64) (segment.stop / videorate->rate);
       segment.time = (gint64) (segment.time / videorate->rate);
 
-      if (!gst_segment_is_equal (&segment, &videorate->segment)) {
-        rolled_back_caps =
-            gst_video_rate_rollback_to_prev_caps_if_needed (videorate);
+      base_ts = gst_segment_position_from_running_time (&segment,
+          GST_FORMAT_TIME,
+          gst_segment_to_running_time (&videorate->segment, GST_FORMAT_TIME,
+              videorate->base_ts));
+      next_ts = gst_segment_position_from_running_time (&segment,
+          GST_FORMAT_TIME,
+          gst_segment_to_running_time (&videorate->segment, GST_FORMAT_TIME,
+              videorate->next_ts));
+
+      /* Reset if the segment is discontinuous */
+      if (next_ts == GST_CLOCK_TIME_NONE) {
+        reset_base_ts = TRUE;
 
         /* close up the previous segment, if appropriate */
         if (videorate->prevbuf) {
-          /* fill up to the end of current segment */
-          gint count = gst_video_rate_duplicate_to_close_segment (videorate);
+          gint count = 0;
+          GstFlowReturn res;
+
+          res = GST_FLOW_OK;
+          /* fill up to the end of current segment,
+           * or only send out the stored buffer if there is no specific stop.
+           * regardless, prevent going loopy in strange cases */
+          while (res == GST_FLOW_OK && count <= MAGIC_LIMIT
+              && !videorate->drop_only
+              && ((videorate->segment.rate > 0.0
+                      && GST_CLOCK_TIME_IS_VALID (videorate->segment.stop)
+                      && GST_CLOCK_TIME_IS_VALID (videorate->next_ts)
+                      && videorate->next_ts - videorate->segment.base <
+                      videorate->segment.stop) || (videorate->segment.rate < 0.0
+                      && GST_CLOCK_TIME_IS_VALID (videorate->segment.start)
+                      && GST_CLOCK_TIME_IS_VALID (videorate->next_ts)
+                      && videorate->next_ts - videorate->segment.base >=
+                      videorate->segment.start)
+                  || count < 1)) {
+            res =
+                gst_video_rate_flush_prev (videorate, count > 0,
+                GST_CLOCK_TIME_NONE);
+            count++;
+          }
           if (count > 1) {
             videorate->dup += count - 1;
             if (!videorate->silent)
@@ -1023,39 +876,21 @@ gst_video_rate_sink_event (GstBaseTransform * trans, GstEvent * event)
           /* clean up for the new one; _chain will resume from the new start */
           gst_video_rate_swap_prev (videorate, NULL, 0);
         }
-
-        if (rolled_back_caps) {
-          GST_DEBUG_OBJECT (videorate,
-              "Resetting rolled back caps %" GST_PTR_FORMAT, rolled_back_caps);
-          if (!gst_pad_send_event (GST_BASE_TRANSFORM_SINK_PAD (videorate),
-                  gst_event_new_caps (rolled_back_caps)
-              )) {
-
-            GST_WARNING_OBJECT (videorate,
-                "Could not resend caps after closing " " segment");
-
-            GST_ELEMENT_ERROR (videorate, CORE, NEGOTIATION,
-                ("Could not resend caps after closing segment"), (NULL));
-            gst_caps_unref (rolled_back_caps);
-
-            return FALSE;
-          }
-
-          gst_caps_unref (rolled_back_caps);
-        }
-        if (segment.rate < 0)
-          videorate->base_ts = segment.stop;
-        else
-          videorate->base_ts = segment.start;
-        videorate->out_frame_count = 0;
-        videorate->next_ts = GST_CLOCK_TIME_NONE;
-        videorate->last_ts = GST_CLOCK_TIME_NONE;
-        gst_buffer_replace (&videorate->prevbuf, NULL);
+      } else if (base_ts == GST_CLOCK_TIME_NONE) {
+        reset_base_ts = TRUE;
       }
+
+      if (reset_base_ts) {
+        base_ts = 0;
+        videorate->out_frame_count = 0;
+      }
+      videorate->next_ts = next_ts;
+      videorate->base_ts = base_ts;
 
       gst_segment_copy_into (&segment, &videorate->segment);
       GST_DEBUG_OBJECT (videorate, "updated segment: %" GST_SEGMENT_FORMAT,
           &videorate->segment);
+
       seqnum = gst_event_get_seqnum (event);
       gst_event_unref (event);
       event = gst_event_new_segment (&segment);
@@ -1067,66 +902,54 @@ gst_video_rate_sink_event (GstBaseTransform * trans, GstEvent * event)
     case GST_EVENT_EOS:{
       gint count = 0;
       GstFlowReturn res = GST_FLOW_OK;
-      GstCaps *rolled_back_caps;
 
       GST_DEBUG_OBJECT (videorate, "Got %s",
           gst_event_type_get_name (GST_EVENT_TYPE (event)));
 
-      rolled_back_caps =
-          gst_video_rate_rollback_to_prev_caps_if_needed (videorate);
-
       /* If the segment has a stop position, fill the segment */
       if (GST_CLOCK_TIME_IS_VALID (videorate->segment.stop)) {
-        /* fill up to the end of current segment */
-        count = gst_video_rate_duplicate_to_close_segment (videorate);
+        /* fill up to the end of current segment,
+         * or only send out the stored buffer if there is no specific stop.
+         * regardless, prevent going loopy in strange cases */
+        while (res == GST_FLOW_OK && count <= MAGIC_LIMIT
+            && !videorate->drop_only
+            && ((videorate->segment.rate > 0.0
+                    && GST_CLOCK_TIME_IS_VALID (videorate->segment.stop)
+                    && GST_CLOCK_TIME_IS_VALID (videorate->next_ts)
+                    && videorate->next_ts - videorate->segment.base <
+                    videorate->segment.stop) || (videorate->segment.rate < 0.0
+                    && GST_CLOCK_TIME_IS_VALID (videorate->segment.start)
+                    && GST_CLOCK_TIME_IS_VALID (videorate->next_ts)
+                    && videorate->next_ts - videorate->segment.base >=
+                    videorate->segment.start)
+            )) {
+          res = gst_video_rate_flush_prev (videorate, count > 0,
+              GST_CLOCK_TIME_NONE);
+          count++;
+        }
       } else if (!videorate->drop_only && videorate->prevbuf) {
         /* Output at least one frame but if the buffer duration is valid, output
          * enough frames to use the complete buffer duration */
         if (GST_BUFFER_DURATION_IS_VALID (videorate->prevbuf)) {
-          GstClockTime end_ts, duration =
-              GST_BUFFER_DURATION (videorate->prevbuf);
+          GstClockTime end_ts =
+              videorate->next_ts + GST_BUFFER_DURATION (videorate->prevbuf);
 
-          if (GST_CLOCK_TIME_IS_VALID
-              (videorate->max_closing_segment_duplication_duration))
-            duration =
-                MIN (videorate->max_closing_segment_duplication_duration,
-                duration);
-
-          end_ts = videorate->next_ts + duration;
-          while (res == GST_FLOW_OK && ((videorate->segment.rate > 0.0
+          while (res == GST_FLOW_OK && count <= MAGIC_LIMIT &&
+              ((videorate->segment.rate > 0.0
                       && GST_CLOCK_TIME_IS_VALID (videorate->segment.stop)
                       && GST_CLOCK_TIME_IS_VALID (videorate->next_ts)
-                      && videorate->next_ts < end_ts)
+                      && videorate->next_ts - videorate->segment.base < end_ts)
                   || count < 1)) {
             res =
                 gst_video_rate_flush_prev (videorate, count > 0,
-                GST_CLOCK_TIME_NONE, FALSE);
+                GST_CLOCK_TIME_NONE);
             count++;
           }
         } else {
-          /* allow the duration to be invalid as there is no way to infer it if we
-           * received a single buffer and not output framerate was set. */
           res =
-              gst_video_rate_flush_prev (videorate, FALSE, GST_CLOCK_TIME_NONE,
-              TRUE);
+              gst_video_rate_flush_prev (videorate, FALSE, GST_CLOCK_TIME_NONE);
           count = 1;
         }
-      }
-
-      if (rolled_back_caps) {
-        GST_DEBUG_OBJECT (videorate,
-            "Resetting rolled back caps %" GST_PTR_FORMAT, rolled_back_caps);
-
-        if (!gst_pad_send_event (GST_BASE_TRANSFORM_SINK_PAD (videorate),
-                gst_event_new_caps (rolled_back_caps)
-            )) {
-
-          /* Not erroring out on EOS as it won't be too bad in any case */
-          GST_WARNING_OBJECT (videorate, "Could not resend caps after closing "
-              " segment on EOS (ignoring the error)");
-        }
-
-        gst_caps_unref (rolled_back_caps);
       }
 
       if (count > 1) {
@@ -1145,7 +968,7 @@ gst_video_rate_sink_event (GstBaseTransform * trans, GstEvent * event)
     case GST_EVENT_FLUSH_STOP:
       /* also resets the segment */
       GST_DEBUG_OBJECT (videorate, "Got FLUSH_STOP");
-      gst_video_rate_reset (videorate, TRUE);
+      gst_video_rate_reset (videorate);
       break;
     case GST_EVENT_GAP:
       /* no gaps after videorate, ignore the event */
@@ -1411,7 +1234,7 @@ gst_video_rate_propose_allocation (GstBaseTransform * trans,
 
       gst_query_parse_nth_allocation_pool (query, i, &pool, &size, &min, &max);
 
-      if (max != 0 && min == max) {
+      if (min == max) {
         if (pool)
           gst_object_unref (pool);
         gst_query_remove_nth_allocation_pool (query, i);
@@ -1443,7 +1266,7 @@ gst_video_rate_propose_allocation (GstBaseTransform * trans,
 static GstFlowReturn
 gst_video_rate_trans_ip_max_avg (GstVideoRate * videorate, GstBuffer * buf)
 {
-  GstClockTime ts = GST_BUFFER_PTS (buf);
+  GstClockTime ts = GST_BUFFER_TIMESTAMP (buf);
 
   videorate->in++;
 
@@ -1612,14 +1435,12 @@ gst_video_rate_do_max_duplicate (GstVideoRate * videorate, GstBuffer * buffer,
      * previous buffer */
     if (videorate->segment.rate < 0.0) {
       while (videorate->next_ts > prevtime) {
-        gst_video_rate_flush_prev (videorate, *count > 0, GST_CLOCK_TIME_NONE,
-            FALSE);
+        gst_video_rate_flush_prev (videorate, *count > 0, GST_CLOCK_TIME_NONE);
         *count += 1;
       }
     } else {
       while (videorate->next_ts <= prevtime) {
-        gst_video_rate_flush_prev (videorate, *count > 0, GST_CLOCK_TIME_NONE,
-            FALSE);
+        gst_video_rate_flush_prev (videorate, *count > 0, GST_CLOCK_TIME_NONE);
         *count += 1;
       }
     }
@@ -1659,14 +1480,9 @@ gst_video_rate_apply_pending_rate (GstVideoRate * videorate)
     goto done;
 
   ret = TRUE;
-  if (videorate->segment.rate < 0)
-    videorate->base_ts -= gst_util_uint64_scale (videorate->out_frame_count,
-        videorate->to_rate_denominator * GST_SECOND,
-        videorate->to_rate_numerator);
-  else
-    videorate->base_ts += gst_util_uint64_scale (videorate->out_frame_count,
-        videorate->to_rate_denominator * GST_SECOND,
-        videorate->to_rate_numerator);
+  videorate->base_ts += gst_util_uint64_scale (videorate->out_frame_count,
+      videorate->to_rate_denominator * GST_SECOND,
+      videorate->to_rate_numerator);
   videorate->rate = videorate->pending_rate;
   videorate->out_frame_count = 0;
 
@@ -1681,21 +1497,10 @@ gst_video_rate_transform_ip (GstBaseTransform * trans, GstBuffer * buffer)
 {
   GstVideoRate *videorate;
   GstFlowReturn res = GST_BASE_TRANSFORM_FLOW_DROPPED;
-  GstClockTime in_ts, in_dur, last_ts;
+  GstClockTime intime, in_ts, in_dur, last_ts;
   gboolean skip;
 
   videorate = GST_VIDEO_RATE (trans);
-
-  if (videorate->prev_caps != videorate->in_caps) {
-    /* After caps where set we didn't reset the state so we could close
-     * the segment from previous caps if necessary, we got a buffer after the
-     * new caps so we can reset now */
-    GST_DEBUG_OBJECT (videorate, "Clearing old buffers now that we had a buffer"
-        " after receiving caps");
-    gst_video_rate_swap_prev (videorate, NULL, GST_CLOCK_TIME_NONE);
-    gst_clear_caps (&videorate->prev_caps);
-    videorate->average = 0;
-  }
 
   /* make sure the denominators are not 0 */
   if (videorate->from_rate_denominator == 0 ||
@@ -1721,7 +1526,7 @@ gst_video_rate_transform_ip (GstBaseTransform * trans, GstBuffer * buffer)
     return gst_video_rate_trans_ip_max_avg (videorate, buffer);
 
   gst_video_rate_apply_pending_rate (videorate);
-  in_ts = GST_BUFFER_PTS (buffer);
+  in_ts = GST_BUFFER_TIMESTAMP (buffer);
   in_dur = GST_BUFFER_DURATION (buffer);
 
   if (G_UNLIKELY (!GST_CLOCK_TIME_IS_VALID (in_ts))) {
@@ -1734,6 +1539,10 @@ gst_video_rate_transform_ip (GstBaseTransform * trans, GstBuffer * buffer)
       goto invalid_buffer;
   }
 
+  if (!gst_segment_clip (&videorate->segment, GST_FORMAT_TIME, in_ts,
+          GST_CLOCK_TIME_NONE, NULL, NULL))
+    goto outside_segment;
+
   /* get the time of the next expected buffer timestamp, we use this when the
    * next buffer has -1 as a timestamp */
   last_ts = videorate->last_ts;
@@ -1743,6 +1552,10 @@ gst_video_rate_transform_ip (GstBaseTransform * trans, GstBuffer * buffer)
 
   GST_DEBUG_OBJECT (videorate, "got buffer with timestamp %" GST_TIME_FORMAT,
       GST_TIME_ARGS (in_ts));
+
+  /* the input time is the time in the segment + all previously accumulated
+   * segments */
+  intime = in_ts + videorate->segment.base;
 
   /* we need to have two buffers to compare */
   if (videorate->prevbuf == NULL || videorate->drop_only) {
@@ -1757,14 +1570,18 @@ gst_video_rate_transform_ip (GstBaseTransform * trans, GstBuffer * buffer)
         GST_BUFFER_DURATION (buffer) = last_ts - in_ts;
     }
 
-    gst_video_rate_swap_prev (videorate, buffer, in_ts);
+    gst_video_rate_swap_prev (videorate, buffer, intime);
     videorate->in++;
     if (!GST_CLOCK_TIME_IS_VALID (videorate->next_ts)) {
       /* new buffer, we expect to output a buffer that matches the first
        * timestamp in the segment */
       if (videorate->skip_to_first || skip) {
-        videorate->base_ts = in_ts;
-        videorate->next_ts = in_ts;
+        videorate->next_ts = intime;
+        if (videorate->segment.rate < 0.0) {
+          videorate->base_ts = videorate->segment.stop - in_ts;
+        } else {
+          videorate->base_ts = in_ts - videorate->segment.start;
+        }
         videorate->out_frame_count = 0;
       } else {
         if (videorate->segment.rate < 0.0) {
@@ -1773,7 +1590,8 @@ gst_video_rate_transform_ip (GstBaseTransform * trans, GstBuffer * buffer)
                 videorate->to_rate_denominator * GST_SECOND,
                 videorate->to_rate_numerator);
 
-            videorate->next_ts = videorate->segment.stop;
+            videorate->next_ts =
+                videorate->segment.stop + videorate->segment.base;
 
             if (videorate->next_ts > frame_duration)
               videorate->next_ts =
@@ -1783,10 +1601,11 @@ gst_video_rate_transform_ip (GstBaseTransform * trans, GstBuffer * buffer)
               videorate->next_ts = videorate->segment.start;
           } else {
             /* What else can we do? */
-            videorate->next_ts = in_ts;
+            videorate->next_ts = intime;
           }
         } else {
-          videorate->next_ts = videorate->segment.start;
+          videorate->next_ts =
+              videorate->segment.start + videorate->segment.base;
         }
       }
     }
@@ -1796,8 +1615,8 @@ gst_video_rate_transform_ip (GstBaseTransform * trans, GstBuffer * buffer)
      * allowed frame period. This also keeps latency down to 0 frames
      */
     if (videorate->drop_only) {
-      if ((videorate->segment.rate > 0.0 && in_ts >= videorate->next_ts) ||
-          (videorate->segment.rate < 0.0 && in_ts <= videorate->next_ts)) {
+      if ((videorate->segment.rate > 0.0 && intime >= videorate->next_ts) ||
+          (videorate->segment.rate < 0.0 && intime <= videorate->next_ts)) {
         GstFlowReturn r;
 
         /* The buffer received from basetransform is guaranteed to be writable.
@@ -1805,7 +1624,7 @@ gst_video_rate_transform_ip (GstBaseTransform * trans, GstBuffer * buffer)
          * GstBaseTransform can get its reference back. */
         if ((r = gst_video_rate_push_buffer (videorate,
                     gst_buffer_ref (buffer), FALSE,
-                    GST_CLOCK_TIME_NONE, FALSE)) != GST_FLOW_OK) {
+                    GST_CLOCK_TIME_NONE)) != GST_FLOW_OK) {
           res = r;
           goto done;
         }
@@ -1816,34 +1635,34 @@ gst_video_rate_transform_ip (GstBaseTransform * trans, GstBuffer * buffer)
       gst_buffer_replace (&videorate->prevbuf, NULL);
     }
   } else {
-    GstClockTime prev_ts;
+    GstClockTime prevtime;
     gint count = 0;
     gint64 diff1 = 0, diff2 = 0;
 
-    prev_ts = videorate->prev_ts;
+    prevtime = videorate->prev_ts;
 
     GST_LOG_OBJECT (videorate,
         "BEGINNING prev buf %" GST_TIME_FORMAT " new buf %" GST_TIME_FORMAT
-        " outgoing ts %" GST_TIME_FORMAT, GST_TIME_ARGS (prev_ts),
-        GST_TIME_ARGS (in_ts), GST_TIME_ARGS (videorate->next_ts));
+        " outgoing ts %" GST_TIME_FORMAT, GST_TIME_ARGS (prevtime),
+        GST_TIME_ARGS (intime), GST_TIME_ARGS (videorate->next_ts));
 
     videorate->in++;
 
     /* drop new buffer if it's before previous one */
-    if ((videorate->segment.rate > 0.0 && in_ts < prev_ts) ||
-        (videorate->segment.rate < 0.0 && in_ts > prev_ts)) {
+    if ((videorate->segment.rate > 0.0 && intime < prevtime) ||
+        (videorate->segment.rate < 0.0 && intime > prevtime)) {
       GST_DEBUG_OBJECT (videorate,
           "The new buffer (%" GST_TIME_FORMAT
           ") is before the previous buffer (%"
           GST_TIME_FORMAT "). Dropping new buffer.",
-          GST_TIME_ARGS (in_ts), GST_TIME_ARGS (prev_ts));
+          GST_TIME_ARGS (intime), GST_TIME_ARGS (prevtime));
       videorate->drop++;
       if (!videorate->silent)
         gst_video_rate_notify_drop (videorate);
       goto done;
     }
 
-    if (!gst_video_rate_do_max_duplicate (videorate, buffer, in_ts, prev_ts,
+    if (!gst_video_rate_do_max_duplicate (videorate, buffer, intime, prevtime,
             &count))
       goto done;
 
@@ -1860,12 +1679,13 @@ gst_video_rate_transform_ip (GstBaseTransform * trans, GstBuffer * buffer)
          * or the code above for the very first buffer */
         g_assert (GST_BUFFER_DURATION_IS_VALID (videorate->prevbuf));
         if (!GST_BUFFER_DURATION_IS_VALID (buffer))
-          GST_BUFFER_DURATION (buffer) = prev_ts > in_ts ? prev_ts - in_ts : 0;
+          GST_BUFFER_DURATION (buffer) =
+              prevtime > intime ? prevtime - intime : 0;
       } else {
         /* Make sure that we have a duration for previous buffer */
         if (!GST_BUFFER_DURATION_IS_VALID (videorate->prevbuf))
           GST_BUFFER_DURATION (videorate->prevbuf) =
-              in_ts > prev_ts ? in_ts - prev_ts : 0;
+              intime > prevtime ? intime - prevtime : 0;
       }
 
 #ifndef ABSDIFF
@@ -1876,7 +1696,7 @@ gst_video_rate_transform_ip (GstBaseTransform * trans, GstBuffer * buffer)
       if (videorate->segment.rate < 0.0) {
         GstClockTime next_end_ts;
         GstClockTime prev_endtime;
-        GstClockTime in_endtime;
+        GstClockTime in_endtime, base_ts_in_segment;
 
         next_ts = videorate->next_ts;
 
@@ -1886,8 +1706,8 @@ gst_video_rate_transform_ip (GstBaseTransform * trans, GstBuffer * buffer)
           break;
         }
 
-        prev_endtime = prev_ts + GST_BUFFER_DURATION (videorate->prevbuf);
-        in_endtime = in_ts + GST_BUFFER_DURATION (buffer);
+        prev_endtime = prevtime + GST_BUFFER_DURATION (videorate->prevbuf);
+        in_endtime = intime + GST_BUFFER_DURATION (buffer);
 
         if (videorate->to_rate_numerator) {
           GstClockTime frame_duration = gst_util_uint64_scale (1,
@@ -1898,10 +1718,11 @@ gst_video_rate_transform_ip (GstBaseTransform * trans, GstBuffer * buffer)
           next_end_ts = next_ts + GST_BUFFER_DURATION (videorate->prevbuf);
         }
 
-        next_ts = videorate->base_ts - (
-            (videorate->base_ts - next_ts) * videorate->rate);
-        next_end_ts = videorate->base_ts - (MAX (0,
-                (videorate->base_ts - next_end_ts)) * videorate->rate);
+        base_ts_in_segment = videorate->segment.stop - videorate->base_ts;
+        next_ts = base_ts_in_segment - (
+            (base_ts_in_segment - next_ts) * videorate->rate);
+        next_end_ts = base_ts_in_segment - (MAX (0,
+                (base_ts_in_segment - next_end_ts)) * videorate->rate);
 
         diff1 = ABSDIFF (prev_endtime, next_end_ts);
         diff2 = ABSDIFF (in_endtime, next_end_ts);
@@ -1916,8 +1737,8 @@ gst_video_rate_transform_ip (GstBaseTransform * trans, GstBuffer * buffer)
             videorate->base_ts + ((videorate->next_ts -
                 videorate->base_ts) * videorate->rate);
 
-        diff1 = ABSDIFF (prev_ts, next_ts);
-        diff2 = ABSDIFF (in_ts, next_ts);
+        diff1 = ABSDIFF (prevtime, next_ts);
+        diff2 = ABSDIFF (intime, next_ts);
 
         GST_LOG_OBJECT (videorate,
             "diff with prev %" GST_TIME_FORMAT " diff with new %"
@@ -1933,7 +1754,7 @@ gst_video_rate_transform_ip (GstBaseTransform * trans, GstBuffer * buffer)
 
         /* on error the _flush function posted a warning already */
         if ((r = gst_video_rate_flush_prev (videorate,
-                    count > 1, in_ts, FALSE)) != GST_FLOW_OK) {
+                    count > 1, intime)) != GST_FLOW_OK) {
           res = r;
           goto done;
         }
@@ -1970,7 +1791,7 @@ gst_video_rate_transform_ip (GstBaseTransform * trans, GstBuffer * buffer)
         videorate->in, videorate->out, videorate->drop, videorate->dup);
 
     /* swap in new one when it's the best */
-    gst_video_rate_swap_prev (videorate, buffer, in_ts);
+    gst_video_rate_swap_prev (videorate, buffer, intime);
   }
 done:
   return res;
@@ -1990,19 +1811,26 @@ invalid_buffer:
     res = GST_BASE_TRANSFORM_FLOW_DROPPED;
     goto done;
   }
+
+outside_segment:
+  {
+    GST_WARNING_OBJECT (videorate, "Got buffer outide segment, discarding it");
+    res = GST_BASE_TRANSFORM_FLOW_DROPPED;
+    goto done;
+  }
 }
 
 static gboolean
 gst_video_rate_start (GstBaseTransform * trans)
 {
-  gst_video_rate_reset (GST_VIDEO_RATE (trans), FALSE);
+  gst_video_rate_reset (GST_VIDEO_RATE (trans));
   return TRUE;
 }
 
 static gboolean
 gst_video_rate_stop (GstBaseTransform * trans)
 {
-  gst_video_rate_reset (GST_VIDEO_RATE (trans), FALSE);
+  gst_video_rate_reset (GST_VIDEO_RATE (trans));
   return TRUE;
 }
 
@@ -2056,14 +1884,6 @@ gst_video_rate_set_property (GObject * object,
     case PROP_MAX_DUPLICATION_TIME:
       videorate->max_duplication_time = g_value_get_uint64 (value);
       break;
-    case PROP_MAX_CLOSING_SEGMENT_DUPLICATION_DURATION:
-      videorate->max_closing_segment_duplication_duration =
-          g_value_get_uint64 (value);
-      break;
-    case PROP_DROP_OUT_OF_SEGMENT:{
-      videorate->drop_out_of_segment = g_value_get_boolean (value);
-      break;
-    }
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
       break;
@@ -2125,13 +1945,6 @@ gst_video_rate_get_property (GObject * object,
       break;
     case PROP_MAX_DUPLICATION_TIME:
       g_value_set_uint64 (value, videorate->max_duplication_time);
-      break;
-    case PROP_MAX_CLOSING_SEGMENT_DUPLICATION_DURATION:
-      g_value_set_uint64 (value,
-          videorate->max_closing_segment_duplication_duration);
-      break;
-    case PROP_DROP_OUT_OF_SEGMENT:
-      g_value_set_boolean (value, videorate->drop_out_of_segment);
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
