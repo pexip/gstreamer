@@ -771,12 +771,11 @@ gst_element_add_pad (GstElement * element, GstPad * pad)
   GST_OBJECT_FLAG_SET (pad, GST_PAD_FLAG_NEED_PARENT);
   GST_OBJECT_UNLOCK (pad);
 
+  GST_OBJECT_LOCK (element);
   /* Check whether we need to switch to using the hash */
   if ((element->pads_hash == NULL) &&
       (element->numpads_use_hash >= 0) &&
       (element->numpads + 1) >= (element->numpads_use_hash)) {
-
-      GST_OBJECT_LOCK (element);
 
       /* Time to switch to using the hash */
       element->pads_hash = g_hash_table_new_full (g_str_hash, g_str_equal, g_free, NULL);
@@ -788,13 +787,9 @@ gst_element_add_pad (GstElement * element, GstPad * pad)
         child_pad = GST_PAD_CAST (walk->data);
         g_hash_table_insert (element->pads_hash, g_strdup (GST_PAD_NAME(child_pad)), child_pad);
       }
-
-      GST_OBJECT_UNLOCK (element);
   }
 
   /* then check to see if there's already a pad by that name here */
-  GST_OBJECT_LOCK (element);
-
   if (!GST_OBJECT_FLAG_IS_SET (element, GST_ELEMENT_FLAG_NO_UNIQUE_CHECK)) {
     if (element->pads_hash != NULL) {
       /* Use the hash table to look up whether we already have an pad with that
