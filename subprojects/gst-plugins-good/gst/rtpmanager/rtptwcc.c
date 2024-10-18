@@ -299,8 +299,6 @@ _redblock_new(GArray* seq, guint16 fec_seq,
   g_array_set_size (block->fec_seqs, num_redundant_packets);
   block->fec_states = g_array_new (FALSE, FALSE, sizeof (TWCCPktState));
   g_array_set_size (block->fec_states, num_redundant_packets);
-  g_array_index (block->fec_states, TWCCPktState, idx_redundant_packets) 
-    = RTP_TWCC_FECBLOCK_PKT_UNKNOWN;
   for (guint16 i = 0; i < num_redundant_packets; i++)
   {
     g_array_index (block->fec_states, TWCCPktState, i) 
@@ -379,6 +377,9 @@ _redblock_reconsider (RTPTWCCManager * twcc, RedBlock * block)
   gsize nrecovered = 0;
   gsize lost = 0;
 
+  gchar states_media[48];
+  gchar states_fec[16];
+
   /* Special case for RTX: lost RTX introduces extra complexity which 
     is easier to handle separately
   */
@@ -409,45 +410,59 @@ _redblock_reconsider (RTPTWCCManager * twcc, RedBlock * block)
         g_array_index (block->seqs, guint16, i));
     if (!pkt || pkt->state == RTP_TWCC_FECBLOCK_PKT_UNKNOWN) {
       unknowns = TRUE;
+      if (i < G_N_ELEMENTS(states_media)) states_media[i] = 'U'; 
     } else if (pkt->state == RTP_TWCC_FECBLOCK_PKT_RECEIVED) {
       nreceived++;
+      if (i < G_N_ELEMENTS(states_media)) states_media[i] = '+'; 
     } else if (pkt->state == RTP_TWCC_FECBLOCK_PKT_RECOVERED) {
       recovered = TRUE;
+      if (i < G_N_ELEMENTS(states_media)) states_media[i] = 'R'; 
     } else if (pkt->state == RTP_TWCC_FECBLOCK_PKT_LOST) {
       lost++;
+      if (i < G_N_ELEMENTS(states_media)) states_media[i] = '-'; 
     }
 
     if (pkt) {
       pkt->update_stats = FALSE;
     }
   }
+  states_media[block->seqs->len] = '\0';
 
   /* Walk through all fec packets */
   for (gsize i = 0; i < block->fec_seqs->len; ++i) {
     if (g_array_index (block->fec_states, TWCCPktState, i) 
         == RTP_TWCC_FECBLOCK_PKT_UNKNOWN) {
       unknowns = TRUE;
+      if (i < G_N_ELEMENTS(states_fec)) states_fec[i] = 'U'; 
       continue;
     }
     SentPacket *pkt = _find_stats_sentpacket (twcc,
         g_array_index (block->fec_seqs, guint16, i));
     if (!pkt || pkt->state == RTP_TWCC_FECBLOCK_PKT_UNKNOWN) {
       unknowns = TRUE;
+      if (i < G_N_ELEMENTS(states_fec)) states_fec[i] = 'U'; 
     } else if (pkt->state == RTP_TWCC_FECBLOCK_PKT_RECEIVED) {
       nreceived++;
+      if (i < G_N_ELEMENTS(states_fec)) states_fec[i] = '+'; 
     } else if (pkt->state == RTP_TWCC_FECBLOCK_PKT_RECOVERED) {
       recovered = TRUE;
+      if (i < G_N_ELEMENTS(states_fec)) states_fec[i] = 'R'; 
     } else if (pkt->state == RTP_TWCC_FECBLOCK_PKT_LOST) {
       lost++;
+      if (i < G_N_ELEMENTS(states_fec)) states_fec[i] = '-'; 
     }
 
     if (pkt) {
       pkt->update_stats = FALSE;
     }
   }
+  states_fec[block->fec_seqs->len] = '\0';
+
 
   /* We have packet[s] that was not reported about in feedbacks yet */
   if (unknowns) {
+    GST_INFO ("Media: %s; FEC: %s", states_media, states_fec);
+    GST_INFO ("The FEC block has unknown packets");
     return 0;
   }
 
@@ -479,6 +494,8 @@ _redblock_reconsider (RTPTWCCManager * twcc, RedBlock * block)
     }
   }
 
+  GST_INFO ("Media: %s; FEC: %s; recovered: %lu", states_media, states_fec,
+      nrecovered);
   return nrecovered;
 }
 
@@ -715,7 +732,7 @@ twcc_stats_ctx_calculate_windowed_stats (RTPTWCCManager * twcc, TWCCStatsCtx * c
       last_local_pkt = pkt;
     }
 
-    if (GST_CLOCK_TIME_IS_VALID (pkt->remote_ts)) {
+    if (pkt->state == RTP_TWCC_FECBLOCK_PKT_RECEIVED) {
       /* don't count the bits for the first packet in the window */
       if (first_remote_pkt == NULL) {
         first_remote_pkt = pkt;
@@ -724,13 +741,13 @@ twcc_stats_ctx_calculate_windowed_stats (RTPTWCCManager * twcc, TWCCStatsCtx * c
       }
       last_remote_pkt = pkt;
       packets_recv++;
-    } else {
-      GST_LOG ("Packet #%u is lost, recovered=%u", pkt->seqnum,
-          pkt->state == RTP_TWCC_FECBLOCK_PKT_RECOVERED);
+    } else if (pkt->state == RTP_TWCC_FECBLOCK_PKT_RECOVERED) {
+      GST_LOG ("Packet #%u is lost and recovered");
       packets_lost++;
-      if (pkt->state == RTP_TWCC_FECBLOCK_PKT_RECOVERED) {
-        packets_recovered++;
-      }
+      packets_recovered++;
+    } else if(pkt->state == RTP_TWCC_FECBLOCK_PKT_LOST) {
+      GST_LOG ("Packet #%u is lost");
+      packets_lost++;
     }
 
     if (!prev) {
@@ -2404,8 +2421,8 @@ rtp_twcc_manager_get_windowed_stats (RTPTWCCManager * twcc,
           change them to twcc seqnums. */
 
         GRealArray *protect_seqnums_array_real = (GRealArray*)pkt->protects_seqnums;
-        GST_WARNING_OBJECT (twcc, "protect_seqnums refcount: %d",
-            protect_seqnums_array_real->ref_count);
+        GST_WARNING_OBJECT (twcc, "protect_seqnums protects ssrc: %u, refcount: %d",
+            pkt->protects_ssrc, protect_seqnums_array_real->ref_count);
 
         if (pkt->redundant_idx < 0 || pkt->redundant_num <= 0
             || pkt->redundant_idx >= pkt->redundant_num) {
@@ -2459,6 +2476,10 @@ rtp_twcc_manager_get_windowed_stats (RTPTWCCManager * twcc,
           /* Add every data packet into seqnum_2_redblocks  */
           block = _redblock_new (pkt->protects_seqnums, pkt->seqnum,
               pkt->redundant_idx, pkt->redundant_num);
+          g_array_index (block->fec_seqs, guint16, (gsize)pkt->redundant_idx) 
+                  = pkt->seqnum;
+          g_array_index (block->fec_states, TWCCPktState,
+                  (gsize)pkt->redundant_idx) = pkt->state;
           g_hash_table_insert (twcc->redund_2_redblocks, key, block);
           /* Link this seqnum to the block in order to be able to 
             release the block once this packet leave its lifetime */
@@ -2483,10 +2504,8 @@ rtp_twcc_manager_get_windowed_stats (RTPTWCCManager * twcc,
           }
         }
         const gsize packets_recovered = _redblock_reconsider (twcc, block);
-        if (packets_recovered > 0) {
-          GST_LOG ("Reconsider block because of packet #%u, recovered %lu pckt",
-              pkt->seqnum, packets_recovered);
-        }
+        GST_LOG ("Reconsider block because of packet #%u, recovered %lu pckt",
+            pkt->seqnum, packets_recovered);
       /* RTX of FEC */
       } else {
         RedBlock * block;
@@ -2500,10 +2519,8 @@ rtp_twcc_manager_get_windowed_stats (RTPTWCCManager * twcc,
             }
           }
           const gsize packets_recovered = _redblock_reconsider (twcc, block);
-          if (packets_recovered > 0) {
-            GST_LOG ("Reconsider block because of packet #%u, "
-            "recovered %lu pckt", pkt->seqnum, packets_recovered);
-          }
+          GST_LOG ("Reconsider block because of packet #%u, "
+          "recovered %lu pckt", pkt->seqnum, packets_recovered);
         }
       }
     } /* for array */
