@@ -846,6 +846,8 @@ create_failed:
   }
 }
 
+/* MUST be called with object lock
+ */
 static GstRtpSsrcDemuxPads *
 find_demux_pad_for_pad (GstRtpSsrcDemux * demux, GstPad * pad)
 {
@@ -877,6 +879,7 @@ gst_rtp_ssrc_demux_src_event (GstPad * pad, GstObject * parent,
     case GST_EVENT_CUSTOM_BOTH_OOB:
       s = gst_event_get_structure (event);
       if (s && !gst_structure_has_field (s, "ssrc")) {
+        GST_OBJECT_LOCK (demux);
         GstRtpSsrcDemuxPads *dpads = find_demux_pad_for_pad (demux, pad);
 
         if (dpads) {
@@ -886,6 +889,7 @@ gst_rtp_ssrc_demux_src_event (GstPad * pad, GstObject * parent,
           ws = gst_event_writable_structure (event);
           gst_structure_set (ws, "ssrc", G_TYPE_UINT, dpads->ssrc, NULL);
         }
+        GST_OBJECT_UNLOCK (demux);
       }
       break;
     default:
