@@ -740,6 +740,9 @@ ssrc_demux_pad_removed (GstElement * element, guint ssrc, GstPad * pad,
 
   rtpbin = session->bin;
 
+  GST_DEBUG_OBJECT (rtpbin, "SSRC pad %08x, %s:%s removed!", ssrc,
+      GST_DEBUG_PAD_NAME (pad));
+
   GST_RTP_BIN_LOCK (rtpbin);
   GST_RTP_SESSION_LOCK (session);
   if ((stream = find_stream_by_ssrc (session, ssrc)))
@@ -855,6 +858,7 @@ create_session (GstRtpBin * rtpbin, gint id)
   gst_element_set_state (session, target);
   gst_element_set_state (storage, target);
 
+  GST_DEBUG_OBJECT (rtpbin, "created session %p", sess);
   return sess;
 
   /* ERRORS */
@@ -2325,7 +2329,7 @@ no_demux:
   }
 }
 
-/* called with RTP_BIN_LOCK */
+/* called with RTP_BIN_DYN_LOCK */
 static void
 free_stream (GstRtpBinStream * stream, GstRtpBin * bin)
 {
@@ -2344,6 +2348,19 @@ free_stream (GstRtpBinStream * stream, GstRtpBin * bin)
     priv->elements = g_list_delete_link (priv->elements, find);
   }
 
+  if (stream->buffer_ptreq_sig != 0)
+    g_signal_handler_disconnect (buffer, stream->buffer_ptreq_sig);
+  if (stream->buffer_ntpstop_sig != 0)
+    g_signal_handler_disconnect (buffer, stream->buffer_ntpstop_sig);
+  if (stream->demux_newpad_sig != 0)
+    g_signal_handler_disconnect (demux, stream->demux_newpad_sig);
+  if (stream->demux_padremoved_sig != 0)
+    g_signal_handler_disconnect (demux, stream->demux_padremoved_sig);
+  if (stream->demux_ptreq_sig != 0)
+    g_signal_handler_disconnect (demux, stream->demux_ptreq_sig);
+  if (stream->demux_ptchange_sig != 0)
+    g_signal_handler_disconnect (demux, stream->demux_ptchange_sig);
+  
   /* remove all ghostpads for this stream */
   g_hash_table_remove_all (stream->ptpad_to_ghostpad);
 
@@ -4368,7 +4385,7 @@ payload_pad_removed (GstElement * element, GstPad * pad,
   GstRtpBin *rtpbin;
   rtpbin = stream->bin;
 
-  GST_DEBUG ("payload pad removed");
+  GST_DEBUG_OBJECT (rtpbin, "payload pad %p removed on stream %p", pad, stream);
 
   GST_RTP_BIN_DYN_LOCK (rtpbin);
   g_hash_table_remove (stream->ptpad_to_ghostpad, pad);
@@ -4496,6 +4513,8 @@ new_ssrc_pad_found (GstElement * element, guint ssrc, GstPad * pad,
   stream = create_stream (session, ssrc);
   if (!stream)
     goto no_stream;
+
+  GST_DEBUG_OBJECT (rtpbin, "created stream %p", stream);
 
   /* get pad and link */
   GST_DEBUG_OBJECT (rtpbin, "linking jitterbuffer RTP");
