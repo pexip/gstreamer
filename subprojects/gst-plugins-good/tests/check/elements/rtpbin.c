@@ -1159,6 +1159,86 @@ GST_START_TEST (test_autoremove_race)
 
 GST_END_TEST;
 
+static gpointer
+_push_twcc_pkts_event (gpointer data)
+{
+  GstHarness *h = data;
+
+  for (guint i = 0 ; i < 10000 ; i++) {
+    gst_harness_push_upstream_event (h,
+      gst_event_new_custom (GST_EVENT_CUSTOM_UPSTREAM, gst_structure_new_empty ("RTPTWCCPackets")));
+    g_thread_yield();
+  }
+
+  return NULL;
+}
+
+static void
+run_test_autoremove_and_twcc_race ()
+{
+  GstHarness *h_rtcp;
+  GstHarness *h_rtp;
+  GstTestClock *testclock;
+  GThread *push_twcc_t;
+  guint32 ssrc = 1111;
+
+  /* we need to take control of the rtcp-thread, so setting
+     the system-clock to our testclock *before* creating
+     the harnesses is crucial */
+  testclock = GST_TEST_CLOCK_CAST (gst_test_clock_new ());
+  gst_system_clock_set_default (GST_CLOCK_CAST (testclock));
+
+  h_rtcp = gst_harness_new_with_padnames ("rtpbin", "recv_rtcp_sink_0", NULL);
+  h_rtp = gst_harness_new_with_element (h_rtcp->element, "recv_rtp_sink_0", NULL);
+
+  g_signal_connect (h_rtp->element, "pad-added", G_CALLBACK (_pad_added), h_rtp);
+
+  /* autoremove will automatically remove the receive-pipelines
+     after ssrcdemux when a receive-pad times out */
+  g_object_set (h_rtcp->element, "autoremove", TRUE, NULL);
+
+  gst_harness_set_src_caps_str (h_rtcp, "application/x-rtcp");
+  gst_harness_set_src_caps (h_rtp,
+      gst_caps_new_simple ("application/x-rtp",
+          "clock-rate", G_TYPE_INT, 8000, "payload", G_TYPE_INT, 100, NULL));
+
+  /* push two buffers and crank to activate the jitterbuffer */
+  gst_harness_push (h_rtp, generate_rtp_buffer (GST_SECOND / 50 * 0, 0,
+          8000 / 50 * 0, 100, ssrc));
+  gst_harness_push (h_rtp, generate_rtp_buffer (GST_SECOND / 50 * 1, 1,
+          8000 / 50 * 1, 100, ssrc));
+    gst_harness_crank_single_clock_wait (h_rtp);
+
+  gst_buffer_unref (gst_harness_pull (h_rtp));
+  gst_buffer_unref (gst_harness_pull (h_rtp));
+
+  push_twcc_t = g_thread_new ("push-twcc", _push_twcc_pkts_event, h_rtp);
+
+  /* move the rtcp-thread forwards 50 second, preparing
+     the rtp receive pad to time out */
+  gst_test_clock_set_time (testclock, 50 * GST_SECOND);
+  gst_test_clock_crank (testclock);
+
+  g_usleep (G_USEC_PER_SEC / 100);
+
+  g_thread_join (push_twcc_t);
+  gst_harness_teardown (h_rtp);
+  gst_harness_teardown (h_rtcp);
+
+  /* reset the systemclock */
+  gst_object_unref (testclock);
+  gst_system_clock_set_default (NULL);
+}
+
+GST_START_TEST (test_autoremove_and_twcc_feedback)
+{
+  for (gint i = 0; i < 100; i++) {
+    run_test_autoremove_and_twcc_race ();
+  }
+}
+
+GST_END_TEST;
+
 
 static void
 rtpbin_pad_added (G_GNUC_UNUSED GstElement *rtpbin, GstPad *srcpad,
@@ -1275,6 +1355,7 @@ rtpbin_suite (void)
   tcase_add_test (tc_chain, test_quick_shutdown);
   tcase_add_test (tc_chain, test_recv_rtp_and_rtcp_simultaneously);
   tcase_add_test (tc_chain, test_autoremove_race);
+  tcase_add_test (tc_chain, test_autoremove_and_twcc_feedback);
   tcase_add_test (tc_chain, test_timeout_then_readd);
 
   return s;
