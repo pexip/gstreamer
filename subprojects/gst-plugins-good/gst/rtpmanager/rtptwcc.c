@@ -29,19 +29,6 @@
 
 #include "gstrtputils.h"
 
-/** XXX: FIXME: TODO: rm this */
-typedef struct _GRealArray
-{
-  guint8 *data;
-  guint   len;
-  guint   elt_capacity;
-  guint   elt_size;
-  guint   zero_terminated : 1;
-  guint   clear : 1;
-  gatomicrefcount ref_count;
-  GDestroyNotify clear_func;
-} GRealArray;
-
 GST_DEBUG_CATEGORY (rtp_twcc_debug);
 #define GST_CAT_DEFAULT rtp_twcc_debug
 
@@ -60,7 +47,7 @@ GST_DEBUG_CATEGORY (rtp_twcc_debug);
 
 #define PACKETS_HIST_DUR (10 * GST_SECOND)
 /* How many packets should fit into the packets history by default.
-   Estimated a bundle throughput to 150 per packets at maximum in average
+   Estimated bundle throughput is up to 150 per packets at maximum in average
    circumstances. */
 #define PACKETS_HIST_LEN_DEFAULT (300 * PACKETS_HIST_DUR / GST_SECOND)
 
@@ -72,6 +59,27 @@ typedef enum {
   RTP_TWCC_FECBLOCK_PKT_RECOVERED,
   RTP_TWCC_FECBLOCK_PKT_LOST
 } TWCCPktState;
+
+/* Pick more definitive pkt state */
+static TWCCPktState
+_better_pkt_state (TWCCPktState state1, TWCCPktState state2)
+{
+  if (state1 == RTP_TWCC_FECBLOCK_PKT_UNKNOWN) {
+    return state2;
+  } else if (state2 == RTP_TWCC_FECBLOCK_PKT_UNKNOWN) {
+    return state1;
+  } else if (state1 == RTP_TWCC_FECBLOCK_PKT_LOST) {
+    return state2;
+  } else if (state2 == RTP_TWCC_FECBLOCK_PKT_LOST) {
+    return state1;
+  } else if (state1 == RTP_TWCC_FECBLOCK_PKT_RECOVERED) {
+    return state2;
+  } else if (state2 == RTP_TWCC_FECBLOCK_PKT_RECOVERED) {
+    return state1;
+  } else {
+    return state1;
+  }
+}
 
 static const gchar *
 _pkt_state_s (TWCCPktState state)
@@ -133,9 +141,19 @@ typedef struct
   guint8 pt;
   guint size;
   gboolean lost;
-  gint redundant_idx;
-  gint redundant_num;
-  guint32 protects_ssrc;
+  gint redundant_idx; /* if it's redudndant packet -- series number in a block,
+                        -1 otherwise */
+  gint redundant_num; /* if it'r a redundant packet -- how many packets are 
+                          in the block, -1 otherwise */
+  guint32 protects_ssrc; /* for redundant packets: SSRC of the data stream */
+
+  /* For redundant packets: seqnums of the packets being protected 
+   * by this packet. 
+   * IMPORTANT: Once the packet is checked in before transmission, this array
+   * contains rtp seqnums. After receiving a feedback on the packet, the array
+   * is converted to TWCC seqnums. This is done to shift some work to the 
+   * get_windowed_stats function, which should be less time-critical.
+   */
   GArray * protects_seqnums;
   gboolean stats_processed;
 
@@ -253,7 +271,7 @@ struct _RTPTWCCManager
   * Organizes sent data packets and redundant packets into blocks
   * Keeps track of redundant packets reception such as RTX and FEC packets
   * Maps all packets to blocks and vice versa
-  * Eventually will be used to calculate redundancy statistics
+  * Is used to calculate redundancy statistics
  */
 
 static SentPacket * _find_stats_sentpacket (RTPTWCCManager * twcc, guint16 seqnum);
@@ -1346,9 +1364,8 @@ _set_twcc_seqnum_data (RTPTWCCManager * twcc, RTPPacketInfo * pinfo,
       redundant_pkt_idx, redundant_pkt_num,
       protect_ssrc, protect_seqnums_array);
 
-  GRealArray *protect_seqnums_array_real = (GRealArray*)protect_seqnums_array;
-  for (guint i = 0; protect_seqnums_array_real && i < protect_seqnums_array_real->len; i++) {
-    const guint16 prot_seqnum_ = g_array_index (protect_seqnums_array_real, guint16, i);
+  for (guint i = 0; protect_seqnums_array && i < protect_seqnums_array->len; i++) {
+    const guint16 prot_seqnum_ = g_array_index (protect_seqnums_array, guint16, i);
     GST_DEBUG_OBJECT(twcc, "%u protects seqnum: %u", seqnum, prot_seqnum_);
   }
   gst_rtp_buffer_unmap (&rtp);
@@ -1372,8 +1389,6 @@ _set_twcc_seqnum_data (RTPTWCCManager * twcc, RTPPacketInfo * pinfo,
           < GST_MSECOND * 250) {
           GST_WARNING_OBJECT (twcc, "Risk of"
             " underrun of sent_packets FIFO");
-      } else { 
-        // GST_WARNING_OBJECT (twcc, "sent_packets FIFO overflows, dropping");
       }
       gst_queue_array_pop_head_struct (twcc->sent_packets);
     }
@@ -1386,12 +1401,11 @@ _set_twcc_seqnum_data (RTPTWCCManager * twcc, RTPPacketInfo * pinfo,
 
   GST_DEBUG_OBJECT
       (twcc, "Send: twcc-seqnum: %u, seqnum: %u, pt: %u, marker: %d, "
-      "redundant_idx: %d, redundant_num: %d, protected_seqnums: %u, protect_seqnums_refcnt: %d"
+      "redundant_idx: %d, redundant_num: %d, protected_seqnums: %u,"
       "size: %u, ts: %"
       GST_TIME_FORMAT, packet.seqnum, pinfo->seqnum, packet.pt, pinfo->marker,
       packet.redundant_idx, packet.redundant_num,
       packet.protects_seqnums ? packet.protects_seqnums->len : 0,
-      protect_seqnums_array_real ? protect_seqnums_array_real->ref_count : -666,
       packet.size, GST_TIME_ARGS (pinfo->current_time));
 }
 
@@ -2374,6 +2388,141 @@ rtp_twcc_manager_parse_fci (RTPTWCCManager * twcc,
   return ret;
 }
 
+/* Once we've got feedback on a packet, we need to account it in the internal
+  structures. */
+*/
+static void
+_prtocess_pkt_feedback (SentPacket * pkt, RTPTWCCManager * twcc)
+{
+  if (pkt->stats_processed) {
+    /* This packet was already added to stats structures, but we've got 
+        one more feedback for it
+      */
+    RedBlock * block;
+    if (g_hash_table_lookup_extended (twcc->seqnum_2_redblocks,
+        GUINT_TO_POINTER(pkt->seqnum), NULL, (gpointer *)&block)) {
+      const gsize packets_recovered = _redblock_reconsider (twcc, block);
+      if (packets_recovered > 0) {
+        GST_LOG ("Reconsider block because of packet #%u, "
+        "recovered %lu pckt", pkt->seqnum, packets_recovered);
+      }
+    }
+    return;
+  }
+  pkt->stats_processed = TRUE;
+  GST_LOG ("Processing #%u packet in stats, state: %s", pkt->seqnum,
+    _pkt_state_s (pkt->state));
+
+  twcc_stats_ctx_add_packet (twcc, pkt);
+
+  /* This is either RTX or FEC packet */
+  if (pkt->protects_seqnums && pkt->protects_seqnums->len > 0) {
+    /* We are expecting non-twcc seqnums in the buffer's meta here, so
+      change them to twcc seqnums. */
+
+    if (pkt->redundant_idx < 0 || pkt->redundant_num <= 0
+        || pkt->redundant_idx >= pkt->redundant_num) {
+          GST_ERROR ("Invalid FEC packet: idx: %d, num: %d",
+              pkt->redundant_idx, pkt->redundant_num);
+          g_assert_not_reached ();
+    }
+    
+    for (gsize i = 0; i < pkt->protects_seqnums->len; i++) {
+      const guint16 prot_seqnum = g_array_index (pkt->protects_seqnums,
+          guint16, i);
+      gint32 twcc_seqnum = _lookup_seqnum (twcc, pkt->protects_ssrc,
+          prot_seqnum);
+      if (twcc_seqnum != -1) {
+        g_array_index (pkt->protects_seqnums, guint16, i) 
+            = (guint16)twcc_seqnum;
+      }
+      GST_LOG ("FEC sn: #%u covers twcc sn: #%u, orig sn: %u",
+          pkt->seqnum, twcc_seqnum, prot_seqnum);
+    }
+  
+    /* Check if this packet covers the same block that was already added. */
+    RedBlockKey key = _redblock_key_new (pkt->protects_seqnums);
+    RedBlock * block = NULL;
+    if (g_hash_table_lookup_extended (twcc->redund_2_redblocks, key, NULL,
+        (gpointer*)&block)) {
+      /* Add redundant packet to the existent block */
+      if (block->fec_seqs->len != pkt->redundant_num
+          || block->fec_states->len != pkt->redundant_num
+          || g_array_index (block->fec_seqs, guint16, (gsize)pkt->redundant_idx) != 0
+          || g_array_index (block->fec_states, TWCCPktState, (gsize)pkt->redundant_idx) != RTP_TWCC_FECBLOCK_PKT_UNKNOWN) {
+
+        GST_WARNING_OBJECT (twcc, "Got contradictory FEC block: "
+            "seqs: %u, states: %u, redundant_num: %d, redundant_idx: %d",
+            block->fec_seqs->len, block->fec_states->len, pkt->redundant_num, pkt->redundant_idx);
+        _redblock_key_free (key);
+        return;
+      }
+      g_array_index (block->fec_seqs, guint16, (gsize)pkt->redundant_idx) 
+          = pkt->seqnum;
+      g_array_index (block->fec_states, TWCCPktState,
+          (gsize)pkt->redundant_idx) = pkt->state;
+      
+      _redblock_key_free (key);
+
+      /* Link this seqnum to the block in order to be able to 
+      release the block once this packet leave its lifetime */
+      g_hash_table_insert (twcc->seqnum_2_redblocks, 
+          GUINT_TO_POINTER(pkt->seqnum), block);
+    } else {
+      /* Add every data packet into seqnum_2_redblocks  */
+      block = _redblock_new (pkt->protects_seqnums, pkt->seqnum,
+          pkt->redundant_idx, pkt->redundant_num);
+      g_array_index (block->fec_seqs, guint16, (gsize)pkt->redundant_idx) 
+              = pkt->seqnum;
+      g_array_index (block->fec_states, TWCCPktState,
+              (gsize)pkt->redundant_idx) = pkt->state;
+      g_hash_table_insert (twcc->redund_2_redblocks, key, block);
+      /* Link this seqnum to the block in order to be able to 
+        release the block once this packet leave its lifetime */
+      g_hash_table_insert (twcc->seqnum_2_redblocks, 
+          GUINT_TO_POINTER(pkt->seqnum), block);
+      for (gsize i = 0; i < pkt->protects_seqnums->len; ++i) {
+        const guint64 data_key = g_array_index (pkt->protects_seqnums,
+            guint16, i);
+        RedBlock * data_block = NULL;
+        if (!g_hash_table_lookup_extended (twcc->seqnum_2_redblocks, 
+            GUINT_TO_POINTER(data_key), NULL, (gpointer*)&data_block)) {
+          
+          g_hash_table_insert (twcc->seqnum_2_redblocks, 
+              GUINT_TO_POINTER(data_key), block);
+        } else if (block != data_block) {
+          /* Overlapped blocks are not supported yet */
+          GST_WARNING_OBJECT (twcc, "Data packet %ld covered by two blocks",
+              data_key);
+          g_hash_table_replace (twcc->seqnum_2_redblocks, 
+              GUINT_TO_POINTER(data_key), block);
+        }
+      }
+    }
+    const gsize packets_recovered = _redblock_reconsider (twcc, block);
+    GST_LOG ("Reconsider block because of packet #%u, recovered %lu pckt",
+        pkt->seqnum, packets_recovered);
+  /* Neither RTX nor FEC  */
+  } else {
+    RedBlock * block;
+    if (g_hash_table_lookup_extended (twcc->seqnum_2_redblocks,
+        GUINT_TO_POINTER(pkt->seqnum), NULL, (gpointer *)&block)) {
+
+      for (gsize i = 0; i < block->seqs->len; ++i) {
+        if (g_array_index (block->seqs, guint16, i) == pkt->seqnum) {
+          g_array_index (block->states, TWCCPktState, i) = 
+            _better_pkt_state (g_array_index (block->states, TWCCPktState, i),
+                               pkt->state);
+          break;
+        }
+      }
+      const gsize packets_recovered = _redblock_reconsider (twcc, block);
+      GST_LOG ("Reconsider block because of packet #%u, "
+      "recovered %lu pckt", pkt->seqnum, packets_recovered);
+    }
+  }
+}
+
 GstStructure *
 rtp_twcc_manager_get_windowed_stats (RTPTWCCManager * twcc,
     GstClockTime stats_window_size, GstClockTime stats_window_delay)
@@ -2394,135 +2543,8 @@ rtp_twcc_manager_get_windowed_stats (RTPTWCCManager * twcc,
       SentPacket * pkt = (SentPacket*)g_array_index (psentpkts, SentPacket*, i);
       if (!pkt) {
         continue;
-      } else if (pkt->stats_processed) {
-      /* This packet was already added to stats structures, but we've got 
-          one more feedback for it
-       */
-        RedBlock * block;
-        if (g_hash_table_lookup_extended (twcc->seqnum_2_redblocks,
-            GUINT_TO_POINTER(pkt->seqnum), NULL, (gpointer *)&block)) {
-          const gsize packets_recovered = _redblock_reconsider (twcc, block);
-          if (packets_recovered > 0) {
-            GST_LOG ("Reconsider block because of packet #%u, "
-            "recovered %lu pckt", pkt->seqnum, packets_recovered);
-          }
-        }
-        continue;
       }
-      pkt->stats_processed = TRUE;
-      GST_LOG ("Processing #%u packet in stats, state: %s", pkt->seqnum,
-        _pkt_state_s (pkt->state));
-
-      twcc_stats_ctx_add_packet (twcc, pkt);
-
-      /* This is either RTX or FEC packet */
-      if (pkt->protects_seqnums && pkt->protects_seqnums->len > 0) {
-        /* We are expecting non-twcc seqnums in the buffer's meta here, so
-          change them to twcc seqnums. */
-
-        GRealArray *protect_seqnums_array_real = (GRealArray*)pkt->protects_seqnums;
-        GST_WARNING_OBJECT (twcc, "protect_seqnums protects ssrc: %u, refcount: %d",
-            pkt->protects_ssrc, protect_seqnums_array_real->ref_count);
-
-        if (pkt->redundant_idx < 0 || pkt->redundant_num <= 0
-            || pkt->redundant_idx >= pkt->redundant_num) {
-              GST_ERROR ("Invalid FEC packet: idx: %d, num: %d",
-                  pkt->redundant_idx, pkt->redundant_num);
-              g_assert_not_reached ();
-        }
-        
-        for (gsize i = 0; i < pkt->protects_seqnums->len; i++) {
-          const guint16 prot_seqnum = g_array_index (pkt->protects_seqnums,
-              guint16, i);
-          gint32 twcc_seqnum = _lookup_seqnum (twcc, pkt->protects_ssrc,
-              prot_seqnum);
-          if (twcc_seqnum != -1) {
-            g_array_index (pkt->protects_seqnums, guint16, i) 
-                = (guint16)twcc_seqnum;
-          }
-          GST_LOG ("FEC sn: #%u covers twcc sn: #%u, orig sn: %u",
-              pkt->seqnum, twcc_seqnum, prot_seqnum);
-        }
-      
-        /* Check if this packet covers the same block that was already added. */
-        RedBlockKey key = _redblock_key_new (pkt->protects_seqnums);
-        RedBlock * block = NULL;
-        if (g_hash_table_lookup_extended (twcc->redund_2_redblocks, key, NULL,
-            (gpointer*)&block)) {
-              /* Add redundant packet to the existent block */
-              if (block->fec_seqs->len != pkt->redundant_num
-                  || block->fec_states->len != pkt->redundant_num
-                  || g_array_index (block->fec_seqs, guint16, (gsize)pkt->redundant_idx) != 0
-                  || g_array_index (block->fec_states, TWCCPktState, (gsize)pkt->redundant_idx) != RTP_TWCC_FECBLOCK_PKT_UNKNOWN) {
-
-                GST_WARNING_OBJECT (twcc, "Got contradictory FEC block: "
-                    "seqs: %u, states: %u, redundant_num: %d, redundant_idx: %d",
-                    block->fec_seqs->len, block->fec_states->len, pkt->redundant_num, pkt->redundant_idx);
-                _redblock_key_free (key);
-                continue;
-              }
-              g_array_index (block->fec_seqs, guint16, (gsize)pkt->redundant_idx) 
-                  = pkt->seqnum;
-              g_array_index (block->fec_states, TWCCPktState,
-                  (gsize)pkt->redundant_idx) = pkt->state;
-              
-              _redblock_key_free (key);
-
-              /* Link this seqnum to the block in order to be able to 
-              release the block once this packet leave its lifetime */
-              g_hash_table_insert (twcc->seqnum_2_redblocks, 
-                  GUINT_TO_POINTER(pkt->seqnum), block);
-        } else {
-          /* Add every data packet into seqnum_2_redblocks  */
-          block = _redblock_new (pkt->protects_seqnums, pkt->seqnum,
-              pkt->redundant_idx, pkt->redundant_num);
-          g_array_index (block->fec_seqs, guint16, (gsize)pkt->redundant_idx) 
-                  = pkt->seqnum;
-          g_array_index (block->fec_states, TWCCPktState,
-                  (gsize)pkt->redundant_idx) = pkt->state;
-          g_hash_table_insert (twcc->redund_2_redblocks, key, block);
-          /* Link this seqnum to the block in order to be able to 
-            release the block once this packet leave its lifetime */
-          g_hash_table_insert (twcc->seqnum_2_redblocks, 
-              GUINT_TO_POINTER(pkt->seqnum), block);
-          for (gsize i = 0; i < pkt->protects_seqnums->len; ++i) {
-            const guint64 data_key = g_array_index (pkt->protects_seqnums,
-                guint16, i);
-            RedBlock * data_block = NULL;
-            if (!g_hash_table_lookup_extended (twcc->seqnum_2_redblocks, 
-                GUINT_TO_POINTER(data_key), NULL, (gpointer*)&data_block)) {
-              
-              g_hash_table_insert (twcc->seqnum_2_redblocks, 
-                  GUINT_TO_POINTER(data_key), block);
-            } else if (block != data_block) {
-              /* Overlapped blocks are not supported yet */
-              GST_WARNING_OBJECT (twcc, "Data packet %ld covered by two blocks",
-                  data_key);
-              g_hash_table_replace (twcc->seqnum_2_redblocks, 
-                  GUINT_TO_POINTER(data_key), block);
-            }
-          }
-        }
-        const gsize packets_recovered = _redblock_reconsider (twcc, block);
-        GST_LOG ("Reconsider block because of packet #%u, recovered %lu pckt",
-            pkt->seqnum, packets_recovered);
-      /* RTX of FEC */
-      } else {
-        RedBlock * block;
-        if (g_hash_table_lookup_extended (twcc->seqnum_2_redblocks,
-            GUINT_TO_POINTER(pkt->seqnum), NULL, (gpointer *)&block)) {
-
-          for (gsize i = 0; i < block->seqs->len; ++i) {
-            if (g_array_index (block->seqs, guint16, i) == pkt->seqnum) {
-              g_array_index (block->states, TWCCPktState, i) = pkt->state;
-              break;
-            }
-          }
-          const gsize packets_recovered = _redblock_reconsider (twcc, block);
-          GST_LOG ("Reconsider block because of packet #%u, "
-          "recovered %lu pckt", pkt->seqnum, packets_recovered);
-        }
-      }
+      prtocess_pkt_feedback (pkt, twcc);
     } /* for array */
     g_array_unref (psentpkts);
   } /* while fifo of arrays */
