@@ -30,6 +30,17 @@ G_BEGIN_DECLS
 #define GST_RTP_REPAIR_META_INFO  (gst_rtp_repair_meta_get_info())
 typedef struct _GstRTPRepairMeta GstRTPRepairMeta;
 
+/**
+ * GstRTPRepairMeta:
+ * @meta: parent GstMeta structure
+ * @idx_red_packets: index of this redundant packet for the block
+ * @num_red_packets: number of redundant packets
+ * @ssrc: SSRC
+ * @seqnums: array of sequence numbers of data packets
+ *
+ * Meta describing the reduandant packet, e.g. FEC or RTX.
+ * It is used to tie together the original packet and the redundant packets.
+ */
 struct _GstRTPRepairMeta
 {
   GstMeta meta;
@@ -62,7 +73,8 @@ gboolean gst_buffer_get_repair_seqnums(GstBuffer *buffer, guint32 * ssrc,
 GST_RTP_API
 gint gst_buffer_get_repair_idx(GstBuffer *buffer);
 
-/* If this packet is a FEC/RTX packet, how many redundancy packets are in a block */
+/* If this packet is a FEC/RTX packet, how many redundancy packets are in a block.
+ * -1 if not a repair packet */ 
 GST_RTP_API
 gint gst_buffer_get_repair_num(GstBuffer *buffer);
 
