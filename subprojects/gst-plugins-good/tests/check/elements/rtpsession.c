@@ -5022,6 +5022,43 @@ GST_START_TEST (test_twcc_recv_rtcp_reordered)
 
 GST_END_TEST;
 
+GST_START_TEST (test_twcc_packet_event)
+{
+  SessionHarness *send_h = session_harness_new ();
+  gboolean enabled_twcc_event = __i__;
+  g_object_set (send_h->session, "enable-twcc-packet-event", enabled_twcc_event, NULL);
+  SessionHarness *recv_h = session_harness_new ();
+  GstBuffer *buf;
+  GstEvent *event;
+  guint i;
+
+  TWCCPacket packets[] = {
+    {1, 1 * GST_SECOND, FALSE},
+    {2, 2 * GST_SECOND, TRUE},
+  };
+
+  twcc_push_packets (recv_h, packets);
+
+  buf = session_harness_produce_twcc (recv_h);
+  session_harness_recv_rtcp (send_h, buf);
+
+  for (i = 0; i < 2; i++)
+    gst_event_unref (gst_harness_pull_upstream_event (send_h->send_rtp_h));
+
+  if (enabled_twcc_event) {
+    event = gst_harness_try_pull_upstream_event (send_h->send_rtp_h);
+    twcc_verify_packets_to_event (packets, event);
+  } else {
+    event = gst_harness_try_pull_upstream_event (send_h->send_rtp_h);
+    fail_unless (event == NULL);
+  }
+
+  session_harness_free (send_h);
+  session_harness_free (recv_h);
+}
+
+GST_END_TEST;
+
 GST_START_TEST (test_twcc_no_exthdr_in_buffer)
 {
   SessionHarness *h = session_harness_new ();
@@ -6326,7 +6363,7 @@ GST_START_TEST (test_sender_timeout)
     fail_unless_equals_int (GST_FLOW_OK, res);
     session_harness_crank_clock (h);
   }
-  
+
   /* expect no timeout yet */
   fail_unless_equals_int (0, h->timeout_sender_ssrc);
 
@@ -6427,6 +6464,7 @@ rtpsession_suite (void)
   tcase_add_test (tc_chain, test_twcc_reordering_send_recv);
   tcase_add_test (tc_chain, test_twcc_recv_late_packet_fb_pkt_count_wrap);
   tcase_add_test (tc_chain, test_twcc_recv_rtcp_reordered);
+  tcase_add_loop_test (tc_chain, test_twcc_packet_event, 0, 2);
   tcase_add_test (tc_chain, test_twcc_no_exthdr_in_buffer);
   tcase_add_test (tc_chain, test_twcc_send_and_recv);
   tcase_add_test (tc_chain, test_twcc_multiple_payloads_below_window);
