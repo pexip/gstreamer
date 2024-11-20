@@ -231,6 +231,7 @@ enum
 #define DEFAULT_RTCP_SYNC_SEND_TIME  TRUE
 #define DEFAULT_UPDATE_NTP64_HEADER_EXT  TRUE
 #define DEFAULT_TIMEOUT_INACTIVE_SOURCES TRUE
+#define DEFAULT_ENABLE_TWCC_PACKET_EVENT TRUE
 
 enum
 {
@@ -250,6 +251,7 @@ enum
   PROP_MAX_MISORDER_TIME,
   PROP_STATS,
   PROP_TWCC_STATS,
+  PROP_SEND_TWCC_PACKET_EVENT,
   PROP_RTP_PROFILE,
   PROP_NTP_TIME_SOURCE,
   PROP_RTCP_SYNC_SEND_TIME,
@@ -294,6 +296,8 @@ struct _GstRtpSessionPrivate
   guint sent_rtx_req_count;
 
   GstStructure *last_twcc_stats;
+
+  gboolean enable_twcc_packets_events;
 
   /*
    * This is the list of processed packets in the receive path when upstream
@@ -829,6 +833,13 @@ gst_rtp_session_class_init (GstRtpSessionClass * klass)
           "Various statistics from TWCC", GST_TYPE_STRUCTURE,
           G_PARAM_READABLE | G_PARAM_STATIC_STRINGS));
 
+  g_object_class_install_property (gobject_class, PROP_SEND_TWCC_PACKET_EVENT,
+      g_param_spec_boolean ("enable-twcc-packet-event",
+          "Enable TWCC Packet Event",
+          "Allow the rtpsession to send upstream TWCC packet event.",
+          DEFAULT_ENABLE_TWCC_PACKET_EVENT,
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+
   g_object_class_install_property (gobject_class, PROP_RTP_PROFILE,
       g_param_spec_enum ("rtp-profile", "RTP Profile",
           "RTP profile to use", GST_TYPE_RTP_PROFILE, DEFAULT_RTP_PROFILE,
@@ -935,6 +946,8 @@ gst_rtp_session_init (GstRtpSession * rtpsession)
   rtpsession->priv->session = rtp_session_new ();
   rtpsession->priv->use_pipeline_clock = DEFAULT_USE_PIPELINE_CLOCK;
   rtpsession->priv->rtcp_sync_send_time = DEFAULT_RTCP_SYNC_SEND_TIME;
+  rtpsession->priv->enable_twcc_packets_events =
+      DEFAULT_ENABLE_TWCC_PACKET_EVENT;
 
   /* configure callbacks */
   rtp_session_set_callbacks (rtpsession->priv->session, &callbacks, rtpsession);
@@ -1063,6 +1076,9 @@ gst_rtp_session_set_property (GObject * object, guint prop_id,
       g_object_set_property (G_OBJECT (priv->session),
           "timeout-inactive-sources", value);
       break;
+    case PROP_SEND_TWCC_PACKET_EVENT:
+      priv->enable_twcc_packets_events = g_value_get_boolean (value);
+      break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
       break;
@@ -1132,6 +1148,9 @@ gst_rtp_session_get_property (GObject * object, guint prop_id,
       GST_RTP_SESSION_LOCK (rtpsession);
       g_value_set_boxed (value, priv->last_twcc_stats);
       GST_RTP_SESSION_UNLOCK (rtpsession);
+      break;
+    case PROP_SEND_TWCC_PACKET_EVENT:
+      g_value_set_boolean (value, priv->enable_twcc_packets_events);
       break;
     case PROP_RTP_PROFILE:
       g_object_get_property (G_OBJECT (priv->session), "rtp-profile", value);
@@ -3061,21 +3080,26 @@ gst_rtp_session_notify_twcc (RTPSession * sess,
   rtpsession->priv->last_twcc_stats = twcc_stats;
   GST_RTP_SESSION_UNLOCK (rtpsession);
 
-  if (send_rtp_sink) {
-    event =
-        gst_event_new_custom (GST_EVENT_CUSTOM_UPSTREAM,
-        gst_structure_copy (twcc_packets));
-    gst_pad_push_event (send_rtp_sink, event);
-    gst_object_unref (send_rtp_sink);
+  if (rtpsession->priv->enable_twcc_packets_events) {
+    if (send_rtp_sink) {
+      event =
+          gst_event_new_custom (GST_EVENT_CUSTOM_UPSTREAM,
+          gst_structure_copy (twcc_packets));
+      gst_pad_push_event (send_rtp_sink, event);
+    }
+    if (send_rtp_src) {
+      event =
+          gst_event_new_custom (GST_EVENT_CUSTOM_DOWNSTREAM,
+          gst_structure_copy (twcc_packets));
+      gst_pad_push_event (send_rtp_src, event);
+    }
   }
 
-  if (send_rtp_src) {
-    event =
-        gst_event_new_custom (GST_EVENT_CUSTOM_DOWNSTREAM,
-        gst_structure_copy (twcc_packets));
-    gst_pad_push_event (send_rtp_src, event);
+  if (send_rtp_sink)
+    gst_object_unref (send_rtp_sink);
+
+  if (send_rtp_src)
     gst_object_unref (send_rtp_src);
-  }
 
   gst_structure_free (twcc_packets);
   g_object_notify (G_OBJECT (rtpsession), "twcc-stats");
