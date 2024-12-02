@@ -120,7 +120,6 @@ enum
   PROP_TWCC_FEEDBACK_INTERVAL,
   PROP_UPDATE_NTP64_HEADER_EXT,
   PROP_TIMEOUT_INACTIVE_SOURCES,
-  PROP_RTX_SSRC_MAP,
   PROP_LAST,
 };
 
@@ -804,18 +803,6 @@ rtp_session_class_init (RTPSessionClass * klass)
       DEFAULT_TIMEOUT_INACTIVE_SOURCES,
       G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS);
 
-  /**
-   * RTPSession:rtx-ssrc-map:
-   *
-   * Mapping from SSRC to RTX ssrcs.
-   *
-   * Since: 1.24
-   */
-  properties[PROP_RTX_SSRC_MAP] =
-      g_param_spec_boxed ("rtx-ssrc-map", "RTX SSRC Map",
-      "Map of SSRCs to their retransmission SSRCs",
-      GST_TYPE_STRUCTURE, G_PARAM_WRITABLE | G_PARAM_STATIC_STRINGS);
-
   g_object_class_install_properties (gobject_class, PROP_LAST, properties);
 
   klass->get_twcc_windowed_stats =
@@ -915,7 +902,6 @@ rtp_session_init (RTPSession * sess)
   sess->is_doing_ptp = TRUE;
 
   sess->twcc = rtp_twcc_manager_new (sess->mtu);
-  sess->rtx_ssrc_to_ssrc = g_hash_table_new (NULL, NULL);
   sess->timedout_ssrcs = g_hash_table_new (NULL, NULL);
 }
 
@@ -939,9 +925,6 @@ rtp_session_finalize (GObject * object)
     g_hash_table_destroy (sess->ssrcs[i]);
 
   g_object_unref (sess->twcc);
-  if (sess->rtx_ssrc_map)
-    gst_structure_free (sess->rtx_ssrc_map);
-  g_hash_table_destroy (sess->rtx_ssrc_to_ssrc);
   g_hash_table_destroy (sess->timedout_ssrcs);
 
   g_mutex_clear (&sess->lock);
@@ -1144,16 +1127,6 @@ rtp_session_set_property (GObject * object, guint prop_id,
       break;
     case PROP_TIMEOUT_INACTIVE_SOURCES:
       sess->timeout_inactive_sources = g_value_get_boolean (value);
-      break;
-    case PROP_RTX_SSRC_MAP:
-      RTP_SESSION_LOCK (sess);
-      if (sess->rtx_ssrc_map)
-        gst_structure_free (sess->rtx_ssrc_map);
-      sess->rtx_ssrc_map = g_value_dup_boxed (value);
-      g_hash_table_remove_all (sess->rtx_ssrc_to_ssrc);
-      gst_structure_foreach (sess->rtx_ssrc_map,
-          structure_to_hash_table_reverse, sess->rtx_ssrc_to_ssrc);
-      RTP_SESSION_UNLOCK (sess);
       break;
 
     default:
