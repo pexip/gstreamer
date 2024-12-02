@@ -25,6 +25,7 @@
 
 #include <gst/check/gstharness.h>
 #include <gst/rtp/gstrtpbuffer.h>
+#include <gst/rtp/gstrtprepairmeta.h>
 #include <gst/check/gstcheck.h>
 
 #define RTP_PACKET_DUR (10 * GST_MSECOND)
@@ -459,6 +460,98 @@ SampleRTPPacket avmcu_fec_packets[] = {
   ,
 };
 
+static GstElement *
+request_fec_encoder (GstElement * rtpbin, guint sessid, G_GNUC_UNUSED void *user_data)
+{
+  gint *percentage = (gint *) user_data;
+  GstElement *fecenc = gst_element_factory_make_full ("rtpulpfecenc", 
+      "pt", 100,
+      "multipacket", TRUE,
+      "percentage", *percentage,
+      NULL);
+  return fecenc;
+}
+
+static GstHarness *
+harness_rtpulpfecenc (guint32 ssrc, guint8 lost_pt, gint *percentage)
+{
+  GstElement *rtpbin = gst_element_factory_make ("rtpbin", NULL);
+  g_signal_connect (rtpbin, "request-fec-encoder",
+    (GCallback) request_fec_encoder, percentage);
+  GstPad * rtpbin_sink = gst_element_request_pad_simple (rtpbin, 
+      "send_rtp_sink_0");
+  GstPad * rtpbin_src = gst_element_get_static_pad (rtpbin, "send_rtp_src_0");
+  
+  GstHarness *h = gst_harness_new_with_element (rtpbin,
+        "send_rtp_sink_0", "send_rtp_src_0");
+  gst_object_unref (rtpbin_sink);
+  gst_object_unref (rtpbin_src);
+
+  gchar *caps_str =
+      g_strdup_printf ("application/x-rtp,ssrc=(uint)%u,payload=(int)%u",
+      ssrc, lost_pt);
+  gst_harness_set_src_caps_str (h, caps_str);
+  g_free (caps_str);
+
+  return h;
+}
+
+GST_START_TEST (rtpulpfecdec_repairmeta)
+{
+  guint i = 0;
+  guint16 block_seq[8];
+  guint16 seq = 12511;
+  const gint block_len = G_N_ELEMENTS (block_seq);
+  const gfloat redrate = 0.25f;
+  gint percentage = (gint)(redrate * 100);
+  GstHarness *h = harness_rtpulpfecenc (0x00000d51, 122, &percentage);
+  GstRTPBuffer rtp = GST_RTP_BUFFER_INIT;
+  GstBuffer *buf = NULL;
+  GstBuffer *bufout = NULL;
+
+  for (i = 0; i < G_N_ELEMENTS (avmcu_media_packets); ++i) {
+    gchar* pkt_data = g_memdup2 (avmcu_media_packets[i].data,
+        avmcu_media_packets[i].len);
+    if (i > 0 && (i+1) % block_len == 0) {
+      /* Set the marker bit for every block_len-th packet
+         so that the FEC packets are generated */
+      pkt_data[1] |= 0x80;
+    }
+    buf = gst_rtp_buffer_new_take_data (pkt_data,
+      avmcu_media_packets[i].len);
+    bufout = gst_harness_push_and_pull (h, buf);
+    do {
+      fail_unless (gst_rtp_buffer_map (bufout,
+            GST_MAP_READ, &rtp));
+      fail_unless_equals_int (gst_rtp_buffer_get_seq (&rtp), seq);
+      GstRTPRepairMeta *meta = gst_buffer_get_rtp_repair_meta (bufout);
+      if (meta) {
+        /* Got a redundant packet from FEC encoder, check its repair meta */
+        fail_unless_equals_int (meta->ssrc, 0x00000d51);
+        fail_unless_equals_int (meta->seqnums->len, block_len);
+        for (gint j = 0; j < block_len; ++j) {
+          fail_unless_equals_int (g_array_index(meta->seqnums, guint16, j),
+              block_seq[j]);
+        }
+        fail_unless_equals_int (gst_rtp_buffer_get_payload_type (&rtp), 100);
+      } else {
+        fail_unless_equals_int (gst_rtp_buffer_get_payload_type (&rtp), 122);
+        /* Data packet has just poped out, remember its seqnum */
+        block_seq[i % block_len] = gst_rtp_buffer_get_seq (&rtp);
+      }
+      seq++;
+      gst_rtp_buffer_unmap (&rtp);
+    } while ((bufout = gst_harness_try_pull (h)) != NULL);
+  }
+
+  /* Check that FEC encoder doesn't generate FEC packets more than expected */
+  g_usleep (G_USEC_PER_SEC / 100);
+  i = 0;
+  while ((bufout = gst_harness_try_pull (h)) != NULL) i++;
+  fail_unless (i == 0);
+}
+
+GST_END_TEST;
 
 GST_START_TEST (rtpulpfecdec_recovered_using_recovered_packet)
 {
@@ -656,6 +749,7 @@ rtpfec_suite (void)
   tcase_add_test (tc_chain, rtpulpfecdec_recovered_from_fec);
   tcase_add_test (tc_chain, rtpulpfecdec_recovered_from_fec_long);
   tcase_add_loop_test (tc_chain, rtpulpfecdec_recovered_from_many, 0, 4);
+  tcase_add_test (tc_chain, rtpulpfecdec_repairmeta);
   tcase_add_test (tc_chain, rtpulpfecdec_recovered_using_recovered_packet);
   tcase_add_test (tc_chain, rtpulpfecdec_recovered_from_storage);
   tcase_add_test (tc_chain, rtpulpfecdec_recovered_push_failed);
