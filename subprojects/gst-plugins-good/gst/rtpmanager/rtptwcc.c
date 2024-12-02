@@ -519,6 +519,13 @@ _redblock_reconsider (RTPTWCCManager * twcc, RedBlock * block)
 
 /******************************************************************************/
 
+static StatsPktPtr*
+_sent_pkt_get (GstQueueArray* pkt_array, guint idx)
+{
+  return (StatsPktPtr*)
+    gst_queue_array_peek_nth_struct (pkt_array, idx);
+}
+
 static void
 _append_structure_to_value_array (GValueArray * array, GstStructure * s)
 {
@@ -538,6 +545,31 @@ _structure_take_value_array (GstStructure * s,
   g_value_take_boxed (&value, array);
   gst_structure_take_value (s, field_name, &value);
   g_value_unset (&value);
+}
+
+static void
+_sent_pkt_clean (RTPTWCCManager * twcc, GstQueueArray *sent_packets, gsize max_len)
+{
+  if (gst_queue_array_get_length(sent_packets) >= max_len) {
+    /* It could mean that statistics was not called   at all, asumming that
+      the packet was not referenced anywhere else, we can drop it.
+      */
+    GstClockTime pkt_ts = 
+        ((SentPacket*)gst_queue_array_peek_head_struct (sent_packets))
+          ->local_ts;
+    if (GST_CLOCK_TIME_IS_VALID(twcc->prev_stat_window_beginning) &&
+        GST_CLOCK_DIFF (pkt_ts, twcc->prev_stat_window_beginning) 
+            < 0) {
+        GST_WARNING_OBJECT (twcc, "sent_packets FIFO overflows, dropping");
+        g_assert_not_reached ();
+    } else if (GST_CLOCK_TIME_IS_VALID(twcc->prev_stat_window_beginning) &&
+      GST_CLOCK_DIFF (pkt_ts, twcc->prev_stat_window_beginning)
+        < GST_MSECOND * 250) {
+        GST_WARNING_OBJECT (twcc, "Risk of"
+          " underrun of sent_packets FIFO");
+    }
+    gst_queue_array_pop_head_struct (sent_packets);
+  }
 }
 
 static void
@@ -602,8 +634,7 @@ _get_stats_packets_window (GstQueueArray * array,
   }
 
   for (i = 0; i < array_length; i++) {
-    SentPacket *pkt = ((StatsPktPtr*)gst_queue_array_peek_nth_struct (array, i))
-        ->sentpkt;
+    SentPacket *pkt = _sent_pkt_get (array, i)->sentpkt;
     if (!pkt) {
       continue;
     }
@@ -637,8 +668,7 @@ _get_stats_packets_window (GstQueueArray * array,
   ret = FALSE;
   for (i = 0; i < array_length - *start_idx - 1; i++) {
     guint idx = array_length - 1 - i;
-    SentPacket *pkt = ((StatsPktPtr*)gst_queue_array_peek_nth_struct (array, idx))
-        ->sentpkt;
+    SentPacket *pkt = _sent_pkt_get (array, idx)->sentpkt;
     if (!pkt) {
       continue;
     }
@@ -715,22 +745,17 @@ twcc_stats_ctx_calculate_windowed_stats (RTPTWCCManager * twcc, TWCCStatsCtx * c
     return FALSE;
   } else {
     GST_DEBUG ("Stats window: %u packets, pt: %d, %d->%d", packets_sent,
-      ((StatsPktPtr*)gst_queue_array_peek_nth_struct (packets, start_idx))
-        ->sentpkt->pt,
-      ((StatsPktPtr*)gst_queue_array_peek_nth_struct (packets, start_idx))
-        ->sentpkt->seqnum,
-      ((StatsPktPtr*)gst_queue_array_peek_nth_struct (packets,
-          packets_sent + start_idx - 1))->sentpkt->seqnum);
+      _sent_pkt_get (packets, start_idx) ->sentpkt->pt,
+      _sent_pkt_get (packets, start_idx)->sentpkt->seqnum,
+      _sent_pkt_get (packets, packets_sent + start_idx - 1)->sentpkt->seqnum);
   }
 
   for (i = 0; i < packets_sent; i++) {
     SentPacket *prev = NULL;
     if (i + start_idx >= 1)
-      prev = ((StatsPktPtr*)gst_queue_array_peek_nth_struct (packets,
-          i + start_idx))->sentpkt;
+      prev = _sent_pkt_get (packets, i + start_idx)->sentpkt;
 
-    SentPacket *pkt = ((StatsPktPtr*)gst_queue_array_peek_nth_struct (packets,
-      i + start_idx))->sentpkt;
+    SentPacket *pkt = _sent_pkt_get(packets, i + start_idx)->sentpkt;
     if (!pkt) {
       continue;
     }
@@ -896,8 +921,7 @@ _find_stats_sentpacket (RTPTWCCManager * twcc, guint16 seqnum)
   gint idx = _idx_sentpacket (twcc, seqnum);
   SentPacket * res = NULL;
   if (idx >= 0 && idx < gst_queue_array_get_length (twcc->stats_ctx->pt_packets)) {
-    res = ((StatsPktPtr*)gst_queue_array_peek_nth_struct (twcc->stats_ctx->pt_packets, idx))
-        ->sentpkt;
+    res = _sent_pkt_get (twcc->stats_ctx->pt_packets, idx)->sentpkt;
   }
 
   return res;
@@ -1370,31 +1394,11 @@ _set_twcc_seqnum_data (RTPTWCCManager * twcc, RTPPacketInfo * pinfo,
   }
   gst_rtp_buffer_unmap (&rtp);
 
-  {
-    g_mutex_lock (&twcc->send_lock);
-    if (gst_queue_array_get_length(twcc->sent_packets) >= twcc->sent_packets_size) {
-      /* It could mean that statistics was not called   at all, asumming that
-        the packet was not referenced anywhere else, we can drop it.
-       */
-      GstClockTime pkt_ts = 
-          ((SentPacket*)gst_queue_array_peek_head_struct (twcc->sent_packets))
-            ->local_ts;
-      if (GST_CLOCK_TIME_IS_VALID(twcc->prev_stat_window_beginning) &&
-          GST_CLOCK_DIFF (pkt_ts, twcc->prev_stat_window_beginning) 
-              < 0) {
-          GST_WARNING_OBJECT (twcc, "sent_packets FIFO overflows, dropping");
-          g_assert_not_reached ();
-      } else if (GST_CLOCK_TIME_IS_VALID(twcc->prev_stat_window_beginning) &&
-        GST_CLOCK_DIFF (pkt_ts, twcc->prev_stat_window_beginning)
-          < GST_MSECOND * 250) {
-          GST_WARNING_OBJECT (twcc, "Risk of"
-            " underrun of sent_packets FIFO");
-      }
-      gst_queue_array_pop_head_struct (twcc->sent_packets);
-    }
-    gst_queue_array_push_tail_struct (twcc->sent_packets, &packet);
-    g_mutex_unlock (&twcc->send_lock);
-  }
+  g_mutex_lock (&twcc->send_lock);
+  /* Make sure that sent_packets are within max_size, if not shrink by 1 pkt */
+  _sent_pkt_clean (twcc, twcc->sent_packets, twcc->sent_packets_size);
+  gst_queue_array_push_tail_struct (twcc->sent_packets, &packet);
+  g_mutex_unlock (&twcc->send_lock);
 
   gst_buffer_add_tx_feedback_meta (pinfo->data, seqnum,
       GST_TX_FEEDBACK_CAST (twcc));
@@ -2390,7 +2394,6 @@ rtp_twcc_manager_parse_fci (RTPTWCCManager * twcc,
 
 /* Once we've got feedback on a packet, we need to account it in the internal
   structures. */
-*/
 static void
 _prtocess_pkt_feedback (SentPacket * pkt, RTPTWCCManager * twcc)
 {
@@ -2544,7 +2547,7 @@ rtp_twcc_manager_get_windowed_stats (RTPTWCCManager * twcc,
       if (!pkt) {
         continue;
       }
-      prtocess_pkt_feedback (pkt, twcc);
+      _prtocess_pkt_feedback (pkt, twcc);
     } /* for array */
     g_array_unref (psentpkts);
   } /* while fifo of arrays */

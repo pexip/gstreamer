@@ -507,25 +507,6 @@ session_harness_set_twcc_recv_ext_id (SessionHarness * h, guint8 ext_id)
   g_signal_emit_by_name (h->session, "clear-pt-map");
 }
 
-static GstStructure *
-create_rtx_map (const gchar * name, guint key, guint value)
-{
-  gchar *key_str = g_strdup_printf ("%u", key);
-  GstStructure *s = gst_structure_new (name,
-      key_str, G_TYPE_UINT, (guint) value, NULL);
-  g_free (key_str);
-  return s;
-}
-
-static void
-session_harness_enable_rtx (SessionHarness * h)
-{
-  GstStructure *rtx_map =
-      create_rtx_map ("rtx-map", TEST_BUF_SSRC, TEST_RTX_BUF_SSRC);
-  g_object_set (h->internal_session, "rtx-ssrc-map", rtx_map, NULL);
-  gst_structure_free (rtx_map);
-}
-
 static void
 session_harness_add_caps_for_pt (SessionHarness * h, GstCaps * caps, guint8 pt)
 {
@@ -5294,9 +5275,6 @@ construct_initial_state_for_rtx (SessionHarness * h_send,
   guint i;
   guint window_size_ms = 300;
   guint num_buffers = window_size_ms / TEST_BUF_MS + 1;
-
-  session_harness_enable_rtx (h_send);
-  session_harness_enable_rtx (h_recv);
 
   /* send and recv enough packets to be over the stats window */
   for (i = 0; i < num_buffers; i++) {
