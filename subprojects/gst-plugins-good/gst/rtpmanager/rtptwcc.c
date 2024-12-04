@@ -548,7 +548,8 @@ _structure_take_value_array (GstStructure * s,
 }
 
 static void
-_sent_pkt_clean (RTPTWCCManager * twcc, GstQueueArray *sent_packets, gsize max_len)
+_sent_pkt_keep_length (RTPTWCCManager * twcc, GstQueueArray *sent_packets, gsize max_len,
+    SentPacket* packet)
 {
   if (gst_queue_array_get_length(sent_packets) >= max_len) {
     /* It could mean that statistics was not called   at all, asumming that
@@ -570,6 +571,7 @@ _sent_pkt_clean (RTPTWCCManager * twcc, GstQueueArray *sent_packets, gsize max_l
     }
     gst_queue_array_pop_head_struct (sent_packets);
   }
+  gst_queue_array_push_tail_struct (sent_packets, packet);
 }
 
 static void
@@ -1396,8 +1398,7 @@ _set_twcc_seqnum_data (RTPTWCCManager * twcc, RTPPacketInfo * pinfo,
 
   g_mutex_lock (&twcc->send_lock);
   /* Make sure that sent_packets are within max_size, if not shrink by 1 pkt */
-  _sent_pkt_clean (twcc, twcc->sent_packets, twcc->sent_packets_size);
-  gst_queue_array_push_tail_struct (twcc->sent_packets, &packet);
+  _sent_pkt_keep_length (twcc, twcc->sent_packets, twcc->sent_packets_size, &packet);
   g_mutex_unlock (&twcc->send_lock);
 
   gst_buffer_add_tx_feedback_meta (pinfo->data, seqnum,
