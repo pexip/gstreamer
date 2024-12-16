@@ -266,7 +266,7 @@ _on_timeout (G_GNUC_UNUSED GstElement * element, guint ssrc, gpointer data)
 }
 
 static void
-_on_sender_timeout (G_GNUC_UNUSED GstElement *element,
+_on_sender_timeout (G_GNUC_UNUSED GstElement * element,
     guint ssrc, gpointer data)
 {
   SessionHarness *h = data;
@@ -274,8 +274,8 @@ _on_sender_timeout (G_GNUC_UNUSED GstElement *element,
 }
 
 static void
-_notify_twcc_stats (GParamSpec *spec G_GNUC_UNUSED,
-    GObject *object G_GNUC_UNUSED, gpointer data)
+_notify_twcc_stats (GParamSpec * spec G_GNUC_UNUSED,
+    GObject * object G_GNUC_UNUSED, gpointer data)
 {
   SessionHarness *h = data;
   GstStructure *stats;
@@ -338,7 +338,8 @@ session_harness_new (void)
 
   g_signal_connect (h->session, "on-timeout", (GCallback) _on_timeout, h);
 
-  g_signal_connect (h->session, "on-sender-timeout", (GCallback) _on_sender_timeout, h);
+  g_signal_connect (h->session, "on-sender-timeout",
+      (GCallback) _on_sender_timeout, h);
 
   g_signal_connect (h->session, "notify::twcc-stats",
       (GCallback) _notify_twcc_stats, h);
@@ -988,7 +989,7 @@ GST_START_TEST (test_internal_sources_timeout_rtcp_sr)
   }
 
   /* advance the clock over the timeout time */
-  for (i = 0; i < 20; i++)
+  while (h->timeout_ssrc == 0)
     session_harness_crank_clock (h);
 
   /* verify deadbeef is reported as timed out */
@@ -1044,7 +1045,7 @@ GST_START_TEST (test_internal_sources_timeout_rtcp_rr)
   fail_unless_equals_int (0, h->timeout_ssrc);
 
   /* push some more rtcp-rr packets, while making the clock tick */
-  for (i = 0; i < 20; i++) {
+  while (h->timeout_ssrc == 0) {
     GST_ERROR ("Crank and push rtcp-rr (1) %d", i);
     buf = generate_rtcp_rr_buffer (0xDEADBEEF);
     fail_unless_equals_int (GST_FLOW_OK, session_harness_recv_rtcp (h, buf));
@@ -1060,9 +1061,11 @@ GST_START_TEST (test_internal_sources_timeout_rtcp_rr)
   /* push a single rtcp-rr packet, while making the clock tick, and check that it triggers timeout */
   buf = generate_rtcp_rr_buffer (0xDEADBEEF);
   fail_unless_equals_int (GST_FLOW_OK, session_harness_recv_rtcp (h, buf));
+
   /* advance the clock over the timeout time */
-  for (i = 0; i < 20; i++)
+  while (h->timeout_ssrc == 0) {
     session_harness_crank_clock (h);
+  }
 
   /* verify deadbeef is reported as timed out */
   fail_unless_equals_int (0xDEADBEEF, h->timeout_ssrc);
@@ -2561,7 +2564,8 @@ GST_START_TEST (test_request_multiple_ooo_nack)
   gst_buffer_unref (session_harness_pull_rtcp (h));
 
   /* request NACK immediately */
-  session_harness_rtp_retransmission_request (h, 0x12345678, 1234, 34, 150, 100);
+  session_harness_rtp_retransmission_request (h, 0x12345678, 1234, 34, 150,
+      100);
   session_harness_rtp_retransmission_request (h, 0x12345678, 1234, 0, 0, 0);
 
   /* NACK should be produced immediately as early RTCP is allowed. Pull buffer
@@ -6153,8 +6157,7 @@ GST_START_TEST (test_sender_timeout)
   gint i;
 
   caps = generate_caps (TEST_BUF_PT);
-  gst_caps_set_simple (caps,
-      "ssrc", G_TYPE_UINT, TEST_BUF_SSRC, NULL);
+  gst_caps_set_simple (caps, "ssrc", G_TYPE_UINT, TEST_BUF_SSRC, NULL);
   gst_harness_set_src_caps (h->send_rtp_h, caps);
 
   for (i = 0; i < 5; i++) {
