@@ -74,7 +74,8 @@ static GstBuffer *
 generate_test_buffer_full (GstClockTime ts,
     guint seqnum, guint32 rtp_ts, guint ssrc,
     gboolean marker_bit, guint8 payload_type, guint8 twcc_ext_id,
-    guint16 twcc_seqnum, gint idx_red_packets, gint num_red_packets,
+    guint16 twcc_seqnum,
+    gint idx, gint rpkts_num,
     guint32 protects_ssrc, guint16 * protects_seqnums, guint8 protects_len)
 {
   GstBuffer *buf;
@@ -105,8 +106,8 @@ generate_test_buffer_full (GstClockTime ts,
   }
 
   gst_rtp_buffer_unmap (&rtp);
-  gst_buffer_add_rtp_repair_meta (buf, idx_red_packets, num_red_packets,
-    protects_ssrc, protects_seqnums, protects_len);
+  gst_buffer_add_rtp_repair_meta (buf, idx, rpkts_num,
+      protects_ssrc, protects_seqnums, protects_len);
 
   return buf;
 }
@@ -4937,7 +4938,8 @@ GST_START_TEST (test_twcc_packet_event)
 {
   SessionHarness *send_h = session_harness_new ();
   gboolean enabled_twcc_event = __i__;
-  g_object_set (send_h->session, "enable-twcc-packet-event", enabled_twcc_event, NULL);
+  g_object_set (send_h->session, "enable-twcc-packet-event", enabled_twcc_event,
+      NULL);
   SessionHarness *recv_h = session_harness_new ();
   GstBuffer *buf;
   GstEvent *event;
@@ -5299,8 +5301,8 @@ construct_initial_state_for_rtx (SessionHarness * h_send,
   return i;
 }
 
-static void
-fail_unless_twcc_stats_recovery (SessionHarness * h, gdouble recovery_pct)
+static gdouble
+get_recovery_pct (SessionHarness * h)
 {
   gdouble stats_recovery_pct;
   GstStructure *twcc_stats;
@@ -5310,9 +5312,15 @@ fail_unless_twcc_stats_recovery (SessionHarness * h, gdouble recovery_pct)
 
   fail_unless (gst_structure_get (twcc_stats,
           "recovery-pct", G_TYPE_DOUBLE, &stats_recovery_pct, NULL));
-  fail_unless_equals_float (recovery_pct, stats_recovery_pct);
 
   gst_structure_free (twcc_stats);
+  return stats_recovery_pct;
+}
+
+static void
+fail_unless_twcc_stats_recovery (SessionHarness * h, gdouble recovery_pct)
+{
+  fail_unless_equals_float (recovery_pct, get_recovery_pct (h));
 }
 
 static void
@@ -5389,6 +5397,67 @@ GST_START_TEST (test_twcc_stats_no_rtx_no_recover)
   test_twcc_stats_rtx_recovery (FALSE, 0.0);
 }
 
+GST_END_TEST;
+
+GST_START_TEST (test_twcc_stats_long_rtx_recover)
+{
+  gint loss_pct = 50;
+  guint nframes = 100;
+  guint nframes_to_skip = 10;
+  guint pkt_in_frame = 10;
+
+  GRand *rnd = g_rand_new_with_seed (101);
+
+  SessionHarness *h_send = session_harness_new ();
+  SessionHarness *h_recv = session_harness_new ();
+  guint next_seqnum, lost_num = 0;
+
+  session_harness_add_twcc_caps_for_pt (h_send, TEST_BUF_PT);
+  session_harness_add_twcc_caps_for_pt (h_send, TEST_RTX_BUF_PT);
+  session_harness_set_twcc_recv_ext_id (h_recv, TEST_TWCC_EXT_ID);
+
+  next_seqnum = construct_initial_state_for_rtx (h_send, h_recv);
+
+  for (guint nframe = 0; nframe < nframes; nframe++) {
+    for (guint i = 0; i < pkt_in_frame; i++) {
+      GstBuffer *buf;
+      GstBuffer *rtx_buf;
+
+      const gboolean lost = g_rand_int_range (rnd, 0, 100) < loss_pct;
+      buf = generate_twcc_send_buffer (next_seqnum++, FALSE);
+      rtx_buf = generate_rtx_buffer (i, buf);
+      send_recv_buffer (h_send, h_recv, buf, !lost);
+      if (lost) {
+        // const gboolean rtx_lost = g_rand_int_range (rnd, 0, 100) < loss_pct;
+        const gboolean rtx_lost = FALSE;
+
+        /* we send a buffer but receiver doesn't get it */
+        send_recv_buffer (h_send, h_recv, rtx_buf, !rtx_lost);
+        lost_num++;
+      } else {
+        gst_buffer_unref (rtx_buf);
+      }
+    }
+    /* push a last buffer with the marker bit to trigger the report */
+    send_recv_buffer (h_send, h_recv,
+        generate_twcc_send_buffer (next_seqnum++, TRUE), TRUE);
+
+    fail_unless_equals_int64 (GST_FLOW_OK,
+        session_harness_recv_rtcp (h_send,
+            session_harness_produce_twcc (h_recv)));
+
+    if (nframe > nframes_to_skip) {
+      const gdouble recovery_stats = get_recovery_pct (h_send);
+      fail_if (recovery_stats != 100. && recovery_stats != -1.);
+    } else {
+      const gdouble recovery_stats = get_recovery_pct (h_send);
+      GST_ERROR ("Frame %d: recovery stats: %f", nframe, recovery_stats);
+    }
+  }
+
+  session_harness_free (h_send);
+  session_harness_free (h_recv);
+}
 GST_END_TEST;
 
 GST_START_TEST (test_twcc_stats_block_fec_recover)
@@ -6351,6 +6420,7 @@ rtpsession_suite (void)
   tcase_add_test (tc_chain, test_twcc_feedback_old_seqnum);
   tcase_add_test (tc_chain, test_twcc_stats_rtx_recover_lost);
   tcase_add_test (tc_chain, test_twcc_stats_no_rtx_no_recover);
+  tcase_add_test (tc_chain, test_twcc_stats_long_rtx_recover);
   tcase_add_test (tc_chain, test_twcc_stats_block_fec_recover);
   tcase_add_test (tc_chain, test_twcc_feedback_max_sent_packets);
   tcase_add_test (tc_chain, test_twcc_non_twcc_pkts_does_not_mark_loss);

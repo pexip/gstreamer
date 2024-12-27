@@ -35,7 +35,7 @@ typedef enum {
 struct _TWCCStatsManager;
 typedef struct _TWCCStatsManager TWCCStatsManager;
 
-TWCCStatsManager *rtp_twcc_stats_manager_new (void);
+TWCCStatsManager *rtp_twcc_stats_manager_new (GObject *parent);
 void rtp_twcc_stats_manager_free (TWCCStatsManager *stats_manager);
 
 void rtp_twcc_stats_sent_pkt (TWCCStatsManager *stats_manager,

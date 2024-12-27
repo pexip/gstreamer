@@ -205,7 +205,7 @@ rtp_twcc_manager_init (RTPTWCCManager * twcc)
   twcc->next_feedback_send_time = GST_CLOCK_TIME_NONE;
   twcc->last_report_time = GST_CLOCK_TIME_NONE;
 
-  twcc->stats_manager = rtp_twcc_stats_manager_new ();
+  twcc->stats_manager = rtp_twcc_stats_manager_new (G_OBJECT(twcc));
 }
 
 static void

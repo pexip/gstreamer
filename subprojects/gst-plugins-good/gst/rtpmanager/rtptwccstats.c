@@ -12,6 +12,9 @@
 
 #define MAX_STATS_PACKETS 1000
 
+GST_DEBUG_CATEGORY_EXTERN (rtp_twcc_debug);
+#define GST_CAT_DEFAULT rtp_twcc_debug
+
 typedef struct
 {
   GstClockTime local_ts;
@@ -69,6 +72,8 @@ typedef struct
 
 struct _TWCCStatsManager
 {
+  GObject *parent;
+
   TWCCStatsCtx *stats_ctx;
   /* The first packet in stats_ctx seqnum, valid even if there is a gap in
    stats_ctx caused feedback packet loss
@@ -206,12 +211,12 @@ _sent_pkt_keep_length (TWCCStatsManager *statsman, gsize max_len,
     if (GST_CLOCK_TIME_IS_VALID(statsman->prev_stat_window_beginning) &&
         GST_CLOCK_DIFF (pkt_ts, statsman->prev_stat_window_beginning) 
             < 0) {
-        GST_WARNING_OBJECT (statsman, "sent_packets FIFO overflows, dropping");
+        GST_WARNING_OBJECT (statsman->parent, "sent_packets FIFO overflows, dropping");
         g_assert_not_reached ();
     } else if (GST_CLOCK_TIME_IS_VALID(statsman->prev_stat_window_beginning) &&
       GST_CLOCK_DIFF (pkt_ts, statsman->prev_stat_window_beginning)
         < GST_MSECOND * 250) {
-        GST_WARNING_OBJECT (statsman, "Risk of"
+        GST_WARNING_OBJECT (statsman->parent, "Risk of"
           " underrun of sent_packets FIFO");
     }
     gst_queue_array_pop_head_struct (statsman->sent_packets);
@@ -232,7 +237,7 @@ _register_seqnum (TWCCStatsManager *statsman,
   }
   g_hash_table_insert (seq_to_twcc, GUINT_TO_POINTER (seqnum),
       GUINT_TO_POINTER (twcc_seqnum));
-  GST_LOG ("Registering OSN: %u to statsman-twcc_seqnum: %u with ssrc: %u", seqnum,
+  GST_LOG_OBJECT (statsman->parent, "Registering OSN: %u to statsman-twcc_seqnum: %u with ssrc: %u", seqnum,
       twcc_seqnum, ssrc);
 }
 
@@ -315,7 +320,7 @@ _get_stats_packets_window (GstQueueArray * array,
   const guint array_length = gst_queue_array_get_length (array); 
 
   if (array_length < 2) {
-    GST_DEBUG ("Not enough starts to do a window");
+    GST_DEBUG ("Not enough stats to do a window");
     return FALSE;
   }
 
@@ -471,11 +476,11 @@ twcc_stats_ctx_calculate_windowed_stats (TWCCStatsCtx * ctx,
       last_remote_pkt = pkt;
       packets_recv++;
     } else if (pkt->state == RTP_TWCC_FECBLOCK_PKT_RECOVERED) {
-      GST_LOG ("Packet #%u is lost and recovered");
+      GST_LOG ("Packet #%u is lost and recovered", pkt->seqnum);
       packets_lost++;
       packets_recovered++;
     } else if(pkt->state == RTP_TWCC_FECBLOCK_PKT_LOST) {
-      GST_LOG ("Packet #%u is lost");
+      GST_LOG ("Packet #%u is lost", pkt->seqnum);
       packets_lost++;
     }
 
@@ -633,7 +638,7 @@ twcc_stats_ctx_add_packet (TWCCStatsManager *statsman, SentPacket * pkt)
     const gint idx = _idx_sentpacket (statsman, pkt->seqnum);
     GstQueueArray * main_array = statsman->stats_ctx->pt_packets;
     if (idx < 0) {
-      GST_WARNING ("Packet #%u is too old for stats, dropping, latest pkt is #%u",
+      GST_WARNING_OBJECT (statsman->parent, "Packet #%u is too old for stats, dropping, latest pkt is #%u",
         pkt->seqnum, statsman->stats_ctx_first_seqnum);
       return;
     } else if (idx >= gst_queue_array_get_length (main_array)) {
@@ -650,7 +655,7 @@ twcc_stats_ctx_add_packet (TWCCStatsManager *statsman, SentPacket * pkt)
       statsman->stats_ctx->last_pkt_fb = ctx->last_pkt_fb = pkt;
     } else {
       /* TWCC packets reordered -- do nothing */
-      GST_WARNING ("Packet #%u is out of order, not going to stats", pkt->seqnum);
+      GST_WARNING_OBJECT (statsman->parent, "Packet #%u is out of order, not going to stats", pkt->seqnum);
     }
   }
 }
@@ -908,7 +913,7 @@ _rm_last_packet_from_stats_arrays (TWCCStatsManager *statsman)
     SentPacket * ctx_pkt = ((StatsPktPtr*)gst_queue_array_peek_head_struct (
         ctx->pt_packets))->sentpkt;
     if (!ctx_pkt || ctx_pkt->seqnum != head->seqnum) {
-      GST_WARNING ("Attempting to remove packet from pt stats context "
+      GST_WARNING_OBJECT (statsman->parent, "Attempting to remove packet from pt stats context "
       "which seqnum does not match the main stats context seqnum, "
           "main: #%u, pt: %u, context packet: #%u, pt: %u",
             head->seqnum, head->pt, 
@@ -919,7 +924,7 @@ _rm_last_packet_from_stats_arrays (TWCCStatsManager *statsman)
       statsman->stats_ctx->last_pkt_fb = ctx->last_pkt_fb = NULL;
     }
     gst_queue_array_pop_head_struct (ctx->pt_packets);
-    GST_LOG ("Removing packet #%u from stats context, ts: %" GST_STIME_FORMAT,
+    GST_LOG_OBJECT (statsman->parent, "Removing packet #%u from stats context, ts: %" GST_STIME_FORMAT,
         head->seqnum, head->local_ts);
   }
   gst_queue_array_pop_head_struct (statsman->stats_ctx->pt_packets);
@@ -1009,14 +1014,14 @@ _prtocess_pkt_feedback (SentPacket * pkt, TWCCStatsManager * statsman)
         GUINT_TO_POINTER(pkt->seqnum), NULL, (gpointer *)&block)) {
       const gsize packets_recovered = _redblock_reconsider (statsman, block);
       if (packets_recovered > 0) {
-        GST_LOG ("Reconsider block because of packet #%u, "
+        GST_LOG_OBJECT (statsman->parent, "Reconsider block because of packet #%u, "
         "recovered %lu pckt", pkt->seqnum, packets_recovered);
       }
     }
     return;
   }
   pkt->stats_processed = TRUE;
-  GST_LOG ("Processing #%u packet in stats, state: %s", pkt->seqnum,
+  GST_LOG_OBJECT (statsman->parent, "Processing #%u packet in stats, state: %s", pkt->seqnum,
     _pkt_state_s (pkt->state));
 
   twcc_stats_ctx_add_packet (statsman, pkt);
@@ -1028,7 +1033,7 @@ _prtocess_pkt_feedback (SentPacket * pkt, TWCCStatsManager * statsman)
 
     if (pkt->redundant_idx < 0 || pkt->redundant_num <= 0
         || pkt->redundant_idx >= pkt->redundant_num) {
-          GST_ERROR ("Invalid FEC packet: idx: %d, num: %d",
+          GST_ERROR_OBJECT (statsman->parent, "Invalid FEC packet: idx: %d, num: %d",
               pkt->redundant_idx, pkt->redundant_num);
           g_assert_not_reached ();
     }
@@ -1042,7 +1047,7 @@ _prtocess_pkt_feedback (SentPacket * pkt, TWCCStatsManager * statsman)
         g_array_index (pkt->protects_seqnums, guint16, i) 
             = (guint16)twcc_seqnum;
       }
-      GST_LOG ("FEC sn: #%u covers twcc sn: #%u, orig sn: %u",
+      GST_LOG_OBJECT (statsman->parent, "FEC sn: #%u covers twcc sn: #%u, orig sn: %u",
           pkt->seqnum, twcc_seqnum, prot_seqnum);
     }
   
@@ -1057,7 +1062,7 @@ _prtocess_pkt_feedback (SentPacket * pkt, TWCCStatsManager * statsman)
           || g_array_index (block->fec_seqs, guint16, (gsize)pkt->redundant_idx) != 0
           || g_array_index (block->fec_states, TWCCPktState, (gsize)pkt->redundant_idx) != RTP_TWCC_FECBLOCK_PKT_UNKNOWN) {
 
-        GST_WARNING_OBJECT (statsman, "Got contradictory FEC block: "
+        GST_WARNING_OBJECT (statsman->parent, "Got contradictory FEC block: "
             "seqs: %u, states: %u, redundant_num: %d, redundant_idx: %d",
             block->fec_seqs->len, block->fec_states->len, pkt->redundant_num, pkt->redundant_idx);
         _redblock_key_free (key);
@@ -1098,7 +1103,7 @@ _prtocess_pkt_feedback (SentPacket * pkt, TWCCStatsManager * statsman)
               GUINT_TO_POINTER(data_key), block);
         } else if (block != data_block) {
           /* Overlapped blocks are not supported yet */
-          GST_WARNING_OBJECT (statsman, "Data packet %ld covered by two blocks",
+          GST_WARNING_OBJECT (statsman->parent, "Data packet %ld covered by two blocks",
               data_key);
           g_hash_table_replace (statsman->seqnum_2_redblocks, 
               GUINT_TO_POINTER(data_key), block);
@@ -1106,7 +1111,7 @@ _prtocess_pkt_feedback (SentPacket * pkt, TWCCStatsManager * statsman)
       }
     }
     const gsize packets_recovered = _redblock_reconsider (statsman, block);
-    GST_LOG ("Reconsider block because of packet #%u, recovered %lu pckt",
+    GST_LOG_OBJECT (statsman->parent, "Reconsider block because of packet #%u, recovered %lu pckt",
         pkt->seqnum, packets_recovered);
   /* Neither RTX nor FEC  */
   } else {
@@ -1123,7 +1128,7 @@ _prtocess_pkt_feedback (SentPacket * pkt, TWCCStatsManager * statsman)
         }
       }
       const gsize packets_recovered = _redblock_reconsider (statsman, block);
-      GST_LOG ("Reconsider block because of packet #%u, "
+      GST_LOG_OBJECT (statsman->parent, "Reconsider block because of packet #%u, "
       "recovered %lu pckt", pkt->seqnum, packets_recovered);
     }
   }
@@ -1132,9 +1137,11 @@ _prtocess_pkt_feedback (SentPacket * pkt, TWCCStatsManager * statsman)
 /******************************************************************************/
 
 TWCCStatsManager *
-rtp_twcc_stats_manager_new (void)
+rtp_twcc_stats_manager_new (GObject *parent)
 {
   TWCCStatsManager *statsman = g_new0 (TWCCStatsManager, 1);
+  statsman->parent = parent;
+  g_object_ref (parent);
 
   statsman->stats_ctx = twcc_stats_ctx_new ();
   statsman->ssrc_to_seqmap = g_hash_table_new_full (NULL, NULL, NULL,
@@ -1144,8 +1151,6 @@ rtp_twcc_stats_manager_new (void)
   statsman->sent_packets_size = PACKETS_HIST_LEN_DEFAULT;
   gst_queue_array_set_clear_func (statsman->sent_packets, (GDestroyNotify)_free_sentpacket);
   statsman->sent_packets_feedbacks = gst_queue_array_new (300);
-  gst_queue_array_set_clear_func (statsman->sent_packets_feedbacks,
-      (GDestroyNotify)g_array_unref);
   statsman->stats_ctx_first_seqnum = -1;
   statsman->stats_ctx_by_pt = g_hash_table_new_full (NULL, NULL,
       NULL, (GDestroyNotify) twcc_stats_ctx_free);
@@ -1164,6 +1169,7 @@ rtp_twcc_stats_manager_new (void)
 void
 rtp_twcc_stats_manager_free (TWCCStatsManager *statsman)
 {
+  g_object_ref (statsman->parent);
   g_hash_table_destroy (statsman->ssrc_to_seqmap);
   gst_queue_array_free (statsman->sent_packets);
   gst_queue_array_free (statsman->sent_packets_feedbacks);
@@ -1207,11 +1213,11 @@ void rtp_twcc_stats_sent_pkt (TWCCStatsManager *statsman,
 
   for (guint i = 0; protect_seqnums_array && i < protect_seqnums_array->len; i++) {
     const guint16 prot_seqnum_ = g_array_index (protect_seqnums_array, guint16, i);
-    GST_DEBUG_OBJECT(statsman, "%u protects seqnum: %u", twcc_seqnum, prot_seqnum_);
+    GST_DEBUG_OBJECT (statsman->parent, "%u protects seqnum: %u", twcc_seqnum, prot_seqnum_);
   }
 
   GST_DEBUG_OBJECT
-    (statsman, "Send: twcc-seqnum: %u, seqnum: %u, pt: %u, marker: %d, "
+    (statsman->parent, "Send: twcc-seqnum: %u, seqnum: %u, pt: %u, marker: %d, "
     "redundant_idx: %d, redundant_num: %d, protected_seqnums: %u,"
     "size: %u, ts: %"
     GST_TIME_FORMAT, packet.seqnum, pinfo->seqnum, packet.pt, pinfo->marker,
@@ -1220,22 +1226,22 @@ void rtp_twcc_stats_sent_pkt (TWCCStatsManager *statsman,
     packet.size, GST_TIME_ARGS (pinfo->current_time));
 }
 
-void rtp_twcc_stats_set_sock_ts (TWCCStatsManager *stats_manager,
+void rtp_twcc_stats_set_sock_ts (TWCCStatsManager *statsman,
     guint16 seqnum, GstClockTime sock_ts)
 {
-  SentPacket * pkt = _find_stats_sentpacket (stats_manager, seqnum);
+  SentPacket * pkt = _find_sentpacket (statsman, seqnum);
   if (pkt) {
     pkt->socket_ts = sock_ts;
-    GST_LOG ("packet #%u, setting socket-ts %" GST_TIME_FORMAT,
+    GST_LOG_OBJECT (statsman->parent, "packet #%u, setting socket-ts %" GST_TIME_FORMAT,
         seqnum, GST_TIME_ARGS (sock_ts));
   } else {
-    GST_WARNING ("Unable to update send-time for twcc-seqnum #%u", seqnum);
+    GST_WARNING_OBJECT (statsman->parent, "Unable to update send-time for twcc-seqnum #%u", seqnum);
   }
 }
 
-void rtp_twcc_manager_tx_start_feedback (TWCCStatsManager *stats_manager)
+void rtp_twcc_manager_tx_start_feedback (TWCCStatsManager *statsman)
 {
-  stats_manager->rtt = GST_CLOCK_TIME_NONE;
+  statsman->rtt = GST_CLOCK_TIME_NONE;
 }
 
 void rtp_twcc_stats_pkt_feedback (TWCCStatsManager *statsman,
@@ -1251,7 +1257,7 @@ void rtp_twcc_stats_pkt_feedback (TWCCStatsManager *statsman,
     found->remote_ts = remote_ts;
     found->state = status;
     gst_queue_array_push_tail (statsman->sent_packets_feedbacks, found);
-    GST_LOG ("matching pkt: #%u with local_ts: %" GST_TIME_FORMAT
+    GST_LOG_OBJECT (statsman->parent, "matching pkt: #%u with local_ts: %" GST_TIME_FORMAT
         " size: %u, remote-ts: %" GST_TIME_FORMAT, seqnum,
         GST_TIME_ARGS (found->local_ts),
         found->size * 8, GST_TIME_ARGS (remote_ts));
@@ -1259,7 +1265,7 @@ void rtp_twcc_stats_pkt_feedback (TWCCStatsManager *statsman,
     /* calculate the round-trip time */
     statsman->rtt = GST_CLOCK_DIFF (found->local_ts, current_time);
   } else {
-    GST_WARNING ("Feedback on unknown packet #%u", seqnum);
+    GST_WARNING_OBJECT (statsman->parent, "Feedback on unknown packet #%u", seqnum);
   }
 
 }
@@ -1309,7 +1315,7 @@ rtp_twcc_stats_do_stats (TWCCStatsManager *statsman,
         if (last_seqnum_to_free >= 0 
             && gst_rtp_buffer_compare_seqnum (pkt->seqnum, last_seqnum_to_free)
               >= 0) {
-          GST_WARNING_OBJECT (statsman, "Seqnum reorder in stats pkts");
+          GST_WARNING_OBJECT (statsman->parent, "Seqnum reorder in stats pkts");
           g_assert_not_reached ();
         }
         last_seqnum_to_free = pkt->seqnum;
@@ -1323,7 +1329,7 @@ rtp_twcc_stats_do_stats (TWCCStatsManager *statsman,
   if (last_seqnum_to_free >= 0) {
     while (!gst_queue_array_is_empty (statsman->sent_packets)) {
       SentPacket * pkt = gst_queue_array_peek_head_struct (statsman->sent_packets);
-      GST_LOG_OBJECT (statsman, "Freeing sent packet #%u", pkt->seqnum);
+      GST_LOG_OBJECT (statsman->parent, "Freeing sent packet #%u", pkt->seqnum);
       if (gst_rtp_buffer_compare_seqnum (pkt->seqnum, last_seqnum_to_free)
           >= 0) {
         _free_sentpacket (pkt);
@@ -1338,7 +1344,7 @@ rtp_twcc_stats_do_stats (TWCCStatsManager *statsman,
   end_time = GST_CLOCK_DIFF (stats_window_delay, last_ts);
   start_time = end_time - stats_window_size;
 
-  GST_DEBUG_OBJECT (statsman,
+  GST_DEBUG_OBJECT (statsman->parent,
       "Calculating windowed stats for the window %" GST_STIME_FORMAT
       " starting from %" GST_STIME_FORMAT " to: %" GST_STIME_FORMAT " overall packets: %u",
       GST_STIME_ARGS (stats_window_size), GST_STIME_ARGS (start_time),
@@ -1353,7 +1359,7 @@ rtp_twcc_stats_do_stats (TWCCStatsManager *statsman,
   twcc_stats_ctx_calculate_windowed_stats (statsman->stats_ctx, start_time,
       end_time);
   ret = twcc_stats_ctx_get_structure (statsman->stats_ctx);
-  GST_LOG ("Full stats: %" GST_PTR_FORMAT, ret);
+  GST_LOG_OBJECT (statsman->parent, "Full stats: %" GST_PTR_FORMAT, ret);
 
   g_hash_table_iter_init (&iter, statsman->stats_ctx_by_pt);
   while (g_hash_table_iter_next (&iter, &key, &value)) {
@@ -1364,7 +1370,7 @@ rtp_twcc_stats_do_stats (TWCCStatsManager *statsman,
     s = twcc_stats_ctx_get_structure (ctx);
     gst_structure_set (s, "pt", G_TYPE_UINT, pt, NULL);
     _append_structure_to_value_array (array, s);
-    GST_LOG ("Stats for pt %u: %" GST_PTR_FORMAT, pt, s);
+    GST_LOG_OBJECT (statsman->parent, "Stats for pt %u: %" GST_PTR_FORMAT, pt, s);
   }
 
   _structure_take_value_array (ret, "payload-stats", array);
