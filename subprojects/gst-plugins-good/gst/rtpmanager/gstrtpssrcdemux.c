@@ -709,18 +709,16 @@ gst_rtp_ssrc_demux_chain (GstPad * pad, GstObject * parent, GstBuffer * buf)
   /* push to srcpad */
   ret = gst_pad_push (srcpad, buf);
 
-  if (ret != GST_FLOW_OK) {
-    GstPad *active_pad;
+  if (ret == GST_FLOW_NOT_LINKED || ret == GST_FLOW_FLUSHING
+      || ret == GST_FLOW_EOS) {
+    /* on not-linked, flushing and eos this *could* happen because the ssrc got
+       removed while we were pushing, and since it can also be
+       re-created, we can't know for sure if the removal was the
+       real reason, so simply ignore here */
+    GST_INFO_OBJECT (demux, "Ignoring flow return: %s",
+        gst_flow_get_name (ret));
 
-    /* check if the ssrc still there, may have been removed */
-    active_pad = get_demux_pad_for_ssrc (demux, ssrc, RTP_PAD);
-
-    if (active_pad == NULL || active_pad != srcpad) {
-      /* SSRC was removed during the push ... ignore the error */
-      ret = GST_FLOW_OK;
-    }
-
-    g_clear_object (&active_pad);
+    ret = GST_FLOW_OK;
   }
 
   gst_object_unref (srcpad);
@@ -806,17 +804,14 @@ gst_rtp_ssrc_demux_rtcp_chain (GstPad * pad, GstObject * parent,
   /* push to srcpad */
   ret = gst_pad_push (srcpad, buf);
 
-  if (ret != GST_FLOW_OK) {
-    GstPad *active_pad;
+  if (ret == GST_FLOW_NOT_LINKED) {
+    /* on not-linked, this *could* happen because the ssrc got
+       removed while we were pushing, and since it can also be
+       re-created, we can't know for sure if the removal was the
+       real reason, so simply ignore not-linked here */
+    GST_INFO_OBJECT (demux, "Ignoring not-linked flow return");
 
-    /* check if the ssrc still there, may have been removed */
-    active_pad = get_demux_pad_for_ssrc (demux, ssrc, RTCP_PAD);
-    if (active_pad == NULL || active_pad != srcpad) {
-      /* SSRC was removed during the push ... ignore the error */
-      ret = GST_FLOW_OK;
-    }
-
-    g_clear_object (&active_pad);
+    ret = GST_FLOW_OK;
   }
 
   gst_object_unref (srcpad);
