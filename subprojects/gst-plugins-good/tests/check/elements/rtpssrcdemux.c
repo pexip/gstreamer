@@ -464,7 +464,7 @@ _stress_push_rtp_buffers (gpointer user_data)
 
   gst_harness_set_src_caps_str (h, "application/x-rtp");
   while (running) {
-    fail_unless_equals_uint64 (GST_FLOW_OK,
+    fail_unless_equals_int (GST_FLOW_OK,
         gst_harness_push (h, create_buffer (0, ssrc)));
     g_usleep (G_USEC_PER_SEC / 100);
     ssrc++;
@@ -483,7 +483,7 @@ _stress_push_rtcp_buffers (gpointer user_data)
 
   gst_harness_set_src_caps_str (h, "application/x-rtcp");
   while (running) {
-    fail_unless_equals_uint64 (GST_FLOW_OK,
+    fail_unless_equals_int (GST_FLOW_OK,
         gst_harness_push (h, generate_rtcp_sr_buffer (ssrc)));
     g_usleep (G_USEC_PER_SEC / 90);
     ssrc++;
