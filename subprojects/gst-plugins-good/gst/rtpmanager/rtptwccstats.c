@@ -205,9 +205,8 @@ _sent_pkt_keep_length (TWCCStatsManager *statsman, gsize max_len,
     /* It could mean that statistics was not called at all, asumming that
       the oldest packet was not referenced anywhere else, we can drop it.
       */
-    GstClockTime pkt_ts = 
-        ((SentPacket*)gst_queue_array_peek_head_struct (statsman->sent_packets))
-          ->local_ts;
+    SentPacket * head = (SentPacket*)gst_queue_array_peek_head_struct (statsman->sent_packets);
+    GstClockTime pkt_ts = head->local_ts;
     if (GST_CLOCK_TIME_IS_VALID(statsman->prev_stat_window_beginning) &&
         GST_CLOCK_DIFF (pkt_ts, statsman->prev_stat_window_beginning) 
             < 0) {
@@ -219,6 +218,8 @@ _sent_pkt_keep_length (TWCCStatsManager *statsman, gsize max_len,
         GST_WARNING_OBJECT (statsman->parent, "Risk of"
           " underrun of sent_packets FIFO");
     }
+    GST_LOG_OBJECT (statsman->parent, "Keeping sent_packets FIFO length: %u, dropping packet #%u",
+        max_len, head->seqnum);
     gst_queue_array_pop_head_struct (statsman->sent_packets);
   }
   gst_queue_array_push_tail_struct (statsman->sent_packets, new_packet);
@@ -1003,7 +1004,7 @@ _find_sentpacket (TWCCStatsManager * statsman, guint16 seqnum)
 /* Once we've got feedback on a packet, we need to account it in the internal
   structures. */
 static void
-_prtocess_pkt_feedback (SentPacket * pkt, TWCCStatsManager * statsman)
+_process_pkt_feedback (SentPacket * pkt, TWCCStatsManager * statsman)
 {
   if (pkt->stats_processed) {
     /* This packet was already added to stats structures, but we've got 
@@ -1249,25 +1250,29 @@ void rtp_twcc_stats_pkt_feedback (TWCCStatsManager *statsman,
     TWCCPktState status)
 {
   SentPacket * found;
-  /* Do not process feedback on packets we have got feedback previously */
-  if (!!(found = _find_sentpacket (statsman, seqnum)) 
-      && (found->state == RTP_TWCC_FECBLOCK_PKT_UNKNOWN
-        || found->state == RTP_TWCC_FECBLOCK_PKT_LOST)
-      ) {
-    found->remote_ts = remote_ts;
-    found->state = status;
-    gst_queue_array_push_tail (statsman->sent_packets_feedbacks, found);
-    GST_LOG_OBJECT (statsman->parent, "matching pkt: #%u with local_ts: %" GST_TIME_FORMAT
-        " size: %u, remote-ts: %" GST_TIME_FORMAT, seqnum,
-        GST_TIME_ARGS (found->local_ts),
-        found->size * 8, GST_TIME_ARGS (remote_ts));
+  if (!!(found = _find_sentpacket (statsman, seqnum))) {
+    /* Do not process feedback on packets we have got feedback previously */
+    if (found->state == RTP_TWCC_FECBLOCK_PKT_UNKNOWN
+      || found->state == RTP_TWCC_FECBLOCK_PKT_LOST) {
+      found->remote_ts = remote_ts;
+      found->state = status;
+      gst_queue_array_push_tail (statsman->sent_packets_feedbacks, found);
+      GST_LOG_OBJECT (statsman->parent, "matching pkt: #%u with local_ts: %" GST_TIME_FORMAT
+          " size: %u, remote-ts: %" GST_TIME_FORMAT, seqnum,
+          GST_TIME_ARGS (found->local_ts),
+          found->size * 8, GST_TIME_ARGS (remote_ts));
 
-    /* calculate the round-trip time */
-    statsman->rtt = GST_CLOCK_DIFF (found->local_ts, current_time);
+      /* calculate the round-trip time */
+      statsman->rtt = GST_CLOCK_DIFF (found->local_ts, current_time);
+    } else {
+      /* We've got feed back on the packet that was covered with the previous TWCC report.
+        Receiver could send two feedbacks on a single packet on purpose, 
+        so we just ignore it. */
+      GST_LOG_OBJECT (statsman->parent, "Rejecting second feedback on a packet #%u", seqnum);
+    }
   } else {
     GST_WARNING_OBJECT (statsman->parent, "Feedback on unknown packet #%u", seqnum);
   }
-
 }
 
 void rtp_twcc_manager_tx_end_feedback (TWCCStatsManager *statsman)
@@ -1293,7 +1298,7 @@ rtp_twcc_stats_do_stats (TWCCStatsManager *statsman,
     if (!pkt) {
         continue;
     }
-    _prtocess_pkt_feedback (pkt, statsman);
+    _process_pkt_feedback (pkt, statsman);
   } /* while fifo of arrays */
 
   GstClockTime last_ts = twcc_stats_ctx_get_last_local_ts (statsman->stats_ctx);
