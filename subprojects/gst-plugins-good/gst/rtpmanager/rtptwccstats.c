@@ -1057,17 +1057,25 @@ _process_pkt_feedback (SentPacket * pkt, TWCCStatsManager * statsman)
     RedBlock * block = NULL;
     if (g_hash_table_lookup_extended (statsman->redund_2_redblocks, key, NULL,
         (gpointer*)&block)) {
-      /* Add redundant packet to the existent block */
-      if (block->fec_seqs->len != pkt->redundant_num
-          || block->fec_states->len != pkt->redundant_num
-          || g_array_index (block->fec_seqs, guint16, (gsize)pkt->redundant_idx) != 0
-          || g_array_index (block->fec_states, TWCCPktState, (gsize)pkt->redundant_idx) != RTP_TWCC_FECBLOCK_PKT_UNKNOWN) {
+      /* This is not RTX, check this redundant pkt meta */
+      if (pkt->redundant_num > 1 && 
+          (block->fec_seqs->len != pkt->redundant_num
+          || block->fec_states->len != pkt->redundant_num)) {
 
         GST_WARNING_OBJECT (statsman->parent, "Got contradictory FEC block: "
             "seqs: %u, states: %u, redundant_num: %d, redundant_idx: %d",
             block->fec_seqs->len, block->fec_states->len, pkt->redundant_num, pkt->redundant_idx);
         _redblock_key_free (key);
         return;
+      /* This is 2nd or more attempt of RTX */
+      } else if (pkt->redundant_num == 1) {
+        pkt->redundant_idx = block->fec_seqs->len;
+        block->num_redundant_packets++;
+        g_array_set_size (block->fec_seqs,   block->num_redundant_packets);
+        g_array_set_size (block->fec_states, block->num_redundant_packets);
+
+        GST_LOG_OBJECT (statsman->parent, "Adding redundant packet #%u to"
+            " an exsiting block on position %u", pkt->seqnum, pkt->redundant_idx);
       }
       g_array_index (block->fec_seqs, guint16, (gsize)pkt->redundant_idx) 
           = pkt->seqnum;
@@ -1080,6 +1088,7 @@ _process_pkt_feedback (SentPacket * pkt, TWCCStatsManager * statsman)
       release the block once this packet leave its lifetime */
       g_hash_table_insert (statsman->seqnum_2_redblocks, 
           GUINT_TO_POINTER(pkt->seqnum), block);
+    /* There is no such block, add a new one */
     } else {
       /* Add every data packet into seqnum_2_redblocks  */
       block = _redblock_new (pkt->protects_seqnums, pkt->seqnum,
