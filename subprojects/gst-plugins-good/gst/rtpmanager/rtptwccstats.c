@@ -198,34 +198,6 @@ _structure_take_value_array (GstStructure * s,
 }
 
 static void
-_sent_pkt_keep_length (TWCCStatsManager *statsman, gsize max_len,
-    SentPacket* new_packet)
-{
-  if (gst_queue_array_get_length(statsman->sent_packets) >= max_len) {
-    /* It could mean that statistics was not called at all, asumming that
-      the oldest packet was not referenced anywhere else, we can drop it.
-      */
-    SentPacket * head = (SentPacket*)gst_queue_array_peek_head_struct (statsman->sent_packets);
-    GstClockTime pkt_ts = head->local_ts;
-    if (GST_CLOCK_TIME_IS_VALID(statsman->prev_stat_window_beginning) &&
-        GST_CLOCK_DIFF (pkt_ts, statsman->prev_stat_window_beginning) 
-            < 0) {
-        GST_WARNING_OBJECT (statsman->parent, "sent_packets FIFO overflows, dropping");
-        g_assert_not_reached ();
-    } else if (GST_CLOCK_TIME_IS_VALID(statsman->prev_stat_window_beginning) &&
-      GST_CLOCK_DIFF (pkt_ts, statsman->prev_stat_window_beginning)
-        < GST_MSECOND * 250) {
-        GST_WARNING_OBJECT (statsman->parent, "Risk of"
-          " underrun of sent_packets FIFO");
-    }
-    GST_LOG_OBJECT (statsman->parent, "Keeping sent_packets FIFO length: %u, dropping packet #%u",
-        max_len, head->seqnum);
-    gst_queue_array_pop_head_struct (statsman->sent_packets);
-  }
-  gst_queue_array_push_tail_struct (statsman->sent_packets, new_packet);
-}
-
-static void
 _register_seqnum (TWCCStatsManager *statsman,
     guint32 ssrc, guint16 seqnum, guint16 twcc_seqnum)
 {
@@ -267,9 +239,37 @@ _sent_packet_init (SentPacket * packet, guint16 seqnum, RTPPacketInfo * pinfo,
 static void
 _free_sentpacket (SentPacket * pkt)
 {
-  if (pkt->protects_seqnums) {
+  if (pkt && pkt->protects_seqnums) {
     g_array_unref (pkt->protects_seqnums);
   }
+}
+
+static void
+_sent_pkt_keep_length (TWCCStatsManager *statsman, gsize max_len,
+    SentPacket* new_packet)
+{
+  if (gst_queue_array_get_length(statsman->sent_packets) >= max_len) {
+    /* It could mean that statistics was not called at all, asumming that
+      the oldest packet was not referenced anywhere else, we can drop it.
+      */
+    SentPacket * head = (SentPacket*)gst_queue_array_peek_head_struct (statsman->sent_packets);
+    GstClockTime pkt_ts = head->local_ts;
+    if (GST_CLOCK_TIME_IS_VALID(statsman->prev_stat_window_beginning) &&
+        GST_CLOCK_DIFF (pkt_ts, statsman->prev_stat_window_beginning) 
+            < 0) {
+        GST_WARNING_OBJECT (statsman->parent, "sent_packets FIFO overflows, dropping");
+        g_assert_not_reached ();
+    } else if (GST_CLOCK_TIME_IS_VALID(statsman->prev_stat_window_beginning) &&
+      GST_CLOCK_DIFF (pkt_ts, statsman->prev_stat_window_beginning)
+        < GST_MSECOND * 250) {
+        GST_WARNING_OBJECT (statsman->parent, "Risk of"
+          " underrun of sent_packets FIFO");
+    }
+    GST_LOG_OBJECT (statsman->parent, "Keeping sent_packets FIFO length: %u, dropping packet #%u",
+        max_len, head->seqnum);
+    _free_sentpacket (gst_queue_array_pop_head_struct (statsman->sent_packets));
+  }
+  gst_queue_array_push_tail_struct (statsman->sent_packets, new_packet);
 }
 
 static TWCCStatsCtx *
@@ -1151,7 +1151,6 @@ rtp_twcc_stats_manager_new (GObject *parent)
 {
   TWCCStatsManager *statsman = g_new0 (TWCCStatsManager, 1);
   statsman->parent = parent;
-  g_object_ref (parent);
 
   statsman->stats_ctx = twcc_stats_ctx_new ();
   statsman->ssrc_to_seqmap = g_hash_table_new_full (NULL, NULL, NULL,
@@ -1179,7 +1178,6 @@ rtp_twcc_stats_manager_new (GObject *parent)
 void
 rtp_twcc_stats_manager_free (TWCCStatsManager *statsman)
 {
-  g_object_ref (statsman->parent);
   g_hash_table_destroy (statsman->ssrc_to_seqmap);
   gst_queue_array_free (statsman->sent_packets);
   gst_queue_array_free (statsman->sent_packets_feedbacks);
@@ -1187,6 +1185,7 @@ rtp_twcc_stats_manager_free (TWCCStatsManager *statsman)
   g_hash_table_destroy (statsman->redund_2_redblocks);
   g_hash_table_destroy (statsman->seqnum_2_redblocks);
   twcc_stats_ctx_free (statsman->stats_ctx);
+  g_free (statsman);
 }
 
 void rtp_twcc_stats_sent_pkt (TWCCStatsManager *statsman,
