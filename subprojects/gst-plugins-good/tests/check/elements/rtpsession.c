@@ -234,7 +234,7 @@ generate_test_buffer_timed (GstClockTime ts, guint seqnum, guint32 rtp_ts)
 {
   return generate_test_buffer_full (ts,
       seqnum, rtp_ts, TEST_BUF_SSRC, FALSE, TEST_BUF_PT, 0, 0,
-          -1, -1, 0, NULL, 0);
+      -1, -1, 0, NULL, 0);
 }
 
 typedef struct
@@ -5410,7 +5410,7 @@ GST_START_TEST (test_twcc_stats_long_rtx_recover)
 
   SessionHarness *h_send = session_harness_new ();
   SessionHarness *h_recv = session_harness_new ();
-  guint next_seqnum, lost_num = 0;
+  guint next_seqnum;
 
   session_harness_add_twcc_caps_for_pt (h_send, TEST_BUF_PT);
   session_harness_add_twcc_caps_for_pt (h_send, TEST_RTX_BUF_PT);
@@ -5433,7 +5433,6 @@ GST_START_TEST (test_twcc_stats_long_rtx_recover)
 
         /* we send a buffer but receiver doesn't get it */
         send_recv_buffer (h_send, h_recv, rtx_buf, !rtx_lost);
-        lost_num++;
       } else {
         gst_buffer_unref (rtx_buf);
       }
@@ -5455,9 +5454,11 @@ GST_START_TEST (test_twcc_stats_long_rtx_recover)
     }
   }
 
+  g_rand_free (rnd);
   session_harness_free (h_send);
   session_harness_free (h_recv);
 }
+
 GST_END_TEST;
 
 GST_START_TEST (test_twcc_stats_block_fec_recover)
@@ -5474,9 +5475,9 @@ GST_START_TEST (test_twcc_stats_block_fec_recover)
   const guint8 fec_payload_type = 127;
   const gsize block_len = 7;
   const gsize block_fecs = 2;
-  guint16 * protects_seqnums = g_malloc0(sizeof(guint16) * block_len);
+  guint16 *protects_seqnums = g_malloc0 (sizeof (guint16) * block_len);
   gsize protects_seqnums_i = 0;
-  
+
 
   session_harness_add_twcc_caps_for_pt (h_send, TEST_BUF_PT);
   session_harness_add_twcc_caps_for_pt (h_send, fec_payload_type);
@@ -5495,7 +5496,7 @@ GST_START_TEST (test_twcc_stats_block_fec_recover)
 
     buf = session_harness_pull_send_rtp (h_send);
     // Lose first data packets in the block up to number of fec packets.
-    if (is_last 
+    if (is_last
         || next_seqnum % block_len == 0
         || next_seqnum % block_len > block_fecs) {
       ret = session_harness_recv_rtp (h_recv, buf);
@@ -5504,7 +5505,8 @@ GST_START_TEST (test_twcc_stats_block_fec_recover)
       gst_buffer_unref (buf);
     }
     if (next_seqnum % block_len == (block_fecs + 1)) {
-      session_harness_advance_and_crank (h_recv, block_fecs * TEST_BUF_DURATION);
+      session_harness_advance_and_crank (h_recv,
+          block_fecs * TEST_BUF_DURATION);
     } else if (next_seqnum % block_len > (block_fecs + 1)) {
       session_harness_advance_and_crank (h_recv, TEST_BUF_DURATION);
     }
@@ -5515,7 +5517,7 @@ GST_START_TEST (test_twcc_stats_block_fec_recover)
       protects_seqnums_i = 0;
     }
     // Generate FEC packets for the block
-    if (next_seqnum % block_len == (block_len-1)) {
+    if (next_seqnum % block_len == (block_len - 1)) {
       for (i = 0; i < block_fecs; i++) {
         const gboolean is_fec_last = is_last && (i == block_fecs - 1);
         buf = generate_test_buffer_full (fec_num * TEST_BUF_DURATION,
@@ -5524,7 +5526,8 @@ GST_START_TEST (test_twcc_stats_block_fec_recover)
             protects_seqnums, block_len);
         send_recv_buffer (h_send, h_recv, buf, TRUE);
 
-        fec_num++; fec_seqnum++;
+        fec_num++;
+        fec_seqnum++;
       }
     }
 
