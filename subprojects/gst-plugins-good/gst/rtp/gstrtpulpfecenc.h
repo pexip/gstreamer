@@ -88,6 +88,7 @@ typedef struct {
 
   GArray *info_arr;
   GArray *scratch_buf;
+  GArray *block_seqnums;
 
   guint fec_packets;
   guint fec_packet_idx;
