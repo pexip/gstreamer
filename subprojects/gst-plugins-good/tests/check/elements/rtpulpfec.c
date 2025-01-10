@@ -499,7 +499,7 @@ harness_rtpulpfecenc (guint32 ssrc, guint8 lost_pt, gint *percentage)
 GST_START_TEST (rtpulpfecdec_repairmeta)
 {
   guint i = 0;
-  guint16 block_seq[8];
+  guint16 block_seq[8] = {0};
   guint16 seq = 12511;
   const gint block_len = G_N_ELEMENTS (block_seq);
   const gfloat redrate = 0.25f;
@@ -524,21 +524,24 @@ GST_START_TEST (rtpulpfecdec_repairmeta)
       fail_unless (gst_rtp_buffer_map (bufout,
             GST_MAP_READ, &rtp));
       fail_unless_equals_int (gst_rtp_buffer_get_seq (&rtp), seq);
+      const guint8 pt = gst_rtp_buffer_get_payload_type (&rtp);
       GstRTPRepairMeta *meta = gst_buffer_get_rtp_repair_meta (bufout);
-      if (meta) {
+      if (pt == 100) {
         /* Got a redundant packet from FEC encoder, check its repair meta */
+        fail_unless (meta);
         fail_unless_equals_int (meta->ssrc, 0x00000d51);
         fail_unless_equals_int (meta->seqnums->len, block_len);
         for (gint j = 0; j < block_len; ++j) {
           fail_unless_equals_int (g_array_index(meta->seqnums, guint16, j),
               block_seq[j]);
         }
-        fail_unless_equals_int (gst_rtp_buffer_get_payload_type (&rtp), 100);
-      } else {
-        fail_unless_equals_int (gst_rtp_buffer_get_payload_type (&rtp), 122);
+      } else if (pt == 122) {
         /* Data packet has just poped out, remember its seqnum */
         block_seq[i % block_len] = gst_rtp_buffer_get_seq (&rtp);
+      } else {
+        fail ("Unexpected payload type");
       }
+
       seq++;
       gst_rtp_buffer_unmap (&rtp);
     } while ((bufout = gst_harness_try_pull (h)) != NULL);
