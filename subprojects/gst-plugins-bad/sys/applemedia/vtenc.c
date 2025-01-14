@@ -1981,10 +1981,8 @@ gst_vtenc_restart_session (GstVTEnc * self)
       kCMTimePositiveInfinity);
   if (status != noErr) {
     GST_WARNING_OBJECT (self,
-        "Error when emptying encoder before restart: %d, will retry on next frame encode",
+        "Error when emptying encoder before restart: %d, restarting encoder session anyway",
         (int) status);
-    GST_VIDEO_ENCODER_STREAM_LOCK (self);
-    return;
   } else {
     GST_DEBUG_OBJECT (self, "All frames out, restarting encoder session");
   }
@@ -2256,13 +2254,18 @@ gst_vtenc_encode_frame (GstVTEnc * self, GstVideoCodecFrame * frame)
             (int) vt_status));
   }
 
-  vt_status =
-      VTCompressionSessionCompleteFrames (self->session,
-      kCMTimePositiveInfinity);
-  GST_DEBUG_OBJECT (self, "VTCompressionSessionCompleteFrames ended");
-  if (vt_status != noErr) {
-    GST_WARNING_OBJECT (self, "VTCompressionSessionCompleteFrames returned %d",
-        (int) vt_status);
+  if (vt_status != kVTInvalidSessionErr) {
+    vt_status =
+        VTCompressionSessionCompleteFrames (self->session,
+        kCMTimePositiveInfinity);
+    GST_DEBUG_OBJECT (self, "VTCompressionSessionCompleteFrames ended");
+    if (vt_status != noErr) {
+      GST_WARNING_OBJECT (self, "VTCompressionSessionCompleteFrames returned %d",
+          (int) vt_status);
+    }
+  } else {
+    GST_WARNING_OBJECT (self, "VTCompressionSessionEncodeFrame returned "
+        "kVTInvalidSessionErr, ignoring VTCompressionSessionCompleteFrames");
   }
 
   GST_VIDEO_ENCODER_STREAM_LOCK (self);
