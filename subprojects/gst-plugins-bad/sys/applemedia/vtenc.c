@@ -2009,12 +2009,9 @@ gst_vtenc_restart_session (GstVTEnc * self)
   /* We need to push out all frames still inside the encoder,
    * otherwise destroy_session() will wait for all callbacks to fire
    * and very likely deadlock due to the object lock being taken */
-  if (!gst_vtenc_push_all_pending_frames (self)) {
-    GST_DEBUG_OBJECT (self, "Will retry session restart on next frame encode");
-    return;
+  if (gst_vtenc_push_all_pending_frames (self)) {
+    GST_DEBUG_OBJECT (self, "All frames out, restarting encoder session");
   }
-
-  GST_DEBUG_OBJECT (self, "All frames out, restarting encoder session");
 
   GST_OBJECT_LOCK (self);
   gst_vtenc_destroy_session (self, &self->session);
@@ -2316,13 +2313,18 @@ gst_vtenc_encode_frame (GstVTEnc * self, GstVideoCodecFrame * frame)
             (int) vt_status));
   }
 
-  vt_status =
-      VTCompressionSessionCompleteFrames (self->session,
-      kCMTimePositiveInfinity);
-  GST_DEBUG_OBJECT (self, "VTCompressionSessionCompleteFrames ended");
-  if (vt_status != noErr) {
-    GST_WARNING_OBJECT (self, "VTCompressionSessionCompleteFrames returned %d",
-        (int) vt_status);
+  if (vt_status != kVTInvalidSessionErr) {
+    vt_status =
+        VTCompressionSessionCompleteFrames (self->session,
+        kCMTimePositiveInfinity);
+    GST_DEBUG_OBJECT (self, "VTCompressionSessionCompleteFrames ended");
+    if (vt_status != noErr) {
+      GST_WARNING_OBJECT (self, "VTCompressionSessionCompleteFrames returned %d",
+          (int) vt_status);
+    }
+  } else {
+    GST_WARNING_OBJECT (self, "VTCompressionSessionEncodeFrame returned "
+        "kVTInvalidSessionErr, ignoring VTCompressionSessionCompleteFrames");
   }
 
   GST_VIDEO_ENCODER_STREAM_LOCK (self);
