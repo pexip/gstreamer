@@ -395,20 +395,26 @@ GST_END_TEST;
 
 GST_START_TEST (test_rtxsend_rtxreceive)
 {
-  const guint packets_num = 5;
-  guint master_ssrc = 1234567;
+  /* use the largest SSRC possible */
+  guint master_ssrc = G_MAXUINT32;
+  guint rtx_ssrc = 1234567;
   guint master_pt = 96;
   guint rtx_pt = 99;
+  const guint packets_num = 5;
+  GstStructure *ssrc_map;
   GstStructure *pt_map;
   GstBuffer *inbufs[5];
   GstHarness *hrecv = gst_harness_new ("rtprtxreceive");
   GstHarness *hsend = gst_harness_new ("rtprtxsend");
   guint i;
 
-  pt_map = gst_structure_new ("application/x-rtp-pt-map",
-      "96", G_TYPE_UINT, rtx_pt, NULL);
+  pt_map = create_rtx_map ("application/x-rtp-pt-map", master_pt, rtx_pt);
   g_object_set (hrecv->element, "payload-type-map", pt_map, NULL);
   g_object_set (hsend->element, "payload-type-map", pt_map, NULL);
+
+  ssrc_map = create_rtx_map ("application/x-rtp-ssrc-map", master_ssrc, rtx_ssrc);
+  g_object_set (hrecv->element, "ssrc-map", ssrc_map, NULL);
+  g_object_set (hsend->element, "ssrc-map", ssrc_map, NULL);
 
   gst_harness_set_src_caps_str (hsend, "application/x-rtp, "
       "clock-rate = (int)90000");
@@ -466,6 +472,7 @@ GST_START_TEST (test_rtxsend_rtxreceive)
   }
 
   gst_structure_free (pt_map);
+  gst_structure_free (ssrc_map);
   gst_harness_teardown (hrecv);
   gst_harness_teardown (hsend);
 }
