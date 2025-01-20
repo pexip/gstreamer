@@ -1011,12 +1011,17 @@ structure_to_hash_table_inv (const GstIdStr * fieldname, const GValue * value,
     gpointer hash)
 {
   const gchar *field_str;
+  gint64 field_parsed;
   guint field_uint;
   guint value_uint;
 
   field_str = gst_id_str_as_str (fieldname);
-  field_uint = atoi (field_str);
+  field_parsed = g_ascii_strtoll (field_str, NULL, 10);
+  /* Assert that we are in UINT32 range after parsing */
+  g_assert (field_parsed >= 0 && field_parsed <= G_MAXUINT32);
+  field_uint = (guint) field_parsed;
   value_uint = g_value_get_uint (value);
+
   g_hash_table_insert ((GHashTable *) hash, GUINT_TO_POINTER (value_uint),
       GUINT_TO_POINTER (field_uint));
 
