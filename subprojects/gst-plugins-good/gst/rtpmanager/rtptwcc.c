@@ -1249,8 +1249,6 @@ rtp_twcc_manager_parse_fci (RTPTWCCManager * twcc,
   guint packets_parsed = 0;
   guint fci_parsed;
   guint i;
-  GstClockTimeDiff rtt = GST_CLOCK_STIME_NONE;
-  SentPacket * found;
 
   if (fci_length < 10) {
     GST_WARNING ("Malformed TWCC RTCP feedback packet");
