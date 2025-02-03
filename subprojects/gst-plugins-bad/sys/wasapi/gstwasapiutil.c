@@ -426,10 +426,19 @@ gst_wasapi_util_get_devices (GstMMDeviceEnumerator * self,
     GstStructure *props;
     GstCaps *caps;
     gboolean parse_ret;
+    DWORD state;
 
     hr = IMMDeviceCollection_Item (device_collection, ii, &item);
     if (hr != S_OK)
       continue;
+
+    /* fetch the state, since IMMDeviceEnumerator_EnumAudioEndpoints() */
+    hr = IMMDevice_GetState (item, &state);
+    if (hr != S_OK)
+      goto next;
+
+    if (state != DEVICE_STATE_ACTIVE)
+      goto next;
 
     hr = IMMDevice_QueryInterface (item, &IID_IMMEndpoint, (void **) &endpoint);
     if (hr != S_OK)
