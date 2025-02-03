@@ -45,6 +45,9 @@ static HRESULT
 gst_wasapi_device_provider_default_device_changed (GstMMDeviceEnumerator *
     enumerator, EDataFlow flow, ERole role, LPCWSTR device_id,
     gpointer user_data);
+static HRESULT
+gst_wasapi_device_provider_device_state_changed (GstMMDeviceEnumerator *
+    enumerator, LPCWSTR device_id, DWORD new_state, gpointer user_data);
 
 static void
 gst_wasapi_device_provider_class_init (GstWasapiDeviceProviderClass * klass)
@@ -87,6 +90,8 @@ gst_wasapi_device_provider_start (GstDeviceProvider * provider)
   callbacks.device_removed = gst_wasapi_device_provider_device_removed;
   callbacks.default_device_changed =
       gst_wasapi_device_provider_default_device_changed;
+  callbacks.device_state_changed =
+      gst_wasapi_device_provider_device_state_changed;
 
   if (!gst_mm_device_enumerator_set_notification_callback (self->enumerator,
           &callbacks, self)) {
@@ -266,6 +271,17 @@ static HRESULT
 gst_wasapi_device_provider_default_device_changed (GstMMDeviceEnumerator *
     enumerator, EDataFlow flow, ERole role, LPCWSTR device_id,
     gpointer user_data)
+{
+  GstWasapiDeviceProvider *self = GST_WASAPI_DEVICE_PROVIDER (user_data);
+
+  gst_wasapi_device_provider_update_devices (self);
+
+  return S_OK;
+}
+
+static HRESULT
+gst_wasapi_device_provider_device_state_changed (GstMMDeviceEnumerator *
+    enumerator, LPCWSTR device_id, DWORD new_state, gpointer user_data)
 {
   GstWasapiDeviceProvider *self = GST_WASAPI_DEVICE_PROVIDER (user_data);
 
