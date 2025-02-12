@@ -1309,12 +1309,12 @@ gst_rtp_rtx_send_push_stuffing (GstRtpRtxSend * rtx, SSRCRtxData * rtx_data)
           padding, missing_stuffing_bytes);
     }
     rtx_buf = gst_rtp_rtx_buffer_new (rtx, item->buffer, padding);
-    ret = gst_rtp_rtx_send_push (rtx, rtx_buf);
-
     GST_LOG_OBJECT (rtx,
-        "Pushed 1 stuffing packet with size %u - bucket_size=%d",
+        "Pushing 1 stuffing packet with size %u - bucket_size=%d",
         (guint) get_buffer_bytes_size (rtx_buf),
         (gint) (rtx->stuff_tb.bucket_size / 8));
+    ret = gst_rtp_rtx_send_push (rtx, rtx_buf);
+
     current = g_sequence_iter_next (current);
 
     /* if we are at the end, start over */
