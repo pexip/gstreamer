@@ -199,6 +199,7 @@ enum
   SIGNAL_REQUEST_PT_MAP,
   SIGNAL_CLEAR_PT_MAP,
   SIGNAL_SEND_BYE,
+  SIGNAL_CLEAR_SSRC,
 
   SIGNAL_ON_NEW_SSRC,
   SIGNAL_ON_SSRC_COLLISION,
@@ -379,6 +380,7 @@ static gboolean gst_rtp_session_setcaps_send_rtp (GstPad * pad,
 
 static void gst_rtp_session_clear_pt_map (GstRtpSession * rtpsession);
 static void gst_rtp_session_send_bye (GstRtpSession * rtpsession);
+static void gst_rtp_session_clear_ssrc (GstRtpSession * rtpsession, guint ssrc);
 
 static GstStructure *gst_rtp_session_create_stats (GstRtpSession * rtpsession);
 
@@ -569,6 +571,19 @@ gst_rtp_session_class_init (GstRtpSessionClass * klass)
       G_SIGNAL_RUN_LAST | G_SIGNAL_ACTION,
       G_STRUCT_OFFSET (GstRtpSessionClass, send_bye),
       NULL, NULL, g_cclosure_marshal_generic, G_TYPE_NONE, 0, G_TYPE_NONE);
+
+  /**
+   * GstRtpSession::clear-ssrc:
+   * @sess: the object which received the signal
+   * @ssrc: the ssrc
+   *
+   * Reset the rtpsource associated with the given ssrc.
+   */
+  gst_rtp_session_signals[SIGNAL_CLEAR_SSRC] =
+      g_signal_new ("clear-ssrc", G_TYPE_FROM_CLASS (klass),
+      G_SIGNAL_RUN_LAST | G_SIGNAL_ACTION,
+      G_STRUCT_OFFSET (GstRtpSessionClass, clear_ssrc),
+      NULL, NULL, g_cclosure_marshal_generic, G_TYPE_NONE, 1, G_TYPE_UINT);
 
   /**
    * GstRtpSession::on-new-ssrc:
@@ -895,6 +910,7 @@ gst_rtp_session_class_init (GstRtpSessionClass * klass)
 
   klass->clear_pt_map = GST_DEBUG_FUNCPTR (gst_rtp_session_clear_pt_map);
   klass->send_bye = GST_DEBUG_FUNCPTR (gst_rtp_session_send_bye);
+  klass->clear_ssrc = GST_DEBUG_FUNCPTR (gst_rtp_session_clear_ssrc);
 
   /* sink pads */
   gst_element_class_add_static_pad_template (gstelement_class,
@@ -1485,6 +1501,12 @@ gst_rtp_session_send_bye (GstRtpSession * rtpsession)
   GST_DEBUG_OBJECT (rtpsession, "scheduling BYE message");
   rtp_session_mark_all_bye (rtpsession->priv->session, "End Of Stream");
   rtp_session_schedule_bye (rtpsession->priv->session, current_time);
+}
+
+static void
+gst_rtp_session_clear_ssrc (GstRtpSession * rtpsession, guint ssrc)
+{
+  rtp_session_clear_ssrc (rtpsession->priv->session, ssrc);
 }
 
 /* called when the session manager has an RTP packet ready to be pushed */

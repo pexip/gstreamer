@@ -464,5 +464,7 @@ gboolean        rtp_session_request_nack           (RTPSession * sess,
 
 void            rtp_session_update_recv_caps_structure (RTPSession * sess, const GstStructure * s);
 
+void            rtp_session_clear_ssrc          (RTPSession *sess, guint ssrc);
+
 
 #endif /* __RTP_SESSION_H__ */
