@@ -488,8 +488,9 @@ gst_mf_source_reader_read_sample (GstMFSourceReader * self)
       nullptr, &sample);
 
   if (hr == MF_E_NOTACCEPTING) {
-    /* unlock() called Flush() on the reader */
-    g_assert (!sample);
+    /* unlock() called Flush() on the reader and discard the sample */
+    if (sample)
+      sample->Release ();
     GST_DEBUG_OBJECT (self, "ReadSample returned MF_E_NOTACCEPTING, flushing");
     return GST_FLOW_FLUSHING;
   }
