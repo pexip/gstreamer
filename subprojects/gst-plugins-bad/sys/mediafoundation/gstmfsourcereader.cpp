@@ -497,13 +497,14 @@ gst_mf_source_reader_read_sample (GstMFSourceReader * self)
 
   hr = self->reader->ReadSample (type->stream_index, 0, nullptr, &stream_flags,
       nullptr, &sample);
+  GST_LOG_OBJECT (self, "ReadSample returned: %u", hr);
 
   if (hr == MF_E_NOTACCEPTING) {
     /* unlock() called Flush() on the reader and discard the sample */
     if (sample)
       sample->Release ();
     GST_DEBUG_OBJECT (self, "ReadSample returned MF_E_NOTACCEPTING, flushing");
-    return GST_FLOW_FLUSHING;
+    return GST_FLOW_OK;
   }
 
   if (!gst_mf_result (hr)) {
@@ -740,10 +741,15 @@ gst_mf_source_reader_unlock (GstMFSourceObject * object)
   g_mutex_lock (&self->lock);
 
   GstMFStreamMediaType *type = self->cur_type;
-  if (self->reader) {
+  if (type && self->reader) {
     HRESULT hr = self->reader->Flush (type->stream_index);
     GST_LOG_OBJECT (self, "Flush() returned: %u", hr);
   }
+
+  /* clear the queue here to release pending samples to be pushed if we don't,
+     ReadSample() can block forever due to reduced pool samples sizes
+  */ 
+  gst_vec_deque_clear (self->queue);
 
   self->flushing = TRUE;
   g_mutex_unlock (&self->lock);
