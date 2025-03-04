@@ -219,30 +219,32 @@ plugin_init (GstPlugin * plugin)
   rank = GST_RANK_PRIMARY + 1;
 #endif
 
-  /* FIXME: In order to create MFT for a specific GPU, MFTEnum2() API is
-   * required API but it's desktop only.
-   * So, resulting MFT and D3D11 might not be compatible in case of multi-GPU
-   * environment on UWP. */
-#if GST_MF_HAVE_D3D11
-  if (gst_mf_plat_load_library ())
-    device_list = get_d3d11_devices ();
-#endif
-
   gst_element_register (plugin, "mfvideosrc", rank, GST_TYPE_MF_VIDEO_SRC);
   gst_device_provider_register (plugin, "mfdeviceprovider",
       rank, GST_TYPE_MF_DEVICE_PROVIDER);
 
-  gst_mf_h264_enc_plugin_init (plugin, GST_RANK_SECONDARY, device_list);
-  gst_mf_h265_enc_plugin_init (plugin, GST_RANK_SECONDARY, device_list);
-  gst_mf_vp9_enc_plugin_init (plugin, GST_RANK_SECONDARY, device_list);
+  if (g_getenv ("GST_MF_DISABLE_CODECS") == NULL) {
+    /* FIXME: In order to create MFT for a specific GPU, MFTEnum2() API is
+     * required API but it's desktop only.
+     * So, resulting MFT and D3D11 might not be compatible in case of multi-GPU
+     * environment on UWP. */
+#if GST_MF_HAVE_D3D11
+    if (gst_mf_plat_load_library ())
+      device_list = get_d3d11_devices ();
+#endif
 
-  if (device_list)
-    g_list_free_full (device_list, gst_object_unref);
+    gst_mf_h264_enc_plugin_init (plugin, GST_RANK_SECONDARY, device_list);
+    gst_mf_h265_enc_plugin_init (plugin, GST_RANK_SECONDARY, device_list);
+    gst_mf_vp9_enc_plugin_init (plugin, GST_RANK_SECONDARY, device_list);
 
-  gst_mf_aac_enc_plugin_init (plugin, GST_RANK_SECONDARY);
-  gst_mf_mp3_enc_plugin_init (plugin, GST_RANK_SECONDARY);
-  gst_mf_aac_dec_plugin_init (plugin, GST_RANK_SECONDARY);
-  gst_mf_mp3_dec_plugin_init (plugin, GST_RANK_SECONDARY);
+    if (device_list)
+      g_list_free_full (device_list, gst_object_unref);
+
+    gst_mf_aac_enc_plugin_init (plugin, GST_RANK_SECONDARY);
+    gst_mf_mp3_enc_plugin_init (plugin, GST_RANK_SECONDARY);
+    gst_mf_aac_dec_plugin_init (plugin, GST_RANK_SECONDARY);
+    gst_mf_mp3_dec_plugin_init (plugin, GST_RANK_SECONDARY);
+  }
 
   /* So that call MFShutdown() when this plugin is no more used
    * (i.e., gst_deinit). Otherwise valgrind-like tools would complain
