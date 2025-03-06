@@ -493,10 +493,10 @@ MediaCaptureWrapper::RegisterCb (const MediaCaptureWrapperCallbacks &cb,
 }
 
 HRESULT
-MediaCaptureWrapper::EnumrateFrameSourceGroup
+MediaCaptureWrapper::EnumerateFrameSourceGroup
     (std::vector<GstWinRTMediaFrameSourceGroup> &group_list)
 {
-  return enumrateFrameSourceGroup (group_list);
+  return enumerateFrameSourceGroup (group_list);
 }
 
 HRESULT
@@ -1077,7 +1077,7 @@ MediaCaptureWrapper::onCaptureFailed(IMediaCapture *capture,
 }
 
 HRESULT
-MediaCaptureWrapper::enumrateFrameSourceGroup
+MediaCaptureWrapper::enumerateFrameSourceGroup
     (std::vector<GstWinRTMediaFrameSourceGroup> &groupList)
 {
   ComPtr<IMediaFrameSourceGroupStatics> frame_source_group_statics;
