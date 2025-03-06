@@ -252,6 +252,11 @@ gst_mf_capture_winrt_thread_func (GstMFCaptureWinRT * self)
   g_source_unref (idle_source);
 
   hr = self->capture->EnumerateFrameSourceGroup (group_list);
+  if (!gst_mf_result (hr)) {
+    GST_WARNING_OBJECT (self, "EnumerateFrameSourceGroup failed");
+    source->source_state = GST_MF_ACTIVATION_FAILED;
+    goto run_loop;
+  }
 
   /* *INDENT-OFF* */
 #ifndef GST_DISABLE_GST_DEBUG
@@ -304,7 +309,12 @@ gst_mf_capture_winrt_thread_func (GstMFCaptureWinRT * self)
     goto run_loop;
   }
 
-  self->capture->SetSourceGroup (*target_group);
+  hr = self->capture->SetSourceGroup (*target_group);
+  if (!gst_mf_result (hr)) {
+    GST_WARNING_OBJECT (self, "SetSourceGroup failed");
+    source->source_state = GST_MF_ACTIVATION_FAILED;
+    goto run_loop;
+  }
 
   std::sort (target_group->source_list_.begin (),
       target_group->source_list_.end (), WinRTCapsCompareFunc);
@@ -686,9 +696,11 @@ gst_mf_capture_winrt_set_caps (GstMFSourceObject * object, GstCaps * caps)
 
   for (const auto& iter: desc_list) {
     if (gst_caps_can_intersect (iter.caps_, caps)) {
-      target_caps = gst_caps_ref (iter.caps_);
-      self->capture->SetMediaDescription(iter);
-      break;
+      hr = self->capture->SetMediaDescription(iter);
+      if (gst_mf_result (hr)) {
+        target_caps = gst_caps_ref (iter.caps_);
+        break;
+      }
     }
   }
 
