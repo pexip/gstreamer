@@ -251,7 +251,7 @@ gst_mf_capture_winrt_thread_func (GstMFCaptureWinRT * self)
   g_source_attach (idle_source, self->context);
   g_source_unref (idle_source);
 
-  hr = self->capture->EnumrateFrameSourceGroup (group_list);
+  hr = self->capture->EnumerateFrameSourceGroup (group_list);
 
   /* *INDENT-OFF* */
 #ifndef GST_DISABLE_GST_DEBUG
