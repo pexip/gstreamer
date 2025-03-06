@@ -129,7 +129,7 @@ public:
 
   /* Enumerating available source devices */
   /* Fill enumerated device infos into list */
-  HRESULT EnumrateFrameSourceGroup(std::vector<GstWinRTMediaFrameSourceGroup> &group_list);
+  HRESULT EnumerateFrameSourceGroup(std::vector<GstWinRTMediaFrameSourceGroup> &group_list);
   /* Select target device which should be one of enumerated be fore */
   HRESULT SetSourceGroup(const GstWinRTMediaFrameSourceGroup &group);
   /* Select target format (resolution, video format) to use */
@@ -167,7 +167,7 @@ private:
                          IMediaFrameArrivedEventArgs *args);
   HRESULT onCaptureFailed(IMediaCapture *capture,
                           IMediaCaptureFailedEventArgs *args);
-  static HRESULT enumrateFrameSourceGroup(std::vector<GstWinRTMediaFrameSourceGroup> &list);
+  static HRESULT enumerateFrameSourceGroup(std::vector<GstWinRTMediaFrameSourceGroup> &list);
 };
 
 HRESULT
