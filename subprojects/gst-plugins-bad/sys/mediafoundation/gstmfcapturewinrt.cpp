@@ -67,6 +67,7 @@ struct _GstMFCaptureWinRT
   GstVideoInfo info;
   gboolean flushing;
   gboolean got_error;
+  UINT32 error_code;
 
   gpointer dispatcher;
 };
@@ -257,7 +258,6 @@ gst_mf_capture_winrt_thread_func (GstMFCaptureWinRT * self)
     source->source_state = GST_MF_ACTIVATION_FAILED;
     goto run_loop;
   }
-
   /* *INDENT-OFF* */
 #ifndef GST_DISABLE_GST_DEBUG
   index = 0;
@@ -431,6 +431,7 @@ gst_mf_capture_winrt_on_failed (const std::string & error,
 
   g_mutex_lock (&self->lock);
   self->got_error = TRUE;
+  self->error_code = error_code;
   g_cond_broadcast (&self->cond);
   g_mutex_unlock (&self->lock);
 
@@ -440,7 +441,7 @@ gst_mf_capture_winrt_on_failed (const std::string & error,
 static GstFlowReturn
 gst_mf_capture_winrt_get_video_media_frame (GstMFCaptureWinRT * self,
     IVideoMediaFrame ** media_frame, GstClockTime * timestamp,
-    GstClockTime * duration)
+    GstClockTime * duration, UINT32 * error_code)
 {
   GstMFCaptureWinRTFrame *winrt_frame = nullptr;
   IMediaFrameReference *frame_ref;
@@ -454,6 +455,7 @@ gst_mf_capture_winrt_get_video_media_frame (GstMFCaptureWinRT * self,
 
   g_mutex_lock (&self->lock);
   if (self->got_error) {
+    *error_code = self->error_code;
     g_mutex_unlock (&self->lock);
     return GST_FLOW_ERROR;
   }
@@ -468,6 +470,7 @@ gst_mf_capture_winrt_get_video_media_frame (GstMFCaptureWinRT * self,
     g_cond_wait (&self->cond, &self->lock);
 
   if (self->got_error) {
+    *error_code = self->error_code;
     g_mutex_unlock (&self->lock);
     return GST_FLOW_ERROR;
   }
@@ -503,6 +506,41 @@ done:
   return GST_FLOW_OK;
 }
 
+static void
+gst_mf_capture_winrt_push_error (GstMFCaptureWinRT * self, UINT32 error_code)
+{
+  GstMFSourceObject * object = (GstMFSourceObject *)self;
+  GstElement *client = (GstElement *) g_weak_ref_get (&object->client);
+
+  if (!client) {
+    GST_WARNING_OBJECT (self, "Pushing mediafoundation error 0x%x but client is missing", error_code);
+    return;
+  }
+
+  switch (error_code) {
+    case MF_E_UNAUTHORIZED:
+    {
+      GST_ELEMENT_ERROR (client, RESOURCE, NOT_AUTHORIZED,
+          ("Not authorized (0x%x)", error_code), (NULL));
+      break;
+    }
+    case MF_E_HW_MFT_FAILED_START_STREAMING:
+    {
+      GST_ELEMENT_ERROR (client, RESOURCE, BUSY,
+          ("Busy (0x%x)", error_code), (NULL));
+      break;
+    }
+    default:
+    {
+      GST_ELEMENT_ERROR (client, RESOURCE, FAILED,
+          ("Internal error (0x%x)", error_code), (NULL));
+      break;
+    }
+  }
+
+  gst_object_unref (client);
+}
+
 static GstFlowReturn
 gst_mf_capture_winrt_fill (GstMFSourceObject * object, GstBuffer * buffer)
 {
@@ -512,6 +550,7 @@ gst_mf_capture_winrt_fill (GstMFSourceObject * object, GstBuffer * buffer)
   GstVideoFrame frame;
   BYTE *data;
   UINT32 size;
+  UINT32 error_code = 0;
   gint i, j;
   ComPtr < IVideoMediaFrame > video_frame;
   ComPtr < ISoftwareBitmap > bitmap;
@@ -526,11 +565,15 @@ gst_mf_capture_winrt_fill (GstMFSourceObject * object, GstBuffer * buffer)
 
   do {
     ret = gst_mf_capture_winrt_get_video_media_frame (self,
-        video_frame.ReleaseAndGetAddressOf (), &timestamp, &duration);
+        video_frame.ReleaseAndGetAddressOf (), &timestamp, &duration,
+        &error_code);
   } while (ret == GST_FLOW_OK && !video_frame);
 
-  if (ret != GST_FLOW_OK)
+  if (ret != GST_FLOW_OK) {
+    if (ret == GST_FLOW_ERROR)
+      gst_mf_capture_winrt_push_error (self, error_code);
     return ret;
+  }
 
   hr = video_frame->get_SoftwareBitmap (&bitmap);
   if (!gst_mf_result (hr)) {
