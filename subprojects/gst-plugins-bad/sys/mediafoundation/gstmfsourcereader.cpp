@@ -727,17 +727,18 @@ gst_mf_source_reader_unlock (GstMFSourceObject * object)
   GstMFSourceReader *self = GST_MF_SOURCE_READER (object);
 
   g_mutex_lock (&self->lock);
-
-  GstMFStreamMediaType *type = self->cur_type;
-  if (type && self->reader) {
-    HRESULT hr = self->reader->Flush (type->stream_index);
-    GST_LOG_OBJECT (self, "Flush() returned: %u", hr);
-  }
-
+  
   /* clear the queue here to release pending samples to be pushed if we don't,
      ReadSample() can block forever due to reduced pool samples sizes
   */ 
   gst_vec_deque_clear (self->queue);
+
+
+  GstMFStreamMediaType *type = self->cur_type;
+  if (type && self->reader) {
+    HRESULT hr = self->reader->Flush (MF_SOURCE_READER_ALL_STREAMS);
+    GST_LOG_OBJECT (self, "Flush() returned: %u", hr);
+  }
 
   self->flushing = TRUE;
   g_mutex_unlock (&self->lock);
