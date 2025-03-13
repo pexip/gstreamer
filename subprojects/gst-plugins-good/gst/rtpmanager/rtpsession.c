@@ -3974,8 +3974,24 @@ rtp_session_clear_ssrc (RTPSession * sess, guint ssrc)
   RTP_SESSION_LOCK (sess);
   source = find_source (sess, ssrc);
   if (source) {
-    GST_DEBUG ("Marking source with ssrc %u bye", ssrc);
-    rtp_source_mark_bye (source, "SSRC cleared");
+    GST_DEBUG ("Set closing ssrc %u", ssrc);
+    source->closing = TRUE;
+    gboolean is_sender = RTP_SOURCE_IS_SENDER (source);
+    gboolean is_active = RTP_SOURCE_IS_ACTIVE (source);
+
+    sess->total_sources--;
+    if (is_sender) {
+      sess->stats.sender_sources--;
+      if (source->internal)
+        sess->stats.internal_sender_sources--;
+    }
+    if (is_active)
+      sess->stats.active_sources--;
+
+    if (source->internal)
+      sess->stats.internal_sources--;
+
+    g_hash_table_remove (sess->ssrcs[sess->mask_idx], GINT_TO_POINTER(ssrc));
   }
   RTP_SESSION_UNLOCK (sess);
 }
