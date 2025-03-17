@@ -144,6 +144,7 @@ typedef struct
   gdouble recovery_pct;
   gint64 avg_delta_of_delta;
   gdouble delta_of_delta_growth;
+  gdouble queueing_slope;
 } TWCCStatsCtx;
 
 static void
@@ -262,6 +263,80 @@ _get_stats_packets_window (GArray * array,
   return ret;
 }
 
+/* Does linear regression in order to get the slope the two functions */
+static gfloat
+_get_slope (GArray * x, GArray * y)
+{
+  gfloat sum_x = 0.0, sum_y = 0.0, sum_xy = 0.0, sum_x2 = 0.0;
+  guint n = x->len;
+  guint i;
+
+  for (i = 0; i < n; i++) {
+    gfloat xi = g_array_index (x, gfloat, i);
+    gfloat yi = g_array_index (y, gfloat, i);
+    sum_x += xi;
+    sum_y += yi;
+    sum_xy += xi * yi;
+    sum_x2 += xi * xi;
+  }
+
+  return (n * sum_xy - sum_x * sum_y) / (n * sum_x2 - sum_x * sum_x);
+}
+
+typedef struct
+{
+  gsize n;
+  gdouble mean_x;               /* Mean of x */
+  gdouble mean_y;               /* Mean of y */
+  gdouble Sxy;                  /* Sum of (xi - mean_x) * (yi - mean_y) */
+  gdouble Sxx;                  /* Sum of (xi - mean_x)² */
+} LinearRegression;
+
+/* Initialize the structure */
+static void
+_linear_init (LinearRegression * l)
+{
+  l->n = 0;
+  l->mean_x = 0.0;
+  l->mean_y = 0.0;
+  l->Sxy = 0.0;
+  l->Sxx = 0.0;
+}
+
+/* Update with a new (x, y) point */
+static void
+_linear_update (LinearRegression * l, gdouble x, gdouble y)
+{
+  l->n += 1;
+  const gdouble delta_x = x - l->mean_x;
+  const gdouble delta_y = y - l->mean_y;
+
+  /* Update means */
+  l->mean_x += delta_x / l->n;
+  l->mean_y += delta_y / l->n;
+
+  /* Update sums */
+  l->Sxx += delta_x * (x - l->mean_x);  /* Uses new mean_x */
+  l->Sxy += delta_x * (y - l->mean_y);  /* Uses new mean_y */
+}
+
+/* Compute slope and intercept */
+static void
+_linear_compute (LinearRegression * l, gdouble * slope, gdouble * intercept)
+{
+  if (l->n < 2) {
+    *slope = 0.0;
+    if (intercept) {
+      *intercept = 0.0;
+    }
+    return;
+  }
+  *slope = l->Sxy / l->Sxx;
+  if (intercept) {
+    *intercept = l->mean_y - (*slope) * l->mean_x;
+  }
+}
+
 static gboolean
 twcc_stats_ctx_calculate_windowed_stats (TWCCStatsCtx * ctx,
     GstClockTimeDiff start_time, GstClockTimeDiff end_time)
@@ -294,6 +369,9 @@ twcc_stats_ctx_calculate_windowed_stats (TWCCStatsCtx * ctx,
 
   GstClockTimeDiff local_duration = 0;
   GstClockTimeDiff remote_duration = 0;
+
+  LinearRegression dod_regression;
+  _linear_init (&dod_regression);
 
   ctx->packet_loss_pct = 0.0;
   ctx->avg_delta_of_delta = 0;
@@ -347,6 +425,12 @@ twcc_stats_ctx_calculate_windowed_stats (TWCCStatsCtx * ctx,
 
     if (GST_CLOCK_STIME_IS_VALID (pkt->delta_delta)) {
       delta_delta_sum += pkt->delta_delta;
+      if (GST_CLOCK_TIME_IS_VALID (pkt->local_ts)) {
+        _linear_update (&dod_regression,
+            (gdouble) (pkt->local_ts - first_local_pkt->local_ts),
+            (gdouble) delta_delta_sum);
+      }
+
       delta_delta_count++;
       if (i < packets_sent / 2) {
         first_delta_delta_sum += pkt->delta_delta;
@@ -402,15 +486,18 @@ twcc_stats_ctx_calculate_windowed_stats (TWCCStatsCtx * ctx,
         gst_util_uint64_scale (bits_recv, GST_SECOND, remote_duration);
   }
 
+  _linear_compute (&dod_regression, &ctx->queueing_slope, NULL);
+
   GST_INFO ("Got stats: bits_sent: %u, bits_recv: %u, packets_sent = %u, "
       "packets_recv: %u, packetlost_pct = %lf, recovery_pct = %lf, "
       "local_duration=%" GST_TIME_FORMAT ", remote_duration=%" GST_TIME_FORMAT
       ", " "sent_bitrate = %u, " "recv_bitrate = %u, delta-delta-avg = %"
-      GST_STIME_FORMAT ", delta-delta-growth=%lf", bits_sent, bits_recv,
-      packets_sent, packets_recv, ctx->packet_loss_pct, ctx->recovery_pct,
-      GST_TIME_ARGS (local_duration), GST_TIME_ARGS (remote_duration),
-      ctx->bitrate_sent, ctx->bitrate_recv,
-      GST_STIME_ARGS (ctx->avg_delta_of_delta), ctx->delta_of_delta_growth);
+      GST_STIME_FORMAT ", delta-delta-growth=%lf, queueing-slope=%lf",
+      bits_sent, bits_recv, packets_sent, packets_recv, ctx->packet_loss_pct,
+      ctx->recovery_pct, GST_TIME_ARGS (local_duration),
+      GST_TIME_ARGS (remote_duration), ctx->bitrate_sent, ctx->bitrate_recv,
+      GST_STIME_ARGS (ctx->avg_delta_of_delta), ctx->delta_of_delta_growth,
+      ctx->queueing_slope);
 
   /* trim the stats array down to max packets */
   if (packets->len > max_stats_packets) {
@@ -431,7 +518,8 @@ twcc_stats_ctx_get_structure (TWCCStatsCtx * ctx)
       "packet-loss-pct", G_TYPE_DOUBLE, ctx->packet_loss_pct,
       "recovery-pct", G_TYPE_DOUBLE, ctx->recovery_pct,
       "avg-delta-of-delta", G_TYPE_INT64, ctx->avg_delta_of_delta,
-      "delta-of-delta-growth", G_TYPE_DOUBLE, ctx->delta_of_delta_growth, NULL);
+      "delta-of-delta-growth", G_TYPE_DOUBLE, ctx->delta_of_delta_growth,
+      "queueing-slope", G_TYPE_DOUBLE, ctx->queueing_slope, NULL);
 }
 
 
@@ -482,6 +570,13 @@ _update_stats_for_packet_idx (GArray * array, gint packet_idx)
     GST_LOG ("Calculated delta-of-delta for packet #%u to %" GST_STIME_FORMAT,
         pkt->seqnum, GST_STIME_ARGS (pkt->delta_delta));
   }
+
+  GST_DEBUG ("TS for #%u pt %u local_ts: %" GST_STIME_FORMAT ", remote_ts: %"
+      GST_STIME_FORMAT ", local delta: %" GST_STIME_FORMAT ", remote delta: %"
+      GST_STIME_FORMAT ", delta-delta: %" GST_STIME_FORMAT, pkt->seqnum,
+      pkt->pt, GST_STIME_ARGS (pkt->local_ts), GST_STIME_ARGS (pkt->remote_ts),
+      GST_STIME_ARGS (pkt->local_delta), GST_STIME_ARGS (pkt->remote_delta),
+      GST_STIME_ARGS (pkt->delta_delta));
 }
 
 static gint
