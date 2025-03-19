@@ -1112,6 +1112,9 @@ gst_sctp_association_open_stream (GstSctpAssociation * assoc, guint16 stream_id)
         state->incoming_reset_done || state->outgoing_reset_done) {
       return FALSE;
     }
+
+    /* if we have a state for this stream already, its open */
+    return TRUE;
   }
 
   state = g_new0 (GstSctpStreamState, 1);
@@ -1143,6 +1146,7 @@ gst_sctp_association_send_data (GstSctpAssociation * assoc, const guint8 * buf,
   if (!gst_sctp_association_open_stream (assoc, stream_id)) {
     GST_INFO_OBJECT (assoc,
         "Skipping send data on invalid state with stream id:%u", stream_id);
+    GST_SCTP_ASSOC_MUTEX_UNLOCK (assoc);
     return GST_FLOW_ERROR;
   }
 
