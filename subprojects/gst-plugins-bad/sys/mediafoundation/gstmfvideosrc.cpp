@@ -359,7 +359,7 @@ gst_mf_video_src_set_caps (GstBaseSrc * src, GstCaps * caps)
 {
   GstMFVideoSrc *self = GST_MF_VIDEO_SRC (src);
 
-  GST_DEBUG_OBJECT (self, "Set caps %" GST_PTR_FORMAT, caps);
+  GST_INFO_OBJECT (self, "Set caps %" GST_PTR_FORMAT, caps);
 
   if (!self->source) {
     GST_ERROR_OBJECT (self, "No capture engine yet");
