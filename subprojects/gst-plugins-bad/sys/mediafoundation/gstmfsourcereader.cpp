@@ -350,8 +350,6 @@ gst_mf_source_reader_open (GstMFSourceReader * self, IMFActivate * activate)
       gst_mf_source_reader_close (self);
       return FALSE;
     }
-
-    gst_vec_deque_clear (self->queue);
   }
 
   return TRUE;
@@ -360,6 +358,11 @@ gst_mf_source_reader_open (GstMFSourceReader * self, IMFActivate * activate)
 static gboolean
 gst_mf_source_reader_close (GstMFSourceReader * self)
 {
+  g_mutex_lock (&self->lock);
+  gst_vec_deque_clear (self->queue);
+  g_cond_signal (&self->cond);
+  g_mutex_unlock (&self->lock);
+
   gst_clear_caps (&self->supported_caps);
 
   if (self->activate) {
@@ -481,7 +484,10 @@ gst_mf_source_reader_stop (GstMFSourceObject * object)
 {
   GstMFSourceReader *self = GST_MF_SOURCE_READER (object);
 
+  g_mutex_lock (&self->lock);
   gst_vec_deque_clear (self->queue);
+  g_cond_signal (&self->cond);
+  g_mutex_unlock (&self->lock);
 
   return TRUE;
 }
@@ -501,20 +507,26 @@ gst_mf_source_reader_read_sample (GstMFSourceReader * self)
 
   if (hr == MF_E_NOTACCEPTING) {
     /* unlock() called Flush() on the reader and discard the sample */
+    GST_DEBUG_OBJECT (self, "ReadSample returned MF_E_NOTACCEPTING, flushing");
     if (sample)
       sample->Release ();
-    GST_DEBUG_OBJECT (self, "ReadSample returned MF_E_NOTACCEPTING, flushing");
-    return GST_FLOW_OK;
+    return GST_FLOW_FLUSHING;
   }
 
   if (!gst_mf_result (hr)) {
     GST_ERROR_OBJECT (self, "Failed to read sample");
+    if (sample)
+      sample->Release ();
     return GST_FLOW_ERROR;
   }
+
+  GST_LOG_OBJECT (self, "stream_flags: %u", stream_flags);
 
   if ((stream_flags & MF_SOURCE_READERF_ERROR) == MF_SOURCE_READERF_ERROR) {
     GST_ERROR_OBJECT (self, "Error while reading sample, sample flags 0x%x",
         stream_flags);
+    if (sample)
+      sample->Release ();
     return GST_FLOW_ERROR;
   }
 
@@ -547,21 +559,25 @@ gst_mf_source_reader_get_media_buffer (GstMFSourceReader * self,
   *timestamp = GST_CLOCK_TIME_NONE;
   *duration = GST_CLOCK_TIME_NONE;
 
-  while (gst_vec_deque_is_empty (self->queue)) {
+  g_mutex_lock (&self->lock);
+  while (gst_vec_deque_is_empty (self->queue) && !self->flushing) {
     ret = gst_mf_source_reader_read_sample (self);
-    if (ret != GST_FLOW_OK)
-      return ret;
+  }
 
-    g_mutex_lock (&self->lock);
-    if (self->flushing) {
-      g_mutex_unlock (&self->lock);
-      return GST_FLOW_FLUSHING;
-    }
+  if (self->flushing) {
     g_mutex_unlock (&self->lock);
+    return GST_FLOW_FLUSHING;
+  }
+
+  if (ret != GST_FLOW_OK) {
+    g_mutex_unlock (&self->lock);
+    return ret;
   }
 
   reader_sample =
       (GstMFSourceReaderSample *) gst_vec_deque_pop_head_struct (self->queue);
+  g_mutex_unlock (&self->lock);
+
   sample = reader_sample->sample;
   g_assert (sample);
 
@@ -739,20 +755,19 @@ gst_mf_source_reader_unlock (GstMFSourceObject * object)
   GstMFSourceReader *self = GST_MF_SOURCE_READER (object);
 
   g_mutex_lock (&self->lock);
-  
+
   /* clear the queue here to release pending samples to be pushed if we don't,
      ReadSample() can block forever due to reduced pool samples sizes
   */ 
   gst_vec_deque_clear (self->queue);
-
-
-  GstMFStreamMediaType *type = self->cur_type;
-  if (type && self->reader) {
+  
+  if (self->reader) {
     HRESULT hr = self->reader->Flush (MF_SOURCE_READER_ALL_STREAMS);
     GST_LOG_OBJECT (self, "Flush() returned: %u", hr);
   }
 
   self->flushing = TRUE;
+  g_cond_signal (&self->cond);
   g_mutex_unlock (&self->lock);
 
   return TRUE;
@@ -765,6 +780,7 @@ gst_mf_source_reader_unlock_stop (GstMFSourceObject * object)
 
   g_mutex_lock (&self->lock);
   self->flushing = FALSE;
+  g_cond_signal (&self->cond);
   g_mutex_unlock (&self->lock);
 
   return TRUE;
