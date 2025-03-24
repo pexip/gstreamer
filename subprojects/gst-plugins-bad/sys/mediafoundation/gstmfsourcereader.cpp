@@ -560,7 +560,7 @@ gst_mf_source_reader_get_media_buffer (GstMFSourceReader * self,
   *duration = GST_CLOCK_TIME_NONE;
 
   g_mutex_lock (&self->lock);
-  while (gst_vec_deque_is_empty (self->queue) && !self->flushing) {
+  while (gst_vec_deque_is_empty (self->queue) && !self->flushing && ret == GST_FLOW_OK) {
     ret = gst_mf_source_reader_read_sample (self);
   }
 
