@@ -118,7 +118,8 @@ if egl_dep.found() and cc.has_header('drm_fourcc.h', dependencies: libdrm_dep)
   optional_deps += [allocators_dep, libdrm_dep]
 endif
 
-if ['darwin', 'ios'].contains(host_system)
+is_apple = host_system in ['darwin', 'ios'] 
+if is_apple
   if not have_objc
     error('No ObjC compiler found')
   endif
@@ -149,4 +150,6 @@ gstopengl = library('gstopengl',
   install : true,
   install_dir : plugins_install_dir)
 
-plugins += [gstopengl]
+if not is_apple 
+  plugins += [gstopengl]
+endif
