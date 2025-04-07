@@ -709,8 +709,9 @@ gst_rtp_ssrc_demux_chain (GstPad * pad, GstObject * parent, GstBuffer * buf)
   /* push to srcpad */
   ret = gst_pad_push (srcpad, buf);
 
-  if (ret == GST_FLOW_NOT_LINKED || ret == GST_FLOW_EOS) {
-    /* on not-linked and eos this *could* happen because the ssrc got
+  if (ret == GST_FLOW_NOT_LINKED || ret == GST_FLOW_FLUSHING
+      || ret == GST_FLOW_EOS) {
+    /* on not-linked, flushing and eos this *could* happen because the ssrc got
        removed while we were pushing, and since it can also be
        re-created, we can't know for sure if the removal was the
        real reason, so simply ignore here */
