@@ -21,8 +21,20 @@
 #include <gst/check/gstcheck.h>
 #include <gst/check/gstharness.h>
 #include <gst/rtp/rtp.h>
+#include <gst/rtp/gstrtprepairmeta.h>
 
-#define verify_buf(buf, is_rtx, expected_ssrc, expted_pt, expected_seqnum)       \
+#define check_repairmeta(buf, ssrc_, seqnum_)                                        \
+  G_STMT_START {                                                                     \
+    GstRTPRepairMeta *repmeta = gst_rtp_repair_meta_get (buf);                \
+    fail_unless (repmeta != NULL);                                                   \
+    fail_unless (repmeta->ssrc == (guint32)(ssrc_));                                 \
+    fail_unless (repmeta->seqnums->len == 1);                                        \
+    fail_unless (g_array_index (repmeta->seqnums, guint16, 0) == (guint16)(seqnum_));\
+  } G_STMT_END
+
+
+#define verify_buf(buf, is_rtx, expected_ssrc, expted_pt, expected_seqnum,       \
+                   orig_ssrc, orig_seqnum)                                       \
   G_STMT_START {                                                                 \
     GstRTPBuffer _rtp = GST_RTP_BUFFER_INIT;                                     \
     fail_unless (gst_rtp_buffer_map (buf, GST_MAP_READ, &_rtp));                 \
@@ -31,6 +43,10 @@
     if (!(is_rtx)) {                                                             \
       fail_unless_equals_int (gst_rtp_buffer_get_seq (&_rtp), expected_seqnum);  \
     } else {                                                                     \
+      /* Don't check rtx repair meta on stuffing */                              \
+      if ((gint64)(orig_ssrc)-1 >= -1 && (gint64)(orig_seqnum)-1 >= -1) {        \
+        check_repairmeta (buf, orig_ssrc, orig_seqnum);      \
+      }                                                                          \
       fail_unless_equals_int (GST_READ_UINT16_BE (gst_rtp_buffer_get_payload     \
               (&_rtp)), expected_seqnum);                                        \
       fail_unless (GST_BUFFER_FLAG_IS_SET (buf,                                  \
@@ -39,17 +55,21 @@
     gst_rtp_buffer_unmap (&_rtp);                                                \
   } G_STMT_END
 
-#define pull_and_verify(h, is_rtx, expected_ssrc, expted_pt, expected_seqnum) \
+#define pull_and_verify(h, is_rtx, expected_ssrc, expted_pt, expected_seqnum, \
+                        orig_ssrc, orig_seqnum)                               \
   G_STMT_START {                                                              \
     GstBuffer *_buf = gst_harness_pull (h);                                   \
-    verify_buf (_buf, is_rtx, expected_ssrc, expted_pt, expected_seqnum);     \
+    verify_buf (_buf, is_rtx, expected_ssrc, expted_pt, expected_seqnum,      \
+                orig_ssrc, orig_seqnum);                                      \
     gst_buffer_unref (_buf);                                                  \
   } G_STMT_END
 
-#define push_pull_and_verify(h, buf, is_rtx, expected_ssrc, expted_pt, expected_seqnum) \
+#define push_pull_and_verify(h, buf, is_rtx, expected_ssrc, expted_pt, expected_seqnum, \
+                             orig_ssrc, orig_seqnum)                                    \
   G_STMT_START {                                                                        \
     gst_harness_push (h, buf);                                                          \
-    pull_and_verify (h, is_rtx, expected_ssrc, expted_pt, expected_seqnum);             \
+    pull_and_verify (h, is_rtx, expected_ssrc, expted_pt, expected_seqnum,              \
+                     orig_ssrc, orig_seqnum);                                           \
   } G_STMT_END
 
 static GstEvent *
@@ -254,13 +274,13 @@ GST_START_TEST (test_rtxsend_basic)
       gst_harness_push (h, create_rtp_buffer (main_ssrc, main_pt, 0)));
 
   /* and check it came through */
-  pull_and_verify (h, FALSE, main_ssrc, main_pt, 0);
+  pull_and_verify (h, FALSE, main_ssrc, main_pt, 0, 0, 0);
 
   /* now request this packet as rtx */
   gst_harness_push_upstream_event (h, create_rtx_event (main_ssrc, main_pt, 0));
 
   /* and verify we got an rtx-packet for it */
-  pull_and_verify (h, TRUE, rtx_ssrc, rtx_pt, 0);
+  pull_and_verify (h, TRUE, rtx_ssrc, rtx_pt, 0, main_ssrc, 0);
 
   gst_structure_free (ssrc_map);
   gst_structure_free (pt_map);
@@ -293,7 +313,7 @@ GST_START_TEST (test_rtxsend_disabled_enabled_disabled)
   /* push, pull, request-rtx, verify nothing arrives */
   fail_unless_equals_int (GST_FLOW_OK,
       gst_harness_push (h, create_rtp_buffer (main_ssrc, main_pt, 0)));
-  pull_and_verify (h, FALSE, main_ssrc, main_pt, 0);
+  pull_and_verify (h, FALSE, main_ssrc, main_pt, 0, 0, 0);
   gst_harness_push_upstream_event (h, create_rtx_event (main_ssrc, main_pt, 0));
   fail_unless_equals_int (0, gst_harness_buffers_in_queue (h));
   /* verify there is no task on the rtxsend srcpad */
@@ -305,9 +325,9 @@ GST_START_TEST (test_rtxsend_disabled_enabled_disabled)
   /* push, pull, request rtx, pull rtx */
   fail_unless_equals_int (GST_FLOW_OK,
       gst_harness_push (h, create_rtp_buffer (main_ssrc, main_pt, 1)));
-  pull_and_verify (h, FALSE, main_ssrc, main_pt, 1);
+  pull_and_verify (h, FALSE, main_ssrc, main_pt, 1, 0, 0);
   gst_harness_push_upstream_event (h, create_rtx_event (main_ssrc, main_pt, 1));
-  pull_and_verify (h, TRUE, rtx_ssrc, rtx_pt, 1);
+  pull_and_verify (h, TRUE, rtx_ssrc, rtx_pt, 1, main_ssrc, 1);
   /* verify there is a task on the rtxsend srcpad */
   fail_unless (GST_PAD_TASK (GST_PAD_PEER (h->sinkpad)) != NULL);
 
@@ -317,7 +337,7 @@ GST_START_TEST (test_rtxsend_disabled_enabled_disabled)
   /* push, pull, request-rtx, verify nothing arrives */
   fail_unless_equals_int (GST_FLOW_OK,
       gst_harness_push (h, create_rtp_buffer (main_ssrc, main_pt, 2)));
-  pull_and_verify (h, FALSE, main_ssrc, main_pt, 2);
+  pull_and_verify (h, FALSE, main_ssrc, main_pt, 2, 0, 0);
   gst_harness_push_upstream_event (h, create_rtx_event (main_ssrc, main_pt, 2));
   fail_unless_equals_int (0, gst_harness_buffers_in_queue (h));
   /* verify the task is gone again */
@@ -427,7 +447,7 @@ GST_START_TEST (test_rtxsend_rtxreceive)
     inbufs[i] = create_rtp_buffer (master_ssrc, master_pt, 100 + i);
     gst_harness_push (hsend, gst_buffer_ref (inbufs[i]));
     gst_harness_push (hrecv, gst_harness_pull (hsend));
-    pull_and_verify (hrecv, FALSE, master_ssrc, master_pt, 100 + i);
+    pull_and_verify (hrecv, FALSE, master_ssrc, master_pt, 100 + i, 0, 0);
   }
 
   /* Getting rid of reconfigure event. Preparation before the next step */
@@ -439,12 +459,14 @@ GST_START_TEST (test_rtxsend_rtxreceive)
      check that the packet produced out of RTX packet is the same
      as an original packet */
   for (i = 0; i < packets_num; i++) {
-    GstBuffer *outbuf;
+    GstBuffer *outbuf, *sentbuf;
     gst_harness_push_upstream_event (hrecv,
         create_rtx_event (master_ssrc, master_pt, 100 + i));
     gst_harness_push_upstream_event (hsend,
         gst_harness_pull_upstream_event (hrecv));
-    gst_harness_push (hrecv, gst_harness_pull (hsend));
+    sentbuf = gst_harness_pull (hsend);
+    check_repairmeta (sentbuf, master_ssrc, 100 + i);
+    gst_harness_push (hrecv, sentbuf);
 
     outbuf = gst_harness_pull (hrecv);
     compare_rtp_packets (inbufs[i], outbuf);
@@ -513,7 +535,7 @@ GST_START_TEST (test_rtxsend_rtxreceive_with_packet_loss)
      through rtxreceive to rtxsend, and verify the packet was retransmitted */
   for (drop_nth_packet = 2; drop_nth_packet < 10; drop_nth_packet++) {
     for (i = 0; i < packets_num; i++, seqnum++) {
-      GstBuffer *outbuf;
+      GstBuffer *outbuf, *sentbuf;
       GstBuffer *inbuf = create_rtp_buffer (master_ssrc, master_pt, seqnum);
       gboolean drop_this_packet = ((i + 1) % drop_nth_packet) == 0;
 
@@ -527,7 +549,9 @@ GST_START_TEST (test_rtxsend_rtxreceive_with_packet_loss)
         gst_harness_push_upstream_event (hsend,
             gst_harness_pull_upstream_event (hrecv));
         /* Pushing RTX packet to rtxreceive */
-        gst_harness_push (hrecv, gst_harness_pull (hsend));
+        sentbuf = gst_harness_pull (hsend);
+        check_repairmeta (sentbuf, master_ssrc, seqnum);
+        gst_harness_push (hrecv, sentbuf);
         expected_rtx_packets++;
       } else {
         gst_harness_push (hrecv, gst_harness_pull (hsend));
@@ -683,7 +707,7 @@ GST_START_TEST (test_multi_rtxsend_rtxreceive_with_packet_loss)
     for (i = 0; i < total_pakets_num; i++) {
       RtxSender *sender = &senders[i % senders_num];
       gboolean drop_this_packet = ((i + 1) % drop_nth_packet) == 0;
-      GstBuffer *outbuf, *inbuf;
+      GstBuffer *outbuf, *inbuf, *sentbuf;
       inbuf =
           create_rtp_buffer (sender->master_ssrc, sender->master_pt,
           sender->seqnum);
@@ -707,7 +731,9 @@ GST_START_TEST (test_multi_rtxsend_rtxreceive_with_packet_loss)
         gst_event_unref (rtxevent);
 
         /* Pushing RTX packet to rtxreceive */
-        gst_harness_push (hrecv, gst_harness_pull (sender->h));
+        sentbuf = gst_harness_pull (sender->h);
+        check_repairmeta (sentbuf, sender->master_ssrc, sender->seqnum);
+        gst_harness_push (hrecv, sentbuf);
         sender->expected_rtx_packets++;
         total_dropped_packets++;
       } else {
@@ -810,7 +836,8 @@ test_rtxsender_packet_retention (gboolean test_with_time,
 
       /* Pull only the ones supposed to be retransmitted */
       if (j >= i - half_buffers)
-        pull_and_verify (h, TRUE, rtx_ssrc, rtx_pt, rtx_seqnum);
+        pull_and_verify (h, TRUE, rtx_ssrc, rtx_pt, rtx_seqnum, master_ssrc,
+            rtx_seqnum);
     }
     /* Check there no extra buffers in the harness queue */
     fail_unless_equals_int (gst_harness_buffers_in_queue (h), 0);
@@ -819,7 +846,7 @@ test_rtxsender_packet_retention (gboolean test_with_time,
        to be sure, rtprtxsend can handle it properly */
     push_pull_and_verify (h,
         create_rtp_buffer_with_timestamp (master_ssrc, master_pt, 0x100 + i,
-            timestamp, pts), FALSE, master_ssrc, master_pt, 0x100 + i);
+            timestamp, pts), FALSE, master_ssrc, master_pt, 0x100 + i, 0, 0);
   }
 
   gst_structure_free (pt_map);
@@ -898,14 +925,14 @@ test_rtxqueue_packet_retention (gboolean test_with_time)
     for (j = 0; j < i; j++) {
       guint rtx_seqnum = 0x100 + j;
       if (j >= i - half_buffers)
-        pull_and_verify (h, FALSE, ssrc, pt, rtx_seqnum);
+        pull_and_verify (h, FALSE, ssrc, pt, rtx_seqnum, 0, 0);
     }
 
     /* There should be only one packet remaining in the queue now */
     fail_unless_equals_int (gst_harness_buffers_in_queue (h), 1);
 
     /* pull the one that we just pushed (comes after the retransmitted ones) */
-    pull_and_verify (h, FALSE, ssrc, pt, 0x100 + i);
+    pull_and_verify (h, FALSE, ssrc, pt, 0x100 + i, 0, 0);
 
     /* Check there no extra buffers in the harness queue */
     fail_unless_equals_int (gst_harness_buffers_in_queue (h), 0);
@@ -1043,7 +1070,7 @@ GST_START_TEST (test_rtxsend_header_extensions_copy)
 
     gst_harness_push (hsend, gst_buffer_ref (inbufs[i]));
     gst_harness_push (hrecv, gst_harness_pull (hsend));
-    pull_and_verify (hrecv, FALSE, master_ssrc, master_pt, 100 + i);
+    pull_and_verify (hrecv, FALSE, master_ssrc, master_pt, 100 + i, 0, 0);
   }
   gst_clear_object (&twcc);
 
@@ -1124,13 +1151,13 @@ GST_START_TEST (test_rtxsender_copy_twcc_exthdr)
   gst_harness_push (h,
       create_rtp_buffer_with_twcc_ext (master_ssrc, master_pt, 0, 20,
           twcc_ext_id, 33));
-  pull_and_verify (h, FALSE, master_ssrc, master_pt, 0);
+  pull_and_verify (h, FALSE, master_ssrc, master_pt, 0, 0, 0);
 
   gst_harness_push_upstream_event (h, create_rtx_event (master_ssrc,
           master_pt, 0));
 
   rtx_buf = gst_harness_pull (h);
-  verify_buf (rtx_buf, TRUE, rtx_ssrc, rtx_pt, 0);
+  verify_buf (rtx_buf, TRUE, rtx_ssrc, rtx_pt, 0, master_ssrc, 0);
   fail_unless (read_twcc_seqnum (rtx_buf, twcc_ext_id) == 33);
   gst_buffer_unref (rtx_buf);
 
@@ -1247,7 +1274,7 @@ GST_START_TEST (test_rtxsender_copy_roi_exthdr)
   /* push packets through rtxsend to rtxreceive */
   gst_harness_push (hsend, gst_buffer_ref (inbuf));
   gst_harness_push (hrecv, gst_harness_pull (hsend));
-  pull_and_verify (hrecv, FALSE, master_ssrc, master_pt, 0);
+  pull_and_verify (hrecv, FALSE, master_ssrc, master_pt, 0, 0, 0);
 
   /* get rid of reconfigure event in preparation for next step */
   gst_event_unref (gst_harness_pull_upstream_event (hrecv));
@@ -1260,7 +1287,7 @@ GST_START_TEST (test_rtxsender_copy_roi_exthdr)
       gst_harness_pull_upstream_event (hrecv));
 
   rtxbuf = gst_harness_pull (hsend);
-  verify_buf (rtxbuf, TRUE, rtx_ssrc, rtx_pt, 0);
+  verify_buf (rtxbuf, TRUE, rtx_ssrc, rtx_pt, 0, master_ssrc, 0);
   read_roi (rtxbuf, ext_id, &actual_x, &actual_y, &actual_w, &actual_h,
       &actual_id, &actual_num_faces);
   fail_unless_equals_int (expected_x, actual_x);
@@ -1358,7 +1385,7 @@ GST_START_TEST (test_rtxsend_header_extensions)
     gst_rtp_buffer_unmap (&rtp);
     gst_harness_push (hsend, gst_buffer_ref (inbufs[i]));
     gst_harness_push (hrecv, gst_harness_pull (hsend));
-    pull_and_verify (hrecv, FALSE, master_ssrc, master_pt, 100 + i);
+    pull_and_verify (hrecv, FALSE, master_ssrc, master_pt, 100 + i, 0, 0);
   }
 
   /* Getting rid of reconfigure event. Preparation before the next step */
@@ -1436,31 +1463,31 @@ GST_START_TEST (test_rtxsender_stuffing)
   gst_harness_set_time (h, 0 * GST_MSECOND);
   gst_harness_push (h,
       create_rtp_buffer_with_payload_size (master_ssrc, master_pt, 0, 20));
-  pull_and_verify (h, FALSE, master_ssrc, master_pt, 0);
+  pull_and_verify (h, FALSE, master_ssrc, master_pt, 0, 0, 0);
 
   gst_harness_set_time (h, 10 * GST_MSECOND);
   gst_harness_push (h,
       create_rtp_buffer_with_payload_size (master_ssrc, master_pt, 1, 580));
-  pull_and_verify (h, FALSE, master_ssrc, master_pt, 1);
+  pull_and_verify (h, FALSE, master_ssrc, master_pt, 1, 0, 0);
   /* budget 1000, sent 600, no stuffing (stuff with 580 will exceed budget) */
 
   gst_harness_set_time (h, 20 * GST_MSECOND);
   gst_harness_push (h,
       create_rtp_buffer_with_payload_size (master_ssrc, master_pt, 2, 600));
-  pull_and_verify (h, FALSE, master_ssrc, master_pt, 2);
-  pull_and_verify (h, TRUE, rtx_ssrc, rtx_pt, 2);
+  pull_and_verify (h, FALSE, master_ssrc, master_pt, 2, 0, 0);
+  pull_and_verify (h, TRUE, rtx_ssrc, rtx_pt, 2, -1, -1);
 
   gst_harness_set_time (h, 30 * GST_MSECOND);
   gst_harness_push (h,
       create_rtp_buffer_with_payload_size (master_ssrc, master_pt, 3, 200));
-  pull_and_verify (h, FALSE, master_ssrc, master_pt, 3);
-  pull_and_verify (h, TRUE, rtx_ssrc, rtx_pt, 3);
-  pull_and_verify (h, TRUE, rtx_ssrc, rtx_pt, 3);
+  pull_and_verify (h, FALSE, master_ssrc, master_pt, 3, 0, 0);
+  pull_and_verify (h, TRUE, rtx_ssrc, rtx_pt, 3, -1, -1);
+  pull_and_verify (h, TRUE, rtx_ssrc, rtx_pt, 3, -1, -1);
 
   gst_harness_set_time (h, 40 * GST_MSECOND);
   gst_harness_push (h,
       create_rtp_buffer_with_payload_size (master_ssrc, master_pt, 4, 600));
-  pull_and_verify (h, FALSE, master_ssrc, master_pt, 4);
+  pull_and_verify (h, FALSE, master_ssrc, master_pt, 4, 0, 0);
   g_usleep (G_USEC_PER_SEC / 100);
   fail_if (gst_harness_try_pull (h));
 
@@ -1498,17 +1525,17 @@ GST_START_TEST (test_rtxsender_stuffing_toggle)
   gst_harness_set_time (h, 0 * GST_MSECOND);
   gst_harness_push (h,
       create_rtp_buffer_with_payload_size (master_ssrc, master_pt, 0, 20));
-  pull_and_verify (h, FALSE, master_ssrc, master_pt, 0);
+  pull_and_verify (h, FALSE, master_ssrc, master_pt, 0, 0, 0);
 
   gst_harness_set_time (h, 10 * GST_MSECOND);
   gst_harness_push (h,
       create_rtp_buffer_with_payload_size (master_ssrc, master_pt, 1, 20));
-  pull_and_verify (h, FALSE, master_ssrc, master_pt, 1);
+  pull_and_verify (h, FALSE, master_ssrc, master_pt, 1, 0, 0);
 
   gst_harness_set_time (h, 20 * GST_MSECOND);
   gst_harness_push (h,
       create_rtp_buffer_with_payload_size (master_ssrc, master_pt, 2, 20));
-  pull_and_verify (h, FALSE, master_ssrc, master_pt, 2);
+  pull_and_verify (h, FALSE, master_ssrc, master_pt, 2, 0, 0);
 
   /* 80 kbps = 10 kBps. 10 ms distance between each packet means 10 packets
    * per second and 100 bytes per packet to hit target kbps.
@@ -1518,17 +1545,17 @@ GST_START_TEST (test_rtxsender_stuffing_toggle)
   gst_harness_set_time (h, 30 * GST_MSECOND);
   gst_harness_push (h,
       create_rtp_buffer_with_payload_size (master_ssrc, master_pt, 3, 20));
-  pull_and_verify (h, FALSE, master_ssrc, master_pt, 3);
+  pull_and_verify (h, FALSE, master_ssrc, master_pt, 3, 0, 0);
 
   gst_harness_set_time (h, 40 * GST_MSECOND);
   gst_harness_push (h,
       create_rtp_buffer_with_payload_size (master_ssrc, master_pt, 4, 20));
-  pull_and_verify (h, FALSE, master_ssrc, master_pt, 4);
+  pull_and_verify (h, FALSE, master_ssrc, master_pt, 4, 0, 0);
 
   /* budget 100, sent 40, so stuff with #2, 3 and 4, total of 60 bytes */
-  pull_and_verify (h, TRUE, rtx_ssrc, rtx_pt, 2);
-  pull_and_verify (h, TRUE, rtx_ssrc, rtx_pt, 3);
-  pull_and_verify (h, TRUE, rtx_ssrc, rtx_pt, 4);
+  pull_and_verify (h, TRUE, rtx_ssrc, rtx_pt, 2, -1, -1);
+  pull_and_verify (h, TRUE, rtx_ssrc, rtx_pt, 3, -1, -1);
+  pull_and_verify (h, TRUE, rtx_ssrc, rtx_pt, 4, -1, -1);
 
   /* disable stuffing */
   g_object_set (h->element, "stuffing-kbps", 0, NULL);
@@ -1536,7 +1563,7 @@ GST_START_TEST (test_rtxsender_stuffing_toggle)
   gst_harness_set_time (h, 50 * GST_MSECOND);
   gst_harness_push (h,
       create_rtp_buffer_with_payload_size (master_ssrc, master_pt, 5, 20));
-  pull_and_verify (h, FALSE, master_ssrc, master_pt, 5);
+  pull_and_verify (h, FALSE, master_ssrc, master_pt, 5, 0, 0);
 
   g_usleep (G_USEC_PER_SEC / 100);
   fail_if (gst_harness_try_pull (h));
@@ -1580,32 +1607,32 @@ GST_START_TEST (test_rtxsender_stuffing_non_rtx_packets)
   gst_harness_set_time (h, 0 * GST_MSECOND);
   gst_harness_push (h,
       create_rtp_buffer_with_payload_size (video_ssrc, video_pt, 0, 20));
-  pull_and_verify (h, FALSE, video_ssrc, video_pt, 0);
+  pull_and_verify (h, FALSE, video_ssrc, video_pt, 0, 0, 0);
 
   gst_harness_set_time (h, 10 * GST_MSECOND);
   gst_harness_push (h,
       create_rtp_buffer_with_payload_size (video_ssrc, video_pt, 1, 580));
-  pull_and_verify (h, FALSE, video_ssrc, video_pt, 1);
+  pull_and_verify (h, FALSE, video_ssrc, video_pt, 1, 0, 0);
   /* budget 1000, sent 600, no stuffing (stuff with 580 will exceed budget) */
 
   gst_harness_set_time (h, 20 * GST_MSECOND);
   gst_harness_push (h,
       create_rtp_buffer_with_payload_size (video_ssrc, video_pt, 2, 600));
-  pull_and_verify (h, FALSE, video_ssrc, video_pt, 2);
+  pull_and_verify (h, FALSE, video_ssrc, video_pt, 2, 0, 0);
   /* budget 2000, sent 1200, stuff with #2, 600 bytes */
-  pull_and_verify (h, TRUE, rtx_ssrc, rtx_pt, 2);
+  pull_and_verify (h, TRUE, rtx_ssrc, rtx_pt, 2, -1, -1);
 
   gst_harness_set_time (h, 30 * GST_MSECOND);
   /* audio packet comes in.. */
   gst_harness_push (h,
       create_rtp_buffer_with_payload_size (audio_ssrc, audio_pt, 0, 200));
-  pull_and_verify (h, FALSE, audio_ssrc, audio_pt, 0);
+  pull_and_verify (h, FALSE, audio_ssrc, audio_pt, 0, 0, 0);
   /* budget 3000, sent 2000, stuff with #2, 600 bytes */
-  pull_and_verify (h, TRUE, rtx_ssrc, rtx_pt, 2);
+  pull_and_verify (h, TRUE, rtx_ssrc, rtx_pt, 2, -1, -1);
 
   gst_harness_push (h,
       create_rtp_buffer_with_payload_size (video_ssrc, video_pt, 4, 600));
-  pull_and_verify (h, FALSE, video_ssrc, video_pt, 4);
+  pull_and_verify (h, FALSE, video_ssrc, video_pt, 4, 0, 0);
   /* budget 4000, sent 2600, no more stuffing */
   g_usleep (G_USEC_PER_SEC / 100);
   fail_if (gst_harness_try_pull (h));
@@ -1649,7 +1676,7 @@ GST_START_TEST (test_rtxsender_stuffing_window)
   GST_BUFFER_PTS (buf) = 0;
   gst_harness_push (h, buf);
 
-  pull_and_verify (h, FALSE, master_ssrc, master_pt, 0);
+  pull_and_verify (h, FALSE, master_ssrc, master_pt, 0, 0, 0);
   /* budget 100, sent 80 */
 
   gst_harness_set_time (h, 10 * GST_MSECOND);
@@ -1657,18 +1684,18 @@ GST_START_TEST (test_rtxsender_stuffing_window)
   GST_BUFFER_PTS (buf) = 10 * GST_MSECOND;
   gst_harness_push (h, buf);
 
-  pull_and_verify (h, FALSE, master_ssrc, master_pt, 1);
+  pull_and_verify (h, FALSE, master_ssrc, master_pt, 1, 0, 0);
   /* budget 200, sent 160, no stuffing */
 
   gst_harness_set_time (h, 110 * GST_MSECOND);
   buf = create_rtp_buffer_with_payload_size (master_ssrc, master_pt, 2, 80);
   GST_BUFFER_PTS (buf) = 110 * GST_MSECOND;
   gst_harness_push (h, buf);
-  pull_and_verify (h, FALSE, master_ssrc, master_pt, 2);
+  pull_and_verify (h, FALSE, master_ssrc, master_pt, 2, 0, 0);
 
   /* we have budget, so stuff with #1 and #2, but #0 is too old */
-  pull_and_verify (h, TRUE, rtx_ssrc, rtx_pt, 1);
-  pull_and_verify (h, TRUE, rtx_ssrc, rtx_pt, 2);
+  pull_and_verify (h, TRUE, rtx_ssrc, rtx_pt, 1, -1, -1);
+  pull_and_verify (h, TRUE, rtx_ssrc, rtx_pt, 2, -1, -1);
 
   g_usleep (G_USEC_PER_SEC / 100);
   fail_if (gst_harness_try_pull (h));
@@ -1713,14 +1740,14 @@ GST_START_TEST (test_rtxsender_stuffing_no_packets_under_window)
   buf = create_rtp_buffer_with_payload_size (master_ssrc, master_pt, 0, 80);
   GST_BUFFER_PTS (buf) = 0;
   gst_harness_push (h, buf);
-  pull_and_verify (h, FALSE, master_ssrc, master_pt, 0);
+  pull_and_verify (h, FALSE, master_ssrc, master_pt, 0, 0, 0);
   /* budget 100, sent 80 */
 
   gst_harness_set_time (h, 10 * GST_MSECOND);
   buf = create_rtp_buffer_with_payload_size (master_ssrc, master_pt, 1, 80);
   GST_BUFFER_PTS (buf) = 10 * GST_MSECOND;
   gst_harness_push (h, buf);
-  pull_and_verify (h, FALSE, master_ssrc, master_pt, 1);
+  pull_and_verify (h, FALSE, master_ssrc, master_pt, 1, 0, 0);
   /* budget 200, sent 160, no stuffing */
 
   /* advance far ahead, so the buffers are out of the window */
@@ -1728,12 +1755,12 @@ GST_START_TEST (test_rtxsender_stuffing_no_packets_under_window)
   buf = create_rtp_buffer_with_payload_size (master_ssrc, master_pt, 2, 80);
   GST_BUFFER_PTS (buf) = 20 * GST_MSECOND;
   gst_harness_push (h, buf);
-  pull_and_verify (h, FALSE, master_ssrc, master_pt, 2);
+  pull_and_verify (h, FALSE, master_ssrc, master_pt, 2, 0, 0);
 
   /* we have budget, non of the above are under the window, so we stuff
      repeatedly with the latest buffer */
   for (i = 0; i < 4; i++) {
-    pull_and_verify (h, TRUE, rtx_ssrc, rtx_pt, 2);
+    pull_and_verify (h, TRUE, rtx_ssrc, rtx_pt, 2, -1, -1);
   }
 
   g_usleep (G_USEC_PER_SEC / 100);
@@ -1774,7 +1801,7 @@ GST_START_TEST (test_rtxsender_stuffing_sanity_when_input_rate_is_extreme)
     gst_harness_push (h,
         create_rtp_buffer_with_payload_size (master_ssrc, master_pt, i,
             1000000));
-    pull_and_verify (h, FALSE, master_ssrc, master_pt, i);
+    pull_and_verify (h, FALSE, master_ssrc, master_pt, i, 0, 0);
   }
   fail_if (gst_harness_try_pull (h));
 
@@ -1810,24 +1837,24 @@ GST_START_TEST (test_rtxsender_stuffing_does_not_interfer_with_rtx)
   gst_harness_set_time (h, 0 * GST_MSECOND);
   gst_harness_push (h,
       create_rtp_buffer_with_payload_size (master_ssrc, master_pt, 0, 100));
-  pull_and_verify (h, FALSE, master_ssrc, master_pt, 0);
+  pull_and_verify (h, FALSE, master_ssrc, master_pt, 0, 0, 0);
 
   gst_harness_set_time (h, 10 * GST_MSECOND);
   gst_harness_push (h,
       create_rtp_buffer_with_payload_size (master_ssrc, master_pt, 1, 500));
-  pull_and_verify (h, FALSE, master_ssrc, master_pt, 1);
+  pull_and_verify (h, FALSE, master_ssrc, master_pt, 1, 0, 0);
   /* budget 1000, sent 600 */
 
   /* Request and send RTX packet. Not calculated in budget */
   gst_harness_push_upstream_event (h,
       create_rtx_event (master_ssrc, master_pt, 1));
-  pull_and_verify (h, TRUE, rtx_ssrc, rtx_pt, 1);
+  pull_and_verify (h, TRUE, rtx_ssrc, rtx_pt, 1, master_ssrc, 1);
 
   /* Send media packet. Budget should still be untouched for before.  */
   gst_harness_set_time (h, 20 * GST_MSECOND);
   gst_harness_push (h,
       create_rtp_buffer_with_payload_size (master_ssrc, master_pt, 2, 400));
-  pull_and_verify (h, FALSE, master_ssrc, master_pt, 2);
+  pull_and_verify (h, FALSE, master_ssrc, master_pt, 2, 0, 0);
 
   gst_structure_free (pt_map);
   gst_structure_free (ssrc_map);
@@ -1867,7 +1894,7 @@ GST_START_TEST (test_rtxsender_stuffing_max_burst_packets)
   /* push only a very small buffer to force the creation of a lot of stuffing */
   gst_harness_push (h,
       create_rtp_buffer_with_payload_size (master_ssrc, master_pt, 0, 20));
-  pull_and_verify (h, FALSE, master_ssrc, master_pt, 0);
+  pull_and_verify (h, FALSE, master_ssrc, master_pt, 0, master_ssrc, 0);
 
   /* set the time 1 second in the future, to create a huge deficit on stuffing */
   gst_harness_set_time (h, 1 * GST_SECOND);

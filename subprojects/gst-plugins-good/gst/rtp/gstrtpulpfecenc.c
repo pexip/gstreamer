@@ -86,6 +86,7 @@
 
 #include <gst/rtp/gstrtp-enumtypes.h>
 #include <gst/rtp/gstrtpbuffer.h>
+#include <gst/rtp/gstrtprepairmeta.h>
 #include <string.h>
 
 #include "gstrtpelements.h"
@@ -150,6 +151,7 @@ gst_rtp_ulpfec_enc_stream_ctx_start (GstRtpUlpFecEncStreamCtx * ctx,
   guint i;
 
   g_array_set_size (ctx->info_arr, packets->length);
+  g_array_set_size (ctx->block_seqnums, packets->length);
 
   for (i = 0; i < packets->length; ++i) {
     GstBuffer *buffer = it->data;
@@ -159,6 +161,8 @@ gst_rtp_ulpfec_enc_stream_ctx_start (GstRtpUlpFecEncStreamCtx * ctx,
       g_assert_not_reached ();
 
     GST_LOG_RTP_PACKET (ctx->parent, "rtp header (incoming)", &info->rtp);
+    g_array_index (ctx->block_seqnums, guint16, i) =
+        gst_rtp_buffer_get_seq (&info->rtp);
 
     it = g_list_previous (it);
   }
@@ -388,6 +392,12 @@ gst_rtp_ulpfec_enc_stream_ctx_push_fec_packets (GstRtpUlpFecEncStreamCtx * ctx,
         gst_rtp_buffer_unmap (&rtp);
       }
 
+      /*Add repair packet meta so that TWCC will be able to to tie it 
+         with lost packets */
+      gst_rtp_repair_meta_add (fec,
+          fec_packets_pushed, fec_packets_num, ctx->ssrc,
+          (guint16 *) ctx->block_seqnums->data, ctx->block_seqnums->len);
+
       GST_LOG_OBJECT (ctx->parent, "ctx %p pushing generated fec buffer %"
           GST_PTR_FORMAT, ctx, fec);
       ret = gst_pad_push (ctx->srcpad, fec);
@@ -487,6 +497,7 @@ gst_rtp_ulpfec_enc_stream_ctx_new (guint ssrc,
   ctx->info_arr = g_array_new (FALSE, TRUE, sizeof (RtpUlpFecMapInfo));
   g_array_set_clear_func (ctx->info_arr,
       (GDestroyNotify) rtp_ulpfec_map_info_unmap);
+  ctx->block_seqnums = g_array_new (FALSE, FALSE, sizeof (guint16));
   ctx->parent = parent;
   ctx->scratch_buf = g_array_new (FALSE, TRUE, sizeof (guint8));
   gst_rtp_ulpfec_enc_stream_ctx_configure (ctx, pt,
@@ -508,6 +519,7 @@ gst_rtp_ulpfec_enc_stream_ctx_free (GstRtpUlpFecEncStreamCtx * ctx)
   g_assert (0 == ctx->info_arr->len);
   g_array_free (ctx->info_arr, TRUE);
   g_array_free (ctx->scratch_buf, TRUE);
+  g_array_free (ctx->block_seqnums, TRUE);
   g_free (ctx);
 }
 
