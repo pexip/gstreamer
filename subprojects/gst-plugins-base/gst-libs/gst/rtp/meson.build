@@ -4,6 +4,7 @@ rtp_sources = files([
   'gstrtppayloads.c',
   'gstrtphdrext.c',
   'gstrtpmeta.c',
+  'gstrtprepairmeta.c',
   'gstrtpbaseaudiopayload.c',
   'gstrtpbasepayload.c',
   'gstrtpbasedepayload.c'
@@ -18,6 +19,7 @@ rtp_headers = files([
   'gstrtpdefs.h',
   'gstrtphdrext.h',
   'gstrtpmeta.h',
+  'gstrtprepairmeta.h',
   'gstrtppayloads.h',
   'rtp-prelude.h',
   'rtp.h',

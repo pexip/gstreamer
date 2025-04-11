@@ -71,4 +71,6 @@ GstStructure * rtp_twcc_manager_get_windowed_stats (RTPTWCCManager * twcc,
 void rtp_twcc_manager_set_callback (RTPTWCCManager * twcc,
     RTPTWCCManagerCaps cb, gpointer user_data);
 
+void rtp_twcc_manager_set_base_seqnum (RTPTWCCManager * twcc,
+    guint16 base_seqnum);
 #endif /* __RTP_TWCC_H__ */
