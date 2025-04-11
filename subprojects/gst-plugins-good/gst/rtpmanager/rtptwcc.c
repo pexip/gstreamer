@@ -2128,3 +2128,16 @@ rtp_twcc_manager_set_callback (RTPTWCCManager * twcc, RTPTWCCManagerCaps cb,
   twcc->caps_cb = cb;
   twcc->caps_ud = user_data;
 }
+
+/**
+ * Set the initial sequence number for the outgoing packets, must be called
+ * before any packets are sent. The main and only purpose of this function
+ * is to increase testability.
+ */
+void
+rtp_twcc_manager_set_base_seqnum (RTPTWCCManager * twcc, guint16 base_seqnum)
+{
+  g_assert (twcc->send_seqnum == 0
+    && twcc->sent_packets->len == 0);
+  twcc->send_seqnum = base_seqnum;
+}
