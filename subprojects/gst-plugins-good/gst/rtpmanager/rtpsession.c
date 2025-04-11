@@ -121,6 +121,7 @@ enum
   PROP_UPDATE_NTP64_HEADER_EXT,
   PROP_TIMEOUT_INACTIVE_SOURCES,
   PROP_RTX_SSRC_MAP,
+  PROP_TWCC_BASE_SEQNUM,
   PROP_LAST,
 };
 
@@ -816,6 +817,20 @@ rtp_session_class_init (RTPSessionClass * klass)
       "Map of SSRCs to their retransmission SSRCs",
       GST_TYPE_STRUCTURE, G_PARAM_WRITABLE | G_PARAM_STATIC_STRINGS);
 
+  /**
+   * RTPSession::set_twcc_base_seqnum:
+   * 
+   * Set initial twcc sequence number for  outgoing packets.
+   * Serves only testing puproses. Must be set before sending
+   * any packets.
+   */
+  properties[PROP_TWCC_BASE_SEQNUM] =
+      g_param_spec_uint ("twcc-base-seqnum", "TWCC Base Seqnum",
+      "Set initial twcc sequence number for outgoing packets",
+      0, G_MAXUINT16, 0,
+      G_PARAM_WRITABLE | G_PARAM_STATIC_STRINGS);
+
+
   g_object_class_install_properties (gobject_class, PROP_LAST, properties);
 
   klass->get_twcc_windowed_stats =
@@ -1155,7 +1170,12 @@ rtp_session_set_property (GObject * object, guint prop_id,
           structure_to_hash_table_reverse, sess->rtx_ssrc_to_ssrc);
       RTP_SESSION_UNLOCK (sess);
       break;
-
+    case PROP_TWCC_BASE_SEQNUM:
+      RTP_SESSION_LOCK (sess);
+      rtp_twcc_manager_set_base_seqnum(sess->twcc, 
+          (guint16)g_value_get_uint (value));
+      RTP_SESSION_UNLOCK (sess);
+      break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
       break;
