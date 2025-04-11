@@ -183,6 +183,11 @@ struct _GstBinPrivate
    * hits this number */
   gint numchildren_use_hash;
 
+  /* keep tabs on our childrens properties */
+  gint num_is_sink;
+  gint num_is_src;
+  gint num_provides_clock;
+  gint num_requires_clock;
 };
 
 typedef struct
@@ -1185,6 +1190,7 @@ gst_bin_do_deep_add_remove (GstBin * bin, gint sig_id, const gchar * sig_name,
 static gboolean
 gst_bin_add_func (GstBin * bin, GstElement * element)
 {
+  GstBinPrivate *priv = bin->priv;
   gchar *elem_name;
   GstIterator *it;
   GList *walk;
@@ -1247,6 +1253,15 @@ gst_bin_add_func (GstBin * bin, GstElement * element)
   if (G_UNLIKELY (!gst_object_set_parent (GST_OBJECT_CAST (element),
               GST_OBJECT_CAST (bin))))
     goto had_parent;
+
+  if (is_sink)
+    priv->num_is_sink++;
+  if (is_source)
+    priv->num_is_src++;
+  if (provides_clock)
+    priv->num_provides_clock++;
+  if (requires_clock)
+    priv->num_requires_clock++;
 
   /* if we add a sink we become a sink */
   if (is_sink && !(bin->priv->suppressed_flags & GST_ELEMENT_FLAG_SINK)) {
@@ -1611,6 +1626,7 @@ no_function:
 static gboolean
 gst_bin_remove_func (GstBin * bin, GstElement * element)
 {
+  GstBinPrivate *priv = bin->priv;
   gchar *elem_name;
   GstIterator *it;
   gboolean is_sink, is_source, provides_clock, requires_clock;
@@ -1654,6 +1670,7 @@ gst_bin_remove_func (GstBin * bin, GstElement * element)
   have_no_preroll = FALSE;
   /* iterate the elements, we collect which ones are async and no_preroll. We
    * also remove the element when we find it. */
+
   for (walk = bin->children; walk; walk = next) {
     GstElement *child = GST_ELEMENT_CAST (walk->data);
 
@@ -1703,28 +1720,41 @@ gst_bin_remove_func (GstBin * bin, GstElement * element)
   if (!GST_BIN_IS_NO_RESYNC (bin))
     bin->priv->structure_cookie++;
 
+  if (is_sink)
+    priv->num_is_sink--;
+  if (is_source)
+    priv->num_is_src--;
+  if (provides_clock)
+    priv->num_provides_clock--;
+  if (requires_clock)
+    priv->num_requires_clock--;
+
   if (is_sink && !othersink
       && !(bin->priv->suppressed_flags & GST_ELEMENT_FLAG_SINK)) {
     /* we're not a sink anymore */
     GST_DEBUG_OBJECT (bin, "we removed the last sink");
+    g_assert_cmpint (priv->num_is_sink, ==, 0);
     GST_OBJECT_FLAG_UNSET (bin, GST_ELEMENT_FLAG_SINK);
   }
   if (is_source && !othersource
       && !(bin->priv->suppressed_flags & GST_ELEMENT_FLAG_SOURCE)) {
     /* we're not a source anymore */
     GST_DEBUG_OBJECT (bin, "we removed the last source");
+    g_assert_cmpint (priv->num_is_src, ==, 0);
     GST_OBJECT_FLAG_UNSET (bin, GST_ELEMENT_FLAG_SOURCE);
   }
   if (provides_clock && !otherprovider
       && !(bin->priv->suppressed_flags & GST_ELEMENT_FLAG_PROVIDE_CLOCK)) {
     /* we're not a clock provider anymore */
     GST_DEBUG_OBJECT (bin, "we removed the last clock provider");
+    g_assert_cmpint (priv->num_provides_clock, ==, 0);
     GST_OBJECT_FLAG_UNSET (bin, GST_ELEMENT_FLAG_PROVIDE_CLOCK);
   }
   if (requires_clock && !otherrequirer
       && !(bin->priv->suppressed_flags & GST_ELEMENT_FLAG_REQUIRE_CLOCK)) {
     /* we're not a clock requirer anymore */
     GST_DEBUG_OBJECT (bin, "we removed the last clock requirer");
+    g_assert_cmpint (priv->num_requires_clock, ==, 0);
     GST_OBJECT_FLAG_UNSET (bin, GST_ELEMENT_FLAG_REQUIRE_CLOCK);
   }
 
