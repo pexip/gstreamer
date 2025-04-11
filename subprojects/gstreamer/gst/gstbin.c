@@ -183,6 +183,13 @@ struct _GstBinPrivate
    * hits this number */
   gint numchildren_use_hash;
 
+  /* keep tabs on our childrens properties */
+  gint num_is_sink;
+  gint num_is_src;
+  gint num_provides_clock;
+  gint num_requires_clock;
+  GHashTable *no_preroll_elements;
+  GHashTable *children_links;
 };
 
 typedef struct
@@ -517,6 +524,9 @@ gst_bin_init (GstBin * bin)
   bin->priv->asynchandling = DEFAULT_ASYNC_HANDLING;
   bin->priv->structure_cookie = 0;
   bin->priv->message_forward = DEFAULT_MESSAGE_FORWARD;
+
+  bin->priv->no_preroll_elements = g_hash_table_new (NULL, NULL);
+  bin->priv->children_links = g_hash_table_new (NULL, NULL);
 }
 
 static void
@@ -558,6 +568,9 @@ gst_bin_dispose (GObject * object)
     g_critical ("could not remove elements from bin '%s'",
         GST_STR_NULL (GST_OBJECT_NAME (object)));
   }
+
+  g_hash_table_destroy (bin->priv->no_preroll_elements);
+  g_hash_table_destroy (bin->priv->children_links);
 
   G_OBJECT_CLASS (parent_class)->dispose (object);
 }
@@ -1185,6 +1198,7 @@ gst_bin_do_deep_add_remove (GstBin * bin, gint sig_id, const gchar * sig_name,
 static gboolean
 gst_bin_add_func (GstBin * bin, GstElement * element)
 {
+  GstBinPrivate *priv = bin->priv;
   gchar *elem_name;
   GstIterator *it;
   GList *walk;
@@ -1207,18 +1221,18 @@ gst_bin_add_func (GstBin * bin, GstElement * element)
 
   /* Check whether we need to switch to using the hash */
   GST_OBJECT_LOCK (bin);
-  if ((bin->priv->children_hash == NULL) &&
-      (bin->priv->numchildren_use_hash >= 0) &&
-      (bin->numchildren + 1) >= (bin->priv->numchildren_use_hash)) {
+  if ((priv->children_hash == NULL) &&
+      (priv->numchildren_use_hash >= 0) &&
+      (bin->numchildren + 1) >= (priv->numchildren_use_hash)) {
       /* Time to switch to using the hash */
-      bin->priv->children_hash = g_hash_table_new_full (g_str_hash, g_str_equal, g_free, NULL);
+      priv->children_hash = g_hash_table_new_full (g_str_hash, g_str_equal, g_free, NULL);
 
       /* Initialise each existing element into the hash */
       walk = bin->children;
       for (; walk; walk = g_list_next (walk)) {
         GstElement *child;
         child = GST_ELEMENT_CAST (walk->data);
-        g_hash_table_insert (bin->priv->children_hash, g_strdup (GST_OBJECT_NAME(child)), child);
+        g_hash_table_insert (priv->children_hash, g_strdup (GST_OBJECT_NAME(child)), child);
       }
   }
 
@@ -1230,10 +1244,10 @@ gst_bin_add_func (GstBin * bin, GstElement * element)
      * you can safely change the element name after this check and before setting
      * the object parent. The window is very small though... */
 
-    if (bin->priv->children_hash != NULL) {
+    if (priv->children_hash != NULL) {
         /* Use the hash table to look up whether we already have an element with that
          * name */
-        if (g_hash_table_contains (bin->priv->children_hash, elem_name)) {
+        if (g_hash_table_contains (priv->children_hash, elem_name)) {
           goto duplicate_name;
         }
     } else {
@@ -1248,40 +1262,50 @@ gst_bin_add_func (GstBin * bin, GstElement * element)
               GST_OBJECT_CAST (bin))))
     goto had_parent;
 
+  if (is_sink)
+    priv->num_is_sink++;
+  if (is_source)
+    priv->num_is_src++;
+  if (provides_clock)
+    priv->num_provides_clock++;
+  if (requires_clock)
+    priv->num_requires_clock++;
+
   /* if we add a sink we become a sink */
-  if (is_sink && !(bin->priv->suppressed_flags & GST_ELEMENT_FLAG_SINK)) {
+  if (is_sink && !(priv->suppressed_flags & GST_ELEMENT_FLAG_SINK)) {
     GST_CAT_DEBUG_OBJECT (GST_CAT_PARENTAGE, bin, "element \"%s\" was sink",
         elem_name);
     GST_OBJECT_FLAG_SET (bin, GST_ELEMENT_FLAG_SINK);
   }
-  if (is_source && !(bin->priv->suppressed_flags & GST_ELEMENT_FLAG_SOURCE)) {
+  if (is_source && !(priv->suppressed_flags & GST_ELEMENT_FLAG_SOURCE)) {
     GST_CAT_DEBUG_OBJECT (GST_CAT_PARENTAGE, bin, "element \"%s\" was source",
         elem_name);
     GST_OBJECT_FLAG_SET (bin, GST_ELEMENT_FLAG_SOURCE);
   }
   if (provides_clock
-      && !(bin->priv->suppressed_flags & GST_ELEMENT_FLAG_PROVIDE_CLOCK)) {
+      && !(priv->suppressed_flags & GST_ELEMENT_FLAG_PROVIDE_CLOCK)) {
     GST_DEBUG_OBJECT (bin, "element \"%s\" can provide a clock", elem_name);
     clock_message =
         gst_message_new_clock_provide (GST_OBJECT_CAST (element), NULL, TRUE);
     GST_OBJECT_FLAG_SET (bin, GST_ELEMENT_FLAG_PROVIDE_CLOCK);
   }
   if (requires_clock
-      && !(bin->priv->suppressed_flags & GST_ELEMENT_FLAG_REQUIRE_CLOCK)) {
+      && !(priv->suppressed_flags & GST_ELEMENT_FLAG_REQUIRE_CLOCK)) {
     GST_DEBUG_OBJECT (bin, "element \"%s\" requires a clock", elem_name);
     GST_OBJECT_FLAG_SET (bin, GST_ELEMENT_FLAG_REQUIRE_CLOCK);
   }
 
   bin->children = g_list_prepend (bin->children, element);
+  g_hash_table_insert (priv->children_links, element, bin->children);
 
-  if (bin->priv->children_hash != NULL) {
-    g_hash_table_insert (bin->priv->children_hash, g_strdup (elem_name), element);
+  if (priv->children_hash != NULL) {
+    g_hash_table_insert (priv->children_hash, g_strdup (elem_name), element);
   }
 
   bin->numchildren++;
   bin->children_cookie++;
   if (!GST_BIN_IS_NO_RESYNC (bin))
-    bin->priv->structure_cookie++;
+    priv->structure_cookie++;
 
   /* distribute the bus */
   gst_element_set_bus (element, bin->child_bus);
@@ -1352,6 +1376,7 @@ gst_bin_add_func (GstBin * bin, GstElement * element)
     case GST_STATE_CHANGE_NO_PREROLL:
       /* ignore all async elements we might have and commit our state */
       bin_handle_async_done (bin, ret, FALSE, GST_CLOCK_TIME_NONE);
+      g_hash_table_add (priv->no_preroll_elements, element);
       break;
     case GST_STATE_CHANGE_FAILURE:
       break;
@@ -1611,10 +1636,11 @@ no_function:
 static gboolean
 gst_bin_remove_func (GstBin * bin, GstElement * element)
 {
+  GstBinPrivate *priv = bin->priv;
   gchar *elem_name;
   GstIterator *it;
-  gboolean is_sink, is_source, provides_clock, requires_clock;
-  gboolean othersink, othersource, otherprovider, otherrequirer, found;
+  gboolean is_sink, is_source, provides_clock, requires_clock, no_preroll;
+  gboolean found;
   GstMessage *clock_message = NULL;
   GstClock **provided_clock_p;
   GstElement **clock_provider_p;
@@ -1644,52 +1670,25 @@ gst_bin_remove_func (GstBin * bin, GstElement * element)
       GST_OBJECT_FLAG_IS_SET (element, GST_ELEMENT_FLAG_PROVIDE_CLOCK);
   requires_clock =
       GST_OBJECT_FLAG_IS_SET (element, GST_ELEMENT_FLAG_REQUIRE_CLOCK);
+  no_preroll = GST_STATE_RETURN (element) == GST_STATE_CHANGE_NO_PREROLL;
   GST_OBJECT_UNLOCK (element);
 
+  if (!no_preroll)
+    g_hash_table_remove (priv->no_preroll_elements, element);
+
   found = FALSE;
-  othersink = FALSE;
-  othersource = FALSE;
-  otherprovider = FALSE;
-  otherrequirer = FALSE;
-  have_no_preroll = FALSE;
+  have_no_preroll = g_hash_table_size (priv->no_preroll_elements) > 0;
   /* iterate the elements, we collect which ones are async and no_preroll. We
    * also remove the element when we find it. */
-  for (walk = bin->children; walk; walk = next) {
-    GstElement *child = GST_ELEMENT_CAST (walk->data);
 
-    next = g_list_next (walk);
-
-    if (child == element) {
-      found = TRUE;
-      /* remove the element */
-      if (bin->priv->children_hash != NULL) {
-        g_hash_table_remove (bin->priv->children_hash, elem_name);
-      }
-      bin->children = g_list_delete_link (bin->children, walk);
-    } else {
-      gboolean child_sink, child_source, child_provider, child_requirer;
-
-      GST_OBJECT_LOCK (child);
-      child_sink = GST_OBJECT_FLAG_IS_SET (child, GST_ELEMENT_FLAG_SINK);
-      child_source = GST_OBJECT_FLAG_IS_SET (child, GST_ELEMENT_FLAG_SOURCE);
-      child_provider =
-          GST_OBJECT_FLAG_IS_SET (child, GST_ELEMENT_FLAG_PROVIDE_CLOCK);
-      child_requirer =
-          GST_OBJECT_FLAG_IS_SET (child, GST_ELEMENT_FLAG_REQUIRE_CLOCK);
-      /* when we remove a sink, check if there are other sinks. */
-      if (is_sink && !othersink && child_sink)
-        othersink = TRUE;
-      if (is_source && !othersource && child_source)
-        othersource = TRUE;
-      if (provides_clock && !otherprovider && child_provider)
-        otherprovider = TRUE;
-      if (requires_clock && !otherrequirer && child_requirer)
-        otherrequirer = TRUE;
-      /* check if we have NO_PREROLL children */
-      if (GST_STATE_RETURN (child) == GST_STATE_CHANGE_NO_PREROLL)
-        have_no_preroll = TRUE;
-      GST_OBJECT_UNLOCK (child);
+  GList *link = g_hash_table_lookup (priv->children_links, element);
+  if (link) {
+    if (priv->children_hash != NULL) {
+      g_hash_table_remove (priv->children_hash, elem_name);
     }
+    found = TRUE;
+    /* remove the element */
+    bin->children = g_list_delete_link (bin->children, link);
   }
 
   /* the element must have been in the bin's list of children */
@@ -1701,28 +1700,37 @@ gst_bin_remove_func (GstBin * bin, GstElement * element)
   bin->numchildren--;
   bin->children_cookie++;
   if (!GST_BIN_IS_NO_RESYNC (bin))
-    bin->priv->structure_cookie++;
+    priv->structure_cookie++;
 
-  if (is_sink && !othersink
-      && !(bin->priv->suppressed_flags & GST_ELEMENT_FLAG_SINK)) {
+  if (is_sink)
+    priv->num_is_sink--;
+  if (is_source)
+    priv->num_is_src--;
+  if (provides_clock)
+    priv->num_provides_clock--;
+  if (requires_clock)
+    priv->num_requires_clock--;
+
+  if (priv->num_is_sink == 0
+      && !(priv->suppressed_flags & GST_ELEMENT_FLAG_SINK)) {
     /* we're not a sink anymore */
     GST_DEBUG_OBJECT (bin, "we removed the last sink");
     GST_OBJECT_FLAG_UNSET (bin, GST_ELEMENT_FLAG_SINK);
   }
-  if (is_source && !othersource
-      && !(bin->priv->suppressed_flags & GST_ELEMENT_FLAG_SOURCE)) {
+  if (priv->num_is_src == 0
+      && !(priv->suppressed_flags & GST_ELEMENT_FLAG_SOURCE)) {
     /* we're not a source anymore */
     GST_DEBUG_OBJECT (bin, "we removed the last source");
     GST_OBJECT_FLAG_UNSET (bin, GST_ELEMENT_FLAG_SOURCE);
   }
-  if (provides_clock && !otherprovider
-      && !(bin->priv->suppressed_flags & GST_ELEMENT_FLAG_PROVIDE_CLOCK)) {
+  if (priv->num_provides_clock == 0
+      && !(priv->suppressed_flags & GST_ELEMENT_FLAG_PROVIDE_CLOCK)) {
     /* we're not a clock provider anymore */
     GST_DEBUG_OBJECT (bin, "we removed the last clock provider");
     GST_OBJECT_FLAG_UNSET (bin, GST_ELEMENT_FLAG_PROVIDE_CLOCK);
   }
-  if (requires_clock && !otherrequirer
-      && !(bin->priv->suppressed_flags & GST_ELEMENT_FLAG_REQUIRE_CLOCK)) {
+  if (priv->num_requires_clock == 0
+      && !(priv->suppressed_flags & GST_ELEMENT_FLAG_REQUIRE_CLOCK)) {
     /* we're not a clock requirer anymore */
     GST_DEBUG_OBJECT (bin, "we removed the last clock requirer");
     GST_OBJECT_FLAG_UNSET (bin, GST_ELEMENT_FLAG_REQUIRE_CLOCK);
@@ -2539,8 +2547,11 @@ gst_bin_element_set_state (GstBin * bin, GstElement * element,
    * anyway. */
   if (G_UNLIKELY (ret == GST_STATE_CHANGE_NO_PREROLL)) {
     GST_DEBUG_OBJECT (element, "element is NO_PREROLL, ignore async elements");
+    g_hash_table_add (bin->priv->no_preroll_elements, element);
     goto no_preroll;
   }
+
+  g_hash_table_remove (bin->priv->no_preroll_elements, element);
 
   GST_CAT_INFO_OBJECT (GST_CAT_STATES, element,
       "current %s pending %s, desired next %s",
