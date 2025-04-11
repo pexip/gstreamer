@@ -120,7 +120,7 @@ enum
   PROP_TWCC_FEEDBACK_INTERVAL,
   PROP_UPDATE_NTP64_HEADER_EXT,
   PROP_TIMEOUT_INACTIVE_SOURCES,
-  PROP_RTX_SSRC_MAP,
+  PROP_TWCC_BASE_SEQNUM,
   PROP_LAST,
 };
 
@@ -805,16 +805,17 @@ rtp_session_class_init (RTPSessionClass * klass)
       G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS);
 
   /**
-   * RTPSession:rtx-ssrc-map:
-   *
-   * Mapping from SSRC to RTX ssrcs.
-   *
-   * Since: 1.24
+   * RTPSession::set_twcc_base_seqnum:
+   * 
+   * Set initial twcc sequence number for  outgoing packets.
+   * Serves only testing puproses. Must be set before sending
+   * any packets.
    */
-  properties[PROP_RTX_SSRC_MAP] =
-      g_param_spec_boxed ("rtx-ssrc-map", "RTX SSRC Map",
-      "Map of SSRCs to their retransmission SSRCs",
-      GST_TYPE_STRUCTURE, G_PARAM_WRITABLE | G_PARAM_STATIC_STRINGS);
+  properties[PROP_TWCC_BASE_SEQNUM] =
+      g_param_spec_uint ("twcc-base-seqnum", "TWCC Base Seqnum",
+      "Set initial twcc sequence number for outgoing packets",
+      0, G_MAXUINT16, 0, G_PARAM_WRITABLE | G_PARAM_STATIC_STRINGS);
+
 
   g_object_class_install_properties (gobject_class, PROP_LAST, properties);
 
@@ -915,7 +916,6 @@ rtp_session_init (RTPSession * sess)
   sess->is_doing_ptp = TRUE;
 
   sess->twcc = rtp_twcc_manager_new (sess->mtu);
-  sess->rtx_ssrc_to_ssrc = g_hash_table_new (NULL, NULL);
   sess->timedout_ssrcs = g_hash_table_new (NULL, NULL);
 }
 
@@ -939,9 +939,6 @@ rtp_session_finalize (GObject * object)
     g_hash_table_destroy (sess->ssrcs[i]);
 
   g_object_unref (sess->twcc);
-  if (sess->rtx_ssrc_map)
-    gst_structure_free (sess->rtx_ssrc_map);
-  g_hash_table_destroy (sess->rtx_ssrc_to_ssrc);
   g_hash_table_destroy (sess->timedout_ssrcs);
 
   g_mutex_clear (&sess->lock);
@@ -1145,17 +1142,12 @@ rtp_session_set_property (GObject * object, guint prop_id,
     case PROP_TIMEOUT_INACTIVE_SOURCES:
       sess->timeout_inactive_sources = g_value_get_boolean (value);
       break;
-    case PROP_RTX_SSRC_MAP:
+    case PROP_TWCC_BASE_SEQNUM:
       RTP_SESSION_LOCK (sess);
-      if (sess->rtx_ssrc_map)
-        gst_structure_free (sess->rtx_ssrc_map);
-      sess->rtx_ssrc_map = g_value_dup_boxed (value);
-      g_hash_table_remove_all (sess->rtx_ssrc_to_ssrc);
-      gst_structure_foreach (sess->rtx_ssrc_map,
-          structure_to_hash_table_reverse, sess->rtx_ssrc_to_ssrc);
+      rtp_twcc_manager_set_base_seqnum (sess->twcc,
+          (guint16) g_value_get_uint (value));
       RTP_SESSION_UNLOCK (sess);
       break;
-
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
       break;
@@ -2418,14 +2410,6 @@ update_packet (GstBuffer ** buffer, guint idx, RTPPacketInfo * pinfo)
       /* RTP header extensions */
       pinfo->header_ext = gst_rtp_buffer_get_extension_bytes (&rtp,
           &pinfo->header_ext_bit_pattern);
-
-      /* if RTX, store the original seqnum (OSN) and SSRC */
-      if (GST_BUFFER_FLAG_IS_SET (*buffer, GST_RTP_BUFFER_FLAG_RETRANSMISSION)) {
-        guint8 *payload = gst_rtp_buffer_get_payload (&rtp);
-        if (payload) {
-          pinfo->rtx_osn = GST_READ_UINT16_BE (payload);
-        }
-      }
     }
 
     if (pinfo->ntp64_ext_id != 0 && pinfo->send && !pinfo->have_ntp64_ext) {
@@ -2496,8 +2480,6 @@ update_packet_info (RTPSession * sess, RTPPacketInfo * pinfo,
   pinfo->marker = FALSE;
   pinfo->ntp64_ext_id = send ? sess->send_ntp64_ext_id : 0;
   pinfo->have_ntp64_ext = FALSE;
-  pinfo->rtx_osn = -1;
-  pinfo->rtx_ssrc = 0;
 
   if (is_list) {
     GstBufferList *list = GST_BUFFER_LIST_CAST (data);
@@ -2510,11 +2492,6 @@ update_packet_info (RTPSession * sess, RTPPacketInfo * pinfo,
     res = update_packet (&buffer, 0, pinfo);
     pinfo->arrival_time = GST_BUFFER_DTS (buffer);
   }
-
-  if (pinfo->rtx_osn != -1)
-    pinfo->rtx_ssrc =
-        GPOINTER_TO_UINT (g_hash_table_lookup (sess->rtx_ssrc_to_ssrc,
-            GUINT_TO_POINTER (pinfo->ssrc)));
 
   return res;
 }
