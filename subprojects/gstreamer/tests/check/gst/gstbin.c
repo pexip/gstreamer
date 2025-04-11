@@ -2190,6 +2190,43 @@ GST_START_TEST (test_locked_state_sets_base_time_on_children)
 
 GST_END_TEST;
 
+GST_START_TEST (test_add_remove_performance)
+{
+  gint num_elements = 5000 * 3;
+  GstBin *bin = GST_BIN (gst_bin_new (NULL));
+  GstElement **el = g_new0 (GstElement *, num_elements);
+  gint i;
+  gint64 start;
+  double dur;
+
+  for (i = 0; i < num_elements; i += 3) {
+    el[i + 0] = gst_element_factory_make ("identity", NULL);
+    el[i + 1] = gst_element_factory_make ("fakesrc", NULL);
+    el[i + 2] = gst_element_factory_make ("fakesink", NULL);
+  }
+
+  start = g_get_monotonic_time ();
+
+  for (i = 0; i < num_elements; i++) {
+    gst_bin_add (bin, el[i]);
+  }
+
+  for (i = 0; i < num_elements / 2; i++) {
+    gst_bin_remove (bin, el[i]);
+  }
+  for (i = 0; i < num_elements / 2; i++) {
+    gst_bin_remove (bin, el[num_elements - i - 1]);
+  }
+
+  dur = (g_get_monotonic_time () - start) / (double) G_TIME_SPAN_SECOND;
+
+  GST_ERROR ("duration = %lf", dur);
+
+  gst_object_unref (bin);
+}
+
+GST_END_TEST;
+
 static Suite *
 gst_bin_suite (void)
 {
@@ -2235,6 +2272,8 @@ gst_bin_suite (void)
   /* fails on OSX build bot for some reason, and is a bit silly anyway */
   if (0)
     tcase_add_test (tc_chain, test_many_bins);
+
+  tcase_add_test (tc_chain, test_add_remove_performance);
 
   return s;
 }
