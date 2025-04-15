@@ -134,14 +134,6 @@ struct _RTPTWCCManager
 
   guint64 fb_pkt_count;
 
-  /* Array of SentPackets struct */
-  GstQueueArray *sent_packets;
-  /* Array of GArrays with pointers to SentPackets structs from sent_packets 
-    to which twcc feedbacks were received and are waiting to be processed by
-    statistics thread.
-  */
-  GstQueueArray *sent_packets_feedbacks;
-  
   GArray *parsed_packets;
   GQueue *rtcp_buffers;
 
@@ -1369,6 +1361,6 @@ void
 rtp_twcc_manager_set_base_seqnum (RTPTWCCManager * twcc, guint16 base_seqnum)
 {
   g_assert (twcc->send_seqnum == 0
-    && twcc->sent_packets->len == 0);
+    && rtp_twcc_stats_queue_len (twcc->stats_manager) == 0);
   twcc->send_seqnum = base_seqnum;
 }

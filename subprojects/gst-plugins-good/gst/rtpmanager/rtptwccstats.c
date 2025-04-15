@@ -1474,3 +1474,8 @@ rtp_twcc_stats_do_stats (TWCCStatsManager *statsman,
   return ret;
 }
 
+guint 
+rtp_twcc_stats_queue_len (TWCCStatsManager *stats_manager)
+{
+  return gst_queue_array_get_length (stats_manager->sent_packets);
+}

@@ -53,4 +53,6 @@ void rtp_twcc_manager_tx_end_feedback (TWCCStatsManager *stats_manager);
 GstStructure *rtp_twcc_stats_do_stats (TWCCStatsManager *stats_manager,
     GstClockTime stats_window_size, GstClockTime stats_window_delay);
 
+guint rtp_twcc_stats_queue_len (TWCCStatsManager *stats_manager);
+
 #endif /* __RTP_TWCC_STATS_H__ */

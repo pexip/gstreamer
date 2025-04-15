@@ -330,6 +330,7 @@ struct _RTPSession {
   /* Transport-wide cc-extension */
   RTPTWCCManager *twcc;
   GstStructure *rtx_ssrc_map;
+  GHashTable *rtx_ssrc_to_ssrc;
 };
 
 /**
