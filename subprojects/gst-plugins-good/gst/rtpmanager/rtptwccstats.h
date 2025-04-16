@@ -25,7 +25,8 @@
 #include <gst/rtp/rtp.h>
 #include "rtpstats.h"
 
-typedef enum {
+typedef enum
+{
   RTP_TWCC_FECBLOCK_PKT_UNKNOWN,
   RTP_TWCC_FECBLOCK_PKT_RECEIVED,
   RTP_TWCC_FECBLOCK_PKT_RECOVERED,
@@ -35,24 +36,24 @@ typedef enum {
 struct _TWCCStatsManager;
 typedef struct _TWCCStatsManager TWCCStatsManager;
 
-TWCCStatsManager *rtp_twcc_stats_manager_new (GObject *parent);
-void rtp_twcc_stats_manager_free (TWCCStatsManager *stats_manager);
+TWCCStatsManager *rtp_twcc_stats_manager_new (GObject * parent);
+void rtp_twcc_stats_manager_free (TWCCStatsManager * stats_manager);
 
-void rtp_twcc_stats_sent_pkt (TWCCStatsManager *stats_manager,
-    RTPPacketInfo * pinfo, GstRTPBuffer *rtp, guint16 twcc_seqnum);
+void rtp_twcc_stats_sent_pkt (TWCCStatsManager * stats_manager,
+    RTPPacketInfo * pinfo, GstRTPBuffer * rtp, guint16 twcc_seqnum);
 
-void rtp_twcc_stats_set_sock_ts (TWCCStatsManager *stats_manager,
+void rtp_twcc_stats_set_sock_ts (TWCCStatsManager * stats_manager,
     guint16 seqnum, GstClockTime sock_ts);
 
-void rtp_twcc_manager_tx_start_feedback (TWCCStatsManager *stats_manager);
-void rtp_twcc_stats_pkt_feedback (TWCCStatsManager *stats_manager,
+void rtp_twcc_manager_tx_start_feedback (TWCCStatsManager * stats_manager);
+void rtp_twcc_stats_pkt_feedback (TWCCStatsManager * stats_manager,
     guint16 seqnum, GstClockTime remote_ts, GstClockTime current_time,
     TWCCPktState status);
-void rtp_twcc_manager_tx_end_feedback (TWCCStatsManager *stats_manager);
+void rtp_twcc_manager_tx_end_feedback (TWCCStatsManager * stats_manager);
 
-GstStructure *rtp_twcc_stats_do_stats (TWCCStatsManager *stats_manager,
+GstStructure *rtp_twcc_stats_do_stats (TWCCStatsManager * stats_manager,
     GstClockTime stats_window_size, GstClockTime stats_window_delay);
 
-guint rtp_twcc_stats_queue_len (TWCCStatsManager *stats_manager);
+guint rtp_twcc_stats_queue_len (TWCCStatsManager * stats_manager);
 
 #endif /* __RTP_TWCC_STATS_H__ */

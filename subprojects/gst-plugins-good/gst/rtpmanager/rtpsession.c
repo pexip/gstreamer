@@ -827,8 +827,7 @@ rtp_session_class_init (RTPSessionClass * klass)
   properties[PROP_TWCC_BASE_SEQNUM] =
       g_param_spec_uint ("twcc-base-seqnum", "TWCC Base Seqnum",
       "Set initial twcc sequence number for outgoing packets",
-      0, G_MAXUINT16, 0,
-      G_PARAM_WRITABLE | G_PARAM_STATIC_STRINGS);
+      0, G_MAXUINT16, 0, G_PARAM_WRITABLE | G_PARAM_STATIC_STRINGS);
 
 
   g_object_class_install_properties (gobject_class, PROP_LAST, properties);
@@ -956,7 +955,7 @@ rtp_session_finalize (GObject * object)
   g_object_unref (sess->twcc);
   if (sess->rtx_ssrc_map)
     gst_structure_free (sess->rtx_ssrc_map);
-    g_hash_table_destroy (sess->rtx_ssrc_to_ssrc);
+  g_hash_table_destroy (sess->rtx_ssrc_to_ssrc);
   g_hash_table_destroy (sess->timedout_ssrcs);
 
   g_mutex_clear (&sess->lock);
@@ -1172,8 +1171,8 @@ rtp_session_set_property (GObject * object, guint prop_id,
       break;
     case PROP_TWCC_BASE_SEQNUM:
       RTP_SESSION_LOCK (sess);
-      rtp_twcc_manager_set_base_seqnum(sess->twcc, 
-          (guint16)g_value_get_uint (value));
+      rtp_twcc_manager_set_base_seqnum (sess->twcc,
+          (guint16) g_value_get_uint (value));
       RTP_SESSION_UNLOCK (sess);
       break;
     default:

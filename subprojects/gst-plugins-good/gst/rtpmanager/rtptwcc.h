@@ -25,10 +25,10 @@
 #include <gst/rtp/rtp.h>
 #include "rtpstats.h"
 
-G_DECLARE_FINAL_TYPE (RTPTWCCManager, rtp_twcc_manager, RTP, TWCC_MANAGER, GObject)
+G_DECLARE_FINAL_TYPE (RTPTWCCManager, rtp_twcc_manager, RTP, TWCC_MANAGER,
+    GObject)
 #define RTP_TYPE_TWCC_MANAGER (rtp_twcc_manager_get_type())
 #define RTP_TWCC_MANAGER_CAST(obj) ((RTPTWCCManager *)(obj))
-
 /**
  * RTPTWCCManagerCaps:
  * @payload: the payload
@@ -38,39 +38,41 @@ G_DECLARE_FINAL_TYPE (RTPTWCCManager, rtp_twcc_manager, RTP, TWCC_MANAGER, GObje
  *
  * Returns: the caps of @payload.
  */
-typedef GstCaps * (*RTPTWCCManagerCaps) (guint8 payload, gpointer user_data);
+     typedef GstCaps *(*RTPTWCCManagerCaps) (guint8 payload,
+    gpointer user_data);
 
-RTPTWCCManager * rtp_twcc_manager_new (guint mtu);
+     RTPTWCCManager *rtp_twcc_manager_new (guint mtu);
 
-void rtp_twcc_manager_parse_recv_ext_id (RTPTWCCManager * twcc,
+     void rtp_twcc_manager_parse_recv_ext_id (RTPTWCCManager * twcc,
     const GstStructure * s);
-void rtp_twcc_manager_parse_send_ext_id (RTPTWCCManager * twcc,
+     void rtp_twcc_manager_parse_send_ext_id (RTPTWCCManager * twcc,
     const GstStructure * s);
 
-void rtp_twcc_manager_set_mtu (RTPTWCCManager * twcc, guint mtu);
-void rtp_twcc_manager_set_feedback_interval (RTPTWCCManager * twcc,
+     void rtp_twcc_manager_set_mtu (RTPTWCCManager * twcc, guint mtu);
+     void rtp_twcc_manager_set_feedback_interval (RTPTWCCManager * twcc,
     GstClockTime feedback_interval);
-GstClockTime rtp_twcc_manager_get_feedback_interval (RTPTWCCManager * twcc);
-GstClockTime rtp_twcc_manager_get_next_timeout (RTPTWCCManager * twcc,
+     GstClockTime rtp_twcc_manager_get_feedback_interval (RTPTWCCManager *
+    twcc);
+     GstClockTime rtp_twcc_manager_get_next_timeout (RTPTWCCManager * twcc,
     GstClockTime current_time);
 
-gboolean rtp_twcc_manager_recv_packet (RTPTWCCManager * twcc,
+     gboolean rtp_twcc_manager_recv_packet (RTPTWCCManager * twcc,
     RTPPacketInfo * pinfo);
-void rtp_twcc_manager_send_packet (RTPTWCCManager * twcc,
+     void rtp_twcc_manager_send_packet (RTPTWCCManager * twcc,
     RTPPacketInfo * pinfo);
 
-GstBuffer * rtp_twcc_manager_get_feedback (RTPTWCCManager * twcc,
+     GstBuffer *rtp_twcc_manager_get_feedback (RTPTWCCManager * twcc,
     guint32 sender_ssrc, GstClockTime current_time);
 
-GstStructure * rtp_twcc_manager_parse_fci (RTPTWCCManager * twcc,
+     GstStructure *rtp_twcc_manager_parse_fci (RTPTWCCManager * twcc,
     guint8 * fci_data, guint fci_length, GstClockTime current_time);
 
-GstStructure * rtp_twcc_manager_get_windowed_stats (RTPTWCCManager * twcc,
+     GstStructure *rtp_twcc_manager_get_windowed_stats (RTPTWCCManager * twcc,
     GstClockTime stats_window_size, GstClockTime stats_window_delay);
 
-void rtp_twcc_manager_set_callback (RTPTWCCManager * twcc,
+     void rtp_twcc_manager_set_callback (RTPTWCCManager * twcc,
     RTPTWCCManagerCaps cb, gpointer user_data);
 
-void rtp_twcc_manager_set_base_seqnum (RTPTWCCManager * twcc,
+     void rtp_twcc_manager_set_base_seqnum (RTPTWCCManager * twcc,
     guint16 base_seqnum);
 #endif /* __RTP_TWCC_H__ */

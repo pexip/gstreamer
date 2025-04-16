@@ -89,11 +89,11 @@ typedef struct
   guint8 pt;
   guint size;
   gboolean lost;
-  gint redundant_idx; /* if it's redudndant packet -- series number in a block,
-                        -1 otherwise */
-  gint redundant_num; /* if it'r a redundant packet -- how many packets are 
-                          in the block, -1 otherwise */
-  guint32 protects_ssrc; /* for redundant packets: SSRC of the data stream */
+  gint redundant_idx;           /* if it's redudndant packet -- series number in a block,
+                                   -1 otherwise */
+  gint redundant_num;           /* if it'r a redundant packet -- how many packets are 
+                                   in the block, -1 otherwise */
+  guint32 protects_ssrc;        /* for redundant packets: SSRC of the data stream */
 
   /* For redundant packets: seqnums of the packets being protected 
    * by this packet. 
@@ -102,7 +102,7 @@ typedef struct
    * is converted to TWCC seqnums. This is done to shift some work to the 
    * get_windowed_stats function, which should be less time-critical.
    */
-  GArray * protects_seqnums;
+  GArray *protects_seqnums;
   gboolean stats_processed;
 
   TWCCPktState state;
@@ -116,7 +116,7 @@ typedef struct
   GstClockTime remote_ts;
 } ParsedPacket;
 
-  gdouble queueing_slope;
+gdouble queueing_slope;
 struct _RTPTWCCManager
 {
   GObject object;
@@ -183,7 +183,7 @@ rtp_twcc_manager_init (RTPTWCCManager * twcc)
   twcc->pt_to_twcc_ext_id = g_hash_table_new (NULL, NULL);
 
   twcc->recv_packets = g_array_new (FALSE, FALSE, sizeof (RecvPacket));
-  
+
   twcc->parsed_packets = g_array_new (FALSE, FALSE, sizeof (ParsedPacket));
   g_mutex_init (&twcc->recv_lock);
 
@@ -198,7 +198,7 @@ rtp_twcc_manager_init (RTPTWCCManager * twcc)
   twcc->next_feedback_send_time = GST_CLOCK_TIME_NONE;
   twcc->last_report_time = GST_CLOCK_TIME_NONE;
 
-  twcc->stats_manager = rtp_twcc_stats_manager_new (G_OBJECT(twcc));
+  twcc->stats_manager = rtp_twcc_stats_manager_new (G_OBJECT (twcc));
 }
 
 static void
@@ -1219,7 +1219,7 @@ _add_parsed_packet_to_value_array (GValueArray * array, ParsedPacket * pkt)
   g_value_array_append (array, NULL);
   val = g_value_array_get_nth (array, array->n_values - 1);
   g_value_init (val, GST_TYPE_STRUCTURE);
-  g_value_take_boxed (val, 
+  g_value_take_boxed (val,
       gst_structure_new ("RTPTWCCPacket",
           "seqnum", G_TYPE_UINT, pkt->seqnum,
           "remote-ts", G_TYPE_UINT64, pkt->remote_ts,
@@ -1313,21 +1313,21 @@ rtp_twcc_manager_parse_fci (RTPTWCCManager * twcc,
       ts_rounded += delta_ts;
       pkt->remote_ts = ts_rounded;
 
-      GST_DEBUG_OBJECT ( twcc, "pkt: #%u, remote_ts: %" GST_TIME_FORMAT
+      GST_DEBUG_OBJECT (twcc, "pkt: #%u, remote_ts: %" GST_TIME_FORMAT
           " delta_ts: %" GST_STIME_FORMAT
           " status: %u", pkt->seqnum,
           GST_TIME_ARGS (pkt->remote_ts), GST_STIME_ARGS (delta_ts),
           pkt->status);
       _add_parsed_packet_to_value_array (array, pkt);
     } else {
-      GST_DEBUG_OBJECT ( twcc, "pkt: #%u, remote_ts: 0 delta_ts: 0 status: %u",
+      GST_DEBUG_OBJECT (twcc, "pkt: #%u, remote_ts: 0 delta_ts: 0 status: %u",
           pkt->seqnum, pkt->status);
     }
 
-    rtp_twcc_stats_pkt_feedback (twcc->stats_manager, pkt->seqnum, 
+    rtp_twcc_stats_pkt_feedback (twcc->stats_manager, pkt->seqnum,
         pkt->remote_ts, current_time,
         pkt->status == RTP_TWCC_PACKET_STATUS_NOT_RECV
-          ? RTP_TWCC_FECBLOCK_PKT_LOST : RTP_TWCC_FECBLOCK_PKT_RECEIVED);
+        ? RTP_TWCC_FECBLOCK_PKT_LOST : RTP_TWCC_FECBLOCK_PKT_RECEIVED);
   }
   rtp_twcc_manager_tx_end_feedback (twcc->stats_manager);
   twcc->last_report_time = current_time;
@@ -1361,6 +1361,6 @@ void
 rtp_twcc_manager_set_base_seqnum (RTPTWCCManager * twcc, guint16 base_seqnum)
 {
   g_assert (twcc->send_seqnum == 0
-    && rtp_twcc_stats_queue_len (twcc->stats_manager) == 0);
+      && rtp_twcc_stats_queue_len (twcc->stats_manager) == 0);
   twcc->send_seqnum = base_seqnum;
 }
