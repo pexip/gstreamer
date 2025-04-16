@@ -43,7 +43,6 @@ typedef struct
   gboolean stats_processed;
 
   TWCCPktState state;
-  gint update_stats;
 } SentPacket;
 
 typedef struct
@@ -500,12 +499,15 @@ twcc_stats_ctx_calculate_windowed_stats (TWCCStatsCtx * ctx,
   LinearRegression dod_regression;
   _linear_init (&dod_regression);
 
+  ctx->packets_sent = 0;
+  ctx->packets_recv = 0;
   ctx->packet_loss_pct = 0.0;
   ctx->avg_delta_of_delta = 0;
   ctx->delta_of_delta_growth = 0.0;
   ctx->bitrate_sent = 0;
   ctx->bitrate_recv = 0;
   ctx->recovery_pct = -1.0;
+  ctx->queueing_slope = 0.;
 
   gboolean ret =
       _get_stats_packets_window (packets, start_time, end_time, &start_idx,
@@ -737,9 +739,22 @@ twcc_stats_ctx_add_packet (TWCCStatsManager *statsman, SentPacket * pkt)
       TWCCStatsCtx *ctx = _get_ctx_for_pt (statsman, pkt->pt);
       gst_queue_array_push_tail_struct (ctx->pt_packets, (StatsPktPtr*)&pkt);
       statsman->stats_ctx->last_pkt_fb = ctx->last_pkt_fb = pkt;
+    /* TWCC packets reordered */
     } else {
-      /* TWCC packets reordered -- do nothing */
-      GST_WARNING_OBJECT (statsman->parent, "Packet #%u is out of order, not going to stats", pkt->seqnum);
+      StatsPktPtr *placeholder = gst_queue_array_peek_nth (
+        statsman->stats_ctx->pt_packets, idx);
+      GST_LOG_OBJECT (statsman->parent, "Received out-of-order feedback on #%u,"
+        " main array idx: %d", pkt->seqnum, idx);
+      if (placeholder && placeholder->sentpkt == NULL) {
+          placeholder->sentpkt = pkt;
+      /* TWCC reorder */
+      } else if (G_UNLIKELY (placeholder == NULL)) {
+        GST_ERROR ("Could not locate the packet in the main stats_ctx array");
+        g_assert_not_reached ();
+      } else {
+        GST_ERROR ("Must not add the same packet to stats_ctx twice");
+        g_assert_not_reached ();
+      }
     }
   }
 }
@@ -757,7 +772,7 @@ twcc_stats_ctx_add_packet (TWCCStatsManager *statsman, SentPacket * pkt)
 static RedBlock * _redblock_new(GArray* seq, guint16 fec_seq,
     guint16 idx_redundant_packets, guint16 num_redundant_packets)
 {
-  RedBlock *block = g_malloc (sizeof (RedBlock));
+  RedBlock *block = g_malloc0 (sizeof (RedBlock));
   block->seqs = g_array_ref (seq);
   block->states = g_array_new (FALSE, FALSE, sizeof (TWCCPktState));
   g_array_set_size (block->states, seq->len);
@@ -857,20 +872,20 @@ static gsize _redblock_reconsider (TWCCStatsManager * statsman, RedBlock * block
     is easier to handle separately
   */
   if (block->seqs->len == 1) {
-    SentPacket *pkt = _find_stats_sentpacket (statsman,
+    SentPacket *media_pkt = _find_stats_sentpacket (statsman,
         g_array_index (block->seqs, guint16, 0));
     
-    if (pkt && pkt->state == RTP_TWCC_FECBLOCK_PKT_LOST) {
+    if (media_pkt && media_pkt->state == RTP_TWCC_FECBLOCK_PKT_LOST) {
       for (gsize i = 0; i < block->fec_seqs->len; ++i) {
-        SentPacket *pkt = _find_stats_sentpacket (statsman,
+        SentPacket *redundant_pkt = _find_stats_sentpacket (statsman,
             g_array_index (block->fec_seqs, guint16, i));
-        if (pkt->state == RTP_TWCC_FECBLOCK_PKT_RECEIVED) {
+        if (redundant_pkt->state == RTP_TWCC_FECBLOCK_PKT_RECEIVED) {
           nrecovered++;
           break;
         }
       }
       if (nrecovered == 1) {
-        pkt->state = RTP_TWCC_FECBLOCK_PKT_RECOVERED;
+        media_pkt->state = RTP_TWCC_FECBLOCK_PKT_RECOVERED;
       }
     }
 
@@ -893,10 +908,6 @@ static gsize _redblock_reconsider (TWCCStatsManager * statsman, RedBlock * block
     } else if (pkt->state == RTP_TWCC_FECBLOCK_PKT_LOST) {
       lost++;
       if (i < G_N_ELEMENTS(states_media)) states_media[i] = '-'; 
-    }
-
-    if (pkt) {
-      pkt->update_stats = FALSE;
     }
   }
   states_media[block->seqs->len] = '\0';
@@ -923,10 +934,6 @@ static gsize _redblock_reconsider (TWCCStatsManager * statsman, RedBlock * block
     } else if (pkt->state == RTP_TWCC_FECBLOCK_PKT_LOST) {
       lost++;
       if (i < G_N_ELEMENTS(states_fec)) states_fec[i] = '-'; 
-    }
-
-    if (pkt) {
-      pkt->update_stats = FALSE;
     }
   }
   states_fec[block->fec_seqs->len] = '\0';
@@ -1012,7 +1019,7 @@ _rm_last_packet_from_stats_arrays (TWCCStatsManager *statsman)
         head->seqnum, head->local_ts);
   }
   gst_queue_array_pop_head_struct (statsman->stats_ctx->pt_packets);
-  statsman->stats_ctx_first_seqnum++;
+  statsman->stats_ctx_first_seqnum = (guint16)(statsman->stats_ctx_first_seqnum+1);
 }
 
 static void

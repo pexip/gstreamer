@@ -25,6 +25,10 @@
 #  define GLIB_DISABLE_DEPRECATION_WARNINGS
 #endif
 
+#ifdef HAVE_CONFIG_H
+#include "config.h"
+#endif
+
 #include <gst/check/gstharness.h>
 #include <gst/check/gstcheck.h>
 #include <gst/check/gsttestclock.h>
@@ -36,10 +40,6 @@
 #include <gst/net/gstnet.h>
 #include <gst/net/gstnetaddressmeta.h>
 #include <gst/video/video.h>
-
-#ifdef HAVE_CONFIG_H
-#include "config.h"
-#endif
 
 #ifdef HAVE_VALGRIND
 # include <valgrind/valgrind.h>
