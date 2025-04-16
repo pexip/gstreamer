@@ -1202,16 +1202,6 @@ done:
 }
 
 static void
-_append_structure_to_value_array (GValueArray * array, GstStructure * s)
-{
-  GValue *val;
-  g_value_array_append (array, NULL);
-  val = g_value_array_get_nth (array, array->n_values - 1);
-  g_value_init (val, GST_TYPE_STRUCTURE);
-  g_value_take_boxed (val, s);
-}
-
-static void
 _add_parsed_packet_to_value_array (GValueArray * array, ParsedPacket * pkt)
 {
   GValue *val;

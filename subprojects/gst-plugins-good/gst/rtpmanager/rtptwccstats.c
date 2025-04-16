@@ -1,6 +1,6 @@
 #include "rtptwccstats.h"
 #include <gst/rtp/gstrtprepairmeta.h>
-#include <gst/base/gstqueuearray.h>
+#include <gst/gstvecdeque.h>
 
 #define WEIGHT(a, b, w) (((a) * (w)) + ((b) * (1.0 - (w))))
 
@@ -54,7 +54,7 @@ static StatsPktPtr null_statspktptr = {.sentpkt = NULL };
 
 typedef struct
 {
-  GstQueueArray *pt_packets;
+  GstVecDeque *pt_packets;
   SentPacket *last_pkt_fb;
   gint64 new_packets_idx;
 
@@ -88,12 +88,12 @@ struct _TWCCStatsManager
    */
   GstClockTime prev_stat_window_beginning;
 
-  GstQueueArray *sent_packets;
+  GstVecDeque *sent_packets;
   gsize sent_packets_size;
 
   /* Ring Buffer of pointers to SentPacket struct from sent_packets
      to which we've got feedbacks, but not processed during statistics */
-  GstQueueArray *sent_packets_feedbacks;
+  GstVecDeque *sent_packets_feedbacks;
 
   /* Redundancy bookkeeping */
   GHashTable *redund_2_redblocks;
@@ -171,10 +171,10 @@ _pkt_state_s (TWCCPktState state)
 }
 
 static StatsPktPtr *
-_sent_pkt_get (GstQueueArray * pkt_array, guint idx)
+_sent_pkt_get (GstVecDeque * pkt_array, guint idx)
 {
   return (StatsPktPtr *)
-      gst_queue_array_peek_nth_struct (pkt_array, idx);
+      gst_vec_deque_peek_nth_struct (pkt_array, idx);
 }
 
 static void
@@ -250,12 +250,12 @@ static void
 _sent_pkt_keep_length (TWCCStatsManager * statsman, gsize max_len,
     SentPacket * new_packet)
 {
-  if (gst_queue_array_get_length (statsman->sent_packets) >= max_len) {
+  if (gst_vec_deque_get_length (statsman->sent_packets) >= max_len) {
     /* It could mean that statistics was not called at all, asumming that
        the oldest packet was not referenced anywhere else, we can drop it.
      */
     SentPacket *head = (SentPacket *)
-        gst_queue_array_peek_head_struct (statsman->sent_packets);
+        gst_vec_deque_peek_head_struct (statsman->sent_packets);
     GstClockTime pkt_ts = head->local_ts;
     if (GST_CLOCK_TIME_IS_VALID (statsman->prev_stat_window_beginning) &&
         GST_CLOCK_DIFF (pkt_ts, statsman->prev_stat_window_beginning)
@@ -272,9 +272,9 @@ _sent_pkt_keep_length (TWCCStatsManager * statsman, gsize max_len,
     GST_LOG_OBJECT (statsman->parent,
         "Keeping sent_packets FIFO length: %u, dropping packet #%u", max_len,
         head->seqnum);
-    _free_sentpacket (gst_queue_array_pop_head_struct (statsman->sent_packets));
+    _free_sentpacket (gst_vec_deque_pop_head_struct (statsman->sent_packets));
   }
-  gst_queue_array_push_tail_struct (statsman->sent_packets, new_packet);
+  gst_vec_deque_push_tail_struct (statsman->sent_packets, new_packet);
 }
 
 static TWCCStatsCtx *
@@ -282,7 +282,7 @@ twcc_stats_ctx_new (void)
 {
   TWCCStatsCtx *ctx = g_new0 (TWCCStatsCtx, 1);
 
-  ctx->pt_packets = gst_queue_array_new_for_struct (sizeof (StatsPktPtr),
+  ctx->pt_packets = gst_vec_deque_new_for_struct (sizeof (StatsPktPtr),
       MAX_STATS_PACKETS);
   ctx->last_pkt_fb = NULL;
 
@@ -292,7 +292,7 @@ twcc_stats_ctx_new (void)
 static void
 twcc_stats_ctx_free (TWCCStatsCtx * ctx)
 {
-  gst_queue_array_free (ctx->pt_packets);
+  gst_vec_deque_free (ctx->pt_packets);
   g_free (ctx);
 }
 
@@ -315,14 +315,14 @@ twcc_stats_ctx_get_last_local_ts (TWCCStatsCtx * ctx)
 }
 
 static gboolean
-_get_stats_packets_window (GstQueueArray * array,
+_get_stats_packets_window (GstVecDeque * array,
     GstClockTimeDiff start_time, GstClockTimeDiff end_time,
     guint * start_idx, guint * num_packets)
 {
   gboolean ret = FALSE;
   guint end_idx = 0;
   guint i;
-  const guint array_length = gst_queue_array_get_length (array);
+  const guint array_length = gst_vec_deque_get_length (array);
 
   if (array_length < 2) {
     GST_DEBUG ("Not enough stats to do a window");
@@ -474,7 +474,7 @@ static gboolean
 twcc_stats_ctx_calculate_windowed_stats (TWCCStatsCtx * ctx,
     GstClockTimeDiff start_time, GstClockTimeDiff end_time)
 {
-  GstQueueArray *packets = ctx->pt_packets;
+  GstVecDeque *packets = ctx->pt_packets;
   guint start_idx;
   guint packets_sent = 0;
   guint packets_recv = 0;
@@ -656,13 +656,15 @@ twcc_stats_ctx_calculate_windowed_stats (TWCCStatsCtx * ctx,
 
   GST_INFO ("Got stats: bits_sent: %u, bits_recv: %u, packets_sent = %u, "
       "packets_recv: %u, packetlost_pct = %lf, recovery_pct = %lf, "
-      "recovered: %u, local_duration=%" GST_STIME_FORMAT ", "
+      "recovered: %u",
+      bits_sent, bits_recv, packets_sent, packets_recv, ctx->packet_loss_pct,
+      ctx->recovery_pct, packets_recovered);
+  GST_INFO ("local_duration=%" GST_STIME_FORMAT ", "
       "remote_duration=%" GST_STIME_FORMAT ", "
       "sent_bitrate = %u, " "recv_bitrate = %u, delta-delta-avg = %"
       GST_STIME_FORMAT ", delta-delta-growth=%lf, queueing-slope=%lf",
-      bits_sent, bits_recv, packets_sent, packets_recv, ctx->packet_loss_pct,
-      ctx->recovery_pct, packets_recovered, GST_TIME_ARGS (local_duration),
-      GST_TIME_ARGS (remote_duration), ctx->bitrate_sent, ctx->bitrate_recv,
+      GST_STIME_ARGS (local_duration),
+      GST_STIME_ARGS (remote_duration), ctx->bitrate_sent, ctx->bitrate_recv,
       GST_STIME_ARGS (ctx->avg_delta_of_delta), ctx->delta_of_delta_growth,
       ctx->queueing_slope);
   return TRUE;
@@ -701,7 +703,7 @@ _find_stats_sentpacket (TWCCStatsManager * statsman, guint16 seqnum)
   gint idx = _idx_sentpacket (statsman, seqnum);
   SentPacket *res = NULL;
   if (idx >= 0
-      && idx < gst_queue_array_get_length (statsman->stats_ctx->pt_packets)) {
+      && idx < gst_vec_deque_get_length (statsman->stats_ctx->pt_packets)) {
     res = _sent_pkt_get (statsman->stats_ctx->pt_packets, idx)->sentpkt;
   }
 
@@ -715,36 +717,36 @@ twcc_stats_ctx_add_packet (TWCCStatsManager * statsman, SentPacket * pkt)
 {
   if (!pkt) {
     return;
-  } else if (gst_queue_array_is_empty (statsman->stats_ctx->pt_packets)) {
-    gst_queue_array_push_tail_struct (statsman->stats_ctx->pt_packets,
+  } else if (gst_vec_deque_is_empty (statsman->stats_ctx->pt_packets)) {
+    gst_vec_deque_push_tail_struct (statsman->stats_ctx->pt_packets,
         (StatsPktPtr *) & pkt);
     TWCCStatsCtx *ctx = _get_ctx_for_pt (statsman, pkt->pt);
-    gst_queue_array_push_tail_struct (ctx->pt_packets, (StatsPktPtr *) & pkt);
+    gst_vec_deque_push_tail_struct (ctx->pt_packets, (StatsPktPtr *) & pkt);
     statsman->stats_ctx->last_pkt_fb = ctx->last_pkt_fb = pkt;
     statsman->stats_ctx_first_seqnum = pkt->seqnum;
   } else {
     const gint idx = _idx_sentpacket (statsman, pkt->seqnum);
-    GstQueueArray *main_array = statsman->stats_ctx->pt_packets;
+    GstVecDeque *main_array = statsman->stats_ctx->pt_packets;
     if (idx < 0) {
       GST_WARNING_OBJECT (statsman->parent,
           "Packet #%u is too old for stats, dropping, latest pkt is #%u",
           pkt->seqnum, statsman->stats_ctx_first_seqnum);
       return;
-    } else if (idx >= gst_queue_array_get_length (main_array)) {
-      const gsize n2push = idx - gst_queue_array_get_length (main_array);
+    } else if (idx >= gst_vec_deque_get_length (main_array)) {
+      const gsize n2push = idx - gst_vec_deque_get_length (main_array);
       /* if n2push > 0 means that the last statsman feedback packet[s] is lost,
        */
       for (gsize i = 0; i < n2push; i++) {
-        gst_queue_array_push_tail_struct (main_array, &null_statspktptr);
+        gst_vec_deque_push_tail_struct (main_array, &null_statspktptr);
       }
-      gst_queue_array_push_tail_struct (main_array, (StatsPktPtr *) & pkt);
+      gst_vec_deque_push_tail_struct (main_array, (StatsPktPtr *) & pkt);
       TWCCStatsCtx *ctx = _get_ctx_for_pt (statsman, pkt->pt);
-      gst_queue_array_push_tail_struct (ctx->pt_packets, (StatsPktPtr *) & pkt);
+      gst_vec_deque_push_tail_struct (ctx->pt_packets, (StatsPktPtr *) & pkt);
       statsman->stats_ctx->last_pkt_fb = ctx->last_pkt_fb = pkt;
       /* TWCC packets reordered */
     } else {
       StatsPktPtr *placeholder =
-          gst_queue_array_peek_nth (statsman->stats_ctx->pt_packets, idx);
+          gst_vec_deque_peek_nth_struct (statsman->stats_ctx->pt_packets, idx);
       GST_LOG_OBJECT (statsman->parent,
           "Received out-of-order feedback on #%u," " main array idx: %d",
           pkt->seqnum, idx);
@@ -1019,12 +1021,12 @@ static void
 _rm_last_packet_from_stats_arrays (TWCCStatsManager * statsman)
 {
   SentPacket *head =
-      ((StatsPktPtr *) gst_queue_array_peek_head_struct (statsman->
+      ((StatsPktPtr *) gst_vec_deque_peek_head_struct (statsman->
           stats_ctx->pt_packets))->sentpkt;
   if (head) {
     TWCCStatsCtx *ctx = _get_ctx_for_pt (statsman, head->pt);
     SentPacket *ctx_pkt =
-        ((StatsPktPtr *) gst_queue_array_peek_head_struct (ctx->
+        ((StatsPktPtr *) gst_vec_deque_peek_head_struct (ctx->
             pt_packets))->sentpkt;
     if (!ctx_pkt || ctx_pkt->seqnum != head->seqnum) {
       GST_WARNING_OBJECT (statsman->parent,
@@ -1037,12 +1039,12 @@ _rm_last_packet_from_stats_arrays (TWCCStatsManager * statsman)
     if (ctx->last_pkt_fb == head) {
       statsman->stats_ctx->last_pkt_fb = ctx->last_pkt_fb = NULL;
     }
-    gst_queue_array_pop_head_struct (ctx->pt_packets);
+    gst_vec_deque_pop_head_struct (ctx->pt_packets);
     GST_LOG_OBJECT (statsman->parent,
         "Removing packet #%u from stats context, ts: %" GST_STIME_FORMAT,
         head->seqnum, head->local_ts);
   }
-  gst_queue_array_pop_head_struct (statsman->stats_ctx->pt_packets);
+  gst_vec_deque_pop_head_struct (statsman->stats_ctx->pt_packets);
   statsman->stats_ctx_first_seqnum =
       (guint16) (statsman->stats_ctx_first_seqnum + 1);
 }
@@ -1051,7 +1053,7 @@ static void
 _rm_last_stats_pkt (TWCCStatsManager * ctx)
 {
   SentPacket *head =
-      ((StatsPktPtr *) gst_queue_array_peek_head_struct (ctx->
+      ((StatsPktPtr *) gst_vec_deque_peek_head_struct (ctx->
           stats_ctx->pt_packets))->sentpkt;
   /* If this packet maps to a block in hash tables -- remove every links 
      leading to this block as well as this packet: as we will remove this packet
@@ -1095,17 +1097,17 @@ _lookup_seqnum (TWCCStatsManager * statsman, guint32 ssrc, guint16 seqnum)
 static SentPacket *
 _find_sentpacket (TWCCStatsManager * statsman, guint16 seqnum)
 {
-  if (gst_queue_array_is_empty (statsman->sent_packets) == TRUE) {
+  if (gst_vec_deque_is_empty (statsman->sent_packets) == TRUE) {
     return NULL;
   }
 
-  SentPacket *first = gst_queue_array_peek_head_struct (statsman->sent_packets);
+  SentPacket *first = gst_vec_deque_peek_head_struct (statsman->sent_packets);
   SentPacket *result;
 
   const gint idx = gst_rtp_buffer_compare_seqnum (first->seqnum, seqnum);
-  if (idx < gst_queue_array_get_length (statsman->sent_packets) && idx >= 0) {
+  if (idx < gst_vec_deque_get_length (statsman->sent_packets) && idx >= 0) {
     result = (SentPacket *)
-        gst_queue_array_peek_nth_struct (statsman->sent_packets, idx);
+        gst_vec_deque_peek_nth_struct (statsman->sent_packets, idx);
   } else {
     result = NULL;
   }
@@ -1278,12 +1280,12 @@ rtp_twcc_stats_manager_new (GObject * parent)
   statsman->stats_ctx = twcc_stats_ctx_new ();
   statsman->ssrc_to_seqmap = g_hash_table_new_full (NULL, NULL, NULL,
       (GDestroyNotify) g_hash_table_destroy);
-  statsman->sent_packets = gst_queue_array_new_for_struct (sizeof (SentPacket),
+  statsman->sent_packets = gst_vec_deque_new_for_struct (sizeof (SentPacket),
       PACKETS_HIST_LEN_DEFAULT);
   statsman->sent_packets_size = PACKETS_HIST_LEN_DEFAULT;
-  gst_queue_array_set_clear_func (statsman->sent_packets,
+  gst_vec_deque_set_clear_func (statsman->sent_packets,
       (GDestroyNotify) _free_sentpacket);
-  statsman->sent_packets_feedbacks = gst_queue_array_new (300);
+  statsman->sent_packets_feedbacks = gst_vec_deque_new (300);
   statsman->stats_ctx_first_seqnum = -1;
   statsman->stats_ctx_by_pt = g_hash_table_new_full (NULL, NULL,
       NULL, (GDestroyNotify) twcc_stats_ctx_free);
@@ -1303,8 +1305,8 @@ void
 rtp_twcc_stats_manager_free (TWCCStatsManager * statsman)
 {
   g_hash_table_destroy (statsman->ssrc_to_seqmap);
-  gst_queue_array_free (statsman->sent_packets);
-  gst_queue_array_free (statsman->sent_packets_feedbacks);
+  gst_vec_deque_free (statsman->sent_packets);
+  gst_vec_deque_free (statsman->sent_packets_feedbacks);
   g_hash_table_destroy (statsman->stats_ctx_by_pt);
   g_hash_table_destroy (statsman->redund_2_redblocks);
   g_hash_table_destroy (statsman->seqnum_2_redblocks);
@@ -1396,7 +1398,7 @@ rtp_twcc_stats_pkt_feedback (TWCCStatsManager * statsman,
         || found->state == RTP_TWCC_FECBLOCK_PKT_LOST) {
       found->remote_ts = remote_ts;
       found->state = status;
-      gst_queue_array_push_tail (statsman->sent_packets_feedbacks, found);
+      gst_vec_deque_push_tail (statsman->sent_packets_feedbacks, found);
       GST_LOG_OBJECT (statsman->parent,
           "matching pkt: #%u with local_ts: %" GST_TIME_FORMAT
           " size: %u, remote-ts: %" GST_TIME_FORMAT, seqnum,
@@ -1437,9 +1439,9 @@ rtp_twcc_stats_do_stats (TWCCStatsManager * statsman,
   GstClockTimeDiff start_time;
   GstClockTimeDiff end_time;
 
-  while (!gst_queue_array_is_empty (statsman->sent_packets_feedbacks)) {
+  while (!gst_vec_deque_is_empty (statsman->sent_packets_feedbacks)) {
     SentPacket *pkt = (SentPacket *)
-        gst_queue_array_pop_head (statsman->sent_packets_feedbacks);
+        gst_vec_deque_pop_head (statsman->sent_packets_feedbacks);
     if (!pkt) {
       continue;
     }
@@ -1455,11 +1457,11 @@ rtp_twcc_stats_do_stats (TWCCStatsManager * statsman,
   /* First remove all them from stats structures, and then from sent_packets
      queue at once so as not to lock sent_packets for longer then necessary
    */
-  while (!gst_queue_array_is_empty (statsman->stats_ctx->pt_packets)) {
+  while (!gst_vec_deque_is_empty (statsman->stats_ctx->pt_packets)) {
     SentPacket *pkt =
-        ((StatsPktPtr *) gst_queue_array_peek_head_struct (statsman->
+        ((StatsPktPtr *) gst_vec_deque_peek_head_struct (statsman->
             stats_ctx->pt_packets))->sentpkt;
-    if (gst_queue_array_get_length (statsman->stats_ctx->pt_packets)
+    if (gst_vec_deque_get_length (statsman->stats_ctx->pt_packets)
         >= MAX_STATS_PACKETS
         || (pkt
             && GST_CLOCK_DIFF (pkt->local_ts, last_ts) > PACKETS_HIST_DUR)) {
@@ -1479,14 +1481,13 @@ rtp_twcc_stats_do_stats (TWCCStatsManager * statsman,
   }
   /* Remove old packets from sent_packets queue */
   if (last_seqnum_to_free >= 0) {
-    while (!gst_queue_array_is_empty (statsman->sent_packets)) {
-      SentPacket *pkt =
-          gst_queue_array_peek_head_struct (statsman->sent_packets);
+    while (!gst_vec_deque_is_empty (statsman->sent_packets)) {
+      SentPacket *pkt = gst_vec_deque_peek_head_struct (statsman->sent_packets);
       GST_LOG_OBJECT (statsman->parent, "Freeing sent packet #%u", pkt->seqnum);
       if (gst_rtp_buffer_compare_seqnum (pkt->seqnum, last_seqnum_to_free)
           >= 0) {
         _free_sentpacket (pkt);
-        gst_queue_array_pop_head (statsman->sent_packets);
+        gst_vec_deque_pop_head (statsman->sent_packets);
       } else {
         break;
       }
@@ -1502,7 +1503,7 @@ rtp_twcc_stats_do_stats (TWCCStatsManager * statsman,
       " starting from %" GST_STIME_FORMAT " to: %" GST_STIME_FORMAT
       " overall packets: %u", GST_STIME_ARGS (stats_window_size),
       GST_STIME_ARGS (start_time), GST_STIME_ARGS (end_time),
-      gst_queue_array_get_length (statsman->stats_ctx->pt_packets));
+      gst_vec_deque_get_length (statsman->stats_ctx->pt_packets));
 
   if (!GST_CLOCK_TIME_IS_VALID (statsman->prev_stat_window_beginning) ||
       GST_CLOCK_DIFF (statsman->prev_stat_window_beginning, start_time) > 0) {
@@ -1535,5 +1536,5 @@ rtp_twcc_stats_do_stats (TWCCStatsManager * statsman,
 guint
 rtp_twcc_stats_queue_len (TWCCStatsManager * stats_manager)
 {
-  return gst_queue_array_get_length (stats_manager->sent_packets);
+  return gst_vec_deque_get_length (stats_manager->sent_packets);
 }
