@@ -1246,6 +1246,10 @@ gst_rtp_bin_clear_ssrc (GstRtpBin * bin, guint session_id, guint32 ssrc)
     g_signal_emit_by_name (demux, "clear-ssrc", ssrc, NULL);
     gst_object_unref (demux);
   }
+
+  if (session) {
+    g_signal_emit_by_name (session->session, "clear-ssrc", ssrc, NULL);
+  }
 }
 
 static GstElement *
