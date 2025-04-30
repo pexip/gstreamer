@@ -205,6 +205,19 @@ gst_mf_source_object_stop (GstMFSourceObject * object)
   return klass->stop (object);
 }
 
+gboolean
+gst_mf_source_object_close (GstMFSourceObject * object)
+{
+  GstMFSourceObjectClass *klass;
+
+  g_return_val_if_fail (GST_IS_MF_SOURCE_OBJECT (object), FALSE);
+
+  klass = GST_MF_SOURCE_OBJECT_GET_CLASS (object);
+  g_assert (klass->close != nullptr);
+
+  return klass->close (object);
+}
+
 GstFlowReturn
 gst_mf_source_object_fill (GstMFSourceObject * object, GstBuffer * buffer)
 {

@@ -385,6 +385,7 @@ static void gst_mf_capture_dshow_finalize (GObject * object);
 
 static gboolean gst_mf_capture_dshow_start (GstMFSourceObject * object);
 static gboolean gst_mf_capture_dshow_stop (GstMFSourceObject * object);
+static gboolean gst_mf_capture_dshow_close (GstMFSourceObject * object);
 static GstFlowReturn
 gst_mf_capture_dshow_get_sample (GstMFSourceObject * object,
     GstSample ** sample);
@@ -413,6 +414,7 @@ gst_mf_capture_dshow_class_init (GstMFCaptureDShowClass * klass)
 
   source_class->start = GST_DEBUG_FUNCPTR (gst_mf_capture_dshow_start);
   source_class->stop = GST_DEBUG_FUNCPTR (gst_mf_capture_dshow_stop);
+  source_class->close = GST_DEBUG_FUNCPTR (gst_mf_capture_dshow_close);
   source_class->get_sample =
       GST_DEBUG_FUNCPTR (gst_mf_capture_dshow_get_sample);
   source_class->unlock = GST_DEBUG_FUNCPTR (gst_mf_capture_dshow_unlock);
@@ -589,6 +591,12 @@ gst_mf_capture_dshow_start (GstMFSourceObject * object)
     return FALSE;
   }
 
+  return TRUE;
+}
+
+static gboolean
+gst_mf_capture_dshow_close (GstMFSourceObject * object)
+{
   return TRUE;
 }
 

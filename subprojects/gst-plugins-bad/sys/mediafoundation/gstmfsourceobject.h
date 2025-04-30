@@ -73,6 +73,8 @@ struct _GstMFSourceObjectClass
 
   gboolean      (*stop)        (GstMFSourceObject * object);
 
+  gboolean      (*close)       (GstMFSourceObject * object);
+
   GstFlowReturn (*fill)        (GstMFSourceObject * object,
                                 GstBuffer * buffer);
 
@@ -97,6 +99,8 @@ GType           gst_mf_source_object_get_type     (void);
 gboolean        gst_mf_source_object_start        (GstMFSourceObject * object);
 
 gboolean        gst_mf_source_object_stop         (GstMFSourceObject * object);
+
+gboolean        gst_mf_source_object_close        (GstMFSourceObject * object);
 
 /* Used for raw format */
 GstFlowReturn   gst_mf_source_object_fill         (GstMFSourceObject * object,

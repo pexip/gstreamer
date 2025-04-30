@@ -111,7 +111,7 @@ gst_mf_source_reader_sample_clear (GstMFSourceReaderSample * reader_sample);
 
 static gboolean gst_mf_source_reader_open (GstMFSourceReader * object,
     IMFActivate * activate);
-static gboolean gst_mf_source_reader_close (GstMFSourceReader * object);
+static gboolean gst_mf_source_reader_close (GstMFSourceObject * object);
 static gpointer gst_mf_source_reader_thread_func (GstMFSourceReader * self);
 static gboolean gst_mf_source_enum_device_activate (GstMFSourceReader * self,
     GstMFSourceType source_type, GList ** device_activates);
@@ -135,6 +135,7 @@ gst_mf_source_reader_class_init (GstMFSourceReaderClass * klass)
 
   source_class->start = GST_DEBUG_FUNCPTR (gst_mf_source_reader_start);
   source_class->stop = GST_DEBUG_FUNCPTR (gst_mf_source_reader_stop);
+  source_class->close = GST_DEBUG_FUNCPTR (gst_mf_source_reader_close);
   source_class->fill = GST_DEBUG_FUNCPTR (gst_mf_source_reader_fill);
   source_class->create = GST_DEBUG_FUNCPTR (gst_mf_source_reader_create);
   source_class->unlock = GST_DEBUG_FUNCPTR (gst_mf_source_reader_unlock);
@@ -342,22 +343,26 @@ gst_mf_source_reader_open (GstMFSourceReader * self, IMFActivate * activate)
      this code is also used for camera enumeration */
   if (object->device_path != nullptr) {
     if (!gst_mf_source_reader_set_caps (GST_MF_SOURCE_OBJECT (self), self->supported_caps)) {
-      gst_mf_source_reader_close (self);
+      gst_mf_source_reader_close (object);
       return FALSE;
     }
   
     if (gst_mf_source_reader_read_sample (self) != GST_FLOW_OK){
-      gst_mf_source_reader_close (self);
+      gst_mf_source_reader_close (object);
       return FALSE;
     }
   }
+
+  GST_ERROR_OBJECT (self, "open on %p", self->reader);
 
   return TRUE;
 }
 
 static gboolean
-gst_mf_source_reader_close (GstMFSourceReader * self)
+gst_mf_source_reader_close (GstMFSourceObject * object)
 {
+  GstMFSourceReader *self = GST_MF_SOURCE_READER (object);
+
   g_mutex_lock (&self->lock);
   gst_vec_deque_clear (self->queue);
   g_cond_signal (&self->cond);
@@ -377,6 +382,7 @@ gst_mf_source_reader_close (GstMFSourceReader * self)
     self->media_types = nullptr;
   }
 
+  GST_ERROR_OBJECT (self, "close on %p", self->reader);
   if (self->reader) {
     self->reader->Release ();
     self->reader = nullptr;
@@ -456,6 +462,8 @@ gst_mf_source_reader_start (GstMFSourceObject * object)
         std::abs (actual_stride));
   }
 
+  GST_DEBUG_OBJECT (self, "Selecting StreamIndex %d MediaTypeIndex %d", type->stream_index, type->media_type_index);
+
   hr = self->reader->SetStreamSelection (type->stream_index, TRUE);
   if (!gst_mf_result (hr))
     return FALSE;
@@ -486,6 +494,7 @@ gst_mf_source_reader_stop (GstMFSourceObject * object)
 
   g_mutex_lock (&self->lock);
   gst_vec_deque_clear (self->queue);
+  self->flushing = TRUE;
   g_cond_signal (&self->cond);
   g_mutex_unlock (&self->lock);
 
@@ -500,6 +509,8 @@ gst_mf_source_reader_read_sample (GstMFSourceReader * self)
   GstMFStreamMediaType *type = self->cur_type;
   IMFSample *sample = nullptr;
   GstMFSourceReaderSample reader_sample;
+
+  GST_ERROR_OBJECT (self, "ReadSample on %p", self->reader);
 
   hr = self->reader->ReadSample (type->stream_index, 0, nullptr, &stream_flags,
       nullptr, &sample);
@@ -925,7 +936,7 @@ run_loop:
   GST_DEBUG_OBJECT (self, "Stopped main loop");
 
   gst_mf_source_reader_stop (object);
-  gst_mf_source_reader_close (self);
+  gst_mf_source_reader_close (object);
 
   g_main_context_pop_thread_default (self->context);
 

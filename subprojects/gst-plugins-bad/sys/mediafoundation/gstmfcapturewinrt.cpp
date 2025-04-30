@@ -87,6 +87,7 @@ static void gst_mf_capture_winrt_set_property (GObject * object, guint prop_id,
 
 static gboolean gst_mf_capture_winrt_start (GstMFSourceObject * object);
 static gboolean gst_mf_capture_winrt_stop (GstMFSourceObject * object);
+static gboolean gst_mf_capture_winrt_close (GstMFSourceObject * object);
 static GstFlowReturn gst_mf_capture_winrt_fill (GstMFSourceObject * object,
     GstBuffer * buffer);
 static gboolean gst_mf_capture_winrt_unlock (GstMFSourceObject * object);
@@ -126,6 +127,7 @@ gst_mf_capture_winrt_class_init (GstMFCaptureWinRTClass * klass)
 
   source_class->start = GST_DEBUG_FUNCPTR (gst_mf_capture_winrt_start);
   source_class->stop = GST_DEBUG_FUNCPTR (gst_mf_capture_winrt_stop);
+  source_class->close = GST_DEBUG_FUNCPTR (gst_mf_capture_winrt_close);
   source_class->fill = GST_DEBUG_FUNCPTR (gst_mf_capture_winrt_fill);
   source_class->unlock = GST_DEBUG_FUNCPTR (gst_mf_capture_winrt_unlock);
   source_class->unlock_stop =
@@ -352,6 +354,12 @@ run_loop:
   self->capture = nullptr;
 
   return nullptr;
+}
+
+static gboolean
+gst_mf_capture_winrt_close (GstMFSourceObject * object)
+{
+  return TRUE;
 }
 
 static gboolean

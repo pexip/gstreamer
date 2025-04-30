@@ -299,6 +299,7 @@ gst_mf_video_src_close_source (GstMFVideoSrc * self)
 {
   if (self->source) {
     gst_mf_source_object_stop (self->source);
+    gst_mf_source_object_close (self->source);
     gst_object_unref (self->source);
     self->source = nullptr;
   }
@@ -339,7 +340,12 @@ gst_mf_video_src_start (GstBaseSrc * src)
 
   GST_DEBUG_OBJECT (self, "Start");
 
-  return TRUE;
+  if (self->source && gst_mf_source_object_start (self->source)) {
+    self->started = TRUE;
+    return TRUE;
+  }
+
+  return FALSE;
 }
 
 static gboolean
@@ -349,9 +355,12 @@ gst_mf_video_src_stop (GstBaseSrc * src)
 
   GST_DEBUG_OBJECT (self, "Stop");
 
-  self->started = FALSE;
+ if (self->source && gst_mf_source_object_stop (self->source)) {
+    self->started = FALSE;
+    return TRUE;
+  }
 
-  return TRUE;
+  return FALSE;
 }
 
 static gboolean
@@ -478,13 +487,8 @@ gst_mf_video_src_create (GstPushSrc * pushsrc, GstBuffer ** buffer)
   GstClockTimeDiff diff;
 
   if (!self->started) {
-    if (!gst_mf_source_object_start (self->source)) {
-      GST_ERROR_OBJECT (self, "Failed to start capture object");
-
-      return GST_FLOW_ERROR;
-    }
-
-    self->started = TRUE;
+    GST_ERROR_OBJECT (self, "Not started but create() is called!");
+    g_assert_not_reached ();
   }
 
   if (self->use_dshow) {
