@@ -305,7 +305,7 @@ gst_xv_image_sink_xvimage_put (GstXvImageSink * xvimagesink,
   }
 
   if (xvimagesink->keep_aspect) {
-    GstVideoRectangle s;
+    GstVideoRectangle s = { 0, };
 
     /* We take the size of the source material as it was negotiated and
      * corrected for DAR. This size can be different from the cropped size in
