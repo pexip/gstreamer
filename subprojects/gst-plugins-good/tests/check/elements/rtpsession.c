@@ -6321,6 +6321,69 @@ GST_START_TEST (test_twcc_sent_packets_wrap)
 
 GST_END_TEST;
 
+/* Tests scenario when network connection is lost for a long period of time
+  such that sender is not recieiving any feedback for longer than internal queue
+  size.
+*/
+GST_START_TEST (test_twcc_keep_queue_size)
+{
+  GstBuffer *buf;
+  guint pkt_in_frame = 10;
+
+  SessionHarness *h_send = session_harness_new ();
+  SessionHarness *h_recv = session_harness_new ();
+  guint next_seqnum;
+
+  session_harness_add_twcc_caps_for_pt (h_send, TEST_BUF_PT);
+  session_harness_add_twcc_caps_for_pt (h_send, TEST_RTX_BUF_PT);
+  session_harness_set_twcc_recv_ext_id (h_recv, TEST_TWCC_EXT_ID);
+
+  next_seqnum = construct_initial_state_for_rtx (h_send, h_recv);
+
+  for (guint i = 0; i < pkt_in_frame; i++) {
+    buf = generate_twcc_send_buffer (next_seqnum++, FALSE);
+    send_recv_buffer (h_send, h_recv, buf, TRUE);
+  }
+  /* push a last buffer with the marker bit to trigger the report */
+  send_recv_buffer (h_send, h_recv,
+      generate_twcc_send_buffer (next_seqnum++, TRUE), TRUE);
+
+  fail_unless_equals_int64 (GST_FLOW_OK,
+      session_harness_recv_rtcp (h_send,
+          session_harness_produce_twcc (h_recv)));
+  gst_structure_free (session_harness_get_twcc_stats_full (h_send,
+      300 * GST_MSECOND, 100 * GST_MSECOND));
+
+  for (guint i = 0; i < 70000; i++) {
+    buf = generate_twcc_send_buffer (next_seqnum++, FALSE);
+    send_recv_buffer (h_send, h_recv, buf, FALSE);
+  }
+
+  /* Connection recovered, transfer one frame and get feedback */
+  for (guint i = 0; i < pkt_in_frame; i++) {
+    buf = generate_twcc_send_buffer (next_seqnum++, FALSE);
+    send_recv_buffer (h_send, h_recv, buf, TRUE);
+  }
+  /* push a last buffer with the marker bit to trigger the report */
+  send_recv_buffer (h_send, h_recv,
+      generate_twcc_send_buffer (next_seqnum++, TRUE), TRUE);
+  fail_unless_equals_int64 (GST_FLOW_OK,
+      session_harness_recv_rtcp (h_send,
+          session_harness_produce_twcc (h_recv)));
+
+  GstStructure *twcc_stats = session_harness_get_twcc_stats_full (h_send,
+        500 * GST_MSECOND, 0 * GST_MSECOND);
+  twcc_verify_stats (twcc_stats, 532800, 532800, pkt_in_frame+1, pkt_in_frame+1,
+    0.f, 0);
+  gst_structure_free (twcc_stats);
+    
+  session_harness_free (h_send);
+  session_harness_free (h_recv);
+
+}
+
+GST_END_TEST;
+
 GST_START_TEST (test_send_rtcp_instantly)
 {
   SessionHarness *h = session_harness_new ();
@@ -6820,6 +6883,7 @@ rtpsession_suite (void)
   tcase_add_test (tc_chain, test_twcc_non_twcc_pt_no_twcc_seqnum);
   tcase_add_test (tc_chain, test_twcc_overwrites_exthdr_seqnum_if_present);
   tcase_add_test (tc_chain, test_twcc_sent_packets_wrap);
+  tcase_add_test (tc_chain, test_twcc_keep_queue_size);
 
   tcase_add_test (tc_chain, test_send_rtcp_instantly);
   tcase_add_test (tc_chain, test_send_bye_signal);
