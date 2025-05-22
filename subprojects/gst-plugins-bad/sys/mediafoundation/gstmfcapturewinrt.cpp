@@ -255,7 +255,7 @@ gst_mf_capture_winrt_thread_func (GstMFCaptureWinRT * self)
   hr = self->capture->EnumerateFrameSourceGroup (group_list);
   if (!gst_mf_result (hr)) {
     GST_WARNING_OBJECT (self, "EnumerateFrameSourceGroup failed");
-    source->source_state = GST_MF_ACTIVATION_FAILED;
+    source->source_state = GST_MF_DEVICE_NOT_FOUND;
     goto run_loop;
   }
   /* *INDENT-OFF* */
