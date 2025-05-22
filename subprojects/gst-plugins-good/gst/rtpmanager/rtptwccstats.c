@@ -318,9 +318,10 @@ _rm_pkt_stats (TWCCStatsManager *statsman, SentPacket *pkt)
         ctx_pkt->seqnum);
     g_assert_not_reached ();
   }
-  if (statsman->stats_ctx->last_pkt_fb == pkt) {
-    g_assert (gst_vec_deque_is_empty (statsman->stats_ctx->
-        pt_packets));
+  if (statsman->stats_ctx->last_pkt_fb
+    && statsman->stats_ctx->last_pkt_fb == pkt) {
+    GST_LOG_OBJECT (statsman->parent,
+        "Removing last pkt fb from stats ctx: %u", pkt->seqnum);
     statsman->stats_ctx->last_pkt_fb = NULL;
   }
   statsman->stats_ctx_first_seqnum =
@@ -362,7 +363,7 @@ _keep_history_length (TWCCStatsManager *statsman, gsize max_len,
     if (GST_CLOCK_TIME_IS_VALID (statsman->prev_stat_window_beginning) &&
         GST_CLOCK_DIFF (pkt_ts, statsman->prev_stat_window_beginning)
         < 0) {
-      GST_WARNING_OBJECT (statsman->parent,
+      GST_LOG_OBJECT (statsman->parent,
           "sent_packets FIFO overflows, dropping");
     } else if (GST_CLOCK_TIME_IS_VALID (statsman->prev_stat_window_beginning) &&
         GST_CLOCK_DIFF (pkt_ts, statsman->prev_stat_window_beginning)
