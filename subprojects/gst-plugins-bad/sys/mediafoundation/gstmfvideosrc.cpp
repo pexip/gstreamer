@@ -269,12 +269,22 @@ gst_mf_video_src_set_property (GObject * object, guint prop_id,
 static gboolean
 gst_mf_video_src_open_source (GstMFVideoSrc * self)
 {
-  self->source = gst_mf_source_object_new (GST_MF_SOURCE_TYPE_VIDEO,
-      self->device_index, self->device_name, self->device_path, nullptr);
+  /* if available, use winrt API, unless we are targeting a virtual-camera, in
+     those cases rely on GST_TYPE_MF_SOURCE_READER which is more stable  */
+  gboolean try_winrt = TRUE;
+
+  if (self->device_path && (g_strstr_len (self->device_path, -1, "ROOT#IMAGE")
+          || g_strstr_len (self->device_path, -1, "ROOT#MEDIA"))) {
+    try_winrt = FALSE;
+  }
 
   self->n_frames = 0;
   self->latency = 0;
   self->use_dshow = FALSE;
+
+  self->source = gst_mf_source_object_new (GST_MF_SOURCE_TYPE_VIDEO,
+      self->device_index, self->device_name, self->device_path, nullptr,
+      try_winrt);
 
   if (!self->source) {
 #if GST_MF_WINAPI_DESKTOP
