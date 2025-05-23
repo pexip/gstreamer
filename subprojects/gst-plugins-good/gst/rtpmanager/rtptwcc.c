@@ -80,37 +80,6 @@ typedef struct
 
 typedef struct
 {
-  GstClockTime local_ts;
-  GstClockTime socket_ts;
-  GstClockTime remote_ts;
-  guint16 seqnum;
-  guint16 orig_seqnum;
-  guint32 ssrc;
-  guint8 pt;
-  guint size;
-  gboolean lost;
-  gint redundant_idx;           /* if it's redudndant packet -- series number in a block,
-                                   -1 otherwise */
-  gint redundant_num;           /* if it'r a redundant packet -- how many packets are 
-                                   in the block, -1 otherwise */
-  guint32 protects_ssrc;        /* for redundant packets: SSRC of the data stream */
-
-  /* For redundant packets: seqnums of the packets being protected 
-   * by this packet. 
-   * IMPORTANT: Once the packet is checked in before transmission, this array
-   * contains rtp seqnums. After receiving a feedback on the packet, the array
-   * is converted to TWCC seqnums. This is done to shift some work to the 
-   * get_windowed_stats function, which should be less time-critical.
-   */
-  GArray *protects_seqnums;
-  gboolean stats_processed;
-
-  TWCCPktState state;
-  gint update_stats;
-} SentPacket;
-
-typedef struct
-{
   RTPTWCCPacketStatus status;
   guint16 seqnum;
   GstClockTime remote_ts;
@@ -354,14 +323,6 @@ _get_twcc_buffer_ext_data (GstRTPBuffer * rtpbuf, guint8 ext_id)
 
 /**
   * Set TWCC seqnum and remember the packet for statistics.
-  * 
-  * Fill in SentPacket structure with the seqnum and the packet info,
-  * and add it to the sent_packets queue, which is used by the statistics thread
-  *
-  * NB: protect_seqnum is a reference of the GstBuffer's meta!
-  *
-  * NB: at the moment protect_seqnum contains internal seqnum,
-     they will be replaced with twcc seqnums in-place in statistics thread!
   */
 static void
 _set_twcc_seqnum_data (RTPTWCCManager * twcc, RTPPacketInfo * pinfo,
