@@ -128,7 +128,8 @@ GstMFSourceObject * gst_mf_source_object_new      (GstMFSourceType type,
                                                    gint device_index,
                                                    const gchar * device_name,
                                                    const gchar * device_path,
-                                                   gpointer dispatcher);
+                                                   gpointer dispatcher,
+                                                   gboolean try_winrt);
 
 GstMFSourceResult   gst_mf_source_object_enumerate (gint device_index,
                                                     GstMFSourceObject ** object);
