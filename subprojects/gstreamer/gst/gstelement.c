@@ -121,6 +121,20 @@ enum
       /* FILL ME */
 };
 
+struct _GstElementPrivate
+{
+  GHashTable *pads_hash;
+  gint32 numpads_use_hash;
+
+  GList *pads_last;
+  GList *srcpads_last;
+  GList *sinkpads_last;
+
+  GHashTable *pads_links;
+  GHashTable *srcpads_links;
+  GHashTable *sinkpads_links;
+};
+
 /* Default to switching over to use a hash at 8 pads
  * Can be overriden on a per-element basis by calling gst_bin_set_hash_level */
 #define GST_ELEMENT_DEFAULT_HASH_SWITCH_POINT 8
@@ -324,6 +338,8 @@ gst_element_base_class_init (gpointer g_class)
 static void
 gst_element_init (GstElement * element)
 {
+  GstElementPrivate *priv;
+
   GST_STATE (element) = GST_STATE_NULL;
   GST_STATE_TARGET (element) = GST_STATE_NULL;
   GST_STATE_NEXT (element) = GST_STATE_VOID_PENDING;
@@ -333,8 +349,15 @@ gst_element_init (GstElement * element)
   g_rec_mutex_init (&element->state_lock);
   g_cond_init (&element->state_cond);
 
-  element->pads_hash = NULL;
-  element->numpads_use_hash = GST_ELEMENT_DEFAULT_HASH_SWITCH_POINT;
+  priv = g_new0 (GstElementPrivate, 1);
+  element->priv = priv;
+
+  priv->pads_hash = NULL;
+  priv->numpads_use_hash = GST_ELEMENT_DEFAULT_HASH_SWITCH_POINT;
+
+  priv->pads_links = g_hash_table_new (NULL, NULL);
+  priv->srcpads_links = g_hash_table_new (NULL, NULL);
+  priv->sinkpads_links = g_hash_table_new (NULL, NULL);
 }
 
 static void
@@ -753,6 +776,7 @@ gst_element_get_index (GstElement * element)
 gboolean
 gst_element_add_pad (GstElement * element, GstPad * pad)
 {
+  GstElementPrivate *priv;
   GList *walk;
   gchar *pad_name;
   gboolean active;
@@ -760,6 +784,8 @@ gst_element_add_pad (GstElement * element, GstPad * pad)
 
   g_return_val_if_fail (GST_IS_ELEMENT (element), FALSE);
   g_return_val_if_fail (GST_IS_PAD (pad), FALSE);
+
+  priv = element->priv;
 
   /* locking pad to look at the name */
   GST_OBJECT_LOCK (pad);
@@ -772,28 +798,30 @@ gst_element_add_pad (GstElement * element, GstPad * pad)
 
   GST_OBJECT_LOCK (element);
   /* Check whether we need to switch to using the hash */
-  if ((element->pads_hash == NULL) &&
-      (element->numpads_use_hash >= 0) &&
-      (element->numpads + 1) >= (element->numpads_use_hash)) {
+  if ((priv->pads_hash == NULL) &&
+      (priv->numpads_use_hash >= 0) &&
+      (element->numpads + 1) >= (priv->numpads_use_hash)) {
 
-      /* Time to switch to using the hash */
-      element->pads_hash = g_hash_table_new_full (g_str_hash, g_str_equal, g_free, NULL);
+    /* Time to switch to using the hash */
+    priv->pads_hash =
+        g_hash_table_new_full (g_str_hash, g_str_equal, g_free, NULL);
 
-      /* Initialise each existing element into the hash */
-      walk = element->pads;
-      for (; walk; walk = g_list_next (walk)) {
-        GstPad *child_pad;
-        child_pad = GST_PAD_CAST (walk->data);
-        g_hash_table_insert (element->pads_hash, g_strdup (GST_PAD_NAME(child_pad)), child_pad);
-      }
+    /* Initialise each existing element into the hash */
+    walk = element->pads;
+    for (; walk; walk = g_list_next (walk)) {
+      GstPad *child_pad;
+      child_pad = GST_PAD_CAST (walk->data);
+      g_hash_table_insert (priv->pads_hash, g_strdup (GST_PAD_NAME (child_pad)),
+          child_pad);
+    }
   }
 
   /* then check to see if there's already a pad by that name here */
   if (!GST_OBJECT_FLAG_IS_SET (element, GST_ELEMENT_FLAG_NO_UNIQUE_CHECK)) {
-    if (element->pads_hash != NULL) {
+    if (priv->pads_hash != NULL) {
       /* Use the hash table to look up whether we already have an pad with that
        * name */
-      if (g_hash_table_contains (element->pads_hash, pad_name)) {
+      if (g_hash_table_contains (priv->pads_hash, pad_name)) {
         goto name_exists;
       }
     } else {
@@ -817,21 +845,43 @@ gst_element_add_pad (GstElement * element, GstPad * pad)
   /* add it to the list */
   switch (gst_pad_get_direction (pad)) {
     case GST_PAD_SRC:
-      element->srcpads = g_list_append (element->srcpads, pad);
+      if (!element->srcpads) {
+        element->srcpads = g_list_append (NULL, pad);
+        priv->srcpads_last = element->srcpads;
+      } else {
+        priv->srcpads_last = g_list_append (priv->srcpads_last, pad);
+        priv->srcpads_last = priv->srcpads_last->next;
+      }
+      g_hash_table_insert (priv->srcpads_links, pad, priv->srcpads_last);
       element->numsrcpads++;
       break;
     case GST_PAD_SINK:
-      element->sinkpads = g_list_append (element->sinkpads, pad);
+      if (!element->sinkpads) {
+        element->sinkpads = g_list_append (NULL, pad);
+        priv->sinkpads_last = element->sinkpads;
+      } else {
+        priv->sinkpads_last = g_list_append (priv->sinkpads_last, pad);
+        priv->sinkpads_last = priv->sinkpads_last->next;
+      }
+      g_hash_table_insert (priv->sinkpads_links, pad, priv->sinkpads_last);
       element->numsinkpads++;
       break;
     default:
       goto no_direction;
   }
-  element->pads = g_list_append (element->pads, pad);
+  if (!element->pads) {
+    element->pads = g_list_append (NULL, pad);
+    priv->pads_last = element->pads;
+  } else {
+    priv->pads_last = g_list_append (priv->pads_last, pad);
+    priv->pads_last = priv->pads_last->next;
+  }
+  g_hash_table_insert (priv->pads_links, pad, priv->pads_last);
+
   element->numpads++;
   element->pads_cookie++;
-  if (element->pads_hash != NULL) {
-    g_hash_table_insert (element->pads_hash, g_strdup (GST_PAD_NAME(pad)), pad);
+  if (priv->pads_hash != NULL) {
+    g_hash_table_insert (priv->pads_hash, g_strdup (GST_PAD_NAME (pad)), pad);
   }
 
   GST_OBJECT_UNLOCK (element);
@@ -906,10 +956,14 @@ no_direction:
 gboolean
 gst_element_remove_pad (GstElement * element, GstPad * pad)
 {
+  GstElementPrivate *priv;
   GstPad *peer;
+  GList *link;
 
   g_return_val_if_fail (GST_IS_ELEMENT (element), FALSE);
   g_return_val_if_fail (GST_IS_PAD (pad), FALSE);
+
+  priv = element->priv;
 
   /* locking pad to look at the name and parent */
   GST_OBJECT_LOCK (pad);
@@ -946,18 +1000,26 @@ gst_element_remove_pad (GstElement * element, GstPad * pad)
   GST_OBJECT_LOCK (element);
 
   /* Remove from the hash if necessary */
-  if (element->pads_hash != NULL) {
-    g_hash_table_remove (element->pads_hash, GST_PAD_NAME (pad));
+  if (priv->pads_hash != NULL) {
+    g_hash_table_remove (priv->pads_hash, GST_PAD_NAME (pad));
   }
 
   /* remove it from the list */
   switch (gst_pad_get_direction (pad)) {
     case GST_PAD_SRC:
-      element->srcpads = g_list_remove (element->srcpads, pad);
+      link = g_hash_table_lookup (priv->srcpads_links, pad);
+      if (link == priv->srcpads_last) {
+        priv->srcpads_last = link->prev;
+      }
+      element->srcpads = g_list_delete_link (element->srcpads, link);
       element->numsrcpads--;
       break;
     case GST_PAD_SINK:
-      element->sinkpads = g_list_remove (element->sinkpads, pad);
+      link = g_hash_table_lookup (priv->sinkpads_links, pad);
+      if (link == priv->sinkpads_last) {
+        priv->sinkpads_last = link->prev;
+      }
+      element->sinkpads = g_list_delete_link (element->sinkpads, link);
       element->numsinkpads--;
       break;
     default:
@@ -965,7 +1027,11 @@ gst_element_remove_pad (GstElement * element, GstPad * pad)
       break;
   }
 
-  element->pads = g_list_remove (element->pads, pad);
+  link = g_hash_table_lookup (priv->pads_links, pad);
+  if (link == priv->pads_last) {
+    priv->pads_last = link->prev;
+  }
+  element->pads = g_list_delete_link (element->pads, link);
   element->numpads--;
   element->pads_cookie++;
   GST_OBJECT_UNLOCK (element);
@@ -1051,13 +1117,14 @@ gst_element_get_static_pad (GstElement * element, const gchar * name)
 
   GST_OBJECT_LOCK (element);
 
-  if (element->pads_hash != NULL) {
+  if (element->priv->pads_hash != NULL) {
     /* Can use the hash for lookup */
-    result = g_hash_table_lookup (element->pads_hash, name);
+    result = g_hash_table_lookup (element->priv->pads_hash, name);
   } else {
     /* Need to iterate the list for lookup */
     find =
-        g_list_find_custom (element->pads, name, (GCompareFunc) pad_compare_name);
+        g_list_find_custom (element->pads, name,
+        (GCompareFunc) pad_compare_name);
     if (find) {
       result = GST_PAD_CAST (find->data);
     }
@@ -3451,6 +3518,7 @@ static void
 gst_element_dispose (GObject * object)
 {
   GstElement *element = GST_ELEMENT_CAST (object);
+  GstElementPrivate *priv = element->priv;
   GstClock **clock_p;
   GstBus **bus_p;
   GstElementClass *oclass;
@@ -3474,12 +3542,6 @@ gst_element_dispose (GObject * object)
         GST_PAD_TEMPLATE_PRESENCE (GST_PAD_PAD_TEMPLATE (pad))
         == GST_PAD_REQUEST) {
 
-      if (element->pads_hash != NULL) {
-        GST_OBJECT_LOCK (element);
-        g_hash_table_remove(element->pads_hash, GST_PAD_NAME(pad));
-        GST_OBJECT_UNLOCK (element);
-      }
-
       GST_CAT_DEBUG_OBJECT (GST_CAT_ELEMENT_PADS, element,
           "removing request pad %s:%s", GST_DEBUG_PAD_NAME (pad));
       oclass->release_pad (element, pad);
@@ -3492,11 +3554,6 @@ gst_element_dispose (GObject * object)
   /* remove the remaining pads */
   while (element->pads) {
     GstPad *pad = GST_PAD_CAST (element->pads->data);
-
-    if (element->pads_hash != NULL) {
-        g_hash_table_remove(element->pads_hash, GST_PAD_NAME(pad));
-    }
-
     GST_CAT_DEBUG_OBJECT (GST_CAT_ELEMENT_PADS, element,
         "removing pad %s:%s", GST_DEBUG_PAD_NAME (pad));
     if (!gst_element_remove_pad (element, pad)) {
@@ -3518,10 +3575,14 @@ gst_element_dispose (GObject * object)
   GST_CAT_INFO_OBJECT (GST_CAT_REFCOUNTING, element, "%p parent class dispose",
       element);
 
-  if (element->pads_hash != NULL) {
-    g_hash_table_destroy (element->pads_hash);
-    element->pads_hash = NULL;
+  if (priv->pads_hash != NULL) {
+    g_hash_table_destroy (priv->pads_hash);
+    priv->pads_hash = NULL;
   }
+
+  g_hash_table_destroy (priv->pads_links);
+  g_hash_table_destroy (priv->srcpads_links);
+  g_hash_table_destroy (priv->sinkpads_links);
 
   G_OBJECT_CLASS (parent_class)->dispose (object);
 
@@ -3559,6 +3620,8 @@ gst_element_finalize (GObject * object)
 
   GST_CAT_INFO_OBJECT (GST_CAT_REFCOUNTING, element, "%p finalize parent",
       element);
+
+  g_free (element->priv);
 
   G_OBJECT_CLASS (parent_class)->finalize (object);
 }
@@ -4007,8 +4070,9 @@ gst_make_element_message_details (const char *name, ...)
  * Since: 1.xx
  */
 gboolean
-gst_element_get_using_hash (GstElement * element) {
-  return (element->pads_hash != NULL);
+gst_element_get_using_hash (GstElement *element)
+{
+  return (element->priv->pads_hash != NULL);
 }
 
 /**
@@ -4024,8 +4088,10 @@ gst_element_get_using_hash (GstElement * element) {
  *
  * Since: 1.xx
  */
-void gst_element_set_hash_level (GstElement * element, gint value) {
-  element->numpads_use_hash = value;
+void
+gst_element_set_hash_level (GstElement *element, gint value)
+{
+  element->priv->numpads_use_hash = value;
 }
 
 /**
@@ -4038,6 +4104,8 @@ void gst_element_set_hash_level (GstElement * element, gint value) {
  * Since: 1.xx
  */
 
-gint gst_element_get_hash_level (GstElement * element) {
-  return element->numpads_use_hash;
+gint
+gst_element_get_hash_level (GstElement *element)
+{
+  return element->priv->numpads_use_hash;
 }
