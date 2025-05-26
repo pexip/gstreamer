@@ -91,8 +91,8 @@ test_add_pad_while_paused_dummy_task (void *user_data)
 }
 
 static gboolean
-test_add_pad_while_paused_pad_activatemode (GstPad * pad, GstObject * parent,
-    GstPadMode mode, gboolean active)
+test_add_pad_while_paused_pad_activatemode (GstPad * pad,
+    G_GNUC_UNUSED GstObject * parent, GstPadMode mode, gboolean active)
 {
   *(gboolean *) pad->activatemodedata = active;
   fail_unless (mode == GST_PAD_MODE_PUSH);
@@ -551,7 +551,7 @@ typedef struct _GstTestElement3Class
 
 static GstPad *
 gst_test_element3_request_new_pad (GstElement * element, GstPadTemplate * templ,
-    const gchar * name, const GstCaps * caps)
+    const gchar * name, G_GNUC_UNUSED const GstCaps * caps)
 {
   GstPad *pad;
   gchar *str;
@@ -891,7 +891,8 @@ typedef struct
 } PadChecks;
 
 static gboolean
-pad_foreach_func (GstElement * e, GstPad * pad, gpointer user_data)
+pad_foreach_func (G_GNUC_UNUSED GstElement * e, GstPad * pad,
+    gpointer user_data)
 {
   PadChecks *checks = user_data;
 
@@ -1002,7 +1003,7 @@ GST_START_TEST (test_release_pads_during_dispose)
 
   /* request lots of pads */
   for (guint i = 0; i < G_N_ELEMENTS (ctx.srcpads); i++) {
-    ctx.srcpads[i] = gst_element_get_request_pad (element, "src_%d");
+    ctx.srcpads[i] = gst_element_request_pad_simple (element, "src_%d");
   }
 
   /* start a thread to start releasing those pads */
@@ -1023,8 +1024,9 @@ add_srcpad_deadlock_loop (void)
 }
 
 static gboolean
-add_srcpad_deadlock_activate_mode (GstPad * pad, GstObject * parent,
-    GstPadMode mode, gboolean active)
+add_srcpad_deadlock_activate_mode (GstPad * pad,
+    G_GNUC_UNUSED GstObject * parent, G_GNUC_UNUSED GstPadMode mode,
+    gboolean active)
 {
   if (active)
     return gst_pad_start_task (pad, (GstTaskFunction) add_srcpad_deadlock_loop,
@@ -1285,6 +1287,51 @@ GST_START_TEST (test_hash_switchover_3)
 
 GST_END_TEST;
 
+GST_START_TEST (test_add_remove_pad_performance)
+{
+  gint num_pads = 50000;
+  GstElement *el = gst_element_factory_make ("identity", NULL);
+  GstPad **pads = g_new0 (GstPad *, num_pads);
+  gint i;
+  gint64 t[4];
+
+  for (i = 0; i < num_pads; i += 2) {
+    gchar *srcname = g_strdup_printf ("src-%d", i);
+    gchar *sinkname = g_strdup_printf ("sink-%d", i);
+    pads[i + 0] = gst_pad_new (srcname, GST_PAD_SRC);
+    pads[i + 1] = gst_pad_new (sinkname, GST_PAD_SINK);
+    g_free (srcname);
+    g_free (sinkname);
+  }
+
+  t[0] = g_get_monotonic_time ();
+
+  for (i = 0; i < num_pads; i++) {
+    gst_element_add_pad (el, pads[i]);
+  }
+  t[1] = g_get_monotonic_time ();
+
+  for (i = 0; i < num_pads / 2; i++) {
+    gst_element_remove_pad (el, pads[i]);
+  }
+  t[2] = g_get_monotonic_time ();
+
+  for (i = 0; i < num_pads / 2; i++) {
+    gst_element_remove_pad (el, pads[num_pads - i - 1]);
+  }
+  t[3] = g_get_monotonic_time ();
+
+  for (i = 0; i < 3; i++) {
+    double dur = (t[i + 1] - t[i]) / (double) G_TIME_SPAN_SECOND;
+    GST_ERROR ("stage %d took %lf seconds", i, dur);
+  }
+
+  g_free (pads);
+  gst_object_unref (el);
+}
+
+GST_END_TEST;
+
 static Suite *
 gst_element_suite (void)
 {
@@ -1308,6 +1355,7 @@ gst_element_suite (void)
   tcase_add_test (tc_chain, test_hash_switchover_never);
   tcase_add_test (tc_chain, test_hash_switchover_immediate);
   tcase_add_test (tc_chain, test_hash_switchover_3);
+  tcase_add_test (tc_chain, test_add_remove_pad_performance);
 
   return s;
 }
