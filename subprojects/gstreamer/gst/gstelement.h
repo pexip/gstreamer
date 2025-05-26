@@ -167,6 +167,7 @@ G_END_DECLS
 /* gstelement.h and gstelementfactory.h include each other */
 typedef struct _GstElement GstElement;
 typedef struct _GstElementClass GstElementClass;
+typedef struct _GstElementPrivate GstElementPrivate;
 
 /* gstmessage.h needs State */
 /**
@@ -791,10 +792,9 @@ struct _GstElement
   GList                *contexts;
 
   /*< private >*/
-  GHashTable           *pads_hash;
-  gint32               numpads_use_hash;
+  GstElementPrivate    *priv;
 
-  gpointer _gst_reserved[GST_PADDING-3];
+  gpointer _gst_reserved[GST_PADDING-2];
 };
 
 /**

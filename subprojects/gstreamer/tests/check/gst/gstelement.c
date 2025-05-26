@@ -91,8 +91,8 @@ test_add_pad_while_paused_dummy_task (void *user_data)
 }
 
 static gboolean
-test_add_pad_while_paused_pad_activatemode (GstPad * pad, GstObject * parent,
-    GstPadMode mode, gboolean active)
+test_add_pad_while_paused_pad_activatemode (GstPad *pad,
+    G_GNUC_UNUSED GstObject *parent, GstPadMode mode, gboolean active)
 {
   *(gboolean *) pad->activatemodedata = active;
   fail_unless (mode == GST_PAD_MODE_PUSH);
@@ -550,8 +550,8 @@ typedef struct _GstTestElement3Class
 } GstTestElement3Class;
 
 static GstPad *
-gst_test_element3_request_new_pad (GstElement * element, GstPadTemplate * templ,
-    const gchar * name, const GstCaps * caps)
+gst_test_element3_request_new_pad (GstElement *element, GstPadTemplate *templ,
+    const gchar *name, G_GNUC_UNUSED const GstCaps *caps)
 {
   GstPad *pad;
   gchar *str;
@@ -891,7 +891,7 @@ typedef struct
 } PadChecks;
 
 static gboolean
-pad_foreach_func (GstElement * e, GstPad * pad, gpointer user_data)
+pad_foreach_func (G_GNUC_UNUSED GstElement *e, GstPad *pad, gpointer user_data)
 {
   PadChecks *checks = user_data;
 
@@ -1002,7 +1002,7 @@ GST_START_TEST (test_release_pads_during_dispose)
 
   /* request lots of pads */
   for (guint i = 0; i < G_N_ELEMENTS (ctx.srcpads); i++) {
-    ctx.srcpads[i] = gst_element_get_request_pad (element, "src_%d");
+    ctx.srcpads[i] = gst_element_request_pad_simple (element, "src_%d");
   }
 
   /* start a thread to start releasing those pads */
@@ -1023,8 +1023,8 @@ add_srcpad_deadlock_loop (void)
 }
 
 static gboolean
-add_srcpad_deadlock_activate_mode (GstPad * pad, GstObject * parent,
-    GstPadMode mode, gboolean active)
+add_srcpad_deadlock_activate_mode (GstPad *pad, G_GNUC_UNUSED GstObject *parent,
+    G_GNUC_UNUSED GstPadMode mode, gboolean active)
 {
   if (active)
     return gst_pad_start_task (pad, (GstTaskFunction) add_srcpad_deadlock_loop,
@@ -1071,67 +1071,68 @@ GST_START_TEST (test_hash_switchover_never)
   e = gst_element_factory_make ("fakesrc", "source");
 
   /* Note that the fakesrc already has one src pad */
-  src = gst_element_get_static_pad(e, "src");
+  src = gst_element_get_static_pad (e, "src");
 
   /* Set the hash switchover level */
-  gst_element_set_hash_level(e, -1);
+  gst_element_set_hash_level (e, -1);
 
   /* We should never switch to a list.  Test this with 5 pads (!) */
-  fail_unless(gst_element_get_using_hash(e) == FALSE);
+  fail_unless (gst_element_get_using_hash (e) == FALSE);
 
   p1 = gst_pad_new ("source1", GST_PAD_SRC);
   gst_element_add_pad (e, p1);
-  fail_unless(gst_element_get_using_hash(e) == FALSE);
-  fail_unless(gst_element_get_static_pad(e, "src") == src);
-  fail_unless(gst_element_get_static_pad(e, "source1") == p1);
+  fail_unless (gst_element_get_using_hash (e) == FALSE);
+  fail_unless (gst_element_get_static_pad (e, "src") == src);
+  fail_unless (gst_element_get_static_pad (e, "source1") == p1);
 
   p2 = gst_pad_new ("source2", GST_PAD_SRC);
   gst_element_add_pad (e, p2);
-  fail_unless(gst_element_get_using_hash(e) == FALSE);
-  fail_unless(gst_element_get_static_pad(e, "src") == src);
-  fail_unless(gst_element_get_static_pad(e, "source1") == p1);
-  fail_unless(gst_element_get_static_pad(e, "source2") == p2);
+  fail_unless (gst_element_get_using_hash (e) == FALSE);
+  fail_unless (gst_element_get_static_pad (e, "src") == src);
+  fail_unless (gst_element_get_static_pad (e, "source1") == p1);
+  fail_unless (gst_element_get_static_pad (e, "source2") == p2);
 
   p3 = gst_pad_new ("source3", GST_PAD_SRC);
   gst_element_add_pad (e, p3);
-  fail_unless(gst_element_get_using_hash(e) == FALSE);
-  fail_unless(gst_element_get_static_pad(e, "src") == src);
-  fail_unless(gst_element_get_static_pad(e, "source1") == p1);
-  fail_unless(gst_element_get_static_pad(e, "source2") == p2);
-  fail_unless(gst_element_get_static_pad(e, "source3") == p3);
+  fail_unless (gst_element_get_using_hash (e) == FALSE);
+  fail_unless (gst_element_get_static_pad (e, "src") == src);
+  fail_unless (gst_element_get_static_pad (e, "source1") == p1);
+  fail_unless (gst_element_get_static_pad (e, "source2") == p2);
+  fail_unless (gst_element_get_static_pad (e, "source3") == p3);
 
   p4 = gst_pad_new ("source4", GST_PAD_SRC);
   gst_element_add_pad (e, p4);
-  fail_unless(gst_element_get_using_hash(e) == FALSE);
-  fail_unless(gst_element_get_static_pad(e, "src") == src);
-  fail_unless(gst_element_get_static_pad(e, "source1") == p1);
-  fail_unless(gst_element_get_static_pad(e, "source2") == p2);
-  fail_unless(gst_element_get_static_pad(e, "source3") == p3);
-  fail_unless(gst_element_get_static_pad(e, "source4") == p4);
+  fail_unless (gst_element_get_using_hash (e) == FALSE);
+  fail_unless (gst_element_get_static_pad (e, "src") == src);
+  fail_unless (gst_element_get_static_pad (e, "source1") == p1);
+  fail_unless (gst_element_get_static_pad (e, "source2") == p2);
+  fail_unless (gst_element_get_static_pad (e, "source3") == p3);
+  fail_unless (gst_element_get_static_pad (e, "source4") == p4);
 
   p5 = gst_pad_new ("source5", GST_PAD_SRC);
   gst_element_add_pad (e, p5);
-  fail_unless(gst_element_get_using_hash(e) == FALSE);
-  fail_unless(gst_element_get_static_pad(e, "src") == src);
-  fail_unless(gst_element_get_static_pad(e, "source1") == p1);
-  fail_unless(gst_element_get_static_pad(e, "source2") == p2);
-  fail_unless(gst_element_get_static_pad(e, "source3") == p3);
-  fail_unless(gst_element_get_static_pad(e, "source4") == p4);
-  fail_unless(gst_element_get_static_pad(e, "source5") == p5);
+  fail_unless (gst_element_get_using_hash (e) == FALSE);
+  fail_unless (gst_element_get_static_pad (e, "src") == src);
+  fail_unless (gst_element_get_static_pad (e, "source1") == p1);
+  fail_unless (gst_element_get_static_pad (e, "source2") == p2);
+  fail_unless (gst_element_get_static_pad (e, "source3") == p3);
+  fail_unless (gst_element_get_static_pad (e, "source4") == p4);
+  fail_unless (gst_element_get_static_pad (e, "source5") == p5);
 
   /* Test a couple of removals */
-  fail_unless(gst_element_remove_pad(e, p3), TRUE);
-  fail_unless(gst_element_remove_pad(e, p5), TRUE);
-  fail_unless(gst_element_get_using_hash(e) == FALSE);
-  fail_unless(gst_element_get_static_pad(e, "src") == src);
-  fail_unless(gst_element_get_static_pad(e, "source1") == p1);
-  fail_unless(gst_element_get_static_pad(e, "source2") == p2);
-  fail_unless(gst_element_get_static_pad(e, "source3") == NULL);
-  fail_unless(gst_element_get_static_pad(e, "source4") == p4);
-  fail_unless(gst_element_get_static_pad(e, "source5") == NULL);
+  fail_unless (gst_element_remove_pad (e, p3), TRUE);
+  fail_unless (gst_element_remove_pad (e, p5), TRUE);
+  fail_unless (gst_element_get_using_hash (e) == FALSE);
+  fail_unless (gst_element_get_static_pad (e, "src") == src);
+  fail_unless (gst_element_get_static_pad (e, "source1") == p1);
+  fail_unless (gst_element_get_static_pad (e, "source2") == p2);
+  fail_unless (gst_element_get_static_pad (e, "source3") == NULL);
+  fail_unless (gst_element_get_static_pad (e, "source4") == p4);
+  fail_unless (gst_element_get_static_pad (e, "source5") == NULL);
 
   gst_object_unref (e);
 }
+
 GST_END_TEST;
 
 
@@ -1145,67 +1146,68 @@ GST_START_TEST (test_hash_switchover_immediate)
   e = gst_element_factory_make ("fakesrc", "source");
 
   /* Note that the fakesrc already has one src pad */
-  src = gst_element_get_static_pad(e, "src");
+  src = gst_element_get_static_pad (e, "src");
 
   /* Set the hash switchover level */
-  gst_element_set_hash_level(e, 0);
+  gst_element_set_hash_level (e, 0);
 
   /* We should immediately move to using a hash as soon as we add one pad */
-  fail_unless(gst_element_get_using_hash(e) == FALSE);
+  fail_unless (gst_element_get_using_hash (e) == FALSE);
 
   p1 = gst_pad_new ("source1", GST_PAD_SRC);
   gst_element_add_pad (e, p1);
-  fail_unless(gst_element_get_using_hash(e) == TRUE);
-  fail_unless(gst_element_get_static_pad(e, "src") == src);
-  fail_unless(gst_element_get_static_pad(e, "source1") == p1);
+  fail_unless (gst_element_get_using_hash (e) == TRUE);
+  fail_unless (gst_element_get_static_pad (e, "src") == src);
+  fail_unless (gst_element_get_static_pad (e, "source1") == p1);
 
   p2 = gst_pad_new ("source2", GST_PAD_SRC);
   gst_element_add_pad (e, p2);
-  fail_unless(gst_element_get_using_hash(e) == TRUE);
-  fail_unless(gst_element_get_static_pad(e, "src") == src);
-  fail_unless(gst_element_get_static_pad(e, "source1") == p1);
-  fail_unless(gst_element_get_static_pad(e, "source2") == p2);
+  fail_unless (gst_element_get_using_hash (e) == TRUE);
+  fail_unless (gst_element_get_static_pad (e, "src") == src);
+  fail_unless (gst_element_get_static_pad (e, "source1") == p1);
+  fail_unless (gst_element_get_static_pad (e, "source2") == p2);
 
   p3 = gst_pad_new ("source3", GST_PAD_SRC);
   gst_element_add_pad (e, p3);
-  fail_unless(gst_element_get_using_hash(e) == TRUE);
-  fail_unless(gst_element_get_static_pad(e, "src") == src);
-  fail_unless(gst_element_get_static_pad(e, "source1") == p1);
-  fail_unless(gst_element_get_static_pad(e, "source2") == p2);
-  fail_unless(gst_element_get_static_pad(e, "source3") == p3);
+  fail_unless (gst_element_get_using_hash (e) == TRUE);
+  fail_unless (gst_element_get_static_pad (e, "src") == src);
+  fail_unless (gst_element_get_static_pad (e, "source1") == p1);
+  fail_unless (gst_element_get_static_pad (e, "source2") == p2);
+  fail_unless (gst_element_get_static_pad (e, "source3") == p3);
 
   p4 = gst_pad_new ("source4", GST_PAD_SRC);
   gst_element_add_pad (e, p4);
-  fail_unless(gst_element_get_using_hash(e) == TRUE);
-  fail_unless(gst_element_get_static_pad(e, "src") == src);
-  fail_unless(gst_element_get_static_pad(e, "source1") == p1);
-  fail_unless(gst_element_get_static_pad(e, "source2") == p2);
-  fail_unless(gst_element_get_static_pad(e, "source3") == p3);
-  fail_unless(gst_element_get_static_pad(e, "source4") == p4);
+  fail_unless (gst_element_get_using_hash (e) == TRUE);
+  fail_unless (gst_element_get_static_pad (e, "src") == src);
+  fail_unless (gst_element_get_static_pad (e, "source1") == p1);
+  fail_unless (gst_element_get_static_pad (e, "source2") == p2);
+  fail_unless (gst_element_get_static_pad (e, "source3") == p3);
+  fail_unless (gst_element_get_static_pad (e, "source4") == p4);
 
   p5 = gst_pad_new ("source5", GST_PAD_SRC);
   gst_element_add_pad (e, p5);
-  fail_unless(gst_element_get_using_hash(e) == TRUE);
-  fail_unless(gst_element_get_static_pad(e, "src") == src);
-  fail_unless(gst_element_get_static_pad(e, "source1") == p1);
-  fail_unless(gst_element_get_static_pad(e, "source2") == p2);
-  fail_unless(gst_element_get_static_pad(e, "source3") == p3);
-  fail_unless(gst_element_get_static_pad(e, "source4") == p4);
-  fail_unless(gst_element_get_static_pad(e, "source5") == p5);
+  fail_unless (gst_element_get_using_hash (e) == TRUE);
+  fail_unless (gst_element_get_static_pad (e, "src") == src);
+  fail_unless (gst_element_get_static_pad (e, "source1") == p1);
+  fail_unless (gst_element_get_static_pad (e, "source2") == p2);
+  fail_unless (gst_element_get_static_pad (e, "source3") == p3);
+  fail_unless (gst_element_get_static_pad (e, "source4") == p4);
+  fail_unless (gst_element_get_static_pad (e, "source5") == p5);
 
   /* Test a couple of removals */
-  fail_unless(gst_element_remove_pad(e, p3), TRUE);
-  fail_unless(gst_element_remove_pad(e, p5), TRUE);
-  fail_unless(gst_element_get_using_hash(e) == TRUE);
-  fail_unless(gst_element_get_static_pad(e, "src") == src);
-  fail_unless(gst_element_get_static_pad(e, "source1") == p1);
-  fail_unless(gst_element_get_static_pad(e, "source2") == p2);
-  fail_unless(gst_element_get_static_pad(e, "source3") == NULL);
-  fail_unless(gst_element_get_static_pad(e, "source4") == p4);
-  fail_unless(gst_element_get_static_pad(e, "source5") == NULL);
+  fail_unless (gst_element_remove_pad (e, p3), TRUE);
+  fail_unless (gst_element_remove_pad (e, p5), TRUE);
+  fail_unless (gst_element_get_using_hash (e) == TRUE);
+  fail_unless (gst_element_get_static_pad (e, "src") == src);
+  fail_unless (gst_element_get_static_pad (e, "source1") == p1);
+  fail_unless (gst_element_get_static_pad (e, "source2") == p2);
+  fail_unless (gst_element_get_static_pad (e, "source3") == NULL);
+  fail_unless (gst_element_get_static_pad (e, "source4") == p4);
+  fail_unless (gst_element_get_static_pad (e, "source5") == NULL);
 
   gst_object_unref (e);
 }
+
 GST_END_TEST;
 
 GST_START_TEST (test_hash_switchover_3)
@@ -1218,68 +1220,114 @@ GST_START_TEST (test_hash_switchover_3)
   e = gst_element_factory_make ("fakesrc", "source");
 
   /* Note that the fakesrc already has one src pad */
-  src = gst_element_get_static_pad(e, "src");
+  src = gst_element_get_static_pad (e, "src");
 
   /* Set the hash switchover level */
-  gst_element_set_hash_level(e, 3);
+  gst_element_set_hash_level (e, 3);
 
   /* We should immediately move to using a hash as soon as we add one pad */
-  fail_unless(gst_element_get_using_hash(e) == FALSE);
+  fail_unless (gst_element_get_using_hash (e) == FALSE);
 
   p1 = gst_pad_new ("source1", GST_PAD_SRC);
   gst_element_add_pad (e, p1);
-  fail_unless(gst_element_get_using_hash(e) == FALSE);
-  fail_unless(gst_element_get_static_pad(e, "src") == src);
-  fail_unless(gst_element_get_static_pad(e, "source1") == p1);
+  fail_unless (gst_element_get_using_hash (e) == FALSE);
+  fail_unless (gst_element_get_static_pad (e, "src") == src);
+  fail_unless (gst_element_get_static_pad (e, "source1") == p1);
 
   /* We will switch here as this is our third pad */
   p2 = gst_pad_new ("source2", GST_PAD_SRC);
   gst_element_add_pad (e, p2);
-  fail_unless(gst_element_get_using_hash(e) == TRUE);
-  fail_unless(gst_element_get_static_pad(e, "src") == src);
-  fail_unless(gst_element_get_static_pad(e, "source1") == p1);
-  fail_unless(gst_element_get_static_pad(e, "source2") == p2);
+  fail_unless (gst_element_get_using_hash (e) == TRUE);
+  fail_unless (gst_element_get_static_pad (e, "src") == src);
+  fail_unless (gst_element_get_static_pad (e, "source1") == p1);
+  fail_unless (gst_element_get_static_pad (e, "source2") == p2);
 
   p3 = gst_pad_new ("source3", GST_PAD_SRC);
   gst_element_add_pad (e, p3);
-  fail_unless(gst_element_get_using_hash(e) == TRUE);
-  fail_unless(gst_element_get_static_pad(e, "src") == src);
-  fail_unless(gst_element_get_static_pad(e, "source1") == p1);
-  fail_unless(gst_element_get_static_pad(e, "source2") == p2);
-  fail_unless(gst_element_get_static_pad(e, "source3") == p3);
+  fail_unless (gst_element_get_using_hash (e) == TRUE);
+  fail_unless (gst_element_get_static_pad (e, "src") == src);
+  fail_unless (gst_element_get_static_pad (e, "source1") == p1);
+  fail_unless (gst_element_get_static_pad (e, "source2") == p2);
+  fail_unless (gst_element_get_static_pad (e, "source3") == p3);
 
   p4 = gst_pad_new ("source4", GST_PAD_SRC);
   gst_element_add_pad (e, p4);
-  fail_unless(gst_element_get_using_hash(e) == TRUE);
-  fail_unless(gst_element_get_static_pad(e, "src") == src);
-  fail_unless(gst_element_get_static_pad(e, "source1") == p1);
-  fail_unless(gst_element_get_static_pad(e, "source2") == p2);
-  fail_unless(gst_element_get_static_pad(e, "source3") == p3);
-  fail_unless(gst_element_get_static_pad(e, "source4") == p4);
+  fail_unless (gst_element_get_using_hash (e) == TRUE);
+  fail_unless (gst_element_get_static_pad (e, "src") == src);
+  fail_unless (gst_element_get_static_pad (e, "source1") == p1);
+  fail_unless (gst_element_get_static_pad (e, "source2") == p2);
+  fail_unless (gst_element_get_static_pad (e, "source3") == p3);
+  fail_unless (gst_element_get_static_pad (e, "source4") == p4);
 
   p5 = gst_pad_new ("source5", GST_PAD_SRC);
   gst_element_add_pad (e, p5);
-  fail_unless(gst_element_get_using_hash(e) == TRUE);
-  fail_unless(gst_element_get_static_pad(e, "src") == src);
-  fail_unless(gst_element_get_static_pad(e, "source1") == p1);
-  fail_unless(gst_element_get_static_pad(e, "source2") == p2);
-  fail_unless(gst_element_get_static_pad(e, "source3") == p3);
-  fail_unless(gst_element_get_static_pad(e, "source4") == p4);
-  fail_unless(gst_element_get_static_pad(e, "source5") == p5);
+  fail_unless (gst_element_get_using_hash (e) == TRUE);
+  fail_unless (gst_element_get_static_pad (e, "src") == src);
+  fail_unless (gst_element_get_static_pad (e, "source1") == p1);
+  fail_unless (gst_element_get_static_pad (e, "source2") == p2);
+  fail_unless (gst_element_get_static_pad (e, "source3") == p3);
+  fail_unless (gst_element_get_static_pad (e, "source4") == p4);
+  fail_unless (gst_element_get_static_pad (e, "source5") == p5);
 
   /* Test a couple of removals */
-  fail_unless(gst_element_remove_pad(e, p3), TRUE);
-  fail_unless(gst_element_remove_pad(e, p5), TRUE);
-  fail_unless(gst_element_get_using_hash(e) == TRUE);
-  fail_unless(gst_element_get_static_pad(e, "src") == src);
-  fail_unless(gst_element_get_static_pad(e, "source1") == p1);
-  fail_unless(gst_element_get_static_pad(e, "source2") == p2);
-  fail_unless(gst_element_get_static_pad(e, "source3") == NULL);
-  fail_unless(gst_element_get_static_pad(e, "source4") == p4);
-  fail_unless(gst_element_get_static_pad(e, "source5") == NULL);
+  fail_unless (gst_element_remove_pad (e, p3), TRUE);
+  fail_unless (gst_element_remove_pad (e, p5), TRUE);
+  fail_unless (gst_element_get_using_hash (e) == TRUE);
+  fail_unless (gst_element_get_static_pad (e, "src") == src);
+  fail_unless (gst_element_get_static_pad (e, "source1") == p1);
+  fail_unless (gst_element_get_static_pad (e, "source2") == p2);
+  fail_unless (gst_element_get_static_pad (e, "source3") == NULL);
+  fail_unless (gst_element_get_static_pad (e, "source4") == p4);
+  fail_unless (gst_element_get_static_pad (e, "source5") == NULL);
 
   gst_object_unref (e);
 }
+
+GST_END_TEST;
+
+GST_START_TEST (test_add_remove_pad_performance)
+{
+  gint num_pads = 50000;
+  GstElement *el = gst_element_factory_make ("identity", NULL);
+  GstPad **pads = g_new0 (GstPad *, num_pads);
+  gint i;
+  gint64 t[4];
+
+  for (i = 0; i < num_pads; i += 2) {
+    gchar *srcname = g_strdup_printf ("src-%d", i);
+    gchar *sinkname = g_strdup_printf ("sink-%d", i);
+    pads[i + 0] = gst_pad_new (srcname, GST_PAD_SRC);
+    pads[i + 1] = gst_pad_new (sinkname, GST_PAD_SINK);
+    g_free (srcname);
+    g_free (sinkname);
+  }
+
+  t[0] = g_get_monotonic_time ();
+
+  for (i = 0; i < num_pads; i++) {
+    gst_element_add_pad (el, pads[i]);
+  }
+  t[1] = g_get_monotonic_time ();
+
+  for (i = 0; i < num_pads / 2; i++) {
+    gst_element_remove_pad (el, pads[i]);
+  }
+  t[2] = g_get_monotonic_time ();
+
+  for (i = 0; i < num_pads / 2; i++) {
+    gst_element_remove_pad (el, pads[num_pads - i - 1]);
+  }
+  t[3] = g_get_monotonic_time ();
+
+  for (i = 0; i < 3; i++) {
+    double dur = (t[i + 1] - t[i]) / (double) G_TIME_SPAN_SECOND;
+    GST_ERROR ("stage %d took %lf seconds", i, dur);
+  }
+
+  g_free (pads);
+  gst_object_unref (el);
+}
+
 GST_END_TEST;
 
 static Suite *
@@ -1305,6 +1353,7 @@ gst_element_suite (void)
   tcase_add_test (tc_chain, test_hash_switchover_never);
   tcase_add_test (tc_chain, test_hash_switchover_immediate);
   tcase_add_test (tc_chain, test_hash_switchover_3);
+  tcase_add_test (tc_chain, test_add_remove_pad_performance);
 
   return s;
 }
