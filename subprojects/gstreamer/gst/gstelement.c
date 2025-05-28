@@ -3580,9 +3580,18 @@ gst_element_dispose (GObject * object)
     priv->pads_hash = NULL;
   }
 
-  g_hash_table_destroy (priv->pads_links);
-  g_hash_table_destroy (priv->srcpads_links);
-  g_hash_table_destroy (priv->sinkpads_links);
+  if (priv->pads_links != NULL) {
+    g_hash_table_destroy (priv->pads_links);
+    priv->pads_links = NULL;
+  }
+  if (priv->srcpads_links != NULL) {
+    g_hash_table_destroy (priv->srcpads_links);
+    priv->srcpads_links = NULL;
+  }
+  if (priv->sinkpads_links != NULL) {
+    g_hash_table_destroy (priv->sinkpads_links);
+    priv->sinkpads_links = NULL;
+  }
 
   G_OBJECT_CLASS (parent_class)->dispose (object);
 
