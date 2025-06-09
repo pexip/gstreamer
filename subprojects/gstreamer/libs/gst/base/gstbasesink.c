@@ -425,7 +425,7 @@ static GstCaps *gst_base_sink_fixate (GstBaseSink * bsink, GstCaps * caps);
 
 /* check if an object was too late */
 static gboolean gst_base_sink_is_too_late (GstBaseSink * basesink,
-    GstMiniObject * obj, GstClockTime rstart, GstClockTime rstop,
+    GstMiniObject * obj, GstClockTime rstart, GstClockTime rstop, GstClockTime now,
     GstClockReturn status, GstClockTimeDiff jitter, gboolean render);
 
 static void
@@ -2822,7 +2822,7 @@ again:
 
   /* check if the object should be dropped */
   *late = gst_base_sink_is_too_late (basesink, obj, rstart, rstop,
-      status, jitter, TRUE);
+      stime, status, jitter, TRUE);
 
 done:
   return GST_FLOW_OK;
@@ -3093,7 +3093,7 @@ gst_base_sink_reset_qos (GstBaseSink * sink)
  */
 static gboolean
 gst_base_sink_is_too_late (GstBaseSink * basesink, GstMiniObject * obj,
-    GstClockTime rstart, GstClockTime rstop,
+    GstClockTime rstart, GstClockTime rstop, GstClockTime now,
     GstClockReturn status, GstClockTimeDiff jitter, gboolean render)
 {
   gboolean late;
@@ -3143,9 +3143,14 @@ gst_base_sink_is_too_late (GstBaseSink * basesink, GstMiniObject * obj,
     if (GST_CLOCK_TIME_IS_VALID (priv->last_render_time) &&
         rstart - priv->last_render_time > GST_SECOND) {
       late = FALSE;
-      GST_ELEMENT_WARNING (basesink, CORE, CLOCK,
+
+
+      if (now > (priv->last_render_time + 3 * GST_SECOND)) {
+        GST_ELEMENT_WARNING (basesink, CORE, CLOCK,
           (_("A lot of buffers are being dropped.")),
           ("There may be a timestamping problem, or this computer is too slow."));
+      }
+
       GST_CAT_DEBUG_OBJECT (GST_CAT_PERFORMANCE, basesink,
           "**emergency** last buffer at %" GST_TIME_FORMAT " > GST_SECOND",
           GST_TIME_ARGS (priv->last_render_time));
@@ -3881,7 +3886,7 @@ gst_base_sink_chain_unlocked (GstBaseSink * basesink, GstPad * pad,
         GST_OBJECT_UNLOCK (basesink);
 
         late =
-            gst_base_sink_is_too_late (basesink, obj, rstart, rstop,
+            gst_base_sink_is_too_late (basesink, obj, rstart, rstop, now,
             GST_CLOCK_EARLY, GST_CLOCK_DIFF (stime, now), FALSE);
       } else {
         GST_OBJECT_UNLOCK (basesink);
