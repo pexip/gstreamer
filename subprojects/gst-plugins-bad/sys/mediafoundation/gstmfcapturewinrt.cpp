@@ -70,6 +70,8 @@ struct _GstMFCaptureWinRT
   UINT32 error_code;
 
   gpointer dispatcher;
+
+  gint64 last_read_error_ts;
 };
 
 typedef struct _GstMFCaptureWinRTFrame
@@ -487,10 +489,18 @@ gst_mf_capture_winrt_get_video_media_frame (GstMFCaptureWinRT * self,
   g_assert (frame_ref);
 
   hr = frame_ref->get_VideoMediaFrame (media_frame);
-  if (!gst_mf_result (hr)) {
-    GST_WARNING_OBJECT (self, "Couldn't get IVideoMediaFrame");
+  if (FAILED(hr)) {
+    gint64 now = g_get_monotonic_time ();
+    if (now > (self->last_read_error_ts + 3 * G_USEC_PER_SEC)) {
+      self->last_read_error_ts = now;
+      gst_mf_result (hr);
+      GST_WARNING_OBJECT (self, "Couldn't get IVideoMediaFrame");
+    }
+
     *media_frame = nullptr;
     goto done;
+  } else {
+    self->last_read_error_ts = 0;
   }
 
   hr = frame_ref->get_Duration (&winrt_duration);
