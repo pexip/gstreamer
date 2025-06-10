@@ -79,6 +79,7 @@ static GParamSpec *properties[NUM_PROPERTIES];
 #define DEFAULT_LOCAL_SCTP_PORT 0
 #define MAX_SCTP_PORT 65535
 #define MAX_GST_SCTP_ASSOCIATION_ID 65535
+#define MAX_STREAM_ID 65535
 
 #define GST_SCTP_DEC_GET_ASSOC_MUTEX(self) (&self->association_mutex)
 #define GST_SCTP_DEC_ASSOC_MUTEX_LOCK(self) (g_mutex_lock (GST_SCTP_DEC_GET_ASSOC_MUTEX (self)))
@@ -632,19 +633,14 @@ send_sticky_events (GstSctpDec * self, GstPad * pad, guint16 stream_id)
 }
 
 static GstPad *
-get_pad_for_stream_id (GstSctpDec * self, guint16 stream_id)
+create_pad (GstSctpDec * self, guint16 stream_id, const gchar * pad_name)
 {
-  GstPad *new_pad = NULL;
+  GstPad *new_pad;
   gint state;
-  gchar *pad_name;
   GstPadTemplate *template;
 
-  pad_name = g_strdup_printf ("src_%hu", stream_id);
-  new_pad = gst_element_get_static_pad (GST_ELEMENT (self), pad_name);
-  if (new_pad) {
-    g_free (pad_name);
-    return new_pad;
-  }
+  if (stream_id > MAX_STREAM_ID)
+    return NULL;
 
   GST_SCTP_DEC_ASSOC_MUTEX_LOCK (self);
   if (!self->sctp_association) {
@@ -668,7 +664,6 @@ get_pad_for_stream_id (GstSctpDec * self, guint16 stream_id)
   template = gst_static_pad_template_get (&src_template);
   new_pad = g_object_new (GST_TYPE_SCTP_DEC_PAD, "name", pad_name,
       "direction", template->direction, "template", template, NULL);
-  g_free (pad_name);
   gst_clear_object (&template);
 
   gst_pad_set_event_function (new_pad,
@@ -697,6 +692,18 @@ error_add:
 error_cleanup:
   gst_object_unref (new_pad);
   return NULL;
+}
+
+static GstPad *
+get_pad_for_stream_id (GstSctpDec * self, guint16 stream_id)
+{
+  gchar *pad_name = g_strdup_printf ("src_%hu", stream_id);
+  GstPad *pad = gst_element_get_static_pad (GST_ELEMENT (self), pad_name);
+  if (!pad) {
+    pad = create_pad (self, stream_id, pad_name);
+  }
+  g_free (pad_name);
+  return pad;
 }
 
 static void
