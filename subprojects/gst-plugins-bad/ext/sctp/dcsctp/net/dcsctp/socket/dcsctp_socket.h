@@ -91,6 +91,7 @@ class DcSctpSocket : public DcSctpSocketInterface {
   void Close() override;
   SendStatus Send(DcSctpMessage message,
                   const SendOptions& send_options) override;
+  void SendAbort(const char *message) override;
   std::vector<SendStatus> SendMany(rtc::ArrayView<DcSctpMessage> messages,
                                    const SendOptions& send_options) override;
   ResetStreamsStatus ResetStreams(
