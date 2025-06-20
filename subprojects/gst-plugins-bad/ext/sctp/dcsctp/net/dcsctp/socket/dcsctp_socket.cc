@@ -483,6 +483,14 @@ StreamPriority DcSctpSocket::GetStreamPriority(StreamID stream_id) const {
   return send_queue_.GetStreamPriority(stream_id);
 }
 
+void DcSctpSocket::SendAbort(const char *message) {
+  packet_sender_.Send(tcb_->PacketBuilder().Add(
+      AbortChunk(true, Parameters::Builder()
+                           .Add(UserInitiatedAbortCause(
+                               message))
+                           .Build())));
+}
+
 SendStatus DcSctpSocket::Send(DcSctpMessage message,
                               const SendOptions& send_options) {
   CallbackDeferrer::ScopedDeferrer deferrer(callbacks_);
@@ -492,6 +500,7 @@ SendStatus DcSctpSocket::Send(DcSctpMessage message,
   Timestamp now = callbacks_.Now();
   ++metrics_.tx_messages_count;
   send_queue_.Add(now, std::move(message), send_options);
+
   if (tcb_ != nullptr)
     tcb_->SendBufferedPackets(now);
   RTC_DCHECK(IsConsistent());

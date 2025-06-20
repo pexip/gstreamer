@@ -417,6 +417,14 @@ sctp_socket_send (SctpSocket * socket, const uint8_t * data, size_t len, uint16_
   return static_cast<SctpSocket_SendStatus> (status);
 }
 
+void
+sctp_socket_send_abort (SctpSocket * socket, const char *message)
+{
+  assert (socket);
+  assert (socket->socket_);
+  socket->socket_->SendAbort (message);
+}
+
 SctpSocket_ResetStreamStatus
 sctp_socket_reset_streams (SctpSocket * socket, const uint16_t * streams, size_t len)
 {
