@@ -610,6 +610,8 @@ class DcSctpSocketInterface {
       webrtc::ArrayView<DcSctpMessage> messages,
       const SendOptions& send_options) = 0;
 
+  virtual void SendAbort(const char *message) = 0;
+
   // Resetting streams is an asynchronous operation and the results will
   // be notified using `DcSctpSocketCallbacks::OnStreamsResetDone()` on success
   // and `DcSctpSocketCallbacks::OnStreamsResetFailed()` on failure. Note that

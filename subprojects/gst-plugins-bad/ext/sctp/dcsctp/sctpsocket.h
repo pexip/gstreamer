@@ -264,6 +264,8 @@ extern "C"
                                           uint32_t ppid, bool unordered, int32_t * lifetime,
                                           size_t * max_retransmissions);
 
+  void sctp_socket_send_abort (SctpSocket * socket, const char *message);
+
   // Resetting streams is an asynchronous operation and the results will
   // be notified using `DcSctpSocketCallbacks::OnStreamsResetDone()` on success
   // and `DcSctpSocketCallbacks::OnStreamsResetFailed()` on failure. Note that

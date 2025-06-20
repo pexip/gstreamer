@@ -56,6 +56,7 @@ enum
   SIGNAL_GET_STREAM_BYTES_SENT,
   SIGNAL_DISCONNECT,
   SIGNAL_RECONNECT,
+  SIGNAL_SEND_ABORT,
   NUM_SIGNALS
 };
 
@@ -181,6 +182,7 @@ static void get_config_from_caps (const GstCaps * caps, gboolean * ordered,
 static guint64 on_get_stream_bytes_sent (GstSctpEnc * self, guint stream_id);
 static gboolean disconnect (GstSctpEnc * self);
 static void reconnect (GstSctpEnc * self);
+static void send_abort (GstSctpEnc * self, gchar * message);
 
 static void
 gst_sctp_enc_class_init (GstSctpEncClass * klass)
@@ -260,10 +262,16 @@ gst_sctp_enc_class_init (GstSctpEncClass * klass)
       G_STRUCT_OFFSET (GstSctpEncClass, reconnect), NULL, NULL,
       g_cclosure_marshal_generic, G_TYPE_NONE, 0);
 
+  signals[SIGNAL_SEND_ABORT] = g_signal_new ("send-abort",
+      G_TYPE_FROM_CLASS (gobject_class), G_SIGNAL_RUN_LAST | G_SIGNAL_ACTION,
+      G_STRUCT_OFFSET (GstSctpEncClass, send_abort), NULL, NULL,
+      g_cclosure_marshal_VOID__STRING, G_TYPE_NONE, 1, G_TYPE_STRING);
+
   klass->on_get_stream_bytes_sent =
       GST_DEBUG_FUNCPTR (on_get_stream_bytes_sent);
   klass->disconnect = GST_DEBUG_FUNCPTR (disconnect);
   klass->reconnect = GST_DEBUG_FUNCPTR (reconnect);
+  klass->send_abort = GST_DEBUG_FUNCPTR (send_abort);
 
   gst_element_class_set_static_metadata (element_class,
       "SCTP Encoder",
@@ -986,6 +994,21 @@ reconnect (GstSctpEnc * self)
   }
 
   gst_sctp_association_connect (self->sctp_association);
+  GST_SCTP_ENC_ASSOC_MUTEX_UNLOCK (self);
+}
+
+static void
+send_abort (GstSctpEnc * self, gchar * message)
+{
+  GST_SCTP_ENC_ASSOC_MUTEX_LOCK (self);
+
+  if (!self->sctp_association) {
+    GST_ERROR_OBJECT (self, "No GstSctpAssociation");
+    GST_SCTP_ENC_ASSOC_MUTEX_UNLOCK (self);
+    return;
+  }
+
+  gst_sctp_association_send_abort (self->sctp_association, message);
   GST_SCTP_ENC_ASSOC_MUTEX_UNLOCK (self);
 }
 
