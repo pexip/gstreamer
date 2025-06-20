@@ -71,7 +71,7 @@ typedef void (*GstSctpAssociationPacketOutCb) (const guint8 * data, gsize length
 typedef void (*GstSctpAssociationStateChangeCb) (GstSctpAssociation *
     sctp_association, GstSctpAssociationState state, gpointer user_data);
 
-struct _GstSctpAssociationEncoderCtx 
+struct _GstSctpAssociationEncoderCtx
 {
   gpointer element;
   GstSctpAssociationStateChangeCb state_change_cb;
@@ -85,7 +85,7 @@ typedef void (*GstSctpAssociationStreamResetCb)(guint16 stream_id, gpointer user
 
 typedef void (*GstSctpAssociationRestartCb)(gpointer user_data);
 
-struct _GstSctpAssociationDecoderCtx 
+struct _GstSctpAssociationDecoderCtx
 {
   gpointer element;
   GstSctpAssociationPacketReceivedCb packet_received_cb;
@@ -136,7 +136,7 @@ GType gst_sctp_association_get_type (void);
 
 gboolean gst_sctp_association_connect (GstSctpAssociation * self);
 
-void gst_sctp_association_set_encoder_ctx (GstSctpAssociation * self, 
+void gst_sctp_association_set_encoder_ctx (GstSctpAssociation * self,
     GstSctpAssociationEncoderCtx * ctx);
 void gst_sctp_association_set_decoder_ctx (GstSctpAssociation * self,
     GstSctpAssociationDecoderCtx * ctx);
@@ -147,6 +147,8 @@ GstFlowReturn gst_sctp_association_send_data (GstSctpAssociation * self,
     const guint8 * buf, guint32 length, guint16 stream_id, guint32 ppid,
     gboolean ordered, GstSctpAssociationPartialReliability pr,
     guint32 reliability_param, guint32 *bytes_sent);
+void gst_sctp_association_send_abort (GstSctpAssociation * assoc,
+    const gchar * message);
 void gst_sctp_association_reset_stream (GstSctpAssociation * self,
     guint16 stream_id);
 void gst_sctp_association_force_close (GstSctpAssociation * self);

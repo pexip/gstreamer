@@ -74,6 +74,7 @@ struct _GstSctpEncClass
       guint stream_id);
   gboolean (*disconnect) (GstSctpEnc * sctp_enc);
   void (*reconnect) (GstSctpEnc * sctp_enc);
+  void (*send_abort) (GstSctpEnc * sctp_enc, gchar *message);
 };
 
 GType gst_sctp_enc_get_type (void);
