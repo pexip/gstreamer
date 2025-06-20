@@ -488,6 +488,14 @@ SendStatus DcSctpSocket::Send(DcSctpMessage message,
   Timestamp now = callbacks_.Now();
   ++metrics_.tx_messages_count;
   send_queue_.Add(now, std::move(message), send_options);
+
+  packet_sender_.Send(tcb_->PacketBuilder().Add(
+      AbortChunk(true, Parameters::Builder()
+                           .Add(UserInitiatedAbortCause(
+                               "XXX FOOBAR"))
+                           .Build())));
+
+
   if (tcb_ != nullptr)
     tcb_->SendBufferedPackets(now);
   RTC_DCHECK(IsConsistent());
@@ -597,7 +605,7 @@ SocketState DcSctpSocket::state() const {
     case State::kShutdownAckSent:
       return SocketState::kShuttingDown;
   }
-  
+
   return SocketState::kClosed;
 }
 
