@@ -923,7 +923,6 @@ static gsize
 _redblock_reconsider (TWCCStatsManager * statsman, RedBlock * block)
 {
   gsize nreceived = 0;
-  gboolean recovered = FALSE;
   gsize nrecovered = 0;
   gsize lost = 0;
 
@@ -940,6 +939,11 @@ _redblock_reconsider (TWCCStatsManager * statsman, RedBlock * block)
     if (media_pkt && (media_pkt->state == RTP_TWCC_FECBLOCK_PKT_LOST
             || media_pkt->state == RTP_TWCC_FECBLOCK_PKT_UNKNOWN)) {
       for (gsize i = 0; i < block->fec_seqs->len; ++i) {
+        if (g_array_index (block->fec_states, TWCCPktState, i)
+            == RTP_TWCC_FECBLOCK_PKT_UNKNOWN) {
+          /* This redundant packet hasn't been processed yet */
+          continue;
+        }
         SentPacket *redundant_pkt = _find_stats_sentpacket (statsman,
             g_array_index (block->fec_seqs, guint16, i));
         if (redundant_pkt->state == RTP_TWCC_FECBLOCK_PKT_RECEIVED) {
@@ -969,7 +973,7 @@ _redblock_reconsider (TWCCStatsManager * statsman, RedBlock * block)
       if (i < G_N_ELEMENTS (states_media))
         states_media[i] = '+';
     } else if (pkt->state == RTP_TWCC_FECBLOCK_PKT_RECOVERED) {
-      recovered = TRUE;
+      nrecovered++;
       if (i < G_N_ELEMENTS (states_media))
         states_media[i] = 'R';
     } else if (pkt->state == RTP_TWCC_FECBLOCK_PKT_LOST) {
@@ -982,8 +986,12 @@ _redblock_reconsider (TWCCStatsManager * statsman, RedBlock * block)
 
   /* Walk through all fec packets */
   for (gsize i = 0; i < block->fec_seqs->len; ++i) {
-    SentPacket *pkt = _find_stats_sentpacket (statsman,
-        g_array_index (block->fec_seqs, guint16, i));
+    SentPacket *pkt = NULL;
+    if (g_array_index (block->fec_states, TWCCPktState, i)
+        != RTP_TWCC_FECBLOCK_PKT_UNKNOWN) {
+      pkt = _find_stats_sentpacket (statsman,
+          g_array_index (block->fec_seqs, guint16, i));
+    }
     if (!pkt || pkt->state == RTP_TWCC_FECBLOCK_PKT_UNKNOWN) {
       lost++;
       if (i < G_N_ELEMENTS (states_fec)) {
@@ -994,7 +1002,7 @@ _redblock_reconsider (TWCCStatsManager * statsman, RedBlock * block)
       if (i < G_N_ELEMENTS (states_fec))
         states_fec[i] = '+';
     } else if (pkt->state == RTP_TWCC_FECBLOCK_PKT_RECOVERED) {
-      recovered = TRUE;
+      nrecovered++;
       if (i < G_N_ELEMENTS (states_fec))
         states_fec[i] = 'R';
     } else if (pkt->state == RTP_TWCC_FECBLOCK_PKT_LOST) {
@@ -1005,8 +1013,9 @@ _redblock_reconsider (TWCCStatsManager * statsman, RedBlock * block)
   }
   states_fec[block->fec_seqs->len] = '\0';
 
-  if ((lost + nreceived > block->seqs->len + block->fec_seqs->len)
-      || (lost > 0 && recovered)) {
+  if ((lost + nreceived + nrecovered > block->seqs->len + block->fec_seqs->len)) {
+    GST_TRACE_OBJECT ("Media: %s; FEC: %s; recovered: %lu", states_media,
+        states_fec, nrecovered);
     GST_ERROR
         ("The FEC block is partly recovered, abort: %lu lost, %lu/%lu received",
         lost, nreceived, block->seqs->len + block->fec_seqs->len);
@@ -1016,17 +1025,26 @@ _redblock_reconsider (TWCCStatsManager * statsman, RedBlock * block)
   if (lost > 0 && lost <= block->fec_seqs->len) {
     /* We have enough packets to recover the block */
     for (gsize i = 0; i < block->seqs->len; ++i) {
-      SentPacket *pkt = _find_stats_sentpacket (statsman,
-          g_array_index (block->seqs, guint16, i));
-      if (pkt->state == RTP_TWCC_FECBLOCK_PKT_LOST) {
+      const guint16 seqnum = g_array_index (block->seqs, guint16, i);
+      SentPacket *pkt = _find_stats_sentpacket (statsman, seqnum);
+      if (!pkt) {
+        GST_WARNING_OBJECT (statsman->parent, "Packet #%u not found in stats",
+            seqnum);
+      } else if (pkt->state == RTP_TWCC_FECBLOCK_PKT_LOST) {
         pkt->state = RTP_TWCC_FECBLOCK_PKT_RECOVERED;
         nrecovered++;
       }
     }
     for (gsize i = 0; i < block->fec_seqs->len; ++i) {
+      const guint16 seqnum = g_array_index (block->fec_seqs, guint16, i);
+      if (g_array_index (block->fec_states, TWCCPktState, i)
+          == RTP_TWCC_FECBLOCK_PKT_UNKNOWN) {
+        /* This redundant packet hasn't been not processed yet */
+        continue;
+      }
       SentPacket *pkt = _find_stats_sentpacket (statsman,
-          g_array_index (block->fec_seqs, guint16, i));
-      if (pkt->state == RTP_TWCC_FECBLOCK_PKT_LOST) {
+          seqnum);
+      if (pkt && pkt->state == RTP_TWCC_FECBLOCK_PKT_LOST) {
         pkt->state = RTP_TWCC_FECBLOCK_PKT_RECOVERED;
         nrecovered++;
       }
@@ -1068,6 +1086,11 @@ _rm_redundancy_links_pkt (TWCCStatsManager * ctx, SentPacket * pkt)
           GUINT_TO_POINTER (g_array_index (block->seqs, guint16, i)));
     }
     for (gsize i = 0; i < block->fec_seqs->len; i++) {
+      if (g_array_index (block->fec_states, TWCCPktState, i)
+          == RTP_TWCC_FECBLOCK_PKT_UNKNOWN) {
+        /* This redundant packet hasn't been not processed yet */
+        continue;
+      }
       g_hash_table_remove (ctx->seqnum_2_redblocks,
           GUINT_TO_POINTER (g_array_index (block->fec_seqs, guint16, i)));
     }
@@ -1124,6 +1147,9 @@ _find_sentpacket (TWCCStatsManager * statsman, guint16 seqnum)
 static void
 _process_pkt_feedback (SentPacket * pkt, TWCCStatsManager * statsman)
 {
+  GST_TRACE_OBJECT (statsman->parent,
+      "Processing feedback for packet #%u, state: %s", pkt->seqnum,
+      _pkt_state_s (pkt->state));
   if (pkt->stats_processed) {
     /* This packet was already added to stats structures, but we've got 
        one more feedback for it
@@ -1233,7 +1259,7 @@ _process_pkt_feedback (SentPacket * pkt, TWCCStatsManager * statsman)
           (gsize) pkt->redundant_idx) = pkt->state;
       g_hash_table_insert (statsman->redund_2_redblocks, key, block);
       /* Link this seqnum to the block in order to be able to 
-         release the block once this packet leave its lifetime */
+         release the block once this packet outlives its lifetime */
       g_hash_table_insert (statsman->seqnum_2_redblocks,
           GUINT_TO_POINTER (pkt->seqnum), block);
       for (gsize i = 0; i < pkt->protects_seqnums->len; ++i) {
