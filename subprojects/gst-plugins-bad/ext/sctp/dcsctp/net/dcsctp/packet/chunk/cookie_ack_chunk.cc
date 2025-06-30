@@ -9,11 +9,11 @@
  */
 #include "net/dcsctp/packet/chunk/cookie_ack_chunk.h"
 
-#include <stdint.h>
-
+#include <cstdint>
+#include <optional>
+#include <string>
 #include <vector>
 
-#include "absl/types/optional.h"
 #include "api/array_view.h"
 
 namespace dcsctp {
@@ -27,10 +27,10 @@ namespace dcsctp {
 //  +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 constexpr int CookieAckChunk::kType;
 
-absl::optional<CookieAckChunk> CookieAckChunk::Parse(
-    rtc::ArrayView<const uint8_t> data) {
+std::optional<CookieAckChunk> CookieAckChunk::Parse(
+    webrtc::ArrayView<const uint8_t> data) {
   if (!ParseTLV(data).has_value()) {
-    return absl::nullopt;
+    return std::nullopt;
   }
   return CookieAckChunk();
 }
