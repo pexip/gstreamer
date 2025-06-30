@@ -61,6 +61,7 @@ absl::string_view ToString(ReconfigurationResponseParameter::Result result) {
     case ReconfigurationResponseParameter::Result::kInProgress:
       return "In progress";
   }
+  return "Unknown";
 }
 
 std::optional<ReconfigurationResponseParameter>

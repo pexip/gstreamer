@@ -44,6 +44,7 @@ constexpr absl::string_view HandoverUnreadinessReasonToString(
     case HandoverUnreadinessReason::kPendingStreamResetRequest:
       return "PENDING_STREAM_RESET_REQUEST";
   }
+  return "Unknown";
 }
 }  // namespace
 

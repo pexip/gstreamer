@@ -89,7 +89,7 @@ RTC_NORETURN void WriteFatalLog(const char* /* file */,
 #if RTC_CHECK_MSG_ENABLED
 // Reads one argument from args, appends it to s and advances fmt.
 // Returns true iff an argument was sucessfully parsed.
-bool ParseArg(va_list* args, const CheckArgType** fmt, std::string* s) {
+static bool ParseArg(va_list* args, const CheckArgType** fmt, std::string* s) {
   if (**fmt == CheckArgType::kEnd)
     return false;
 
