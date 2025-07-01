@@ -22,13 +22,13 @@
 //   };
 //
 //   void some_function() {
-//     scoped_refptr<MyFoo> foo = new MyFoo();
+//     scoped_refptr<MyFoo> foo = make_ref_counted<MyFoo>();
 //     foo->Method(param);
 //     // `foo` is released when this function returns
 //   }
 //
 //   void some_other_function() {
-//     scoped_refptr<MyFoo> foo = new MyFoo();
+//     scoped_refptr<MyFoo> foo = make_ref_counted<MyFoo>();
 //     ...
 //     foo = nullptr;  // explicitly releases `foo`
 //     ...
@@ -41,7 +41,7 @@
 // references between the two objects, like so:
 //
 //   {
-//     scoped_refptr<MyFoo> a = new MyFoo();
+//     scoped_refptr<MyFoo> a = make_ref_counted<MyFoo>();
 //     scoped_refptr<MyFoo> b;
 //
 //     b.swap(a);
@@ -52,7 +52,7 @@
 // object, simply use the assignment operator:
 //
 //   {
-//     scoped_refptr<MyFoo> a = new MyFoo();
+//     scoped_refptr<MyFoo> a = make_ref_counted<MyFoo>();
 //     scoped_refptr<MyFoo> b;
 //
 //     b = a;
@@ -63,20 +63,22 @@
 #ifndef API_SCOPED_REFPTR_H_
 #define API_SCOPED_REFPTR_H_
 
-#include <memory>
+#include <cstddef>
 #include <utility>
+
+#include "absl/base/nullability.h"
 
 namespace webrtc {
 
 template <class T>
-class scoped_refptr {
+class ABSL_NULLABILITY_COMPATIBLE scoped_refptr {
  public:
-  typedef T element_type;
+  using element_type = T;
 
   scoped_refptr() : ptr_(nullptr) {}
   scoped_refptr(std::nullptr_t) : ptr_(nullptr) {}  // NOLINT(runtime/explicit)
 
-  explicit scoped_refptr(T* p) : ptr_(p) {
+  explicit scoped_refptr(T* absl_nullable p) : ptr_(p) {
     if (ptr_)
       ptr_->AddRef();
   }
@@ -103,23 +105,23 @@ class scoped_refptr {
       ptr_->Release();
   }
 
-  T* get() const { return ptr_; }
+  T* absl_nullable get() const { return ptr_; }
   explicit operator bool() const { return ptr_ != nullptr; }
   T& operator*() const { return *ptr_; }
-  T* operator->() const { return ptr_; }
+  T* absl_nullable operator->() const { return ptr_; }
 
   // Returns the (possibly null) raw pointer, and makes the scoped_refptr hold a
   // null pointer, all without touching the reference count of the underlying
   // pointed-to object. The object is still reference counted, and the caller of
   // release() is now the proud owner of one reference, so it is responsible for
   // calling Release() once on the object when no longer using it.
-  T* release() {
+  T* absl_nullable release() {
     T* retVal = ptr_;
     ptr_ = nullptr;
     return retVal;
   }
 
-  scoped_refptr<T>& operator=(T* p) {
+  scoped_refptr<T>& operator=(T* absl_nullable p) {
     // AddRef first so that self assignment should work
     if (p)
       p->AddRef();
@@ -149,7 +151,7 @@ class scoped_refptr {
     return *this;
   }
 
-  void swap(T** pp) noexcept {
+  void swap(T* absl_nonnull * absl_nonnull pp) noexcept {
     T* p = ptr_;
     ptr_ = *pp;
     *pp = p;
@@ -158,7 +160,7 @@ class scoped_refptr {
   void swap(scoped_refptr<T>& r) noexcept { swap(&r.ptr_); }
 
  protected:
-  T* ptr_;
+  T* absl_nullable ptr_;
 };
 
 template <typename T, typename U>
@@ -192,20 +194,20 @@ bool operator!=(std::nullptr_t, const scoped_refptr<T>& a) {
 
 // Comparison with raw pointer.
 template <typename T, typename U>
-bool operator==(const scoped_refptr<T>& a, const U* b) {
+bool operator==(const scoped_refptr<T>& a, const U* absl_nullable b) {
   return a.get() == b;
 }
 template <typename T, typename U>
-bool operator!=(const scoped_refptr<T>& a, const U* b) {
+bool operator!=(const scoped_refptr<T>& a, const U* absl_nullable b) {
   return !(a == b);
 }
 
 template <typename T, typename U>
-bool operator==(const T* a, const scoped_refptr<U>& b) {
+bool operator==(const T* absl_nullable a, const scoped_refptr<U>& b) {
   return a == b.get();
 }
 template <typename T, typename U>
-bool operator!=(const T* a, const scoped_refptr<U>& b) {
+bool operator!=(const T* absl_nullable a, const scoped_refptr<U>& b) {
   return !(a == b);
 }
 
@@ -217,11 +219,12 @@ bool operator<(const scoped_refptr<T>& a, const scoped_refptr<U>& b) {
 
 }  // namespace webrtc
 
+#ifdef WEBRTC_ALLOW_DEPRECATED_NAMESPACES
 namespace rtc {
 // Backwards compatible alias.
-// TODO(bugs.webrtc.org/15622): Deprecate and remove.
-template <typename T>
-using scoped_refptr = webrtc::scoped_refptr<T>;
+// TODO: bugs.webrtc.org/42225969 - Deprecate and remove.
+using ::webrtc::scoped_refptr;
 }  // namespace rtc
+#endif  // WEBRTC_ALLOW_DEPRECATED_NAMESPACES
 
 #endif  // API_SCOPED_REFPTR_H_
