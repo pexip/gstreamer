@@ -10,19 +10,20 @@
 #ifndef NET_DCSCTP_SOCKET_TRANSMISSION_CONTROL_BLOCK_H_
 #define NET_DCSCTP_SOCKET_TRANSMISSION_CONTROL_BLOCK_H_
 
-#include <cstdint>
+#include <cstddef>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
-#include <vector>
 
-#include "absl/functional/bind_front.h"
 #include "absl/strings/string_view.h"
-#include "api/task_queue/task_queue_base.h"
-#include "net/dcsctp/common/sequence_numbers.h"
+#include "api/units/time_delta.h"
+#include "api/units/timestamp.h"
+#include "net/dcsctp/common/internal_types.h"
 #include "net/dcsctp/packet/chunk/cookie_echo_chunk.h"
 #include "net/dcsctp/packet/sctp_packet.h"
+#include "net/dcsctp/public/dcsctp_handover_state.h"
 #include "net/dcsctp/public/dcsctp_options.h"
 #include "net/dcsctp/public/dcsctp_socket.h"
 #include "net/dcsctp/rx/data_tracker.h"
@@ -120,7 +121,7 @@ class TransmissionControlBlock : public Context {
 
   // Called when the COOKIE ACK chunk has been received, to allow further
   // packets to be sent.
-  void ClearCookieEchoChunk() { cookie_echo_chunk_ = absl::nullopt; }
+  void ClearCookieEchoChunk() { cookie_echo_chunk_ = std::nullopt; }
 
   bool has_cookie_echo_chunk() const { return cookie_echo_chunk_.has_value(); }
 
@@ -187,7 +188,7 @@ class TransmissionControlBlock : public Context {
   // including a COOKIE ECHO). So if `cookie_echo_chunk_` is present, the
   // SendBufferedChunks will always only just send one packet, with this chunk
   // as the first chunk in the packet.
-  absl::optional<CookieEchoChunk> cookie_echo_chunk_ = absl::nullopt;
+  std::optional<CookieEchoChunk> cookie_echo_chunk_ = std::nullopt;
 };
 }  // namespace dcsctp
 
