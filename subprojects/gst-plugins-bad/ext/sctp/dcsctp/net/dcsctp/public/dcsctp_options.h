@@ -10,10 +10,10 @@
 #ifndef NET_DCSCTP_PUBLIC_DCSCTP_OPTIONS_H_
 #define NET_DCSCTP_PUBLIC_DCSCTP_OPTIONS_H_
 
-#include <stddef.h>
-#include <stdint.h>
+#include <cstddef>
+#include <cstdint>
+#include <optional>
 
-#include "absl/types/optional.h"
 #include "net/dcsctp/public/types.h"
 
 namespace dcsctp {
@@ -85,6 +85,12 @@ struct DcSctpOptions {
   // buffer is fully utilized.
   size_t max_receiver_window_buffer_size = 5 * 1024 * 1024;
 
+  // Enables receive pull mode - `DcSctpCallbacks::OnMessageReady` will be
+  // called when there are messages ready to be read instead of
+  // `DcSctpCallbacks::OnMessageReceived`.  It is up to the
+  // caller to call `DcSctpSocket::GetNextMessage()` to receive the messages.
+  bool enable_receive_pull_mode = false;
+
   // Send queue total size limit. It will not be possible to queue more data if
   // the queue size is larger than this number.
   size_t max_send_buffer_size = 2'000'000;
@@ -128,7 +134,7 @@ struct DcSctpOptions {
   // transient network issues. Setting this value may require changing
   // `max_retransmissions` and `max_init_retransmits` to ensure that the
   // connection is not closed too quickly.
-  absl::optional<DurationMs> max_timer_backoff_duration = absl::nullopt;
+  std::optional<DurationMs> max_timer_backoff_duration = std::nullopt;
 
   // Hearbeat interval (on idle connections only). Set to zero to disable.
   DurationMs heartbeat_interval = DurationMs(30000);
@@ -175,6 +181,16 @@ struct DcSctpOptions {
   // creating small fragmented packets.
   size_t avoid_fragmentation_cwnd_mtus = 6;
 
+  // When the congestion window is below this number of MTUs, sent data chunks
+  // will have the "I" (Immediate SACK - RFC7053) bit set. That will prevent the
+  // receiver from delaying the SACK, which result in shorter time until the
+  // sender can send the next packet as its driven by SACKs. This can reduce
+  // latency for low utilized and lossy connections.
+  //
+  // Default value set to be same as initial congestion window. Set to zero to
+  // disable.
+  size_t immediate_sack_under_cwnd_mtus = 10;
+
   // The number of packets that may be sent at once. This is limited to avoid
   // bursts that too quickly fill the send buffer. Typically in a a socket in
   // its "slow start" phase (when it sends as much as it can), it will send
@@ -183,13 +199,13 @@ struct DcSctpOptions {
   // retransmission scenarios.
   int max_burst = 4;
 
-  // Maximum Data Retransmit Attempts (per DATA chunk). Set to absl::nullopt for
+  // Maximum Data Retransmit Attempts (per DATA chunk). Set to std::nullopt for
   // no limit.
-  absl::optional<int> max_retransmissions = 10;
+  std::optional<int> max_retransmissions = 10;
 
   // Max.Init.Retransmits (https://tools.ietf.org/html/rfc4960#section-15). Set
-  // to absl::nullopt for no limit.
-  absl::optional<int> max_init_retransmits = 8;
+  // to std::nullopt for no limit.
+  std::optional<int> max_init_retransmits = 8;
 
   // RFC3758 Partial Reliability Extension
   bool enable_partial_reliability = true;
