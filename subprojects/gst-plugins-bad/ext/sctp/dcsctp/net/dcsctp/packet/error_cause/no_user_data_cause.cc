@@ -9,17 +9,15 @@
  */
 #include "net/dcsctp/packet/error_cause/no_user_data_cause.h"
 
-#include <stdint.h>
-
+#include <cstdint>
+#include <optional>
 #include <string>
-#include <type_traits>
 #include <vector>
 
-#include "absl/types/optional.h"
 #include "api/array_view.h"
+#include "net/dcsctp/common/internal_types.h"
 #include "net/dcsctp/packet/bounded_byte_reader.h"
 #include "net/dcsctp/packet/bounded_byte_writer.h"
-#include "net/dcsctp/packet/tlv_trait.h"
 #include "rtc_base/strings/string_builder.h"
 
 namespace dcsctp {
@@ -34,11 +32,11 @@ namespace dcsctp {
 //  +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 constexpr int NoUserDataCause::kType;
 
-absl::optional<NoUserDataCause> NoUserDataCause::Parse(
-    rtc::ArrayView<const uint8_t> data) {
-  absl::optional<BoundedByteReader<kHeaderSize>> reader = ParseTLV(data);
+std::optional<NoUserDataCause> NoUserDataCause::Parse(
+    webrtc::ArrayView<const uint8_t> data) {
+  std::optional<BoundedByteReader<kHeaderSize>> reader = ParseTLV(data);
   if (!reader.has_value()) {
-    return absl::nullopt;
+    return std::nullopt;
   }
   TSN tsn(reader->Load32<4>());
   return NoUserDataCause(tsn);
@@ -50,7 +48,7 @@ void NoUserDataCause::SerializeTo(std::vector<uint8_t>& out) const {
 }
 
 std::string NoUserDataCause::ToString() const {
-  rtc::StringBuilder sb;
+  webrtc::StringBuilder sb;
   sb << "No User Data, tsn=" << *tsn_;
   return sb.Release();
 }
