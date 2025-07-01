@@ -3,6 +3,16 @@ subdir('third_party')
 
 # dcSCTP
 dcsctp_sources = [
+  # absl
+  'absl/base/internal/raw_logging.cc',
+  'absl/strings/ascii.cc',
+  'absl/strings/charconv.cc',
+  'absl/strings/internal/charconv_bigint.cc',
+  'absl/strings/internal/charconv_parse.cc',
+  'absl/strings/internal/memutil.cc',
+  'absl/strings/match.cc',
+  'absl/strings/numbers.cc',
+
   # rtc_base
   'rtc_base/memory/aligned_malloc.cc',
   'rtc_base/logging.cc',
@@ -110,7 +120,9 @@ dcsctp_sources = [
 
 threads_dep = dependency('threads')
 
-dcsctp_cppargs = []
+dcsctp_cppargs = [
+  '-DWEBRTC_ALLOW_DEPRECATED_NAMESPACES',
+]
 dcsctp_deps = [threads_dep, crc32c_dep]
 
 if host_system == 'windows'

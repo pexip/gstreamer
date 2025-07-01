@@ -10,30 +10,27 @@
 #ifndef NET_DCSCTP_SOCKET_STREAM_RESET_HANDLER_H_
 #define NET_DCSCTP_SOCKET_STREAM_RESET_HANDLER_H_
 
-#include <cstdint>
 #include <memory>
-#include <string>
+#include <optional>
 #include <utility>
 #include <vector>
 
 #include "absl/functional/bind_front.h"
 #include "absl/strings/string_view.h"
-#include "absl/types/optional.h"
 #include "api/array_view.h"
 #include "api/units/time_delta.h"
 #include "net/dcsctp/common/internal_types.h"
+#include "net/dcsctp/common/sequence_numbers.h"
 #include "net/dcsctp/packet/chunk/reconfig_chunk.h"
-#include "net/dcsctp/packet/parameter/incoming_ssn_reset_request_parameter.h"
-#include "net/dcsctp/packet/parameter/outgoing_ssn_reset_request_parameter.h"
+#include "net/dcsctp/packet/parameter/parameter.h"
 #include "net/dcsctp/packet/parameter/reconfiguration_response_parameter.h"
-#include "net/dcsctp/packet/sctp_packet.h"
-#include "net/dcsctp/public/dcsctp_socket.h"
+#include "net/dcsctp/public/dcsctp_handover_state.h"
+#include "net/dcsctp/public/types.h"
 #include "net/dcsctp/rx/data_tracker.h"
 #include "net/dcsctp/rx/reassembly_queue.h"
 #include "net/dcsctp/socket/context.h"
 #include "net/dcsctp/timer/timer.h"
 #include "net/dcsctp/tx/retransmission_queue.h"
-#include "rtc_base/containers/flat_set.h"
 
 namespace dcsctp {
 
@@ -100,13 +97,13 @@ class StreamResetHandler {
   // time and also multiple times. It will enqueue requests that can't be
   // directly fulfilled, and will asynchronously process them when any ongoing
   // request has completed.
-  void ResetStreams(rtc::ArrayView<const StreamID> outgoing_streams);
+  void ResetStreams(webrtc::ArrayView<const StreamID> outgoing_streams);
 
   // Creates a Reset Streams request that must be sent if returned. Will start
-  // the reconfig timer. Will return absl::nullopt if there is no need to
+  // the reconfig timer. Will return std::nullopt if there is no need to
   // create a request (no streams to reset) or if there already is an ongoing
   // stream reset request that hasn't completed yet.
-  absl::optional<ReConfigChunk> MakeStreamResetRequest();
+  std::optional<ReConfigChunk> MakeStreamResetRequest();
 
   // Called when handling and incoming RE-CONFIG chunk.
   void HandleReConfig(ReConfigChunk chunk);
@@ -124,7 +121,7 @@ class StreamResetHandler {
   class CurrentRequest {
    public:
     CurrentRequest(TSN sender_last_assigned_tsn, std::vector<StreamID> streams)
-        : req_seq_nbr_(absl::nullopt),
+        : req_seq_nbr_(std::nullopt),
           sender_last_assigned_tsn_(sender_last_assigned_tsn),
           streams_(std::move(streams)) {}
 
@@ -152,7 +149,7 @@ class StreamResetHandler {
     // If the receiver can't apply the request yet (and answered "In Progress"),
     // this will be called to prepare the request to be retransmitted at a later
     // time.
-    void PrepareRetransmission() { req_seq_nbr_ = absl::nullopt; }
+    void PrepareRetransmission() { req_seq_nbr_ = std::nullopt; }
 
     // If the request hasn't been sent yet, this assigns it a request number.
     void PrepareToSend(ReconfigRequestSN new_req_seq_nbr) {
@@ -164,7 +161,7 @@ class StreamResetHandler {
     // has been prepared, but has not yet been sent. This is typically used when
     // the peer responded "in progress" and the same request (but a different
     // request number) must be sent again.
-    absl::optional<ReconfigRequestSN> req_seq_nbr_;
+    std::optional<ReconfigRequestSN> req_seq_nbr_;
     // The sender's (that's us) last assigned TSN, from the retransmission
     // queue.
     TSN sender_last_assigned_tsn_;
@@ -176,9 +173,9 @@ class StreamResetHandler {
   bool Validate(const ReConfigChunk& chunk);
 
   // Processes a stream stream reconfiguration chunk and may either return
-  // absl::nullopt (on protocol errors), or a list of responses - either 0, 1
+  // std::nullopt (on protocol errors), or a list of responses - either 0, 1
   // or 2.
-  absl::optional<std::vector<ReconfigurationResponseParameter>> Process(
+  std::optional<std::vector<ReconfigurationResponseParameter>> Process(
       const ReConfigChunk& chunk);
 
   // Creates the actual RE-CONFIG chunk. A request (which set `current_request`)
@@ -226,7 +223,7 @@ class StreamResetHandler {
   ReconfigRequestSN next_outgoing_req_seq_nbr_;
 
   // The current stream request operation.
-  absl::optional<CurrentRequest> current_request_;
+  std::optional<CurrentRequest> current_request_;
 
   // For incoming requests - last processed request sequence number.
   UnwrappedReconfigRequestSn last_processed_req_seq_nbr_;

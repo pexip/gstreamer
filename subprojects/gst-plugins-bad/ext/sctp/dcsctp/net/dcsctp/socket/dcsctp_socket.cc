@@ -10,18 +10,22 @@
 #include "net/dcsctp/socket/dcsctp_socket.h"
 
 #include <algorithm>
+#include <cstddef>
 #include <cstdint>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
 
 #include "absl/functional/bind_front.h"
-#include "absl/memory/memory.h"
 #include "absl/strings/string_view.h"
-#include "absl/types/optional.h"
 #include "api/array_view.h"
+#include "api/task_queue/task_queue_base.h"
+#include "api/units/time_delta.h"
+#include "api/units/timestamp.h"
+#include "net/dcsctp/common/internal_types.h"
 #include "net/dcsctp/packet/chunk/abort_chunk.h"
 #include "net/dcsctp/packet/chunk/chunk.h"
 #include "net/dcsctp/packet/chunk/cookie_ack_chunk.h"
@@ -57,7 +61,7 @@
 #include "net/dcsctp/packet/parameter/supported_extensions_parameter.h"
 #include "net/dcsctp/packet/parameter/zero_checksum_acceptable_chunk_parameter.h"
 #include "net/dcsctp/packet/sctp_packet.h"
-#include "net/dcsctp/packet/tlv_trait.h"
+#include "net/dcsctp/public/dcsctp_handover_state.h"
 #include "net/dcsctp/public/dcsctp_message.h"
 #include "net/dcsctp/public/dcsctp_options.h"
 #include "net/dcsctp/public/dcsctp_socket.h"
@@ -73,7 +77,6 @@
 #include "net/dcsctp/socket/transmission_control_block.h"
 #include "net/dcsctp/timer/timer.h"
 #include "net/dcsctp/tx/retransmission_queue.h"
-#include "net/dcsctp/tx/send_queue.h"
 #include "rtc_base/checks.h"
 #include "rtc_base/logging.h"
 #include "rtc_base/strings/string_builder.h"
@@ -97,7 +100,7 @@ Capabilities ComputeCapabilities(const DcSctpOptions& options,
                                  uint16_t peer_nbr_inbound_streams,
                                  const Parameters& parameters) {
   Capabilities capabilities;
-  absl::optional<SupportedExtensionsParameter> supported_extensions =
+  std::optional<SupportedExtensionsParameter> supported_extensions =
       parameters.get<SupportedExtensionsParameter>();
 
   if (options.enable_partial_reliability) {
@@ -168,7 +171,7 @@ TieTag MakeTieTag(DcSctpSocketCallbacks& cb) {
 }
 
 SctpImplementation DeterminePeerImplementation(
-    rtc::ArrayView<const uint8_t> cookie) {
+    webrtc::ArrayView<const uint8_t> cookie) {
   if (cookie.size() > 8) {
     absl::string_view magic(reinterpret_cast<const char*>(cookie.data()), 8);
     if (magic == "dcSCTP00") {
@@ -224,7 +227,8 @@ std::string DcSctpSocket::log_prefix() const {
 }
 
 bool DcSctpSocket::IsConsistent() const {
-  if (tcb_ != nullptr && tcb_->reassembly_queue().HasMessages()) {
+  if (tcb_ != nullptr && (!options_.enable_receive_pull_mode &&
+                          tcb_->reassembly_queue().HasMessages())) {
     return false;
   }
   switch (state_) {
@@ -320,7 +324,7 @@ void DcSctpSocket::Connect() {
         callbacks_.GetRandomInt(kMinVerificationTag, kMaxVerificationTag));
     RTC_DLOG(LS_INFO)
         << log_prefix()
-        << rtc::StringFormat(
+        << webrtc::StringFormat(
                "Connecting. my_verification_tag=%08x, my_initial_tsn=%u",
                *connect_params_.verification_tag, *connect_params_.initial_tsn);
     SendInit();
@@ -495,7 +499,7 @@ SendStatus DcSctpSocket::Send(DcSctpMessage message,
 }
 
 std::vector<SendStatus> DcSctpSocket::SendMany(
-    rtc::ArrayView<DcSctpMessage> messages,
+    webrtc::ArrayView<DcSctpMessage> messages,
     const SendOptions& send_options) {
   CallbackDeferrer::ScopedDeferrer deferrer(callbacks_);
   Timestamp now = callbacks_.Now();
@@ -561,7 +565,7 @@ SendStatus DcSctpSocket::InternalSend(const DcSctpMessage& message,
 }
 
 ResetStreamsStatus DcSctpSocket::ResetStreams(
-    rtc::ArrayView<const StreamID> outgoing_streams) {
+    webrtc::ArrayView<const StreamID> outgoing_streams) {
   CallbackDeferrer::ScopedDeferrer deferrer(callbacks_);
 
   if (tcb_ == nullptr) {
@@ -597,7 +601,7 @@ SocketState DcSctpSocket::state() const {
     case State::kShutdownAckSent:
       return SocketState::kShuttingDown;
   }
-  
+
   return SocketState::kClosed;
 }
 
@@ -618,9 +622,9 @@ void DcSctpSocket::SetBufferedAmountLowThreshold(StreamID stream_id,
   send_queue_.SetBufferedAmountLowThreshold(stream_id, bytes);
 }
 
-absl::optional<Metrics> DcSctpSocket::GetMetrics() const {
+std::optional<Metrics> DcSctpSocket::GetMetrics() const {
   if (tcb_ == nullptr) {
-    return absl::nullopt;
+    return std::nullopt;
   }
 
   Metrics metrics = metrics_;
@@ -663,7 +667,7 @@ void DcSctpSocket::MaybeSendShutdownOnPacketReceived(const SctpPacket& packet) {
 }
 
 void DcSctpSocket::MaybeSendResetStreamsRequest() {
-  absl::optional<ReConfigChunk> reconfig =
+  std::optional<ReConfigChunk> reconfig =
       tcb_->stream_reset_handler().MakeStreamResetRequest();
   if (reconfig.has_value()) {
     SctpPacket::Builder builder = tcb_->PacketBuilder();
@@ -721,7 +725,7 @@ bool DcSctpSocket::ValidatePacket(const SctpPacket& packet) {
     }
     callbacks_.OnError(
         ErrorKind::kParseFailed,
-        rtc::StringFormat(
+        webrtc::StringFormat(
             "Packet has invalid verification tag: %08x, expected %08x",
             *header.verification_tag, *connect_params_.verification_tag));
     return false;
@@ -766,7 +770,7 @@ bool DcSctpSocket::ValidatePacket(const SctpPacket& packet) {
 
   callbacks_.OnError(
       ErrorKind::kParseFailed,
-      rtc::StringFormat(
+      webrtc::StringFormat(
           "Packet has invalid verification tag: %08x, expected %08x",
           *header.verification_tag, *my_verification_tag));
   return false;
@@ -785,7 +789,7 @@ void DcSctpSocket::HandleTimeout(TimeoutID timeout_id) {
   RTC_DCHECK(IsConsistent());
 }
 
-void DcSctpSocket::ReceivePacket(rtc::ArrayView<const uint8_t> data) {
+void DcSctpSocket::ReceivePacket(webrtc::ArrayView<const uint8_t> data) {
   CallbackDeferrer::ScopedDeferrer deferrer(callbacks_);
 
   ++metrics_.rx_packets_count;
@@ -794,7 +798,7 @@ void DcSctpSocket::ReceivePacket(rtc::ArrayView<const uint8_t> data) {
     packet_observer_->OnReceivedPacket(TimeMs(callbacks_.Now().ms()), data);
   }
 
-  absl::optional<SctpPacket> packet = SctpPacket::Parse(data, options_);
+  std::optional<SctpPacket> packet = SctpPacket::Parse(data, options_);
   if (!packet.has_value()) {
     // https://tools.ietf.org/html/rfc4960#section-6.8
     // "The default procedure for handling invalid SCTP packets is to
@@ -835,7 +839,8 @@ void DcSctpSocket::ReceivePacket(rtc::ArrayView<const uint8_t> data) {
   RTC_DCHECK(IsConsistent());
 }
 
-void DcSctpSocket::DebugPrintOutgoing(rtc::ArrayView<const uint8_t> payload) {
+void DcSctpSocket::DebugPrintOutgoing(
+    webrtc::ArrayView<const uint8_t> payload) {
   auto packet = SctpPacket::Parse(payload, options_);
   RTC_DCHECK(packet.has_value());
 
@@ -912,7 +917,7 @@ bool DcSctpSocket::HandleUnrecognizedChunk(
   RTC_DLOG(LS_VERBOSE) << log_prefix() << "Received unknown chunk: "
                        << static_cast<int>(descriptor.type);
   if (report_as_error) {
-    rtc::StringBuilder sb;
+    webrtc::StringBuilder sb;
     sb << "Received unknown chunk of type: "
        << static_cast<int>(descriptor.type) << " with report-error bit set";
     callbacks_.OnError(ErrorKind::kParseFailed, sb.str());
@@ -1014,7 +1019,7 @@ TimeDelta DcSctpSocket::OnShutdownTimerExpiry() {
   return tcb_->current_rto();
 }
 
-void DcSctpSocket::OnSentPacket(rtc::ArrayView<const uint8_t> packet,
+void DcSctpSocket::OnSentPacket(webrtc::ArrayView<const uint8_t> packet,
                                 SendPacketStatus status) {
   // The packet observer is invoked even if the packet was failed to be sent, to
   // indicate an attempt was made.
@@ -1043,22 +1048,22 @@ bool DcSctpSocket::ValidateHasTCB() {
 }
 
 void DcSctpSocket::ReportFailedToParseChunk(int chunk_type) {
-  rtc::StringBuilder sb;
+  webrtc::StringBuilder sb;
   sb << "Failed to parse chunk of type: " << chunk_type;
   callbacks_.OnError(ErrorKind::kParseFailed, sb.str());
 }
 
-void DcSctpSocket::HandleData(const CommonHeader& header,
+void DcSctpSocket::HandleData(const CommonHeader& /* header */,
                               const SctpPacket::ChunkDescriptor& descriptor) {
-  absl::optional<DataChunk> chunk = DataChunk::Parse(descriptor.data);
+  std::optional<DataChunk> chunk = DataChunk::Parse(descriptor.data);
   if (ValidateParseSuccess(chunk) && ValidateHasTCB()) {
     HandleDataCommon(*chunk);
   }
 }
 
-void DcSctpSocket::HandleIData(const CommonHeader& header,
+void DcSctpSocket::HandleIData(const CommonHeader& /* header */,
                                const SctpPacket::ChunkDescriptor& descriptor) {
-  absl::optional<IDataChunk> chunk = IDataChunk::Parse(descriptor.data);
+  std::optional<IDataChunk> chunk = IDataChunk::Parse(descriptor.data);
   if (ValidateParseSuccess(chunk) && ValidateHasTCB()) {
     HandleDataCommon(*chunk);
   }
@@ -1087,15 +1092,24 @@ void DcSctpSocket::HandleDataCommon(AnyDataChunk& chunk) {
                        << tcb_->reassembly_queue().is_above_watermark();
 
   if (tcb_->reassembly_queue().is_full()) {
-    // If the reassembly queue is full, there is nothing that can be done. The
-    // specification only allows dropping gap-ack-blocks, and that's not
-    // likely to help as the socket has been trying to fill gaps since the
-    // watermark was reached.
-    packet_sender_.Send(tcb_->PacketBuilder().Add(AbortChunk(
-        true, Parameters::Builder().Add(OutOfResourceErrorCause()).Build())));
-    InternalClose(ErrorKind::kResourceExhaustion,
-                  "Reassembly Queue is exhausted");
-    return;
+    if (tcb_->reassembly_queue().HasMessages()) {
+      // If the reassembly queue is full but there are assembled messages
+      // waiting to be pulled, we can't do anything with this data except drop
+      // it, and hope the upper layer drains the accumulated messages soon.
+      RTC_DLOG(LS_VERBOSE) << log_prefix()
+                           << "Rejected data because of full reassembly queue";
+      return;
+    } else {
+      // If the reassembly queue is full and there's no messages waiting, there
+      // is nothing that can be done. The specification only allows dropping
+      // gap-ack-blocks, and that's not likely to help as the socket has been
+      // trying to fill gaps since the watermark was reached.
+      packet_sender_.Send(tcb_->PacketBuilder().Add(AbortChunk(
+          true, Parameters::Builder().Add(OutOfResourceErrorCause()).Build())));
+      InternalClose(ErrorKind::kResourceExhaustion,
+                    "Reassembly Queue is exhausted");
+      return;
+    }
   }
 
   if (tcb_->reassembly_queue().is_above_watermark()) {
@@ -1123,9 +1137,9 @@ void DcSctpSocket::HandleDataCommon(AnyDataChunk& chunk) {
   }
 }
 
-void DcSctpSocket::HandleInit(const CommonHeader& header,
+void DcSctpSocket::HandleInit(const CommonHeader& /* header */,
                               const SctpPacket::ChunkDescriptor& descriptor) {
-  absl::optional<InitChunk> chunk = InitChunk::Parse(descriptor.data);
+  std::optional<InitChunk> chunk = InitChunk::Parse(descriptor.data);
   if (!ValidateParseSuccess(chunk)) {
     return;
   }
@@ -1221,7 +1235,7 @@ void DcSctpSocket::HandleInit(const CommonHeader& header,
 
   RTC_DLOG(LS_VERBOSE)
       << log_prefix()
-      << rtc::StringFormat(
+      << webrtc::StringFormat(
              "Proceeding with connection. my_verification_tag=%08x, "
              "my_initial_tsn=%u, peer_verification_tag=%08x, "
              "peer_initial_tsn=%u",
@@ -1253,9 +1267,9 @@ void DcSctpSocket::HandleInit(const CommonHeader& header,
 }
 
 void DcSctpSocket::HandleInitAck(
-    const CommonHeader& header,
+    const CommonHeader& /* header */,
     const SctpPacket::ChunkDescriptor& descriptor) {
-  absl::optional<InitAckChunk> chunk = InitAckChunk::Parse(descriptor.data);
+  std::optional<InitAckChunk> chunk = InitAckChunk::Parse(descriptor.data);
   if (!ValidateParseSuccess(chunk)) {
     return;
   }
@@ -1313,14 +1327,13 @@ void DcSctpSocket::HandleInitAck(
 void DcSctpSocket::HandleCookieEcho(
     const CommonHeader& header,
     const SctpPacket::ChunkDescriptor& descriptor) {
-  absl::optional<CookieEchoChunk> chunk =
+  std::optional<CookieEchoChunk> chunk =
       CookieEchoChunk::Parse(descriptor.data);
   if (!ValidateParseSuccess(chunk)) {
     return;
   }
 
-  absl::optional<StateCookie> cookie =
-      StateCookie::Deserialize(chunk->cookie());
+  std::optional<StateCookie> cookie = StateCookie::Deserialize(chunk->cookie());
   if (!cookie.has_value()) {
     callbacks_.OnError(ErrorKind::kParseFailed, "Failed to parse state cookie");
     return;
@@ -1334,7 +1347,7 @@ void DcSctpSocket::HandleCookieEcho(
     if (header.verification_tag != cookie->my_tag()) {
       callbacks_.OnError(
           ErrorKind::kParseFailed,
-          rtc::StringFormat(
+          webrtc::StringFormat(
               "Received CookieEcho with invalid verification tag: %08x, "
               "expected %08x",
               *header.verification_tag, *cookie->my_tag()));
@@ -1453,9 +1466,9 @@ bool DcSctpSocket::HandleCookieEchoWithTCB(const CommonHeader& header,
 }
 
 void DcSctpSocket::HandleCookieAck(
-    const CommonHeader& header,
+    const CommonHeader& /* header */,
     const SctpPacket::ChunkDescriptor& descriptor) {
-  absl::optional<CookieAckChunk> chunk = CookieAckChunk::Parse(descriptor.data);
+  std::optional<CookieAckChunk> chunk = CookieAckChunk::Parse(descriptor.data);
   if (!ValidateParseSuccess(chunk)) {
     return;
   }
@@ -1478,15 +1491,38 @@ void DcSctpSocket::HandleCookieAck(
 }
 
 void DcSctpSocket::MaybeDeliverMessages() {
-  for (auto& message : tcb_->reassembly_queue().FlushMessages()) {
+  if (options_.enable_receive_pull_mode) {
+    if (tcb_->reassembly_queue().HasMessages()) {
+      callbacks_.OnMessageReady();
+    }
+    return;
+  }
+
+  while (std::optional<DcSctpMessage> message =
+             tcb_->reassembly_queue().GetNextMessage()) {
     ++metrics_.rx_messages_count;
-    callbacks_.OnMessageReceived(std::move(message));
+    callbacks_.OnMessageReceived(*std::move(message));
   }
 }
 
-void DcSctpSocket::HandleSack(const CommonHeader& header,
+size_t DcSctpSocket::MessagesReady() const {
+  return tcb_ != nullptr ? tcb_->reassembly_queue().MessagesReady() : 0;
+}
+
+std::optional<DcSctpMessage> DcSctpSocket::GetNextMessage() {
+  if (tcb_ == nullptr) {
+    return std::nullopt;
+  }
+  std::optional<DcSctpMessage> ret = tcb_->reassembly_queue().GetNextMessage();
+  if (ret.has_value()) {
+    ++metrics_.rx_messages_count;
+  }
+  return ret;
+}
+
+void DcSctpSocket::HandleSack(const CommonHeader& /* header */,
                               const SctpPacket::ChunkDescriptor& descriptor) {
-  absl::optional<SackChunk> chunk = SackChunk::Parse(descriptor.data);
+  std::optional<SackChunk> chunk = SackChunk::Parse(descriptor.data);
 
   if (ValidateParseSuccess(chunk) && ValidateHasTCB()) {
     Timestamp now = callbacks_.Now();
@@ -1517,9 +1553,9 @@ void DcSctpSocket::HandleSack(const CommonHeader& header,
 }
 
 void DcSctpSocket::HandleHeartbeatRequest(
-    const CommonHeader& header,
+    const CommonHeader& /* header */,
     const SctpPacket::ChunkDescriptor& descriptor) {
-  absl::optional<HeartbeatRequestChunk> chunk =
+  std::optional<HeartbeatRequestChunk> chunk =
       HeartbeatRequestChunk::Parse(descriptor.data);
 
   if (ValidateParseSuccess(chunk) && ValidateHasTCB()) {
@@ -1528,9 +1564,9 @@ void DcSctpSocket::HandleHeartbeatRequest(
 }
 
 void DcSctpSocket::HandleHeartbeatAck(
-    const CommonHeader& header,
+    const CommonHeader& /* header */,
     const SctpPacket::ChunkDescriptor& descriptor) {
-  absl::optional<HeartbeatAckChunk> chunk =
+  std::optional<HeartbeatAckChunk> chunk =
       HeartbeatAckChunk::Parse(descriptor.data);
 
   if (ValidateParseSuccess(chunk) && ValidateHasTCB()) {
@@ -1538,9 +1574,9 @@ void DcSctpSocket::HandleHeartbeatAck(
   }
 }
 
-void DcSctpSocket::HandleAbort(const CommonHeader& header,
+void DcSctpSocket::HandleAbort(const CommonHeader& /* header */,
                                const SctpPacket::ChunkDescriptor& descriptor) {
-  absl::optional<AbortChunk> chunk = AbortChunk::Parse(descriptor.data);
+  std::optional<AbortChunk> chunk = AbortChunk::Parse(descriptor.data);
   if (ValidateParseSuccess(chunk)) {
     std::string error_string = ErrorCausesToString(chunk->error_causes());
     if (tcb_ == nullptr) {
@@ -1558,9 +1594,9 @@ void DcSctpSocket::HandleAbort(const CommonHeader& header,
   }
 }
 
-void DcSctpSocket::HandleError(const CommonHeader& header,
+void DcSctpSocket::HandleError(const CommonHeader& /* header */,
                                const SctpPacket::ChunkDescriptor& descriptor) {
-  absl::optional<ErrorChunk> chunk = ErrorChunk::Parse(descriptor.data);
+  std::optional<ErrorChunk> chunk = ErrorChunk::Parse(descriptor.data);
   if (ValidateParseSuccess(chunk)) {
     std::string error_string = ErrorCausesToString(chunk->error_causes());
     if (tcb_ == nullptr) {
@@ -1576,10 +1612,10 @@ void DcSctpSocket::HandleError(const CommonHeader& header,
 }
 
 void DcSctpSocket::HandleReconfig(
-    const CommonHeader& header,
+    const CommonHeader& /* header */,
     const SctpPacket::ChunkDescriptor& descriptor) {
   Timestamp now = callbacks_.Now();
-  absl::optional<ReConfigChunk> chunk = ReConfigChunk::Parse(descriptor.data);
+  std::optional<ReConfigChunk> chunk = ReConfigChunk::Parse(descriptor.data);
   if (ValidateParseSuccess(chunk) && ValidateHasTCB()) {
     tcb_->stream_reset_handler().HandleReConfig(*std::move(chunk));
     // Handling this response may result in outgoing stream resets finishing
@@ -1700,7 +1736,7 @@ void DcSctpSocket::HandleShutdownComplete(
 void DcSctpSocket::HandleForwardTsn(
     const CommonHeader& header,
     const SctpPacket::ChunkDescriptor& descriptor) {
-  absl::optional<ForwardTsnChunk> chunk =
+  std::optional<ForwardTsnChunk> chunk =
       ForwardTsnChunk::Parse(descriptor.data);
   if (ValidateParseSuccess(chunk) && ValidateHasTCB()) {
     HandleForwardTsnCommon(*chunk);
@@ -1710,7 +1746,7 @@ void DcSctpSocket::HandleForwardTsn(
 void DcSctpSocket::HandleIForwardTsn(
     const CommonHeader& header,
     const SctpPacket::ChunkDescriptor& descriptor) {
-  absl::optional<IForwardTsnChunk> chunk =
+  std::optional<IForwardTsnChunk> chunk =
       IForwardTsnChunk::Parse(descriptor.data);
   if (ValidateParseSuccess(chunk) && ValidateHasTCB()) {
     HandleForwardTsnCommon(*chunk);
@@ -1742,7 +1778,7 @@ void DcSctpSocket::HandleForwardTsnCommon(const AnyForwardTsnChunk& chunk) {
 }
 
 void DcSctpSocket::MaybeSendShutdownOrAck() {
-  if (tcb_->retransmission_queue().unacked_bytes() != 0) {
+  if (tcb_->retransmission_queue().unacked_items() != 0) {
     return;
   }
 
@@ -1794,12 +1830,12 @@ HandoverReadinessStatus DcSctpSocket::GetHandoverReadiness() const {
   return status;
 }
 
-absl::optional<DcSctpSocketHandoverState>
+std::optional<DcSctpSocketHandoverState>
 DcSctpSocket::GetHandoverStateAndClose() {
   CallbackDeferrer::ScopedDeferrer deferrer(callbacks_);
 
   if (!GetHandoverReadiness().IsReady()) {
-    return absl::nullopt;
+    return std::nullopt;
   }
 
   DcSctpSocketHandoverState state;
