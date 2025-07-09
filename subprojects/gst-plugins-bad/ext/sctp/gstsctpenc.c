@@ -516,7 +516,6 @@ gst_sctp_enc_request_new_pad (GstElement * element, GstPadTemplate * template,
   GstPad *new_pad = NULL;
   GstSctpEncPad *sctpenc_pad;
   guint32 stream_id;
-  gint state;
   guint32 new_ppid;
   gboolean is_new_ppid;
 
@@ -526,16 +525,7 @@ gst_sctp_enc_request_new_pad (GstElement * element, GstPadTemplate * template,
     GST_SCTP_ENC_ASSOC_MUTEX_UNLOCK (self);
     return NULL;
   }
-
-  g_object_get (self->sctp_association, "state", &state, NULL);
   GST_SCTP_ENC_ASSOC_MUTEX_UNLOCK (self);
-
-  if (state != GST_SCTP_ASSOCIATION_STATE_CONNECTED) {
-    GST_ERROR_OBJECT
-        (self,
-        "The SCTP association must be established before a new stream can be created");
-    goto invalid_state;
-  }
 
   if (!template)
     goto invalid_parameter;
@@ -588,7 +578,6 @@ gst_sctp_enc_request_new_pad (GstElement * element, GstPadTemplate * template,
   if (!gst_element_add_pad (element, new_pad))
     goto error_add_pad;
 
-invalid_state:
 invalid_parameter:
   return new_pad;
 error_add_pad:
@@ -949,19 +938,10 @@ gst_sctp_enc_src_event (GstPad * pad, GstObject * parent, GstEvent * event)
 static gboolean
 disconnect (GstSctpEnc * self)
 {
-  gint state;
-
   GST_SCTP_ENC_ASSOC_MUTEX_LOCK (self);
 
   if (!self->sctp_association) {
     GST_ERROR_OBJECT (self, "No GstSctpAssociation");
-    GST_SCTP_ENC_ASSOC_MUTEX_UNLOCK (self);
-    return FALSE;
-  }
-
-  g_object_get (self->sctp_association, "state", &state, NULL);
-  if (state != GST_SCTP_ASSOCIATION_STATE_CONNECTED) {
-    GST_WARNING_OBJECT (self, "Cannot disconnect in non-CONNECTED state.");
     GST_SCTP_ENC_ASSOC_MUTEX_UNLOCK (self);
     return FALSE;
   }
