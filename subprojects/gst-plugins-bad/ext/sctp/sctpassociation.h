@@ -112,6 +112,8 @@ struct _GstSctpAssociation
   guint16 remote_port;
   gboolean use_sock_stream;
   gboolean aggressive_heartbeat;
+
+  // Must only be accessed from GSource async handlers
   SctpSocket * socket;
 
   GRecMutex association_mutex;
