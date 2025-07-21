@@ -621,7 +621,7 @@ gst_d3d12_swapchain_sink_set_info (GstVideoSink * sink, GstCaps * caps,
   guint min, max;
 
   min = BACK_BUFFER_COUNT;
-  max = 100;
+  max = BACK_BUFFER_COUNT * 10;
 
   if (!gst_video_calculate_display_ratio (&num, &den, video_width,
           video_height, video_par_n, video_par_d, display_par_n,
@@ -1140,7 +1140,7 @@ gst_d3d12_swapchain_sink_propose_allocation (GstBaseSink * sink,
 
   size = info.size;
   min = BACK_BUFFER_COUNT;
-  max = 100;
+  max = BACK_BUFFER_COUNT * 10;
   update = FALSE;
 
   bool is_d3d12 = false;
