@@ -618,11 +618,6 @@ gst_d3d12_swapchain_sink_set_info (GstVideoSink * sink, GstCaps * caps,
   gint display_par_d = 1;
   guint num, den;
 
-  guint min, max;
-
-  min = BACK_BUFFER_COUNT;
-  max = BACK_BUFFER_COUNT * 2;
-
   if (!gst_video_calculate_display_ratio (&num, &den, video_width,
           video_height, video_par_n, video_par_d, display_par_n,
           display_par_d)) {
@@ -677,7 +672,7 @@ gst_d3d12_swapchain_sink_set_info (GstVideoSink * sink, GstCaps * caps,
   priv->pool = gst_d3d12_buffer_pool_new (self->device);
   auto config = gst_buffer_pool_get_config (priv->pool);
 
-  gst_buffer_pool_config_set_params (config, priv->caps, priv->info.size, min, max);
+  gst_buffer_pool_config_set_params (config, priv->caps, priv->info.size, 0, 0);
   if (!gst_buffer_pool_set_config (priv->pool, config) ||
       !gst_buffer_pool_set_active (priv->pool, TRUE)) {
     GST_ELEMENT_ERROR (self, RESOURCE, FAILED, (nullptr),
@@ -1118,8 +1113,7 @@ gst_d3d12_swapchain_sink_propose_allocation (GstBaseSink * sink,
   GstCaps *caps;
   GstBufferPool *pool = nullptr;
   GstVideoInfo info;
-  guint size, min, max;
-  gboolean update;
+  guint size;
   gboolean need_pool;
 
   if (!self->device) {
@@ -1139,9 +1133,6 @@ gst_d3d12_swapchain_sink_propose_allocation (GstBaseSink * sink,
   }
 
   size = info.size;
-  min = BACK_BUFFER_COUNT;
-  max = BACK_BUFFER_COUNT * 2;
-  update = FALSE;
 
   bool is_d3d12 = false;
   auto features = gst_caps_get_features (caps, 0);
@@ -1165,13 +1156,8 @@ gst_d3d12_swapchain_sink_propose_allocation (GstBaseSink * sink,
           GST_BUFFER_POOL_OPTION_VIDEO_ALIGNMENT);
     }
 
-    if (gst_query_get_n_allocation_pools (query) > 0) {
-      gst_query_parse_nth_allocation_pool (query, 0, &pool, &size, &min, &max);
-      size = MAX (size, info.size);
-      update = TRUE;
-    }
+    gst_buffer_pool_config_set_params (config, caps, size, 2, 0);
 
-    gst_buffer_pool_config_set_params (config, caps, size, min, max);
     if (!gst_buffer_pool_set_config (pool, config)) {
       GST_ERROR_OBJECT (pool, "Couldn't set config");
       gst_object_unref (pool);
@@ -1187,10 +1173,7 @@ gst_d3d12_swapchain_sink_propose_allocation (GstBaseSink * sink,
     }
   }
 
-  if (update)
-    gst_query_set_nth_allocation_pool (query, 0, pool, size, min, max);
-  else
-    gst_query_add_allocation_pool (query, pool, size, min, max);
+  gst_query_add_allocation_pool (query, pool, size, 2, 0);
   gst_clear_object (&pool);
 
   gst_query_add_allocation_meta (query, GST_VIDEO_META_API_TYPE, nullptr);
