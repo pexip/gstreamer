@@ -47,15 +47,15 @@ typedef struct
   gboolean lost;
   gint redundant_idx;           /* if it's redudndant packet -- series number in a block,
                                    -1 otherwise */
-  gint redundant_num;           /* if it'r a redundant packet -- how many packets are 
+  gint redundant_num;           /* if it'r a redundant packet -- how many packets are
                                    in the block, -1 otherwise */
   guint32 protects_ssrc;        /* for redundant packets: SSRC of the data stream */
 
-  /* For redundant packets: seqnums of the packets being protected 
-   * by this packet. 
+  /* For redundant packets: seqnums of the packets being protected
+   * by this packet.
    * IMPORTANT: Once the packet is checked in before transmission, this array
    * contains rtp seqnums. After receiving a feedback on the packet, the array
-   * is converted to TWCC seqnums. This is done to shift some work to the 
+   * is converted to TWCC seqnums. This is done to shift some work to the
    * get_windowed_stats function, which should be less time-critical.
    */
   GArray *protects_seqnums;
@@ -121,6 +121,8 @@ struct _TWCCStatsManager
 
   GstClockTimeDiff avg_rtt;
   GstClockTimeDiff rtt;
+
+  GstClockTime underrun_tx_pkt_log_ts;
 };
 
 static SentPacket *_find_sentpacket (TWCCStatsManager * statsman,
@@ -366,10 +368,20 @@ _keep_history_length (TWCCStatsManager *statsman, gsize max_len,
       GST_LOG_OBJECT (statsman->parent,
           "sent_packets FIFO overflows, dropping");
     } else if (GST_CLOCK_TIME_IS_VALID (statsman->prev_stat_window_beginning) &&
-        GST_CLOCK_DIFF (pkt_ts, statsman->prev_stat_window_beginning)
-        < GST_MSECOND * 1500) {
-      GST_WARNING_OBJECT (statsman->parent, "Risk of"
-          " underrun of sent_packets FIFO");
+               GST_CLOCK_DIFF (pkt_ts, statsman->prev_stat_window_beginning) < GST_MSECOND * 1500 &&
+               GST_CLOCK_TIME_IS_VALID (cur_time)) {
+      const gboolean enough_time_since_last_record =
+        !GST_CLOCK_TIME_IS_VALID (statsman->underrun_tx_pkt_log_ts) ||
+        GST_CLOCK_DIFF (statsman->underrun_tx_pkt_log_ts, cur_time) > GST_SECOND * 2;
+      if (enough_time_since_last_record) {
+        statsman->underrun_tx_pkt_log_ts = cur_time;
+        GST_WARNING_OBJECT (statsman->parent,
+                            "Risk of"
+                            " underrun of sent_packets FIFO, len: %ld, %" GST_STIME_FORMAT,
+                            gst_vec_deque_get_length (statsman->sent_packets),
+                            GST_STIME_ARGS (GST_CLOCK_DIFF (pkt_ts, cur_time)));
+      }
+
     }
     gst_vec_deque_pop_head_struct (statsman->sent_packets);
     _rm_pkt_stats (statsman, head);
@@ -817,7 +829,7 @@ twcc_stats_ctx_add_packet (TWCCStatsManager *statsman, SentPacket *pkt)
 /******************************************************************************/
 /* Redundancy book keeping subpart
   "Was a certain packet recovered on the receiver side?"
-  
+
   * Organizes sent data packets and redundant packets into blocks
   * Keeps track of redundant packets reception such as RTX and FEC packets
   * Maps all packets to blocks and vice versa
@@ -885,7 +897,7 @@ redblock_2_key (GArray *seq)
 {
   guint32 key = 0;
   gsize i = 0;
-  /* In reality seq contains guint16, but we treat it as 32bits ints till 
+  /* In reality seq contains guint16, but we treat it as 32bits ints till
      we can */
   for (; i < seq->len / 2; i += 2) {
     key ^= g_array_index (seq, guint32, i / 2);
@@ -929,7 +941,7 @@ _redblock_reconsider (TWCCStatsManager *statsman, RedBlock *block)
   gchar states_media[48];
   gchar states_fec[16];
 
-  /* Special case for RTX: lost RTX introduces extra complexity which 
+  /* Special case for RTX: lost RTX introduces extra complexity which
      is easier to handle separately
    */
   if (block->seqs->len == 1) {
@@ -1073,7 +1085,7 @@ _get_ctx_for_pt (TWCCStatsManager *statsman, guint pt)
 static void
 _rm_redundancy_links_pkt (TWCCStatsManager *ctx, SentPacket *pkt)
 {
-  /* If this packet maps to a block in hash tables -- remove every links 
+  /* If this packet maps to a block in hash tables -- remove every links
      leading to this block as well as this packet: as we will remove this packet
      from the context, we will not be able to use this block anyways. */
   RedBlock *block = NULL;
@@ -1150,7 +1162,7 @@ _process_pkt_feedback (SentPacket *pkt, TWCCStatsManager *statsman)
       "Processing feedback for packet #%u, state: %s", pkt->seqnum,
       _pkt_state_s (pkt->state));
   if (pkt->stats_processed) {
-    /* This packet was already added to stats structures, but we've got 
+    /* This packet was already added to stats structures, but we've got
        one more feedback for it
      */
     RedBlock *block;
@@ -1243,7 +1255,7 @@ _process_pkt_feedback (SentPacket *pkt, TWCCStatsManager *statsman)
 
       _redblock_key_free (key);
 
-      /* Link this seqnum to the block in order to be able to 
+      /* Link this seqnum to the block in order to be able to
          release the block once this packet leave its lifetime */
       g_hash_table_insert (statsman->seqnum_2_redblocks,
           GUINT_TO_POINTER (pkt->seqnum), block);
@@ -1257,7 +1269,7 @@ _process_pkt_feedback (SentPacket *pkt, TWCCStatsManager *statsman)
       g_array_index (block->fec_states, TWCCPktState,
           (gsize) pkt->redundant_idx) = pkt->state;
       g_hash_table_insert (statsman->redund_2_redblocks, key, block);
-      /* Link this seqnum to the block in order to be able to 
+      /* Link this seqnum to the block in order to be able to
          release the block once this packet outlives its lifetime */
       g_hash_table_insert (statsman->seqnum_2_redblocks,
           GUINT_TO_POINTER (pkt->seqnum), block);
@@ -1337,6 +1349,8 @@ rtp_twcc_stats_manager_new (GObject *parent)
   statsman->first_fci_parse = TRUE;
   statsman->expected_parsed_seqnum = 0;
   statsman->expected_parsed_fb_pkt_count = 0;
+
+  statsman->underrun_tx_pkt_log_ts = GST_CLOCK_TIME_NONE;
 
   return statsman;
 }
@@ -1450,7 +1464,7 @@ rtp_twcc_stats_pkt_feedback (TWCCStatsManager *statsman,
       statsman->rtt = GST_CLOCK_DIFF (found->local_ts, current_time);
     } else {
       /* We've got feed back on the packet that was covered with the previous TWCC report.
-         Receiver could send two feedbacks on a single packet on purpose, 
+         Receiver could send two feedbacks on a single packet on purpose,
          so we just ignore it. */
       GST_LOG_OBJECT (statsman->parent,
           "Rejecting second feedback on a packet #%u: current state: %s, "
@@ -1600,7 +1614,7 @@ rtp_twcc_stats_check_for_lost_packets (TWCCStatsManager *statsman,
 
       } else {
         /* We've got feed back on the packet that was covered with the previous TWCC report.
-           Receiver could send two feedbacks on a single packet on purpose, 
+           Receiver could send two feedbacks on a single packet on purpose,
            so we just ignore it. */
         GST_LOG_OBJECT (statsman->parent,
             "Rejecting second feedback on a packet #%u", seqnum);
