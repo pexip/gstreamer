@@ -38,6 +38,11 @@
 
 #include "gstcheck.h"
 
+#include <stdio.h>
+#include <time.h>
+#include "gst/check/libcheck/check_list.h"
+#include "gst/check/libcheck/check_impl.h"
+
 GST_DEBUG_CATEGORY (check_debug);
 
 /* logging function for tests
@@ -1106,6 +1111,13 @@ gst_check_abi_list (GstCheckABIStruct list[], gboolean have_abi_sizes)
   }
 }
 
+static int
+_compare_tresult_duration (const void *a, const void *b)
+{
+  return (*(const TestResult **) b)->duration -
+      (*(const TestResult **) a)->duration;
+}
+
 /**
  * gst_check_run_suite: (skip)
  * @suite: the check test suite
@@ -1119,7 +1131,7 @@ gst_check_run_suite (Suite * suite, const gchar * name, const gchar * fname)
 {
   SRunner *sr;
   gchar *xmlfilename = NULL;
-  gint nf;
+  gint nr, nf;
   GTimer *timer;
 
   sr = srunner_create (suite);
@@ -1133,11 +1145,24 @@ gst_check_run_suite (Suite * suite, const gchar * name, const gchar * fname)
 
   timer = g_timer_new ();
   srunner_run_all (sr, CK_NORMAL);
+  nr = srunner_ntests_run (sr);
   nf = srunner_ntests_failed (sr);
-  g_print ("Check suite %s ran in %.3fs (tests failed: %d)\n",
-      name, g_timer_elapsed (timer, NULL), nf);
+  g_print ("Check suite %s ran in %.3fs (tests failed: %d/%d)\n", name,
+      g_timer_elapsed (timer, NULL), nf, nr);
   g_timer_destroy (timer);
   g_free (xmlfilename);
+
+  if (g_getenv ("GST_CHECK_DURATION")) {
+    TestResult **results = srunner_results (sr);
+    qsort (results, nr, sizeof (TestResult *), _compare_tresult_duration);
+    g_print ("Summary of Durations:\n");
+    for (int i = 0; i < nr; i++) {
+      TestResult *tr = results[i];
+      g_print ("%6.3fs - %s:%s\n", (float) tr->duration / US_PER_SEC,
+          tr->tcname, tr->tname);
+    }
+    free (results);
+  }
   srunner_free (sr);
   g_thread_pool_stop_unused_threads ();
   return nf;
