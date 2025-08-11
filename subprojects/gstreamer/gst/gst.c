@@ -1088,7 +1088,7 @@ gst_deinit (void)
   if (gst_deinitialized) {
     /* tell the user how naughty they've been */
     g_message ("GStreamer should not be deinitialized a second time.");
-    g_mutex_unlock (&init_lock);
+    g_rec_mutex_unlock (&init_lock);
     return;
   }
 
