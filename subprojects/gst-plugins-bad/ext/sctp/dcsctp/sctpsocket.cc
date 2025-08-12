@@ -390,8 +390,10 @@ sctp_socket_send (SctpSocket * socket, const uint8_t * data, size_t len, uint16_
     return SCTP_SOCKET_STATUS_MESSAGE_TOO_LARGE;
   }
 
-  std::vector<uint8_t> message_payload (data, data + len);
-  if (message_payload.empty ()) {
+  std::vector<uint8_t> message_payload;
+  if (len > 0 && data != nullptr) {
+    message_payload.assign(data, data + len);
+  } else {
     // https://www.rfc-editor.org/rfc/rfc8831.html#section-6.6
     // SCTP does not support the sending of empty user messages. Therefore, if
     // an empty message has to be sent, the appropriate PPID (WebRTC String
