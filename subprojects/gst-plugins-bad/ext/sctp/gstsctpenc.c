@@ -1,5 +1,7 @@
 /*
  * Copyright (c) 2015, Collabora Ltd.
+ * Copyright (c) 2023, Pexip AS
+ *  @author: Tulio Beloqui <tulio@pexip.com>
  *
  * Redistribution and use in source and binary forms, with or without modification,
  * are permitted provided that the following conditions are met:
@@ -27,6 +29,7 @@
 #include "config.h"
 #endif
 #include "gstsctpenc.h"
+#include "sctpassociation_factory.h"
 
 #include <gst/sctp/sctpsendmeta.h>
 #include <stdio.h>
@@ -51,6 +54,8 @@ enum
 {
   SIGNAL_SCTP_ASSOCIATION_ESTABLISHED,
   SIGNAL_GET_STREAM_BYTES_SENT,
+  SIGNAL_DISCONNECT,
+  SIGNAL_RECONNECT,
   NUM_SIGNALS
 };
 
@@ -63,6 +68,7 @@ enum
   PROP_GST_SCTP_ASSOCIATION_ID,
   PROP_REMOTE_SCTP_PORT,
   PROP_USE_SOCK_STREAM,
+  PROP_AGGRESSIVE_HEARTBEAT,
 
   NUM_PROPERTIES
 };
@@ -77,11 +83,15 @@ static GParamSpec *properties[NUM_PROPERTIES];
 
 #define BUFFER_FULL_SLEEP_TIME 100000
 
+#define GST_SCTP_ENC_GET_ASSOC_MUTEX(self) (&self->association_mutex)
+#define GST_SCTP_ENC_ASSOC_MUTEX_LOCK(self) (g_mutex_lock (GST_SCTP_ENC_GET_ASSOC_MUTEX (self)))
+#define GST_SCTP_ENC_ASSOC_MUTEX_UNLOCK(self) (g_mutex_unlock (GST_SCTP_ENC_GET_ASSOC_MUTEX (self)))
+
 GType gst_sctp_enc_pad_get_type (void);
 
 #define GST_TYPE_SCTP_ENC_PAD (gst_sctp_enc_pad_get_type())
-#define GST_SCTP_ENC_PAD(obj) (G_TYPE_CHECK_INSTANCE_CAST((obj), GST_TYPE_SCTP_ENC_PAD, GstSctpEncPad))
-#define GST_SCTP_ENC_PAD_CLASS(klass) (G_TYPE_CHECK_CLASS_CAST((klass), GST_TYPE_SCTP_ENC_PAD, GstSctpEncPadClass))
+#define GST_SCTP_ENC_PAD_CAST(obj) (GstSctpEncPad*)(obj)
+#define GST_SCTP_ENC_PAD_CAST_CLASS(klass) (G_TYPE_CHECK_CLASS_CAST((klass), GST_TYPE_SCTP_ENC_PAD, GstSctpEncPadClass))
 #define GST_IS_SCTP_ENC_PAD(obj) (G_TYPE_CHECK_INSTANCE_TYPE((obj), GST_TYPE_SCTP_ENC_PAD))
 #define GST_IS_SCTP_ENC_PAD_CLASS(klass) (G_TYPE_CHECK_CLASS_TYPE((klass), GST_TYPE_SCTP_ENC_PAD))
 
@@ -111,7 +121,7 @@ G_DEFINE_TYPE (GstSctpEncPad, gst_sctp_enc_pad, GST_TYPE_PAD);
 static void
 gst_sctp_enc_pad_finalize (GObject * object)
 {
-  GstSctpEncPad *self = GST_SCTP_ENC_PAD (object);
+  GstSctpEncPad *self = GST_SCTP_ENC_PAD_CAST (object);
 
   g_cond_clear (&self->cond);
   g_mutex_clear (&self->lock);
@@ -136,6 +146,7 @@ gst_sctp_enc_pad_init (GstSctpEncPad * self)
   self->clear_to_send = FALSE;
 }
 
+static void gst_sctp_enc_dispose (GObject * object);
 static void gst_sctp_enc_finalize (GObject * object);
 static void gst_sctp_enc_set_property (GObject * object, guint prop_id,
     const GValue * value, GParamSpec * pspec);
@@ -153,18 +164,23 @@ static gboolean gst_sctp_enc_sink_event (GstPad * pad, GstObject * parent,
     GstEvent * event);
 static gboolean gst_sctp_enc_src_event (GstPad * pad, GstObject * parent,
     GstEvent * event);
+static gboolean
+gst_sctp_enc_src_activate_mode (GstPad * pad, GstObject * parent,
+    GstPadMode mode, gboolean active);
 static void on_sctp_association_state_changed (GstSctpAssociation *
-    sctp_association, GParamSpec * pspec, GstSctpEnc * self);
+    sctp_association, GstSctpAssociationState state, gpointer user_data);
 
 static gboolean configure_association (GstSctpEnc * self);
-static void on_sctp_packet_out (GstSctpAssociation * sctp_association,
-    const guint8 * buf, gsize length, gpointer user_data);
-static void stop_srcpad_task (GstPad * pad, GstSctpEnc * self);
-static void sctpenc_cleanup (GstSctpEnc * self);
+static void cleanup_association (GstSctpEnc * self);
+
+static void on_sctp_packet_out (const guint8 * buf, gsize length,
+    gpointer user_data);
 static void get_config_from_caps (const GstCaps * caps, gboolean * ordered,
     GstSctpAssociationPartialReliability * reliability,
     guint32 * reliability_param, guint32 * ppid, gboolean * ppid_available);
 static guint64 on_get_stream_bytes_sent (GstSctpEnc * self, guint stream_id);
+static gboolean disconnect (GstSctpEnc * self);
+static void reconnect (GstSctpEnc * self);
 
 static void
 gst_sctp_enc_class_init (GstSctpEncClass * klass)
@@ -183,6 +199,7 @@ gst_sctp_enc_class_init (GstSctpEncClass * klass)
   gst_element_class_add_pad_template (GST_ELEMENT_CLASS (klass),
       gst_static_pad_template_get (&sink_template));
 
+  gobject_class->dispose = GST_DEBUG_FUNCPTR (gst_sctp_enc_dispose);
   gobject_class->finalize = GST_DEBUG_FUNCPTR (gst_sctp_enc_finalize);
   gobject_class->set_property = GST_DEBUG_FUNCPTR (gst_sctp_enc_set_property);
   gobject_class->get_property = GST_DEBUG_FUNCPTR (gst_sctp_enc_get_property);
@@ -215,6 +232,11 @@ gst_sctp_enc_class_init (GstSctpEncClass * klass)
       "When TRUE the partial reliability parameters of the channel are ignored.",
       DEFAULT_USE_SOCK_STREAM, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS);
 
+  properties[PROP_AGGRESSIVE_HEARTBEAT] =
+      g_param_spec_boolean ("aggressive-heartbeat", "Aggressive heartbeat",
+      "When set to TRUE, set the heartbeat interval to 1000ms and the assoc "
+      "rtx max to 2.", FALSE, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS);
+
   g_object_class_install_properties (gobject_class, NUM_PROPERTIES, properties);
 
   signals[SIGNAL_SCTP_ASSOCIATION_ESTABLISHED] =
@@ -228,8 +250,20 @@ gst_sctp_enc_class_init (GstSctpEncClass * klass)
       G_STRUCT_OFFSET (GstSctpEncClass, on_get_stream_bytes_sent), NULL, NULL,
       NULL, G_TYPE_UINT64, 1, G_TYPE_UINT);
 
+  signals[SIGNAL_DISCONNECT] = g_signal_new ("disconnect",
+      G_TYPE_FROM_CLASS (gobject_class), G_SIGNAL_RUN_LAST | G_SIGNAL_ACTION,
+      G_STRUCT_OFFSET (GstSctpEncClass, disconnect), NULL, NULL,
+      g_cclosure_marshal_generic, G_TYPE_BOOLEAN, 0);
+
+  signals[SIGNAL_RECONNECT] = g_signal_new ("reconnect",
+      G_TYPE_FROM_CLASS (gobject_class), G_SIGNAL_RUN_LAST | G_SIGNAL_ACTION,
+      G_STRUCT_OFFSET (GstSctpEncClass, reconnect), NULL, NULL,
+      g_cclosure_marshal_generic, G_TYPE_NONE, 0);
+
   klass->on_get_stream_bytes_sent =
       GST_DEBUG_FUNCPTR (on_get_stream_bytes_sent);
+  klass->disconnect = GST_DEBUG_FUNCPTR (disconnect);
+  klass->reconnect = GST_DEBUG_FUNCPTR (reconnect);
 
   gst_element_class_set_static_metadata (element_class,
       "SCTP Encoder",
@@ -259,10 +293,12 @@ data_queue_full_cb (GstDataQueue * queue, gpointer user_data)
 static void
 gst_sctp_enc_init (GstSctpEnc * self)
 {
+  g_mutex_init (GST_SCTP_ENC_GET_ASSOC_MUTEX (self));
+
+  self->sctp_association = NULL;
   self->sctp_association_id = DEFAULT_GST_SCTP_ASSOCIATION_ID;
   self->remote_sctp_port = DEFAULT_REMOTE_SCTP_PORT;
 
-  self->sctp_association = NULL;
   self->outbound_sctp_packet_queue =
       gst_data_queue_new (data_queue_check_full_cb, data_queue_full_cb,
       data_queue_empty_cb, NULL);
@@ -270,6 +306,8 @@ gst_sctp_enc_init (GstSctpEnc * self)
   self->src_pad = gst_pad_new_from_static_template (&src_template, "src");
   gst_pad_set_event_function (self->src_pad,
       GST_DEBUG_FUNCPTR ((GstPadEventFunction) gst_sctp_enc_src_event));
+  gst_pad_set_activatemode_function (self->src_pad,
+      GST_DEBUG_FUNCPTR (gst_sctp_enc_src_activate_mode));
   gst_element_add_pad (GST_ELEMENT (self), self->src_pad);
 
   g_queue_init (&self->pending_pads);
@@ -277,12 +315,41 @@ gst_sctp_enc_init (GstSctpEnc * self)
 }
 
 static void
+remove_sinkpad (const GValue * item, gpointer user_data)
+{
+  GstSctpEncPad *sctpenc_pad = g_value_get_object (item);
+  GstSctpEnc *self = user_data;
+
+  gst_sctp_enc_release_pad (GST_ELEMENT (self), GST_PAD (sctpenc_pad));
+}
+
+static void
+gst_sctp_enc_dispose (GObject * object)
+{
+  GstSctpEnc *self = GST_SCTP_ENC_CAST (object);
+
+  /* remove all sinkpads */
+  GstIterator *it;
+  it = gst_element_iterate_sink_pads (GST_ELEMENT (self));
+  while (gst_iterator_foreach (it, remove_sinkpad, self) == GST_ITERATOR_RESYNC)
+    gst_iterator_resync (it);
+  gst_iterator_free (it);
+  g_queue_clear (&self->pending_pads);
+
+  gst_pad_set_active (self->src_pad, FALSE);
+
+  G_OBJECT_CLASS (parent_class)->dispose (object);
+}
+
+static void
 gst_sctp_enc_finalize (GObject * object)
 {
-  GstSctpEnc *self = GST_SCTP_ENC (object);
+  GstSctpEnc *self = GST_SCTP_ENC_CAST (object);
 
   g_queue_clear (&self->pending_pads);
   gst_object_unref (self->outbound_sctp_packet_queue);
+
+  g_mutex_clear (GST_SCTP_ENC_GET_ASSOC_MUTEX (self));
 
   G_OBJECT_CLASS (parent_class)->finalize (object);
 }
@@ -291,7 +358,7 @@ static void
 gst_sctp_enc_set_property (GObject * object, guint prop_id,
     const GValue * value, GParamSpec * pspec)
 {
-  GstSctpEnc *self = GST_SCTP_ENC (object);
+  GstSctpEnc *self = GST_SCTP_ENC_CAST (object);
 
   switch (prop_id) {
     case PROP_GST_SCTP_ASSOCIATION_ID:
@@ -299,9 +366,30 @@ gst_sctp_enc_set_property (GObject * object, guint prop_id,
       break;
     case PROP_REMOTE_SCTP_PORT:
       self->remote_sctp_port = g_value_get_uint (value);
+      GST_SCTP_ENC_ASSOC_MUTEX_LOCK (self);
+      if (self->sctp_association) {
+        g_object_set (self->sctp_association, "remote-port",
+            self->remote_sctp_port, NULL);
+      }
+      GST_SCTP_ENC_ASSOC_MUTEX_UNLOCK (self);
       break;
     case PROP_USE_SOCK_STREAM:
       self->use_sock_stream = g_value_get_boolean (value);
+      GST_SCTP_ENC_ASSOC_MUTEX_LOCK (self);
+      if (self->sctp_association) {
+        g_object_set (self->sctp_association, "use-sock-stream",
+            self->use_sock_stream, NULL);
+      }
+      GST_SCTP_ENC_ASSOC_MUTEX_UNLOCK (self);
+      break;
+    case PROP_AGGRESSIVE_HEARTBEAT:
+      self->aggressive_heartbeat = g_value_get_boolean (value);
+      GST_SCTP_ENC_ASSOC_MUTEX_LOCK (self);
+      if (self->sctp_association) {
+        g_object_set (self->sctp_association, "aggressive-heartbeat",
+            self->aggressive_heartbeat, NULL);
+      }
+      GST_SCTP_ENC_ASSOC_MUTEX_UNLOCK (self);
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (self, prop_id, pspec);
@@ -313,7 +401,7 @@ static void
 gst_sctp_enc_get_property (GObject * object, guint prop_id, GValue * value,
     GParamSpec * pspec)
 {
-  GstSctpEnc *self = GST_SCTP_ENC (object);
+  GstSctpEnc *self = GST_SCTP_ENC_CAST (object);
 
   switch (prop_id) {
     case PROP_GST_SCTP_ASSOCIATION_ID:
@@ -324,6 +412,9 @@ gst_sctp_enc_get_property (GObject * object, guint prop_id, GValue * value,
       break;
     case PROP_USE_SOCK_STREAM:
       g_value_set_boolean (value, self->use_sock_stream);
+      break;
+    case PROP_AGGRESSIVE_HEARTBEAT:
+      g_value_set_boolean (value, self->aggressive_heartbeat);
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (self, prop_id, pspec);
@@ -362,49 +453,18 @@ flush_sinkpads (GstSctpEnc * self, gboolean state)
 static GstStateChangeReturn
 gst_sctp_enc_change_state (GstElement * element, GstStateChange transition)
 {
-  GstSctpEnc *self = GST_SCTP_ENC (element);
-  GstStateChangeReturn ret = GST_STATE_CHANGE_FAILURE;
-  gboolean res = TRUE;
+  GstSctpEnc *self = GST_SCTP_ENC_CAST (element);
+  GstStateChangeReturn ret;
+
+  ret = GST_ELEMENT_CLASS (parent_class)->change_state (element, transition);
 
   switch (transition) {
     case GST_STATE_CHANGE_NULL_TO_READY:
-      break;
-    case GST_STATE_CHANGE_READY_TO_PAUSED:
-      self->need_segment = self->need_stream_start_caps = TRUE;
-      self->src_ret = GST_FLOW_OK;
-      gst_data_queue_set_flushing (self->outbound_sctp_packet_queue, FALSE);
-      res = configure_association (self);
-      break;
-    case GST_STATE_CHANGE_PLAYING_TO_PAUSED:
-      break;
-    case GST_STATE_CHANGE_PAUSED_TO_READY:
-      stop_srcpad_task (self->src_pad, self);
-      flush_sinkpads (self, TRUE);
-      self->src_ret = GST_FLOW_FLUSHING;
+      if (!configure_association (self))
+        ret = GST_STATE_CHANGE_FAILURE;
       break;
     case GST_STATE_CHANGE_READY_TO_NULL:
-      break;
-    default:
-      break;
-  }
-
-  if (res)
-    ret = GST_ELEMENT_CLASS (parent_class)->change_state (element, transition);
-
-  switch (transition) {
-    case GST_STATE_CHANGE_NULL_TO_READY:
-      break;
-    case GST_STATE_CHANGE_READY_TO_PAUSED:
-      if (ret != GST_STATE_CHANGE_FAILURE)
-        gst_pad_start_task (self->src_pad,
-            (GstTaskFunction) gst_sctp_enc_srcpad_loop, self->src_pad, NULL);
-      break;
-    case GST_STATE_CHANGE_PLAYING_TO_PAUSED:
-      break;
-    case GST_STATE_CHANGE_PAUSED_TO_READY:
-      sctpenc_cleanup (self);
-      break;
-    case GST_STATE_CHANGE_READY_TO_NULL:
+      cleanup_association (self);
       break;
     default:
       break;
@@ -413,11 +473,38 @@ gst_sctp_enc_change_state (GstElement * element, GstStateChange transition)
   return ret;
 }
 
+static gboolean
+gst_sctp_enc_src_activate_mode (GstPad * pad, GstObject * parent,
+    GstPadMode mode, gboolean active)
+{
+  GstSctpEnc *self = GST_SCTP_ENC_CAST (parent);
+  gboolean result;
+
+  GST_DEBUG_OBJECT (self, "activate mode %d active %d", mode, active);
+
+  if (active) {
+    self->need_segment = TRUE;
+    self->need_stream_start_caps = TRUE;
+    self->src_ret = GST_FLOW_OK;
+    gst_data_queue_set_flushing (self->outbound_sctp_packet_queue, FALSE);
+
+    result = gst_pad_start_task (pad,
+        (GstTaskFunction) gst_sctp_enc_srcpad_loop, pad, NULL);
+  } else {
+    gst_data_queue_set_flushing (self->outbound_sctp_packet_queue, TRUE);
+    gst_data_queue_flush (self->outbound_sctp_packet_queue);
+    result = gst_pad_stop_task (pad);
+    self->src_ret = GST_FLOW_FLUSHING;
+  }
+
+  return result;
+}
+
 static GstPad *
 gst_sctp_enc_request_new_pad (GstElement * element, GstPadTemplate * template,
     const gchar * new_pad_name, const GstCaps * caps)
 {
-  GstSctpEnc *self = GST_SCTP_ENC (element);
+  GstSctpEnc *self = GST_SCTP_ENC_CAST (element);
   GstPad *new_pad = NULL;
   GstSctpEncPad *sctpenc_pad;
   guint32 stream_id;
@@ -425,7 +512,15 @@ gst_sctp_enc_request_new_pad (GstElement * element, GstPadTemplate * template,
   guint32 new_ppid;
   gboolean is_new_ppid;
 
+  GST_SCTP_ENC_ASSOC_MUTEX_LOCK (self);
+  if (!self->sctp_association) {
+    GST_ERROR_OBJECT (self, "Attempt to get pad without a GstSctpAssociation");
+    GST_SCTP_ENC_ASSOC_MUTEX_UNLOCK (self);
+    return NULL;
+  }
+
   g_object_get (self->sctp_association, "state", &state, NULL);
+  GST_SCTP_ENC_ASSOC_MUTEX_UNLOCK (self);
 
   if (state != GST_SCTP_ASSOCIATION_STATE_CONNECTED) {
     GST_ERROR_OBJECT
@@ -462,7 +557,7 @@ gst_sctp_enc_request_new_pad (GstElement * element, GstPadTemplate * template,
   gst_pad_set_event_function (new_pad,
       GST_DEBUG_FUNCPTR (gst_sctp_enc_sink_event));
 
-  sctpenc_pad = GST_SCTP_ENC_PAD (new_pad);
+  sctpenc_pad = GST_SCTP_ENC_PAD_CAST (new_pad);
   sctpenc_pad->stream_id = stream_id;
   sctpenc_pad->ppid = DEFAULT_SCTP_PPID;
 
@@ -498,11 +593,11 @@ error_cleanup:
 static void
 gst_sctp_enc_release_pad (GstElement * element, GstPad * pad)
 {
-  GstSctpEncPad *sctpenc_pad = GST_SCTP_ENC_PAD (pad);
+  GstSctpEncPad *sctpenc_pad = GST_SCTP_ENC_PAD_CAST (pad);
   GstSctpEnc *self;
   guint stream_id = 0;
 
-  self = GST_SCTP_ENC (element);
+  self = GST_SCTP_ENC_CAST (element);
 
   g_mutex_lock (&sctpenc_pad->lock);
   sctpenc_pad->flushing = TRUE;
@@ -512,8 +607,12 @@ gst_sctp_enc_release_pad (GstElement * element, GstPad * pad)
   stream_id = sctpenc_pad->stream_id;
   gst_pad_set_active (pad, FALSE);
 
+  GST_SCTP_ENC_ASSOC_MUTEX_LOCK (self);
+
   if (self->sctp_association)
     gst_sctp_association_reset_stream (self->sctp_association, stream_id);
+
+  GST_SCTP_ENC_ASSOC_MUTEX_UNLOCK (self);
 
   GST_PAD_STREAM_LOCK (pad);
   if (gst_object_has_as_parent (GST_OBJECT (pad), GST_OBJECT (element)))
@@ -524,7 +623,7 @@ gst_sctp_enc_release_pad (GstElement * element, GstPad * pad)
 static void
 gst_sctp_enc_srcpad_loop (GstPad * pad)
 {
-  GstSctpEnc *self = GST_SCTP_ENC (GST_PAD_PARENT (pad));
+  GstSctpEnc *self = GST_SCTP_ENC_CAST (GST_PAD_PARENT (pad));
   GstFlowReturn flow_ret;
   GstDataQueueItem *item;
 
@@ -554,7 +653,7 @@ gst_sctp_enc_srcpad_loop (GstPad * pad)
   if (gst_data_queue_pop (self->outbound_sctp_packet_queue, &item)) {
     GstBuffer *buffer = GST_BUFFER (item->object);
 
-    GST_DEBUG_OBJECT (self, "Forwarding buffer %" GST_PTR_FORMAT, buffer);
+    GST_LOG_OBJECT (self, "Forwarding buffer %" GST_PTR_FORMAT, buffer);
 
     flow_ret = gst_pad_push (self->src_pad, buffer);
     item->object = NULL;
@@ -593,8 +692,8 @@ gst_sctp_enc_srcpad_loop (GstPad * pad)
 static GstFlowReturn
 gst_sctp_enc_sink_chain (GstPad * pad, GstObject * parent, GstBuffer * buffer)
 {
-  GstSctpEnc *self = GST_SCTP_ENC (parent);
-  GstSctpEncPad *sctpenc_pad = GST_SCTP_ENC_PAD (pad);
+  GstSctpEnc *self = GST_SCTP_ENC_CAST (parent);
+  GstSctpEncPad *sctpenc_pad = GST_SCTP_ENC_PAD_CAST (pad);
   GstSctpEncPad *sctpenc_pad_next = NULL;
   GstMapInfo map;
   guint32 ppid;
@@ -650,11 +749,6 @@ gst_sctp_enc_sink_chain (GstPad * pad, GstObject * parent, GstBuffer * buffer)
     }
   }
 
-  GST_DEBUG_OBJECT (pad,
-      "Sending buffer %" GST_PTR_FORMAT
-      " with ppid %u ordered %d pr %d pr_param %u", buffer, ppid, ordered, pr,
-      pr_param);
-
   if (!gst_buffer_map (buffer, &map, GST_MAP_READ)) {
     GST_ERROR_OBJECT (pad, "Could not map GstBuffer");
     goto error;
@@ -683,10 +777,24 @@ gst_sctp_enc_sink_chain (GstPad * pad, GstObject * parent, GstBuffer * buffer)
 
     g_mutex_unlock (&sctpenc_pad->lock);
 
-    flow_ret =
-        gst_sctp_association_send_data (self->sctp_association, data,
-        length, sctpenc_pad->stream_id, ppid, ordered, pr, pr_param,
-        &bytes_sent);
+    GST_SCTP_ENC_ASSOC_MUTEX_LOCK (self);
+
+    if (self->sctp_association) {
+      GST_DEBUG_OBJECT (pad,
+          "Sending buffer %" GST_PTR_FORMAT
+          " on stream: %u with ppid %u ordered %d pr %d pr_param %u", buffer,
+          sctpenc_pad->stream_id, ppid, ordered, pr, pr_param);
+
+      flow_ret =
+          gst_sctp_association_send_data (self->sctp_association, data,
+          length, sctpenc_pad->stream_id, ppid, ordered, pr, pr_param,
+          &bytes_sent);
+    } else {
+      GST_ERROR_OBJECT (self, "No GstSctpAssociation");
+      flow_ret = GST_FLOW_ERROR;
+    }
+
+    GST_SCTP_ENC_ASSOC_MUTEX_UNLOCK (self);
 
     g_mutex_lock (&sctpenc_pad->lock);
     if (flow_ret != GST_FLOW_OK) {
@@ -709,7 +817,7 @@ gst_sctp_enc_sink_chain (GstPad * pad, GstObject * parent, GstBuffer * buffer)
       g_cond_wait_until (&sctpenc_pad->cond, &sctpenc_pad->lock, end_time);
 
     } else if (bytes_sent == length) {
-      GST_DEBUG_OBJECT (pad, "Successfully sent buffer");
+      GST_LOG_OBJECT (pad, "Successfully sent buffer");
       sctpenc_pad->bytes_sent += bytes_sent;
       break;
     }
@@ -741,8 +849,8 @@ error:
 static gboolean
 gst_sctp_enc_sink_event (GstPad * pad, GstObject * parent, GstEvent * event)
 {
-  GstSctpEnc *self = GST_SCTP_ENC (parent);
-  GstSctpEncPad *sctpenc_pad = GST_SCTP_ENC_PAD (pad);
+  GstSctpEnc *self = GST_SCTP_ENC_CAST (parent);
+  GstSctpEncPad *sctpenc_pad = GST_SCTP_ENC_PAD_CAST (pad);
   gboolean ret, is_new_ppid;
   guint32 new_ppid;
 
@@ -797,7 +905,7 @@ gst_sctp_enc_sink_event (GstPad * pad, GstObject * parent, GstEvent * event)
 static gboolean
 gst_sctp_enc_src_event (GstPad * pad, GstObject * parent, GstEvent * event)
 {
-  GstSctpEnc *self = GST_SCTP_ENC (parent);
+  GstSctpEnc *self = GST_SCTP_ENC_CAST (parent);
   gboolean ret;
 
   switch (GST_EVENT_TYPE (event)) {
@@ -819,8 +927,6 @@ gst_sctp_enc_src_event (GstPad * pad, GstObject * parent, GstEvent * event)
       GST_OBJECT_LOCK (self);
       self->src_ret = GST_FLOW_OK;
       GST_OBJECT_UNLOCK (self);
-      gst_pad_start_task (self->src_pad,
-          (GstTaskFunction) gst_sctp_enc_srcpad_loop, self->src_pad, NULL);
 
       ret = gst_pad_event_default (pad, parent, event);
       break;
@@ -833,55 +939,129 @@ gst_sctp_enc_src_event (GstPad * pad, GstObject * parent, GstEvent * event)
 }
 
 static gboolean
-configure_association (GstSctpEnc * self)
+disconnect (GstSctpEnc * self)
 {
   gint state;
 
-  self->sctp_association = gst_sctp_association_get (self->sctp_association_id);
+  GST_SCTP_ENC_ASSOC_MUTEX_LOCK (self);
 
+  if (!self->sctp_association) {
+    GST_ERROR_OBJECT (self, "No GstSctpAssociation");
+    GST_SCTP_ENC_ASSOC_MUTEX_UNLOCK (self);
+    return FALSE;
+  }
+
+  g_object_get (self->sctp_association, "state", &state, NULL);
+  if (state != GST_SCTP_ASSOCIATION_STATE_CONNECTED) {
+    GST_WARNING_OBJECT (self, "Cannot disconnect in non-CONNECTED state.");
+    GST_SCTP_ENC_ASSOC_MUTEX_UNLOCK (self);
+    return FALSE;
+  }
+
+  gst_sctp_association_disconnect (self->sctp_association);
+
+  GST_SCTP_ENC_ASSOC_MUTEX_UNLOCK (self);
+
+  return TRUE;
+}
+
+static void
+reconnect (GstSctpEnc * self)
+{
+  gint state;
+
+  GST_SCTP_ENC_ASSOC_MUTEX_LOCK (self);
+
+  if (!self->sctp_association) {
+    GST_ERROR_OBJECT (self, "No GstSctpAssociation");
+    GST_SCTP_ENC_ASSOC_MUTEX_UNLOCK (self);
+    return;
+  }
+
+  g_object_get (self->sctp_association, "state", &state, NULL);
+  if (state != GST_SCTP_ASSOCIATION_STATE_DISCONNECTED) {
+    GST_WARNING_OBJECT (self, "Cannot reconnect in non-DISCONNECTED state.");
+    GST_SCTP_ENC_ASSOC_MUTEX_UNLOCK (self);
+    return;
+  }
+
+  gst_sctp_association_connect (self->sctp_association);
+  GST_SCTP_ENC_ASSOC_MUTEX_UNLOCK (self);
+}
+
+static gboolean
+configure_association (GstSctpEnc * self)
+{
+  gint state;
+  GstSctpAssociationEncoderCtx ctx;
+
+  GST_SCTP_ENC_ASSOC_MUTEX_LOCK (self);
+  self->sctp_association =
+      gst_sctp_association_factory_get (self->sctp_association_id);
   g_object_get (self->sctp_association, "state", &state, NULL);
 
   if (state != GST_SCTP_ASSOCIATION_STATE_NEW) {
     GST_WARNING_OBJECT (self,
         "Could not configure SCTP association. Association already in use!");
-    g_object_unref (self->sctp_association);
+    gst_sctp_association_factory_release (self->sctp_association);
     self->sctp_association = NULL;
-    goto error;
+    GST_SCTP_ENC_ASSOC_MUTEX_UNLOCK (self);
+    return FALSE;
   }
 
-  self->signal_handler_state_changed =
-      g_signal_connect_object (self->sctp_association, "notify::state",
-      G_CALLBACK (on_sctp_association_state_changed), self, 0);
+  g_object_set (self->sctp_association, "remote-port", self->remote_sctp_port,
+      "use-sock-stream", self->use_sock_stream, "aggressive-heartbeat",
+      self->aggressive_heartbeat, NULL);
 
-  g_object_bind_property (self, "remote-sctp-port", self->sctp_association,
-      "remote-port", G_BINDING_SYNC_CREATE);
+  ctx.element = self;
+  ctx.state_change_cb = on_sctp_association_state_changed;
+  ctx.packet_out_cb = on_sctp_packet_out;
+  gst_sctp_association_set_encoder_ctx (self->sctp_association, &ctx);
 
-  g_object_bind_property (self, "use-sock-stream", self->sctp_association,
-      "use-sock-stream", G_BINDING_SYNC_CREATE);
-
-  gst_sctp_association_set_on_packet_out (self->sctp_association,
-      on_sctp_packet_out, gst_object_ref (self), gst_object_unref);
+  GST_SCTP_ENC_ASSOC_MUTEX_UNLOCK (self);
 
   return TRUE;
-error:
-  return FALSE;
+}
+
+static const gchar *
+gst_sctp_association_state_string (GstSctpAssociationState state)
+{
+  switch (state) {
+    case GST_SCTP_ASSOCIATION_STATE_NEW:
+      return "NEW";
+    case GST_SCTP_ASSOCIATION_STATE_READY:
+      return "READY";
+    case GST_SCTP_ASSOCIATION_STATE_CONNECTING:
+      return "CONNECTING";
+    case GST_SCTP_ASSOCIATION_STATE_CONNECTED:
+      return "CONNECTED";
+    case GST_SCTP_ASSOCIATION_STATE_DISCONNECTING:
+      return "DISCONNECTING";
+    case GST_SCTP_ASSOCIATION_STATE_DISCONNECTED:
+      return "DISCONNECTED";
+    case GST_SCTP_ASSOCIATION_STATE_ERROR:
+      return "ERROR";
+    default:
+      return "UNKNOWN!";
+  }
 }
 
 static void
-on_sctp_association_state_changed (GstSctpAssociation * sctp_association,
-    GParamSpec * pspec, GstSctpEnc * self)
+on_sctp_association_state_changed (GstSctpAssociation *
+    sctp_association, GstSctpAssociationState state, gpointer user_data)
 {
-  gint state;
+  GstSctpEnc *self = (GstSctpEnc *) user_data;
 
-  g_object_get (sctp_association, "state", &state, NULL);
-
-  GST_DEBUG_OBJECT (self, "Association state changed to %d", state);
+  /* we demand to have a valid encoder here */
+  g_assert (self);
+  GST_DEBUG_OBJECT (self, "Association (%p) state changed to %s",
+      sctp_association, gst_sctp_association_state_string (state));
 
   switch (state) {
     case GST_SCTP_ASSOCIATION_STATE_NEW:
       break;
     case GST_SCTP_ASSOCIATION_STATE_READY:
-      gst_sctp_association_start (sctp_association);
+      gst_sctp_association_connect (sctp_association);
       break;
     case GST_SCTP_ASSOCIATION_STATE_CONNECTING:
       break;
@@ -890,6 +1070,7 @@ on_sctp_association_state_changed (GstSctpAssociation * sctp_association,
           TRUE);
       break;
     case GST_SCTP_ASSOCIATION_STATE_DISCONNECTING:
+      break;
     case GST_SCTP_ASSOCIATION_STATE_DISCONNECTED:
       g_signal_emit (self, signals[SIGNAL_SCTP_ASSOCIATION_ESTABLISHED], 0,
           FALSE);
@@ -910,15 +1091,14 @@ data_queue_item_free (GstDataQueueItem * item)
 }
 
 static void
-on_sctp_packet_out (GstSctpAssociation * _association, const guint8 * buf,
-    gsize length, gpointer user_data)
+on_sctp_packet_out (const guint8 * buf, gsize length, gpointer user_data)
 {
   GstSctpEnc *self = user_data;
   GstBuffer *gstbuf;
   GstDataQueueItem *item;
   GstSctpEncPad *sctpenc_pad;
 
-  GST_DEBUG_OBJECT (self, "Received output packet of size %" G_GSIZE_FORMAT,
+  GST_LOG_OBJECT (self, "Received output packet of size %" G_GSIZE_FORMAT,
       length);
 
   gstbuf = gst_buffer_new_memdup (buf, length);
@@ -953,41 +1133,22 @@ on_sctp_packet_out (GstSctpAssociation * _association, const guint8 * buf,
 }
 
 static void
-stop_srcpad_task (GstPad * pad, GstSctpEnc * self)
+cleanup_association (GstSctpEnc * self)
 {
-  gst_data_queue_set_flushing (self->outbound_sctp_packet_queue, TRUE);
-  gst_data_queue_flush (self->outbound_sctp_packet_queue);
-  gst_pad_stop_task (pad);
-}
+  GstSctpAssociationEncoderCtx ctx;
 
-static void
-remove_sinkpad (const GValue * item, gpointer user_data)
-{
-  GstSctpEncPad *sctpenc_pad = g_value_get_object (item);
-  GstSctpEnc *self = user_data;
+  GST_SCTP_ENC_ASSOC_MUTEX_LOCK (self);
+  if (!self->sctp_association) {
+    GST_SCTP_ENC_ASSOC_MUTEX_UNLOCK (self);
+    return;
+  }
 
-  gst_sctp_enc_release_pad (GST_ELEMENT (self), GST_PAD (sctpenc_pad));
-}
-
-static void
-sctpenc_cleanup (GstSctpEnc * self)
-{
-  GstIterator *it;
-
-  gst_sctp_association_set_on_packet_out (self->sctp_association, NULL, NULL,
-      NULL);
-
-  g_signal_handler_disconnect (self->sctp_association,
-      self->signal_handler_state_changed);
+  memset (&ctx, 0, sizeof (GstSctpAssociationEncoderCtx));
+  gst_sctp_association_set_encoder_ctx (self->sctp_association, &ctx);
   gst_sctp_association_force_close (self->sctp_association);
-  g_object_unref (self->sctp_association);
+  gst_sctp_association_factory_release (self->sctp_association);
   self->sctp_association = NULL;
-
-  it = gst_element_iterate_sink_pads (GST_ELEMENT (self));
-  while (gst_iterator_foreach (it, remove_sinkpad, self) == GST_ITERATOR_RESYNC)
-    gst_iterator_resync (it);
-  gst_iterator_free (it);
-  g_queue_clear (&self->pending_pads);
+  GST_SCTP_ENC_ASSOC_MUTEX_UNLOCK (self);
 }
 
 static void
@@ -1053,7 +1214,7 @@ on_get_stream_bytes_sent (GstSctpEnc * self, guint stream_id)
     return 0;
   }
 
-  sctpenc_pad = GST_SCTP_ENC_PAD (pad);
+  sctpenc_pad = GST_SCTP_ENC_PAD_CAST (pad);
 
   g_mutex_lock (&sctpenc_pad->lock);
   bytes_sent = sctpenc_pad->bytes_sent;
