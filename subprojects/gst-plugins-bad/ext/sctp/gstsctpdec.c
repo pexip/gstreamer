@@ -79,7 +79,6 @@ static GParamSpec *properties[NUM_PROPERTIES];
 #define DEFAULT_LOCAL_SCTP_PORT 0
 #define MAX_SCTP_PORT 65535
 #define MAX_GST_SCTP_ASSOCIATION_ID 65535
-#define MAX_STREAM_ID 65535
 
 #define GST_SCTP_DEC_GET_ASSOC_MUTEX(self) (&self->association_mutex)
 #define GST_SCTP_DEC_ASSOC_MUTEX_LOCK(self) (g_mutex_lock (GST_SCTP_DEC_GET_ASSOC_MUTEX (self)))
@@ -638,9 +637,6 @@ create_pad (GstSctpDec * self, guint16 stream_id, const gchar * pad_name)
   GstPad *new_pad;
   gint state;
   GstPadTemplate *template;
-
-  if (stream_id > MAX_STREAM_ID)
-    return NULL;
 
   GST_SCTP_DEC_ASSOC_MUTEX_LOCK (self);
   if (!self->sctp_association) {
