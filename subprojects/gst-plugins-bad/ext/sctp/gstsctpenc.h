@@ -1,5 +1,7 @@
 /*
  * Copyright (c) 2015, Collabora Ltd.
+ * Copyright (c) 2023, Pexip AS
+ *  @author: Tulio Beloqui <tulio@pexip.com>
  *
  * Redistribution and use in source and binary forms, with or without modification,
  * are permitted provided that the following conditions are met:
@@ -34,6 +36,7 @@ G_BEGIN_DECLS
 
 #define GST_TYPE_SCTP_ENC (gst_sctp_enc_get_type())
 #define GST_SCTP_ENC(obj) (G_TYPE_CHECK_INSTANCE_CAST((obj), GST_TYPE_SCTP_ENC, GstSctpEnc))
+#define GST_SCTP_ENC_CAST(obj) (GstSctpEnc*)(obj)
 #define GST_SCTP_ENC_CLASS(klass) (G_TYPE_CHECK_CLASS_CAST((klass), GST_TYPE_SCTP_ENC, GstSctpEncClass))
 #define GST_IS_SCTP_ENC(obj) (G_TYPE_CHECK_INSTANCE_TYPE((obj), GST_TYPE_SCTP_ENC))
 #define GST_IS_SCTP_ENC_CLASS(klass) (G_TYPE_CHECK_CLASS_TYPE((klass), GST_TYPE_SCTP_ENC))
@@ -45,19 +48,20 @@ struct _GstSctpEnc
 {
   GstElement element;
 
+  GMutex association_mutex;
+
   GstPad *src_pad;
   GstFlowReturn src_ret;
   gboolean need_stream_start_caps, need_segment;
   guint32 sctp_association_id;
   guint16 remote_sctp_port;
   gboolean use_sock_stream;
+  gboolean aggressive_heartbeat;
 
   GstSctpAssociation *sctp_association;
   GstDataQueue *outbound_sctp_packet_queue;
 
   GQueue pending_pads;
-
-  gulong signal_handler_state_changed;
 };
 
 struct _GstSctpEncClass
@@ -68,7 +72,8 @@ struct _GstSctpEncClass
       gboolean established);
     guint64 (*on_get_stream_bytes_sent) (GstSctpEnc * sctp_enc,
       guint stream_id);
-
+  gboolean (*disconnect) (GstSctpEnc * sctp_enc);
+  void (*reconnect) (GstSctpEnc * sctp_enc);
 };
 
 GType gst_sctp_enc_get_type (void);

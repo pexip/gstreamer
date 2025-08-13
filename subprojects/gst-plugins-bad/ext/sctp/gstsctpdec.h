@@ -1,5 +1,7 @@
 /*
  * Copyright (c) 2015, Collabora Ltd.
+ * Copyright (c) 2023, Pexip AS
+ *  @author: Tulio Beloqui <tulio@pexip.com>
  *
  * Redistribution and use in source and binary forms, with or without modification,
  * are permitted provided that the following conditions are met:
@@ -35,6 +37,7 @@ G_BEGIN_DECLS
 
 #define GST_TYPE_SCTP_DEC (gst_sctp_dec_get_type())
 #define GST_SCTP_DEC(obj) (G_TYPE_CHECK_INSTANCE_CAST((obj), GST_TYPE_SCTP_DEC, GstSctpDec))
+#define GST_SCTP_DEC_CAST(obj) (GstSctpDec*)(obj)
 #define GST_SCTP_DEC_CLASS(klass) (G_TYPE_CHECK_CLASS_CAST((klass), GST_TYPE_SCTP_DEC, GstSctpDecClass))
 #define GST_IS_SCTP_DEC(obj) (G_TYPE_CHECK_INSTANCE_TYPE((obj), GST_TYPE_SCTP_DEC))
 #define GST_IS_SCTP_DEC_CLASS(klass) (G_TYPE_CHECK_CLASS_TYPE((klass), GST_TYPE_SCTP_DEC))
@@ -45,16 +48,15 @@ struct _GstSctpDec
 {
   GstElement element;
 
+  GMutex association_mutex;
+
   GstFlowCombiner *flow_combiner;
 
   GstPad *sink_pad;
   guint sctp_association_id;
   guint local_sctp_port;
-  gboolean automatic_association_id;
 
-  GstSctpAssociation *automatic_sctp_association;
   GstSctpAssociation *sctp_association;
-  gulong signal_handler_stream_reset;
 };
 
 struct _GstSctpDecClass
@@ -62,6 +64,7 @@ struct _GstSctpDecClass
   GstElementClass parent_class;
 
   void (*on_reset_stream) (GstSctpDec * sctp_dec, guint stream_id);
+  void (*on_association_restart) (GstSctpDec * sctp_dec);
 };
 
 GType gst_sctp_dec_get_type (void);
