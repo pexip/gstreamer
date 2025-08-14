@@ -38,17 +38,17 @@ G_DECLARE_FINAL_TYPE (RtpTimerQueue, rtp_timer_queue, RTP_TIMER, QUEUE, GObject)
 
 /**
  * RtpTimerType:
- * @RTP_TIMER_EXPECTED: This is used to track when to emit retranmission
+ * @RTP_TIMER_RTX:      This is used to track when to emit retranmission
  *                      requests. They may be converted into %RTP_TIMER_LOST
  *                      timer if the number of retry has been exhausted.
- * @RTP_TIMER_LOST: This is used to track when a packet is considered lost.
+ * @RTP_TIMER_LOST:     This is used to track when a packet is considered lost.
  * @RTP_TIMER_DEADLINE: This is used to track when the jitterbuffer should
  *                      start pushing buffers.
  * @RTP_TIMER_EOS:      This is used to track when end of stream is reached.
  */
 typedef enum
 {
-  RTP_TIMER_EXPECTED,
+  RTP_TIMER_RTX,
   RTP_TIMER_LOST,
   RTP_TIMER_DEADLINE,
   RTP_TIMER_EOS
