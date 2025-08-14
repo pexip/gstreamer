@@ -2494,7 +2494,7 @@ update_timer_offsets (GstRtpJitterBuffer * jitterbuffer)
   GstClockTimeDiff new_offset = timeout_offset (jitterbuffer);
 
   while (test) {
-    if (test->type != RTP_TIMER_EXPECTED) {
+    if (test->type != RTP_TIMER_RTX) {
       GstClockTime pts = get_pts_timeout (test);
       if (safe_add (&test->timeout, pts, new_offset)) {
         test->offset = new_offset;
@@ -2664,7 +2664,7 @@ update_rtx_timers (GstRtpJitterBuffer * jitterbuffer, guint16 seqnum,
       gint gap;
 
       /* filter the timer type to speed up this loop */
-      if (test->type != RTP_TIMER_EXPECTED) {
+      if (test->type != RTP_TIMER_RTX) {
         test = rtp_timer_get_next (test);
         continue;
       }
@@ -2682,7 +2682,7 @@ update_rtx_timers (GstRtpJitterBuffer * jitterbuffer, guint16 seqnum,
 
       /* max gap, we exceeded the max reorder distance and we don't expect the
        * missing packet to be this reordered */
-      if (test->num_rtx_retry == 0 && test->type == RTP_TIMER_EXPECTED)
+      if (test->num_rtx_retry == 0 && test->type == RTP_TIMER_RTX)
         rtp_timer_queue_update_timer (priv->timers, test, test->seqnum,
             -1, 0, 0, FALSE);
 
@@ -2711,7 +2711,7 @@ update_rtx_timers (GstRtpJitterBuffer * jitterbuffer, guint16 seqnum,
          * several retransmitted packets. For accuracy we should update the
          * stats also when the redundant retransmitted packets arrives. */
         stats_timer->timeout = pts + priv->rtx_stats_timeout * GST_MSECOND;
-        stats_timer->type = RTP_TIMER_EXPECTED;
+        stats_timer->type = RTP_TIMER_RTX;
         rtp_timer_queue_insert (priv->rtx_stats_timers, stats_timer);
       }
     }
@@ -2733,7 +2733,7 @@ update_rtx_timers (GstRtpJitterBuffer * jitterbuffer, guint16 seqnum,
         GST_TIME_ARGS (priv->packet_spacing), GST_TIME_ARGS (priv->avg_jitter));
 
     if (timer && !is_stats_timer) {
-      timer->type = RTP_TIMER_EXPECTED;
+      timer->type = RTP_TIMER_RTX;
       rtp_timer_queue_update_timer (priv->timers, timer, priv->next_in_seqnum,
           next_expected_pts, delay, 0, TRUE);
     } else {
@@ -2978,7 +2978,7 @@ gst_rtp_jitter_buffer_handle_missing_packets (GstRtpJitterBuffer * jitterbuffer,
       RtpTimer *timer = rtp_timer_queue_find (priv->timers, missing_seqnum);
 
       /* if we had a timer for the missing packet, update it. */
-      if (timer && timer->type == RTP_TIMER_EXPECTED) {
+      if (timer && timer->type == RTP_TIMER_RTX) {
         timer->duration = duration;
         if (timer->timeout > (est_pts + rtx_delay) && timer->num_rtx_retry == 0) {
           rtp_timer_queue_update_timer (priv->timers, timer, timer->seqnum,
@@ -4490,7 +4490,7 @@ update_rtx_stats (GstRtpJitterBuffer * jitterbuffer, const RtpTimer * timer,
 
 /* the timeout for when we expected a packet expired */
 static gboolean
-do_expected_timeout (GstRtpJitterBuffer * jitterbuffer, RtpTimer * timer,
+do_rtx_timeout (GstRtpJitterBuffer * jitterbuffer, RtpTimer * timer,
     GstClockTime now)
 {
   GstRtpJitterBufferPrivate *priv = jitterbuffer->priv;
@@ -4652,8 +4652,8 @@ do_timeout (GstRtpJitterBuffer * jitterbuffer, RtpTimer * timer,
   gboolean removed = FALSE;
 
   switch (timer->type) {
-    case RTP_TIMER_EXPECTED:
-      removed = do_expected_timeout (jitterbuffer, timer, now);
+    case RTP_TIMER_RTX:
+      removed = do_rtx_timeout (jitterbuffer, timer, now);
       break;
     case RTP_TIMER_LOST:
       removed = do_lost_timeout (jitterbuffer, timer, now);
