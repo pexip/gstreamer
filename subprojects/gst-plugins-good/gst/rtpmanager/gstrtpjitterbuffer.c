@@ -377,7 +377,7 @@ struct _GstRtpJitterBufferPrivate
   /* the last seqnum we pushed out */
   guint32 last_popped_seqnum;
   /* the next expected seqnum we push */
-  guint32 next_seqnum;
+  guint32 next_out_seqnum;
   /* seqnum-base, if known */
   guint32 seqnum_base;
   /* last output time */
@@ -1738,8 +1738,8 @@ gst_jitter_buffer_sink_parse_caps (GstRtpJitterBuffer * jitterbuffer,
     /* first expected seqnum, only update when we didn't have a previous base. */
     if (priv->next_in_seqnum == -1)
       priv->next_in_seqnum = val;
-    if (priv->next_seqnum == -1) {
-      priv->next_seqnum = val;
+    if (priv->next_out_seqnum == -1) {
+      priv->next_out_seqnum = val;
       JBUF_SIGNAL_EVENT (priv);
     }
     priv->seqnum_base = val;
@@ -1938,7 +1938,7 @@ gst_rtp_jitter_buffer_flush_stop (GstRtpJitterBuffer * jitterbuffer)
   gst_segment_init (&priv->segment, GST_FORMAT_TIME);
   priv->last_popped_seqnum = -1;
   priv->last_out_time = GST_CLOCK_TIME_NONE;
-  priv->next_seqnum = -1;
+  priv->next_out_seqnum = -1;
   priv->seqnum_base = -1;
   priv->ips_rtptime = -1;
   priv->packet_spacing = 0;
@@ -3322,14 +3322,14 @@ gst_rtp_jitter_buffer_reset (GstRtpJitterBuffer * jitterbuffer,
     GstRTPBuffer gap_rtp = GST_RTP_BUFFER_INIT;
 
     gst_rtp_buffer_map (gap_buffer, GST_MAP_READ, &gap_rtp);
-    priv->next_seqnum = gst_rtp_buffer_get_seq (&gap_rtp);
+    priv->next_out_seqnum = gst_rtp_buffer_get_seq (&gap_rtp);
     gst_rtp_buffer_unmap (&gap_rtp);
   } else {
-    priv->next_seqnum = seqnum;
+    priv->next_out_seqnum = seqnum;
   }
 
   GST_DEBUG_OBJECT (jitterbuffer, "setting next_seqnum to #%u",
-      priv->next_seqnum);
+      priv->next_out_seqnum);
 
   priv->last_in_pts = -1;
   priv->next_in_seqnum = -1;
@@ -3448,7 +3448,7 @@ _drop_on_latency (GstRtpJitterBuffer * jitterbuffer)
       old_item = rtp_jitter_buffer_pop (priv->jbuf, NULL);
       GST_DEBUG_OBJECT (jitterbuffer, "Queue full, dropping old packet %p",
           old_item);
-      priv->next_seqnum = (old_item->seqnum + old_item->count) & 0xffff;
+      priv->next_out_seqnum = (old_item->seqnum + old_item->count) & 0xffff;
       if (priv->post_drop_messages) {
         drop_msg =
             new_drop_message (jitterbuffer, old_item->seqnum, old_item->pts,
@@ -4202,7 +4202,9 @@ pop_and_push_next (GstRtpJitterBuffer * jitterbuffer, guint seqnum)
    * so the other end can push stuff in the queue again. */
   if (seqnum != -1) {
     priv->last_popped_seqnum = seqnum;
-    priv->next_seqnum = (seqnum + item->count) & 0xffff;
+    priv->next_out_seqnum = (seqnum + item->count) & 0xffff;
+    GST_LOG_OBJECT (jitterbuffer, "Pushed out #%u, next expected #%u",
+        priv->last_popped_seqnum, priv->next_out_seqnum);
   }
   msg = check_buffering_percent (jitterbuffer, percent);
 
@@ -4323,7 +4325,7 @@ handle_next_buffer (GstRtpJitterBuffer * jitterbuffer)
     return pop_and_push_next (jitterbuffer, seqnum);
   }
 
-  next_seqnum = priv->next_seqnum;
+  next_seqnum = priv->next_out_seqnum;
 
   /* get the gap between this and the previous packet. If we don't know the
    * previous packet seqnum assume no gap. */
@@ -4646,8 +4648,8 @@ do_deadline_timeout (GstRtpJitterBuffer * jitterbuffer, RtpTimer * timer,
 
   /* timer seqnum might have been obsoleted by caps seqnum-base,
    * only mess with current ongoing seqnum if still unknown */
-  if (priv->next_seqnum == -1)
-    priv->next_seqnum = timer->seqnum;
+  if (priv->next_out_seqnum == -1)
+    priv->next_out_seqnum = timer->seqnum;
   rtp_timer_free (timer);
   JBUF_SIGNAL_EVENT (priv);
 
