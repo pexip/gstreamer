@@ -3428,6 +3428,42 @@ _get_inband_ntp_time (GstRtpJitterBuffer * jitterbuffer, GstRTPBuffer * rtp)
   return ntpnstime;
 }
 
+/* let's drop oldest packet if the queue is already full and drop-on-latency
+ * is set. We can only do this when there actually is a latency. When no
+ * latency is set, we just pump it in the queue and let the other end push it
+ * out as fast as possible. */
+static GstMessage *
+_drop_on_latency (GstRtpJitterBuffer * jitterbuffer)
+{
+  GstRtpJitterBufferPrivate *priv = jitterbuffer->priv;
+  GstMessage *drop_msg = NULL;
+  guint64 latency_ts = gst_util_uint64_scale_int (priv->latency_ms, priv->clock_rate, 1000);
+
+  if (G_UNLIKELY (rtp_jitter_buffer_get_ts_diff (priv->jbuf) >= latency_ts)) {
+    RTPJitterBufferItem *old_item;
+
+    old_item = rtp_jitter_buffer_peek (priv->jbuf);
+
+    if (IS_DROPABLE (old_item)) {
+      old_item = rtp_jitter_buffer_pop (priv->jbuf, NULL);
+      GST_DEBUG_OBJECT (jitterbuffer, "Queue full, dropping old packet %p",
+          old_item);
+      priv->next_seqnum = (old_item->seqnum + old_item->count) & 0xffff;
+      if (priv->post_drop_messages) {
+        drop_msg =
+            new_drop_message (jitterbuffer, old_item->seqnum, old_item->pts,
+            REASON_DROP_ON_LATENCY);
+      }
+      rtp_jitter_buffer_free_item (old_item);
+    }
+    /* we might have removed some head buffers, signal the pushing thread to
+     * see if it can push now */
+    JBUF_SIGNAL_EVENT (priv);
+  }
+
+  return drop_msg;
+}
+
 static GstFlowReturn
 gst_rtp_jitter_buffer_chain (GstPad * pad, GstObject * parent,
     GstBuffer * buffer)
@@ -3441,7 +3477,6 @@ gst_rtp_jitter_buffer_chain (GstPad * pad, GstObject * parent,
   GstClockTime dts, pts;
   GstClockTime ntp_time;
   GstClockTime inband_ntp_time;
-  guint64 latency_ts;
   gboolean head;
   gboolean duplicate;
   gint percent = -1;
@@ -3797,36 +3832,10 @@ gst_rtp_jitter_buffer_chain (GstPad * pad, GstObject * parent,
     }
   }
 
-  /* let's drop oldest packet if the queue is already full and drop-on-latency
-   * is set. We can only do this when there actually is a latency. When no
-   * latency is set, we just pump it in the queue and let the other end push it
-   * out as fast as possible. */
   if (priv->latency_ms && priv->drop_on_latency) {
-    latency_ts =
-        gst_util_uint64_scale_int (priv->latency_ms, priv->clock_rate, 1000);
-
-    if (G_UNLIKELY (rtp_jitter_buffer_get_ts_diff (priv->jbuf) >= latency_ts)) {
-      RTPJitterBufferItem *old_item;
-
-      old_item = rtp_jitter_buffer_peek (priv->jbuf);
-
-      if (IS_DROPABLE (old_item)) {
-        old_item = rtp_jitter_buffer_pop (priv->jbuf, &percent);
-        GST_DEBUG_OBJECT (jitterbuffer, "Queue full, dropping old packet %p",
-            old_item);
-        priv->next_seqnum = (old_item->seqnum + old_item->count) & 0xffff;
-        if (priv->post_drop_messages) {
-          drop_msg =
-              new_drop_message (jitterbuffer, old_item->seqnum, old_item->pts,
-              REASON_DROP_ON_LATENCY);
-        }
-        rtp_jitter_buffer_free_item (old_item);
-      }
-      /* we might have removed some head buffers, signal the pushing thread to
-       * see if it can push now */
-      JBUF_SIGNAL_EVENT (priv);
-    }
+    drop_msg = _drop_on_latency (jitterbuffer);
   }
+
   // If we can calculate a NTP time based solely on the Sender Report, or
   // inband NTP header extension do that so that we can still add a reference
   // timestamp meta to the buffer
