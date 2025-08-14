@@ -644,7 +644,7 @@ static void do_handle_sync_rtp_info (GstRtpJitterBuffer * jitterbuffer,
 
 static void unschedule_current_timer (GstRtpJitterBuffer * jitterbuffer);
 
-static void wait_next_timeout (GstRtpJitterBuffer * jitterbuffer);
+static void timer_thread_func (GstRtpJitterBuffer * jitterbuffer);
 
 static GstStructure *gst_rtp_jitter_buffer_create_stats (GstRtpJitterBuffer *
     jitterbuffer);
@@ -2065,7 +2065,7 @@ gst_rtp_jitter_buffer_change_state (GstElement * element,
       priv->timer_running = TRUE;
       priv->srcresult = GST_FLOW_OK;
       priv->timer_thread =
-          g_thread_new ("timer", (GThreadFunc) wait_next_timeout, jitterbuffer);
+          g_thread_new ("timer", (GThreadFunc) timer_thread_func, jitterbuffer);
       JBUF_UNLOCK (priv);
       break;
     case GST_STATE_CHANGE_PAUSED_TO_PLAYING:
@@ -4676,7 +4676,7 @@ do_timeout (GstRtpJitterBuffer * jitterbuffer, RtpTimer * timer,
  * If there are no timers, we wait on a gcond until something new happens.
  */
 static void
-wait_next_timeout (GstRtpJitterBuffer * jitterbuffer)
+timer_thread_func (GstRtpJitterBuffer * jitterbuffer)
 {
   GstRtpJitterBufferPrivate *priv = jitterbuffer->priv;
   GstClockTime now = 0;
@@ -4727,7 +4727,7 @@ wait_next_timeout (GstRtpJitterBuffer * jitterbuffer)
       GstClockReturn ret;
       GstClockTimeDiff clock_jitter;
 
-      /* we poped all immediate and due timer, so this should just never
+      /* we popped all immediate and due timer, so this should just never
        * happens */
       g_assert (GST_CLOCK_TIME_IS_VALID (timer->timeout));
 
