@@ -582,7 +582,7 @@ rtp_timer_queue_set_timer (RtpTimerQueue * queue, RtpTimerType type,
 
   /* for new timers or on seqnum change reset the RTX data */
   if (!timer->queued || timer->seqnum != seqnum) {
-    if (type == RTP_TIMER_EXPECTED) {
+    if (type == RTP_TIMER_RTX) {
       timer->rtx_base = timeout;
     }
 
@@ -617,14 +617,14 @@ rtp_timer_queue_set_timer (RtpTimerQueue * queue, RtpTimerType type,
  * @duration: the duration of the event related to the timer
  *
  * Specialized version of rtp_timer_queue_set_timer() that creates or updates a
- * timer with type %RTP_TIMER_EXPECTED. Expected timers do not carry
+ * timer with type %RTP_TIMER_RTX. Expected timers do not carry
  * a timestamp, hence have no offset.
  */
 void
 rtp_timer_queue_set_expected (RtpTimerQueue * queue, guint16 seqnum,
     GstClockTime timeout, GstClockTime delay, GstClockTime duration)
 {
-  rtp_timer_queue_set_timer (queue, RTP_TIMER_EXPECTED, seqnum, timeout,
+  rtp_timer_queue_set_timer (queue, RTP_TIMER_RTX, seqnum, timeout,
       delay, duration, 0);
 }
 
