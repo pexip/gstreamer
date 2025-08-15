@@ -164,6 +164,7 @@ enum
 #define DEFAULT_RFC7273_USE_SYSTEM_CLOCK FALSE
 #define DEFAULT_RFC7273_REFERENCE_TIMESTAMP_META_ONLY FALSE
 #define DEFAULT_MIN_SYNC_INTERVAL 15000
+#define DEFAULT_DUMP_QUEUE_THRESHOLD 0
 
 #define DEFAULT_AUTO_RTX_DELAY (20 * GST_MSECOND)
 #define DEFAULT_AUTO_RTX_TIMEOUT (40 * GST_MSECOND)
@@ -202,6 +203,7 @@ enum
   PROP_RFC7273_USE_SYSTEM_CLOCK,
   PROP_RFC7273_REFERENCE_TIMESTAMP_META_ONLY,
   PROP_MIN_SYNC_INTERVAL,
+  PROP_DUMP_QUEUE_THRESHOLD,
 };
 
 #define JBUF_LOCK(priv)   G_STMT_START {			\
@@ -498,6 +500,8 @@ struct _GstRtpJitterBufferPrivate
   /* accumulators; reset every time a drop message is posted */
   guint num_too_late;
   guint num_drop_on_latency;
+
+  guint dump_queue_threshold_ms;
 };
 typedef enum
 {
@@ -1163,6 +1167,25 @@ gst_rtp_jitter_buffer_class_init (GstRtpJitterBufferClass * klass)
           "Minimum RTCP SR / NTP-64 interval synchronization (ms)",
           0, G_MAXUINT, DEFAULT_MIN_SYNC_INTERVAL,
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+
+
+  /**
+   * GstRtpJitterBuffer:dump-queue-threshold:
+   *
+   * The number of milliseconds that will be allowed to be queued up in the
+   * jitterbuffer, in addition to the configured latency, before flushing
+   * everything out. This is to get out of situations where high CPU load might
+   * cause the jitterbuffer to get backed up, and in these situations it is
+   * much better to get rid of all the "backlog", since it could potentially
+   * keep the CPU busy trying to process all the backed up buffers.
+   */
+  g_object_class_install_property (gobject_class, PROP_DUMP_QUEUE_THRESHOLD,
+      g_param_spec_uint ("dump-queue-threshold",
+          "Dump Queue Threshold",
+          "The number of milliseconds we allow of queuing (in addition to latency) "
+          "before flushing out all the buffers (0 = no limit).", 0, G_MAXUINT,
+          DEFAULT_DUMP_QUEUE_THRESHOLD, G_PARAM_READWRITE |
+          G_PARAM_STATIC_STRINGS));
 
   /**
    * GstRtpJitterBuffer::request-pt-map:
@@ -3464,6 +3487,60 @@ _drop_on_latency (GstRtpJitterBuffer * jitterbuffer)
   return drop_msg;
 }
 
+static gboolean
+_dump_queue_on_threshold (GstRtpJitterBuffer *jitterbuffer, guint16 seqnum,
+    GstClockTime pts)
+{
+  GstRtpJitterBufferPrivate *priv = jitterbuffer->priv;
+  gboolean ret = FALSE;
+  RTPJitterBufferItem *first;
+  GstClockTime first_pts;
+  guint16 first_seqnum;
+  GstClockTime pts_diff, threshold;
+
+  /* next_out_seqnum represents the next expected seqnum to leave the jittebuffer */
+  first_seqnum = priv->next_out_seqnum;
+  first = rtp_jitter_buffer_peek (priv->jbuf);
+
+  if (first == NULL || first->pts == GST_CLOCK_TIME_NONE)
+    return ret;
+
+  first_pts = first->pts;
+
+  /* special case where we have missing packets between the last we pushed,
+     and the first we have in the queue */
+  if (first_seqnum < first->seqnum && priv->packet_spacing > 0) {
+    guint16 gap = first->seqnum - first_seqnum;
+    /* we subtract the packet spacing "gap" times, to estimate the pts
+       of the missing packet */
+    first_pts -= gap * priv->packet_spacing;
+  }
+
+  pts_diff = pts - first_pts;
+  threshold = (priv->dump_queue_threshold_ms + priv->latency_ms) * GST_MSECOND;
+
+  GST_DEBUG_OBJECT (jitterbuffer, "pts-diff of %" GST_TIME_FORMAT,
+      GST_TIME_ARGS (pts_diff));
+
+  if (pts_diff >= threshold) {
+    guint16 prev_seqnum = seqnum - 1;
+    guint16 seqnum_diff = prev_seqnum - first_seqnum;
+    guint num_packets = seqnum_diff + 1;
+
+    GST_INFO_OBJECT (jitterbuffer,
+        "Dumping all buffers, from #%u to #%u, with a length of %"
+        GST_TIME_FORMAT, first_seqnum, first_seqnum + seqnum_diff,
+        GST_TIME_ARGS (pts_diff));
+    rtp_jitter_buffer_flush (priv->jbuf, NULL, NULL);
+    rtp_timer_queue_remove_all (priv->timers);
+    insert_lost_event (jitterbuffer, first_seqnum, num_packets, first_pts,
+        pts_diff, 0);
+    ret = TRUE;
+  }
+
+  return ret;
+}
+
 static GstFlowReturn
 gst_rtp_jitter_buffer_chain (GstPad * pad, GstObject * parent,
     GstBuffer * buffer)
@@ -3836,6 +3913,14 @@ gst_rtp_jitter_buffer_chain (GstPad * pad, GstObject * parent,
     drop_msg = _drop_on_latency (jitterbuffer);
   }
 
+  if (priv->dump_queue_threshold_ms > 0) {
+    gboolean dumped = _dump_queue_on_threshold (jitterbuffer, seqnum, pts);
+    if (dumped) {
+      /* when dumping, all the timers are invalidated */
+      timer = NULL;
+    }
+  }
+
   // If we can calculate a NTP time based solely on the Sender Report, or
   // inband NTP header extension do that so that we can still add a reference
   // timestamp meta to the buffer
@@ -3896,9 +3981,11 @@ gst_rtp_jitter_buffer_chain (GstPad * pad, GstObject * parent,
     head = TRUE;
 
   /* update rtx timers */
-  if (priv->do_retransmission)
+  if (priv->do_retransmission) {
     update_rtx_timers (jitterbuffer, seqnum, dts, pts, do_next_seqnum, is_rtx,
-        g_steal_pointer (&timer));
+        timer);
+    timer = NULL;
+  }
 
   /* do sync if necessary: prefer inband, otherwise RTCP SR, otherwise
    * RTP-Info */
@@ -5673,6 +5760,11 @@ gst_rtp_jitter_buffer_set_property (GObject * object,
       priv->min_sync_interval = g_value_get_uint (value);
       JBUF_UNLOCK (priv);
       break;
+    case PROP_DUMP_QUEUE_THRESHOLD:
+      JBUF_LOCK (priv);
+      priv->dump_queue_threshold_ms = g_value_get_uint (value);
+      JBUF_UNLOCK (priv);
+      break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
       break;
@@ -5852,6 +5944,11 @@ gst_rtp_jitter_buffer_get_property (GObject * object,
     case PROP_MIN_SYNC_INTERVAL:
       JBUF_LOCK (priv);
       g_value_set_uint (value, priv->min_sync_interval);
+      JBUF_UNLOCK (priv);
+      break;
+    case PROP_DUMP_QUEUE_THRESHOLD:
+      JBUF_LOCK (priv);
+      g_value_set_uint (value, priv->dump_queue_threshold_ms);
       JBUF_UNLOCK (priv);
       break;
     default:

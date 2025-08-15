@@ -4224,6 +4224,106 @@ GST_START_TEST (test_packet_spacing_correct_after_skew)
 GST_END_TEST;
 
 
+GST_START_TEST (test_dump_queue_threshold)
+{
+  GstHarness *h = gst_harness_new ("rtpjitterbuffer");
+  GstBuffer *buf;
+  guint16 seqnum_org, seqnum;
+  guint16 seqnum_dumped_first;
+  gint i;
+
+  /* setup dump queue threshold to 800ms, so in addition to our 200ms latency,
+     the threshold will be set at 1000ms for dumping */
+  g_object_set (h->element, "do-lost", TRUE, "do-retransmission", TRUE,
+      "dump-queue-threshold", 800, NULL);
+  seqnum = seqnum_org = construct_deterministic_initial_state (h, 200);
+
+  /* we block all outgoing traffic from the jitterbuffer, mimicing an
+     overloaded system */
+  gst_harness_set_blocking_push_mode (h);
+
+  /* this push of seqnum #11 will now be blocked going out */
+  fail_unless_equals_int (seqnum_org, 11);
+  fail_unless_equals_int (GST_FLOW_OK, gst_harness_push (h,
+          generate_test_buffer (seqnum)));
+  seqnum++;
+
+  /* we now add 50 more seqnums to the queue. This will mean we have 1 second
+     worth of data inside the queue */
+  for (i = 0; i < 50; i++) {
+    fail_unless_equals_int (GST_FLOW_OK, gst_harness_push (h,
+            generate_test_buffer (seqnum)));
+    seqnum++;
+  }
+
+  /* we push one more (#62), which will trigger the dumping mechanism */
+  fail_unless_equals_int (seqnum, 62);
+  fail_unless_equals_int (GST_FLOW_OK, gst_harness_push (h,
+          generate_test_buffer (seqnum)));
+
+  /* by pulling, we automagically unblock, and finally pull seqnum #11 that
+     has been waiting all this time */
+  buf = gst_harness_pull (h);
+  fail_unless_equals_int (seqnum_org, get_rtp_seq_num (buf));
+  gst_buffer_unref (buf);
+
+  /* we now want to check the lost event that has been generated contains
+     all the packets clogged up inside the jitterbuffer, and their total
+     duration. Note how the first dumped seqnum is the one immediately
+     following the one we just pulled out (#12) */
+  seqnum_dumped_first = seqnum_org + 1;
+  verify_lost_event (h, seqnum_dumped_first,
+      seqnum_dumped_first * TEST_BUF_DURATION,
+      (seqnum - seqnum_dumped_first) * TEST_BUF_DURATION);
+
+  /* and finally the last buffer we pushed that triggered the dumping can
+     now be pulled out */
+  buf = gst_harness_pull (h);
+  fail_unless_equals_int (seqnum, get_rtp_seq_num (buf));
+  gst_buffer_unref (buf);
+
+  gst_harness_teardown (h);
+}
+
+GST_END_TEST;
+
+GST_START_TEST (test_dump_queue_threshold_with_lost_packets)
+{
+  GstHarness *h = gst_harness_new ("rtpjitterbuffer");
+  GstBuffer *buf;
+  guint16 seqnum_org, seqnum;
+  gint i;
+
+  /* setup dump queue threshold to 1 second */
+  g_object_set (h->element, "do-lost", TRUE, "do-retransmission", TRUE,
+      "dump-queue-threshold", 1000, NULL);
+  seqnum = seqnum_org = construct_deterministic_initial_state (h, 100);
+
+  /* by adding seqnum gaps of 2, but not allowing the clock to timeout (no crank),
+     we effectively stall the jitterbuffer, causing buffers to queue up */
+  for (i = 0; i < 28; i++) {
+    seqnum += 2;
+    fail_unless_equals_int (GST_FLOW_OK, gst_harness_push (h,
+            generate_test_buffer (seqnum)));
+  }
+  gst_harness_crank_single_clock_wait (h);
+
+  /* check the whole internal queue was dumped, and a lost event generated
+     for all of it */
+  verify_lost_event (h, seqnum_org,
+      seqnum_org * TEST_BUF_DURATION,
+      (seqnum - seqnum_org) * TEST_BUF_DURATION);
+
+  /* and the last packet comes out just fine */
+  buf = gst_harness_pull (h);
+  fail_unless_equals_int (seqnum, get_rtp_seq_num (buf));
+  gst_buffer_unref (buf);
+
+  gst_harness_teardown (h);
+}
+
+GST_END_TEST;
+
 static Suite *
 rtpjitterbuffer_suite (void)
 {
@@ -4326,6 +4426,9 @@ rtpjitterbuffer_suite (void)
   tcase_add_test (tc_chain, test_rtcp_non_utf8_cname);
 
   tcase_add_test (tc_chain, test_packet_spacing_correct_after_skew);
+
+  tcase_add_test (tc_chain, test_dump_queue_threshold);
+  tcase_add_test (tc_chain, test_dump_queue_threshold_with_lost_packets);
 
   return s;
 }
