@@ -210,7 +210,11 @@ set_default_chroma_site (GstVideoInfo * info)
 
   if (GST_VIDEO_FORMAT_INFO_IS_YUV (finfo)) {
     if (info->height > 576) {
-      info->chroma_site = GST_VIDEO_CHROMA_SITE_H_COSITED;
+      /* PEXHACK: we need to revist what this mean for us? */
+      /* info->chroma_site = GST_VIDEO_CHROMA_SITE_H_COSITED; */
+
+      /* for now keep the old default */
+      info->chroma_site = GST_VIDEO_CHROMA_SITE_NONE;
     } else {
       info->chroma_site = GST_VIDEO_CHROMA_SITE_NONE;
     }
