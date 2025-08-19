@@ -180,7 +180,8 @@ pkgconfig.generate(gstd3d12,
 library_def = {'lib': gstd3d12}
 gen_sources = []
 
-if build_gir
+# pehack: do not build gir for d3d12 plugin
+if build_gir and false
   gir = {
     'sources' : d3d12_sources + d3d12_headers,
     'namespace' : 'GstD3D12',
