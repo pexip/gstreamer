@@ -266,7 +266,7 @@ create_amc_format (GstAmcVideoEnc * encoder, GstVideoCodecState * input_state,
   gst_amc_format_set_int (format, "color-format", color_format, &err);
   if (err)
     GST_ELEMENT_WARNING_FROM_ERROR (encoder, err);
-  stride = GST_ROUND_UP_4 (info->width);        /* safe (?) */
+  stride = info->width;
   gst_amc_format_set_int (format, "stride", stride, &err);
   if (err)
     GST_ELEMENT_WARNING_FROM_ERROR (encoder, err);
