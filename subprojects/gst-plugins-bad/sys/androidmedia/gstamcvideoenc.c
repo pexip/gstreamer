@@ -1023,6 +1023,12 @@ gst_amc_video_enc_handle_output_frame (GstAmcVideoEnc * self,
     GST_BUFFER_PTS (out_buf) =
         gst_util_uint64_scale (buffer_info->presentation_time_us, GST_USECOND,
         1);
+    GST_BUFFER_DTS (out_buf) = GST_BUFFER_PTS (out_buf);
+
+    if (!(buffer_info->flags & BUFFER_FLAG_PARTIAL_FRAME)) {
+      GST_DEBUG_OBJECT (self, "Frame is complete");
+      GST_BUFFER_FLAG_SET (out_buf, GST_BUFFER_FLAG_MARKER);
+    }
 
     if (frame) {
       frame->output_buffer = out_buf;
