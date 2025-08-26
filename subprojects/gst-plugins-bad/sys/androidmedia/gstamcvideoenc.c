@@ -1067,11 +1067,10 @@ gst_amc_video_enc_loop (GstAmcVideoEnc * self)
 retry:
   GST_LOG_OBJECT (self, "Waiting for available output buffer");
   GST_VIDEO_ENCODER_STREAM_UNLOCK (self);
-  /* Wait at most 100ms here, some codecs don't fail dequeueing if
+  /* Wait at most 1s here, some codecs don't fail dequeueing if
    * the codec is flushing, causing deadlocks during shutdown */
-  idx =
-      gst_amc_codec_dequeue_output_buffer (self->codec, &buffer_info, 100000,
-      &err);
+  idx = gst_amc_codec_dequeue_output_buffer (self->codec, &buffer_info,
+      G_USEC_PER_SEC, &err);
   GST_VIDEO_ENCODER_STREAM_LOCK (self);
   /*} */
 
