@@ -1032,10 +1032,11 @@ gst_amc_video_enc_handle_output_frame (GstAmcVideoEnc * self,
 
     if (frame) {
       frame->output_buffer = out_buf;
-      if (buffer_info->flags & BUFFER_FLAG_SYNC_FRAME) {
+      if (buffer_info->flags & BUFFER_FLAG_KEY_FRAME) {
         GST_DEBUG_OBJECT (self, "Frame is sync frame!");
         GST_VIDEO_CODEC_FRAME_SET_SYNC_POINT (frame);
       }
+
       flow_ret = gst_video_encoder_finish_frame (encoder, frame);
     } else {
       /* This sometimes happens at EOS or if the input is not properly framed,
@@ -1720,7 +1721,7 @@ again:
       GST_TIME_FORMAT, GST_TIME_ARGS (id->timestamp));
   if (GST_VIDEO_CODEC_FRAME_IS_SYNC_POINT (frame)) {
     GST_DEBUG_OBJECT (self, "Frame is sync point");
-    buffer_info.flags |= BUFFER_FLAG_SYNC_FRAME;
+    buffer_info.flags |= BUFFER_FLAG_KEY_FRAME;
   }
   gst_video_codec_frame_set_user_data (frame, id,
       (GDestroyNotify) buffer_identification_free);
