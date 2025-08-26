@@ -837,8 +837,8 @@ _find_nearest_frame (GstAmcVideoEnc * self, GstClockTime reference_timestamp)
   GList *l, *best_l = NULL;
   GList *finish_frames = NULL;
   GstVideoCodecFrame *best = NULL;
-  guint64 best_timestamp = 0;
-  guint64 best_diff = G_MAXUINT64;
+  GstClockTime best_timestamp = 0;
+  GstClockTimeDiff best_diff = G_MAXINT64;
   BufferIdentification *best_id = NULL;
   GList *frames;
 
@@ -847,21 +847,24 @@ _find_nearest_frame (GstAmcVideoEnc * self, GstClockTime reference_timestamp)
   for (l = frames; l; l = l->next) {
     GstVideoCodecFrame *tmp = l->data;
     BufferIdentification *id = gst_video_codec_frame_get_user_data (tmp);
-    guint64 timestamp, diff;
+    GstClockTime timestamp;
+    GstClockTimeDiff diff;
 
     /* This happens for frames that were just added but
      * which were not passed to the component yet. Ignore
      * them here!
      */
-    if (!id)
+    if (!id) {
+      GST_WARNING_OBJECT (self, "Found frame without BufferIdentification");
       continue;
+    }
 
     timestamp = id->timestamp;
 
-    if (timestamp > reference_timestamp)
-      diff = timestamp - reference_timestamp;
-    else
-      diff = reference_timestamp - timestamp;
+    diff = ABS (GST_CLOCK_DIFF (timestamp, reference_timestamp));
+    GST_LOG_OBJECT (self,
+        "Found frame with ID: %" GST_TIME_FORMAT " and diff: %" GST_TIME_FORMAT,
+        GST_TIME_ARGS (id->timestamp), GST_TIME_ARGS (diff));
 
     if (best == NULL || diff < best_diff) {
       best = tmp;
@@ -903,6 +906,8 @@ _find_nearest_frame (GstAmcVideoEnc * self, GstClockTime reference_timestamp)
   if (finish_frames) {
     g_warning ("%s: Too old frames, bug in encoder -- please file a bug",
         GST_ELEMENT_NAME (self));
+    GST_ERROR_OBJECT (self,
+        "Too old frames, bug in encoder -- please file a bug");
     for (l = finish_frames; l; l = l->next) {
       gst_video_encoder_finish_frame (GST_VIDEO_ENCODER (self), l->data);
     }
@@ -983,8 +988,11 @@ gst_amc_video_enc_fill_buffer (GstAmcVideoEnc * self, GstBuffer * inbuf,
    * then we can use state->info safely */
   GstVideoInfo *info = &input_state->info;
 
-  if (buffer_info->size < self->color_format_info.frame_size)
+  if (buffer_info->size < self->color_format_info.frame_size) {
+    GST_WARNING_OBJECT (self, "Buffer size too small for frame (%u < %u)",
+        buffer_info->size, self->color_format_info.frame_size);
     return FALSE;
+  }
 
   return gst_amc_color_format_copy (&self->color_format_info, outbuf,
       buffer_info, info, inbuf, COLOR_FORMAT_COPY_IN);
@@ -1057,7 +1065,7 @@ gst_amc_video_enc_loop (GstAmcVideoEnc * self)
   GST_VIDEO_ENCODER_STREAM_LOCK (self);
 
 retry:
-  GST_DEBUG_OBJECT (self, "Waiting for available output buffer");
+  GST_LOG_OBJECT (self, "Waiting for available output buffer");
   GST_VIDEO_ENCODER_STREAM_UNLOCK (self);
   /* Wait at most 100ms here, some codecs don't fail dequeueing if
    * the codec is flushing, causing deadlocks during shutdown */
@@ -1080,7 +1088,7 @@ retry:
       GstAmcFormat *format;
       gchar *format_string;
 
-      GST_DEBUG_OBJECT (self, "Output format has changed");
+      GST_INFO_OBJECT (self, "Output format has changed");
 
       format = (idx == INFO_OUTPUT_FORMAT_CHANGED) ?
           gst_amc_codec_get_output_format (self->codec,
@@ -1104,7 +1112,7 @@ retry:
         gst_amc_format_free (format);
         goto format_error;
       }
-      GST_DEBUG_OBJECT (self, "Got new output format: %s", format_string);
+      GST_INFO_OBJECT (self, "Got new output format: %s", format_string);
       g_free (format_string);
 
       if (!gst_amc_video_enc_set_src_caps (self, format)) {
@@ -1126,7 +1134,7 @@ retry:
         g_assert_not_reached ();
         break;
       case INFO_TRY_AGAIN_LATER:
-        GST_DEBUG_OBJECT (self, "Dequeueing output buffer timed out");
+        GST_LOG_OBJECT (self, "Dequeueing output buffer timed out");
         goto retry;
         break;
       case G_MININT:
@@ -1142,7 +1150,7 @@ retry:
   }
 
 process_buffer:
-  GST_DEBUG_OBJECT (self,
+  GST_LOG_OBJECT (self,
       "Got output buffer at index %d: size %d time %" G_GINT64_FORMAT
       " flags 0x%08x", idx, buffer_info.size, buffer_info.presentation_time_us,
       buffer_info.flags);
@@ -1240,7 +1248,7 @@ process_buffer:
     g_mutex_unlock (&self->drain_lock);
     GST_VIDEO_ENCODER_STREAM_LOCK (self);
   } else {
-    GST_DEBUG_OBJECT (self, "Finished frame: %s", gst_flow_get_name (flow_ret));
+    GST_LOG_OBJECT (self, "Finished frame: %s", gst_flow_get_name (flow_ret));
   }
 
   self->downstream_flow_ret = flow_ret;
@@ -1318,6 +1326,7 @@ flow_error:
           gst_event_new_eos ());
       gst_pad_pause_task (GST_VIDEO_ENCODER_SRC_PAD (self));
     }
+    self->downstream_flow_ret = flow_ret;
     GST_VIDEO_ENCODER_STREAM_UNLOCK (self);
     g_mutex_lock (&self->drain_lock);
     self->draining = FALSE;
@@ -1582,7 +1591,7 @@ gst_amc_video_enc_handle_frame (GstVideoEncoder * encoder,
 
   self = GST_AMC_VIDEO_ENC (encoder);
 
-  GST_DEBUG_OBJECT (self, "Handling frame");
+  GST_LOG_OBJECT (self, "Handling frame");
 
   if (!self->started) {
     GST_ERROR_OBJECT (self, "Codec not started yet");
@@ -1601,7 +1610,7 @@ gst_amc_video_enc_handle_frame (GstVideoEncoder * encoder,
 
   if (GST_VIDEO_CODEC_FRAME_IS_FORCE_KEYFRAME (frame)) {
     if (gst_amc_codec_request_key_frame (self->codec, &err)) {
-      GST_DEBUG_OBJECT (self, "Passed keyframe request to MediaCodec");
+      GST_INFO_OBJECT (self, "Passed keyframe request to MediaCodec");
     }
     if (err) {
       GST_ELEMENT_WARNING_FROM_ERROR (self, err);
@@ -1642,12 +1651,15 @@ again:
   }
 
   if (self->flushing) {
+    GST_INFO_OBJECT (self, "We are flushing");
     memset (&buffer_info, 0, sizeof (buffer_info));
     gst_amc_codec_queue_input_buffer (self->codec, idx, &buffer_info, NULL);
     goto flushing;
   }
 
   if (self->downstream_flow_ret != GST_FLOW_OK) {
+    GST_INFO_OBJECT (self, "Downstream returned %s",
+        gst_flow_get_name (self->downstream_flow_ret));
     memset (&buffer_info, 0, sizeof (buffer_info));
     gst_amc_codec_queue_input_buffer (self->codec, idx, &buffer_info, &err);
     if (err && !self->flushing)
@@ -1661,6 +1673,8 @@ again:
   /* Copy the buffer content in chunks of size as requested
    * by the port */
   buf = gst_amc_codec_get_input_buffer (self->codec, idx, &err);
+  GST_LOG_OBJECT (self, "Got input buffer: %" GST_PTR_FORMAT, buf);
+
   if (err)
     goto failed_to_get_input_buffer;
   else if (!buf)
@@ -1674,6 +1688,7 @@ again:
 
   if (!gst_amc_video_enc_fill_buffer (self, frame->input_buffer, buf,
           &buffer_info)) {
+    GST_ERROR_OBJECT (self, "Could not fill buffer!");
     memset (&buffer_info, 0, sizeof (buffer_info));
     gst_amc_codec_queue_input_buffer (self->codec, idx, &buffer_info, &err);
     if (err && !self->flushing)
@@ -1696,12 +1711,16 @@ again:
     self->last_upstream_ts += duration;
 
   id = buffer_identification_new (timestamp + timestamp_offset);
-  if (GST_VIDEO_CODEC_FRAME_IS_SYNC_POINT (frame))
+  GST_LOG_OBJECT (self, "Created buffer id with timestamp: %"
+      GST_TIME_FORMAT, GST_TIME_ARGS (id->timestamp));
+  if (GST_VIDEO_CODEC_FRAME_IS_SYNC_POINT (frame)) {
+    GST_DEBUG_OBJECT (self, "Frame is sync point");
     buffer_info.flags |= BUFFER_FLAG_SYNC_FRAME;
+  }
   gst_video_codec_frame_set_user_data (frame, id,
       (GDestroyNotify) buffer_identification_free);
 
-  GST_DEBUG_OBJECT (self,
+  GST_LOG_OBJECT (self,
       "Queueing buffer %d: size %d time %" G_GINT64_FORMAT " flags 0x%08x",
       idx, buffer_info.size, buffer_info.presentation_time_us,
       buffer_info.flags);
