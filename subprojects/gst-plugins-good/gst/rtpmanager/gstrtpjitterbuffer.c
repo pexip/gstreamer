@@ -3502,7 +3502,7 @@ _dump_queue_on_threshold (GstRtpJitterBuffer *jitterbuffer, guint16 seqnum,
   first_seqnum = priv->next_out_seqnum;
   first = rtp_jitter_buffer_peek (priv->jbuf);
 
-  if (first == NULL || first->pts == GST_CLOCK_TIME_NONE)
+  if (first == NULL || first->pts == GST_CLOCK_TIME_NONE || pts == GST_CLOCK_TIME_NONE)
     return ret;
 
   first_pts = first->pts;
@@ -3511,10 +3511,14 @@ _dump_queue_on_threshold (GstRtpJitterBuffer *jitterbuffer, guint16 seqnum,
      and the first we have in the queue */
   if (first_seqnum < first->seqnum && priv->packet_spacing > 0) {
     guint16 gap = first->seqnum - first_seqnum;
+    GstClockTime gap_time = gap * priv->packet_spacing;
     /* we subtract the packet spacing "gap" times, to estimate the pts
        of the missing packet */
-    first_pts -= gap * priv->packet_spacing;
+    first_pts -= MIN (first_pts, gap_time);
   }
+
+  if (first_pts > pts)
+    return ret;
 
   pts_diff = pts - first_pts;
   threshold = (priv->dump_queue_threshold_ms + priv->latency_ms) * GST_MSECOND;
@@ -3527,7 +3531,7 @@ _dump_queue_on_threshold (GstRtpJitterBuffer *jitterbuffer, guint16 seqnum,
     guint16 seqnum_diff = prev_seqnum - first_seqnum;
     guint num_packets = seqnum_diff + 1;
 
-    GST_INFO_OBJECT (jitterbuffer,
+    GST_ERROR_OBJECT (jitterbuffer,
         "Dumping all buffers, from #%u to #%u, with a length of %"
         GST_TIME_FORMAT, first_seqnum, first_seqnum + seqnum_diff,
         GST_TIME_ARGS (pts_diff));
@@ -3970,8 +3974,8 @@ gst_rtp_jitter_buffer_chain (GstPad * pad, GstObject * parent,
     if (is_rtx) {
       /* For RTX there must be a corresponding timer or it would be an
        * unsolicited RTX packet that would be dropped */
-      g_assert (timer != NULL);
-      update_rtx_stats (jitterbuffer, timer, dts, FALSE);
+      if (timer)
+        update_rtx_stats (jitterbuffer, timer, dts, FALSE);
     }
     goto duplicate;
   }
