@@ -1747,7 +1747,7 @@ rtp_source_send_rtp (RTPSource * src, RTPPacketInfo * pinfo)
   GST_LOG ("SSRC %08x, RTP %" G_GUINT64_FORMAT ", running_time %"
       GST_TIME_FORMAT, src->ssrc, ext_rtptime, GST_TIME_ARGS (running_time));
 
-  if (src->last_rtime != -1 && ext_rtptime > src->last_rtptime) {
+  if (ext_rtptime > src->last_rtptime) {
     rtp_diff = ext_rtptime - src->last_rtptime;
     rt_diff =
         GST_CLOCK_TIME_IS_VALID (running_time) ? running_time -
