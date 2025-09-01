@@ -4181,11 +4181,8 @@ session_start_rtcp (RTPSession * sess, ReportData * data)
     gst_rtcp_buffer_add_packet (rtcp, GST_RTCP_TYPE_SR, packet);
 
     /* get latest stats */
-    if (!rtp_source_get_new_sr (own, data->ntpnstime, data->running_time,
-            &ntptime, &rtptime, &packet_count, &octet_count)) {
-      gst_rtcp_buffer_unmap (&data->rtcpbuf);
-      return FALSE;
-    }
+    rtp_source_get_new_sr (own, data->ntpnstime, data->running_time,
+        &ntptime, &rtptime, &packet_count, &octet_count);
     /* store stats */
     rtp_source_process_sr (own, data->current_time, ntptime, rtptime,
         packet_count, octet_count);
