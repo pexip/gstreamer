@@ -1238,21 +1238,6 @@ gst_v4l2src_change_state (GstElement * element, GstStateChange transition)
         gst_v4l2_error (v4l2src, &error);
         return GST_STATE_CHANGE_FAILURE;
       }
-
-      /* the device might still busy even after open() succeds, so try also to
-         set the format, it will return an EBUSY error if the device is
-         already acquired by another process */
-      GstCaps *caps = gst_v4l2_object_get_caps (obj, NULL);
-      caps = gst_caps_make_writable (caps);
-      gboolean set_format = gst_v4l2src_set_format (v4l2src, caps, &error);
-      gst_caps_unref (caps);
-
-      if (!set_format) {
-        gst_v4l2_error (v4l2src, &error);
-        gst_v4l2_object_close (obj);
-        return GST_STATE_CHANGE_FAILURE;
-      }
-
       break;
     default:
       break;
