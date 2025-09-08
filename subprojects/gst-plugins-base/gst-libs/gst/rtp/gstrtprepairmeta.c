@@ -40,6 +40,8 @@ static gboolean gst_rtp_repair_meta_init (GstRTPRepairMeta * meta,
     G_GNUC_UNUSED gpointer params, G_GNUC_UNUSED GstBuffer * buffer);
 static void gst_rtp_repair_meta_free (GstRTPRepairMeta * meta,
     G_GNUC_UNUSED GstBuffer * buffer);
+static gboolean gst_rtp_repair_meta_transform (GstBuffer * dst, GstMeta * meta,
+    GstBuffer * src, GQuark type, G_GNUC_UNUSED gpointer data);
 
 
 GType
@@ -67,7 +69,7 @@ gst_rtp_repair_meta_get_info (void)
         sizeof (GstRTPRepairMeta),
         (GstMetaInitFunction) gst_rtp_repair_meta_init,
         (GstMetaFreeFunction) gst_rtp_repair_meta_free,
-        NULL);
+        (GstMetaTransformFunction)gst_rtp_repair_meta_transform);
     g_once_init_leave (&meta_info, mi);
   }
 
@@ -176,6 +178,26 @@ gst_rtp_repair_meta_get_seqnums (GstBuffer * buffer, guint32 * ssrc,
     *seqnums = NULL;
   }
   return FALSE;
+}
+
+static gboolean gst_rtp_repair_meta_transform (GstBuffer * dst, GstMeta * meta,
+    GstBuffer * src, GQuark type, G_GNUC_UNUSED gpointer data)
+{
+  if (GST_META_TRANSFORM_IS_COPY (type)) {
+    GstRTPRepairMeta *smeta = (GstRTPRepairMeta *) meta;
+    GstRTPRepairMeta *dmeta;
+
+    dmeta = gst_rtp_repair_meta_add (dst,
+      smeta->idx_red_packets, smeta->num_red_packets,
+      smeta->ssrc, (guint16*)smeta->seqnums->data, smeta->seqnums->len);
+    if (dmeta == NULL)
+      return FALSE;
+  } else {
+    /* return FALSE, if transform type is not supported */
+    return FALSE;
+  }
+
+  return TRUE;
 }
 
 static gboolean
