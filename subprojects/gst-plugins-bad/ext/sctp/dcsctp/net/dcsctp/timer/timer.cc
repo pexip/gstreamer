@@ -56,8 +56,6 @@ TimeDelta GetBackoffDuration(const TimerOptions& options,
 }
 }  // namespace
 
-constexpr TimeDelta Timer::kMaxTimerDuration;
-
 Timer::Timer(TimerID id,
              absl::string_view name,
              OnExpired on_expired,
