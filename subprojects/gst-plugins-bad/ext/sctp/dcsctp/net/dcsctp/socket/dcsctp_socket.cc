@@ -500,7 +500,6 @@ SendStatus DcSctpSocket::Send(DcSctpMessage message,
   Timestamp now = callbacks_.Now();
   ++metrics_.tx_messages_count;
   send_queue_.Add(now, std::move(message), send_options);
-
   if (tcb_ != nullptr)
     tcb_->SendBufferedPackets(now);
   RTC_DCHECK(IsConsistent());
