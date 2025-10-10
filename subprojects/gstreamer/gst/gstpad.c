@@ -3104,7 +3104,8 @@ gst_pad_forward (GstPad * pad, GstPadForwardFunction forward,
   GstIterator *iter;
   gboolean done = FALSE;
   GValue item = { 0, };
-  GList *pushed_pads = NULL;
+  GHashTable *pushed_pads = g_hash_table_new (NULL, NULL);
+  gboolean resynced = FALSE;
 
   iter = gst_pad_iterate_internal_links (pad);
 
@@ -3119,8 +3120,9 @@ gst_pad_forward (GstPad * pad, GstPadForwardFunction forward,
 
         intpad = g_value_get_object (&item);
 
-        /* if already pushed, skip. FIXME, find something faster to tag pads */
-        if (intpad == NULL || g_list_find (pushed_pads, intpad)) {
+        /* if we have resynced, check if we have already pushed */
+        if (intpad == NULL || (resynced
+                && g_hash_table_contains (pushed_pads, intpad))) {
           g_value_reset (&item);
           break;
         }
@@ -3129,7 +3131,7 @@ gst_pad_forward (GstPad * pad, GstPadForwardFunction forward,
             GST_DEBUG_PAD_NAME (intpad));
         done = result = forward (intpad, user_data);
 
-        pushed_pads = g_list_prepend (pushed_pads, intpad);
+        g_hash_table_add (pushed_pads, intpad);
 
         g_value_reset (&item);
         break;
@@ -3139,6 +3141,7 @@ gst_pad_forward (GstPad * pad, GstPadForwardFunction forward,
          * again on pads that got the event already and because we need
          * to consider the result of the previous pushes */
         gst_iterator_resync (iter);
+        resynced = TRUE;
         break;
       case GST_ITERATOR_ERROR:
         GST_ERROR_OBJECT (pad, "Could not iterate over internally linked pads");
@@ -3152,7 +3155,7 @@ gst_pad_forward (GstPad * pad, GstPadForwardFunction forward,
   g_value_unset (&item);
   gst_iterator_free (iter);
 
-  g_list_free (pushed_pads);
+  g_hash_table_destroy (pushed_pads);
 
 no_iter:
   return result;
