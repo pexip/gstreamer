@@ -3104,13 +3104,15 @@ gst_pad_forward (GstPad * pad, GstPadForwardFunction forward,
   GstIterator *iter;
   gboolean done = FALSE;
   GValue item = { 0, };
-  GHashTable *pushed_pads = g_hash_table_new (NULL, NULL);
+  GHashTable *pushed_pads = NULL;
   gboolean resynced = FALSE;
 
   iter = gst_pad_iterate_internal_links (pad);
 
   if (!iter)
     goto no_iter;
+
+  pushed_pads = g_hash_table_new (NULL, NULL);
 
   while (!done) {
     switch (gst_iterator_next (iter, &item)) {
