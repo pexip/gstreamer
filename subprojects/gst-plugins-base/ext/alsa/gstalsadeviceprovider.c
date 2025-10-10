@@ -455,7 +455,7 @@ gst_alsa_device_finalize (GObject * object)
 {
   GstAlsaDevice *device = GST_ALSA_DEVICE (object);
 
-  free (device->internal_name);
+  g_free (device->internal_name);
 
   G_OBJECT_CLASS (gst_alsa_device_parent_class)->finalize (object);
 }
