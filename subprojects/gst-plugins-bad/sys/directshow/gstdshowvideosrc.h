@@ -67,6 +67,9 @@ struct _GstDshowVideoSrc
   /* dshow video capture filter */
   IBaseFilter *video_cap_filter;
 
+  /* the current caps video info */
+  GstVideoInfo vinfo;
+
   /* dshow sink filter */
   CDshowFakeSink *dshow_fakesink;
 
@@ -87,7 +90,6 @@ struct _GstDshowVideoSrc
   GstBuffer *buffer;
   gboolean stop_requested;
 
-  gboolean is_rgb;
   gboolean is_running;
   gint width;
   gint height;

@@ -170,7 +170,6 @@ gst_dshowvideosrc_init (GstDshowVideoSrc * src)
   src->filter_graph = NULL;
   src->caps = NULL;
   src->pins_mediatypes = NULL;
-  src->is_rgb = FALSE;
   src->is_running = FALSE;
 
   /*added for analog input*/
@@ -185,6 +184,8 @@ gst_dshowvideosrc_init (GstDshowVideoSrc * src)
   src->stop_requested = FALSE;
 
   CoInitializeEx (NULL, COINIT_MULTITHREADED);
+
+  gst_video_info_init (&src->vinfo);
 
   gst_base_src_set_live (GST_BASE_SRC (src), TRUE);
 }
@@ -746,18 +747,7 @@ gst_dshowvideosrc_set_caps (GstBaseSrc * bsrc, GstCaps * caps)
         /* save width and height negotiated */
         gst_structure_get_int (s, "width", &src->width);
         gst_structure_get_int (s, "height", &src->height);
-
-	GstVideoInfo info;
-	gst_video_info_from_caps(&info, caps);
-	switch (GST_VIDEO_INFO_FORMAT(&info)) {
-          case GST_VIDEO_FORMAT_RGB:
-          case GST_VIDEO_FORMAT_BGR:
-	    src->is_rgb = TRUE;
-	    break;
-	default:
-	  src->is_rgb = FALSE;
-	  break;
-	}
+        gst_video_info_from_caps (&src->info, caps);
       }
     }
   }
@@ -1085,7 +1075,7 @@ gst_dshowvideosrc_push_buffer (guint8 * buffer, guint size, gpointer src_object,
 	  return FALSE;
   }
 
-  if (src->is_rgb) {
+  if (GST_VIDEO_INFO_IS_RGB (&src->vinfo)) {
     /* FOR RGB directshow decoder will return bottom-up BITMAP
      * There is probably a way to get top-bottom video frames from
      * the decoder...
