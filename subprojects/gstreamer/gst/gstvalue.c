@@ -806,7 +806,7 @@ gst_value_list_concat_and_take_values (GValue * dest, GValue * val1,
   g_assert (G_VALUE_TYPE (dest) == 0);
   g_assert (G_IS_VALUE (val1));
   g_assert (G_IS_VALUE (val2));
-  g_assert (gst_value_list_or_array_are_compatible (val1, val2));
+  g_return_if_fail (gst_value_list_or_array_are_compatible (val1, val2));
 
   val1_is_list = GST_VALUE_HOLDS_LIST (val1);
   val1_length = (val1_is_list ? VALUE_LIST_SIZE (val1) : 1);
