@@ -1228,7 +1228,7 @@ gst_base_idle_src_process_object (GstBaseIdleSrc * src, GstMiniObject * obj)
 
     GST_DEBUG_OBJECT (src, "About to push BufferList %" GST_PTR_FORMAT,
         buf_list);
-    ret = gst_pad_push (pad, buf_list);
+    ret = gst_pad_push_list (pad, buf_list);
     goto check_ret_error;
   } else if (GST_IS_EVENT (obj)) {
     GstEvent *event = GST_EVENT_CAST (obj);
