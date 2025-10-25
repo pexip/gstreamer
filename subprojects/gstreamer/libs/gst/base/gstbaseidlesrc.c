@@ -1565,13 +1565,25 @@ alloc_failed:
 }
 
 static void
+gst_base_idle_src_dispose (GObject * object)
+{
+  GstBaseIdleSrc *src;
+  src = GST_BASE_IDLE_SRC (object);
+  (void) src;
+
+  /* FIXME: empty this queue potentially... */
+  // g_queue_clear (src->priv->obj_queue);
+
+  G_OBJECT_CLASS (parent_class)->dispose (object);
+}
+
+static void
 gst_base_idle_src_finalize (GObject * object)
 {
   GstBaseIdleSrc *src;
   src = GST_BASE_IDLE_SRC (object);
 
   g_queue_free (src->priv->obj_queue);
-  /* FIXME: empty this queue potentially... */
 
   G_OBJECT_CLASS (parent_class)->finalize (object);
 }
@@ -1593,6 +1605,7 @@ gst_base_idle_src_class_init (GstBaseIdleSrcClass * klass)
 
   parent_class = g_type_class_peek_parent (klass);
 
+  gobject_class->dispose = gst_base_idle_src_dispose;
   gobject_class->finalize = gst_base_idle_src_finalize;
   gobject_class->set_property = gst_base_idle_src_set_property;
   gobject_class->get_property = gst_base_idle_src_get_property;
