@@ -1324,7 +1324,7 @@ GST_START_TEST (test_rr_stats_assignment)
   SessionHarness *h = session_harness_new ();
   GstFlowReturn res;
   GstBuffer *in_buf, *rtcp_buf;
-  gint i, j;
+  guint i, j;
 
   guint ssrcs[] = {
     0x01BADBAD,

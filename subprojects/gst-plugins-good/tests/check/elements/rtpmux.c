@@ -104,6 +104,12 @@ event_func (GstPad * pad, G_GNUC_UNUSED GstObject * noparent, GstEvent * event)
 }
 
 static void
+gst_buffer_unref_func (gpointer data, G_GNUC_UNUSED gpointer user_data)
+{
+  gst_buffer_unref (data);
+}
+
+static void
 test_basic (const gchar * elem_name, const gchar * sink2, int count,
     check_cb cb)
 {
@@ -212,7 +218,7 @@ test_basic (const gchar * elem_name, const gchar * sink2, int count,
 
     cb (src2, i);
 
-    g_list_foreach (buffers, (GFunc) gst_buffer_unref, NULL);
+    g_list_foreach (buffers, gst_buffer_unref_func, NULL);
     g_list_free (buffers);
     buffers = NULL;
   }
@@ -299,7 +305,7 @@ lock_check_cb (GstPad * pad, int i)
     fail_unless (gst_pad_push (pad, inbuf) == GST_FLOW_OK);
 
 
-    g_list_foreach (buffers, (GFunc) gst_buffer_unref, NULL);
+    g_list_foreach (buffers, gst_buffer_unref_func, NULL);
     g_list_free (buffers);
     buffers = NULL;
   }
