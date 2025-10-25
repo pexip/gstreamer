@@ -111,7 +111,6 @@ gst_base_idle_src_get_instance_private (GstBaseIdleSrc * self)
   return (G_STRUCT_MEMBER_P (self, private_offset));
 }
 
-/* TODO: do we support anything other than _BUFFER/_BYTES ? */
 /**
  * gst_base_idle_src_set_format:
  * @src: base source instance
@@ -130,6 +129,7 @@ gst_base_idle_src_set_format (GstBaseIdleSrc * src, GstFormat format)
 {
   g_return_if_fail (GST_IS_BASE_IDLE_SRC (src));
   g_return_if_fail (GST_STATE (src) <= GST_STATE_READY);
+  g_return_if_fail (GST_FORMAT_BUFFERS == format || GST_FORMAT_BYTES == format);
 
   GST_OBJECT_LOCK (src);
   gst_segment_init (&src->segment, format);
