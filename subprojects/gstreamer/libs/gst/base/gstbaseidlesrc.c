@@ -1210,16 +1210,17 @@ gst_base_idle_src_process_object (GstBaseIdleSrc * src, GstMiniObject * obj)
     GST_DEBUG_OBJECT (src, "About to push Buffer %" GST_PTR_FORMAT, buf);
 
     ret = gst_pad_push (pad, buf);
-    if (ret != GST_FLOW_OK)
+    if (ret != GST_FLOW_OK) {
       GST_ERROR ("Got ret: %s", gst_flow_get_name (ret));
+    }
   } else if (GST_IS_EVENT (obj)) {
     GstEvent *event = GST_EVENT_CAST (obj);
     gboolean ret;
-
     GST_DEBUG_OBJECT (src, "About to push Event %" GST_PTR_FORMAT, event);
     ret = gst_pad_push_event (pad, event);
-    if (!ret)
-      GST_ERROR ("HUUUUAA");
+    if (!ret) {
+      GST_ERROR ("Got ret: %s", gst_flow_get_name (ret));
+    }
   } else if (GST_IS_CAPS (obj)) {
     GST_DEBUG_OBJECT (src, "About to push Caps %" GST_PTR_FORMAT, obj);
   }
