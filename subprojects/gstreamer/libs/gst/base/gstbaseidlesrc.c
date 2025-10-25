@@ -1215,11 +1215,8 @@ gst_base_idle_src_process_object (GstBaseIdleSrc * src, GstMiniObject * obj)
     }
 
     GST_DEBUG_OBJECT (src, "About to push Buffer %" GST_PTR_FORMAT, buf);
-
     ret = gst_pad_push (pad, buf);
-    if (ret != GST_FLOW_OK) {
-      GST_ERROR ("Got ret: %s", gst_flow_get_name (ret));
-    }
+    goto check_ret_error;
   } else if (GST_IS_BUFFER_LIST (obj)) {
     GstBufferList *buf_list = GST_BUFFER_LIST_CAST (obj);
 
@@ -1228,21 +1225,23 @@ gst_base_idle_src_process_object (GstBaseIdleSrc * src, GstMiniObject * obj)
     }
 
     GST_DEBUG_OBJECT (src, "About to push BufferList %" GST_PTR_FORMAT, buf_list);
-
     ret = gst_pad_push (pad, buf_list);
-    if (ret != GST_FLOW_OK) {
-      GST_ERROR ("Got ret: %s", gst_flow_get_name (ret));
-    }
+    goto check_ret_error;
   } else if (GST_IS_EVENT (obj)) {
     GstEvent *event = GST_EVENT_CAST (obj);
     gboolean ret;
+
     GST_DEBUG_OBJECT (src, "About to push Event %" GST_PTR_FORMAT, event);
     ret = gst_pad_push_event (pad, event);
-    if (!ret) {
-      GST_ERROR ("Got ret: %s", gst_flow_get_name (ret));
-    }
+    goto check_ret_error;
   } else {
     GST_ERROR_OBJECT (src, "Unknown object %" GST_PTR_FORMAT " type", obj);
+  }
+
+check_ret_error:
+  if (ret != GST_FLOW_OK && ret != GST_FLOW_FLUSHING) {
+    // XXX: Should we proxy this into the bus in case or error or just ignore?
+    GST_ERROR ("Got ret: %s", gst_flow_get_name (ret));
   }
 
   GST_PAD_STREAM_UNLOCK (pad);

@@ -81,14 +81,19 @@ GST_START_TEST (baseidlesrc_submit_buffer)
 
   h = gst_harness_new_with_element (GST_ELEMENT (src), NULL, "src");
 
-  gst_harness_set_sink_caps_str (h, "foo/bar");
+  gst_harness_set_sink_caps_str (h, "video/x-raw,format=RGB,width=1,height=1");
   gst_harness_play (h);
 
   for (i = 0; i < 5; i++) {
     fail_unless_equals_int (GST_FLOW_OK,
         gst_base_idle_src_alloc_buffer (base_src, 100, &buf));
+    GST_BUFFER_PTS (buf) = i * GST_MSECOND;
     gst_base_idle_src_submit_buffer (base_src, buf);
-    gst_buffer_unref (gst_harness_pull (h));
+
+    buf = gst_harness_pull (h);
+    fail_unless (buf != NULL);
+    fail_unless_equals_uint64 (GST_BUFFER_PTS (buf), i * GST_MSECOND);
+    gst_buffer_unref (buf);
   }
 
   gst_harness_teardown (h);
@@ -129,6 +134,43 @@ GST_START_TEST (baseidlesrc_submit_buffer_list)
 
 GST_END_TEST;
 
+static void
+fail_unless_equals_event_type (const GstEvent * event, GstEventType expected_type)
+{
+  fail_unless (GST_EVENT_TYPE (event), expected_type, "'%s' expected, got '%s'", gst_event_type_get_name (expected_type), gst_event_type_get_name(GST_EVENT_TYPE (event)));
+}
+
+GST_START_TEST (baseidlesrc_handle_eos)
+{
+  GstElement *src;
+  GstHarness *h;
+  GstBaseIdleSrc *base_src;
+  GstBuffer *buf;
+
+  src = g_object_new (test_idle_src_get_type (), NULL);
+  base_src = GST_BASE_IDLE_SRC (src);
+
+  h = gst_harness_new_with_element (src, NULL, "src");
+  gst_harness_set_sink_caps_str (h, "foo/bar");
+  gst_harness_play (h);
+
+  /* push one buffer and then EOS */
+  fail_unless_equals_int (GST_FLOW_OK,
+      gst_base_idle_src_alloc_buffer (base_src, 64, &buf));
+  gst_base_idle_src_submit_buffer (base_src, buf);
+
+  gst_element_send_event (src, gst_event_new_eos ());
+
+  GstEvent *event = gst_harness_pull_event (h);
+  fail_unless_equals_event_type (event, GST_EVENT_EOS);
+  gst_event_unref (event);
+
+  gst_buffer_unref (gst_harness_pull (h));
+
+  gst_harness_teardown (h);
+}
+GST_END_TEST;
+
 static Suite *
 baseidlesrc_suite (void)
 {
@@ -139,6 +181,7 @@ baseidlesrc_suite (void)
   tcase_add_test (tc, baseidlesrc_up_and_down);
   tcase_add_test (tc, baseidlesrc_submit_buffer);
   tcase_add_test (tc, baseidlesrc_submit_buffer_list);
+  tcase_add_test (tc, baseidlesrc_handle_eos);
 
   return s;
 }
