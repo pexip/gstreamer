@@ -1192,6 +1192,13 @@ gst_base_idle_src_add_timestamp (GstBaseIdleSrc * src, GstBuffer * buf)
   GST_BUFFER_DTS (buf) = running_time;
 }
 
+static gboolean
+gst_base_idle_src_buffer_list_add_timestamp_func (GstBuffer ** buf, guint idx, gpointer user_data)
+{
+  GstBaseIdleSrc * src = GST_BASE_IDLE_SRC (user_data);
+  gst_base_idle_src_add_timestamp (src, *buf);
+}
+
 static void
 gst_base_idle_src_process_object (GstBaseIdleSrc * src, GstMiniObject * obj)
 {
@@ -1213,6 +1220,19 @@ gst_base_idle_src_process_object (GstBaseIdleSrc * src, GstMiniObject * obj)
     if (ret != GST_FLOW_OK) {
       GST_ERROR ("Got ret: %s", gst_flow_get_name (ret));
     }
+  } else if (GST_IS_BUFFER_LIST (obj)) {
+    GstBufferList *buf_list = GST_BUFFER_LIST_CAST (obj);
+
+    if (src->priv->do_timestamp) {
+      gst_buffer_list_foreach (buf_list, gst_base_idle_src_buffer_list_add_timestamp_func, src);
+    }
+
+    GST_DEBUG_OBJECT (src, "About to push BufferList %" GST_PTR_FORMAT, buf_list);
+
+    ret = gst_pad_push (pad, buf_list);
+    if (ret != GST_FLOW_OK) {
+      GST_ERROR ("Got ret: %s", gst_flow_get_name (ret));
+    }
   } else if (GST_IS_EVENT (obj)) {
     GstEvent *event = GST_EVENT_CAST (obj);
     gboolean ret;
@@ -1221,6 +1241,8 @@ gst_base_idle_src_process_object (GstBaseIdleSrc * src, GstMiniObject * obj)
     if (!ret) {
       GST_ERROR ("Got ret: %s", gst_flow_get_name (ret));
     }
+  } else {
+    GST_ERROR_OBJECT (src, "Unknown object %" GST_PTR_FORMAT " type", obj);
   }
 
   GST_PAD_STREAM_UNLOCK (pad);
@@ -1502,7 +1524,6 @@ gst_base_idle_src_submit_buffer_list (GstBaseIdleSrc * src,
 
   gst_base_idle_src_start_task (src, FALSE);
 }
-
 
 /**
  * gst_base_idle_src_alloc_buffer:

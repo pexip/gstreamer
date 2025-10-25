@@ -96,6 +96,39 @@ GST_START_TEST (baseidlesrc_submit_buffer)
 
 GST_END_TEST;
 
+GST_START_TEST (baseidlesrc_submit_buffer_list)
+{
+  GstElement *src;
+  GstHarness *h;
+  GstBaseIdleSrc *base_src;
+  GstBuffer *buf;
+  GstBufferList *buf_list;
+  guint i;
+
+  src = g_object_new (test_idle_src_get_type (), NULL);
+  base_src = GST_BASE_IDLE_SRC (src);
+
+  h = gst_harness_new_with_element (GST_ELEMENT (src), NULL, "src");
+
+  gst_harness_set_sink_caps_str (h, "foo/bar");
+  gst_harness_play (h);
+
+  buf_list = gst_buffer_list_new_sized (20);
+
+  for (i = 0; i < 5; i++) {
+    fail_unless_equals_int (GST_FLOW_OK,
+        gst_base_idle_src_alloc_buffer (base_src, 100, &buf));
+    gst_buffer_list_insert (buf_list, -1, buf);
+  }
+
+  gst_base_idle_src_submit_buffer_list (base_src, buf_list);
+  gst_buffer_list_unref (gst_harness_pull_list (h));
+
+  gst_harness_teardown (h);
+}
+
+GST_END_TEST;
+
 static Suite *
 baseidlesrc_suite (void)
 {
@@ -105,6 +138,7 @@ baseidlesrc_suite (void)
   suite_add_tcase (s, tc);
   tcase_add_test (tc, baseidlesrc_up_and_down);
   tcase_add_test (tc, baseidlesrc_submit_buffer);
+  tcase_add_test (tc, baseidlesrc_submit_buffer_list);
 
   return s;
 }
