@@ -86,7 +86,8 @@ GST_START_TEST (test_pay_to_depay_multichannel)
   GstCaps *caps;
   GstStructure *s;
   const GValue *channel_mapping;
-  gint val, i;
+  gint val;
+  guint i;
 
   static const int expected_channel_mapping[] = { 0, 4, 1, 2, 3, 5 };
 
