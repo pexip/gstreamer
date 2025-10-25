@@ -1195,13 +1195,13 @@ gst_base_idle_src_add_timestamp (GstBaseIdleSrc * src, GstBuffer * buf)
 static void
 gst_base_idle_src_process_object (GstBaseIdleSrc * src, GstMiniObject * obj)
 {
+  GstFlowReturn ret;
   GstPad *pad = src->srcpad;
 
   GST_PAD_STREAM_LOCK (pad);
 
   if (GST_IS_BUFFER (obj)) {
     GstBuffer *buf = GST_BUFFER_CAST (obj);
-    GstFlowReturn ret;
 
     if (src->priv->do_timestamp) {
       gst_base_idle_src_add_timestamp (src, buf);
@@ -1221,8 +1221,6 @@ gst_base_idle_src_process_object (GstBaseIdleSrc * src, GstMiniObject * obj)
     if (!ret) {
       GST_ERROR ("Got ret: %s", gst_flow_get_name (ret));
     }
-  } else if (GST_IS_CAPS (obj)) {
-    GST_DEBUG_OBJECT (src, "About to push Caps %" GST_PTR_FORMAT, obj);
   }
 
   GST_PAD_STREAM_UNLOCK (pad);
