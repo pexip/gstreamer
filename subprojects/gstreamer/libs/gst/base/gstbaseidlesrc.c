@@ -28,14 +28,17 @@
  * @short_description: Base class for getrange based source elements
  * @see_also: #GstPushSrc, #GstBaseTransform, #GstBaseSink
  *
-
+ * This is a generic base class for source elements that are mostly
+ * idle in its lifetime.
+ *
+ * Only push-mode is supported.
+ * TODO: Complete
  */
 
 #ifdef HAVE_CONFIG_H
 #  include "config.h"
 #endif
 
-#include <stdlib.h>
 #include <string.h>
 
 #include <gst/gst_private.h>
@@ -69,39 +72,36 @@ enum
 struct _GstBaseIdleSrcPrivate
 {
   /* if a stream-start event should be sent */
-  gboolean stream_start_pending;        /* STREAM_LOCK */
-
+  gboolean stream_start_pending;  /* STREAM_LOCK */
   /* if segment should be sent and a
    * seqnum if it was originated by a seek */
-  gboolean segment_pending;     /* OBJECT_LOCK */
-  guint32 segment_seqnum;       /* OBJECT_LOCK */
+  gboolean segment_pending;       /* OBJECT_LOCK */
+  gboolean do_timestamp;          /* OBJECT_LOCK */
+  guint32 segment_seqnum;         /* OBJECT_LOCK */
 
   /* startup latency is the time it takes between going to PLAYING and producing
    * the first BUFFER with running_time 0. This value is included in the latency
    * reporting. */
-  GstClockTime latency;         /* OBJECT_LOCK */
+  GstClockTime latency;           /* OBJECT_LOCK */
   /* timestamp offset, this is the offset add to the values of gst_times for
    * pseudo live sources */
-  GstClockTimeDiff ts_offset;   /* OBJECT_LOCK */
+  GstClockTimeDiff ts_offset;     /* OBJECT_LOCK */
+  /* QoS */
+  gdouble proportion;             /* OBJECT_LOCK */
+  GstClockTime earliest_time;     /* OBJECT_LOCK */
 
-  gboolean do_timestamp;        /* OBJECT_LOCK */
-
-  /* QoS *//* with LOCK */
-  gdouble proportion;           /* OBJECT_LOCK */
-  GstClockTime earliest_time;   /* OBJECT_LOCK */
-
-  GstBufferPool *pool;          /* OBJECT_LOCK */
-  GstAllocator *allocator;      /* OBJECT_LOCK */
-  GstAllocationParams params;   /* OBJECT_LOCK */
-
+  GstBufferPool *pool;            /* OBJECT_LOCK */
+  GstAllocator *allocator;        /* OBJECT_LOCK */
   GQueue *obj_queue;
   GThread *thread;
+
+  GstAllocationParams params;     /* OBJECT_LOCK */
 };
 
 static GstElementClass *parent_class = NULL;
 static gint private_offset = 0;
 
-
+/* TODO: Should this be an vmethod? */
 static void gst_base_idle_src_start_task (GstBaseIdleSrc * src, gboolean wait);
 static void gst_base_idle_src_process_object_queue (GstBaseIdleSrc * src);
 
@@ -1543,8 +1543,7 @@ gst_base_idle_src_alloc_buffer (GstBaseIdleSrc * src,
 
     ret = GST_FLOW_OK;
   } else {
-    GST_WARNING_OBJECT (src, "Not trying to alloc %u bytes. Blocksize not set?",
-        size);
+    GST_WARNING_OBJECT (src, "Not trying to alloc %" G_GSIZE_FORMAT " bytes. Blocksize not set?", size);
     goto alloc_failed;
   }
 
@@ -1559,7 +1558,7 @@ done:
   /* ERRORS */
 alloc_failed:
   {
-    GST_ERROR_OBJECT (src, "Failed to allocate %u bytes", size);
+    GST_ERROR_OBJECT (src, "Failed to allocate %" G_GSIZE_FORMAT " bytes", size);
     ret = GST_FLOW_ERROR;
     goto done;
   }
@@ -1589,8 +1588,8 @@ gst_base_idle_src_class_init (GstBaseIdleSrcClass * klass)
   if (private_offset != 0)
     g_type_class_adjust_private_offset (klass, &private_offset);
 
-  GST_DEBUG_CATEGORY_INIT (gst_base_idle_src_debug, "idlesrc", 0,
-      "idlesrc element");
+  GST_DEBUG_CATEGORY_INIT (gst_base_idle_src_debug, "baseidlesrc", 0,
+      "base idlesrc element");
 
   parent_class = g_type_class_peek_parent (klass);
 
@@ -1615,7 +1614,6 @@ gst_base_idle_src_class_init (GstBaseIdleSrcClass * klass)
       GST_DEBUG_FUNCPTR (gst_base_idle_src_decide_allocation_default);
 
   /* Registering debug symbols for function pointers */
-
   GST_DEBUG_REGISTER_FUNCPTR (gst_base_idle_src_event);
   GST_DEBUG_REGISTER_FUNCPTR (gst_base_idle_src_query);
   GST_DEBUG_REGISTER_FUNCPTR (gst_base_idle_src_fixate);
