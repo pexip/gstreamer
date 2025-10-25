@@ -1256,7 +1256,6 @@ gst_base_idle_src_process_object_queue (GstBaseIdleSrc * src)
   GstMiniObject *obj;
   GST_OBJECT_LOCK (src);
   while ((obj = g_queue_pop_head (src->priv->obj_queue))) {
-
     GST_OBJECT_UNLOCK (src);
     gst_base_idle_src_process_object (src, obj);
     GST_OBJECT_LOCK (src);
@@ -1290,14 +1289,18 @@ gst_base_idle_src_func (gpointer user_data)
 static void
 gst_base_idle_src_start_task (GstBaseIdleSrc * src, gboolean wait)
 {
-  GST_DEBUG_OBJECT (src, "Starting Task");
+  GST_DEBUG_OBJECT (src, "Starting task");
   /* if we already have an outstanding task, join it */
-  if (src->priv->thread)
+  if (src->priv->thread) {
+    GST_DEBUG_OBJECT (src, "Waiting for outstanding task to finish");
     g_thread_join (src->priv->thread);
+  }
 
   src->priv->thread =
       g_thread_new (GST_ELEMENT_NAME (src), gst_base_idle_src_func, src);
+
   if (wait) {
+    GST_DEBUG_OBJECT (src, "Waiting for task to finish");
     g_thread_join (src->priv->thread);
     src->priv->thread = NULL;
   }
