@@ -1,0 +1,8 @@
+#mesondefine BYTE_ORDER_BIG_ENDIAN
+#mesondefine HAVE_BUILTIN_PREFETCH
+#mesondefine HAVE_MM_PREFETCH
+#mesondefine HAVE_SSE42
+#mesondefine HAVE_ARM64_CRC32C
+#mesondefine HAVE_STRONG_GETAUXVAL
+#mesondefine HAVE_WEAK_GETAUXVAL
+#mesondefine CRC32C_TESTS_BUILT_WITH_GLOG

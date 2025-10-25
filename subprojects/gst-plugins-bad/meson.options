@@ -166,6 +166,7 @@ option('rsvg', type : 'feature', value : 'auto', description : 'SVG overlayer an
 option('rtmp', type : 'feature', value : 'auto', description : 'RTMP video network source and sink plugin')
 option('sbc', type : 'feature', value : 'auto', description : 'SBC bluetooth audio codec plugin')
 option('sctp', type : 'feature', value : 'auto', description : 'SCTP plugin')
+option('dcsctp', type : 'feature', value : 'auto', description : 'dcSCTP plugin')
 option('shm', type : 'feature', value : 'auto', description : 'Shared memory source/sink plugin')
 option('smoothstreaming', type : 'feature', value : 'auto', description : 'Microsoft Smooth Streaming demuxer plugin')
 option('sndfile', type : 'feature', value : 'auto', description : 'libsndfile plugin')

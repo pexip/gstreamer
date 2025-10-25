@@ -911,9 +911,9 @@ data_queue_item_free (GstDataQueueItem * item)
 
 static void
 on_sctp_packet_out (GstSctpAssociation * _association, const guint8 * buf,
-    gsize length, gpointer user_data)
+    gsize length, GstElement * element)
 {
-  GstSctpEnc *self = user_data;
+  GstSctpEnc *self = GST_SCTP_ENC_CAST (element);
   GstBuffer *gstbuf;
   GstDataQueueItem *item;
   GstSctpEncPad *sctpenc_pad;
