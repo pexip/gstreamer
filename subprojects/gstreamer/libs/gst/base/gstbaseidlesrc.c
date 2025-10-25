@@ -72,30 +72,30 @@ enum
 struct _GstBaseIdleSrcPrivate
 {
   /* if a stream-start event should be sent */
-  gboolean stream_start_pending;  /* STREAM_LOCK */
+  gboolean stream_start_pending;        /* STREAM_LOCK */
   /* if segment should be sent and a
    * seqnum if it was originated by a seek */
-  gboolean segment_pending;       /* OBJECT_LOCK */
-  gboolean do_timestamp;          /* OBJECT_LOCK */
-  guint32 segment_seqnum;         /* OBJECT_LOCK */
+  gboolean segment_pending;     /* OBJECT_LOCK */
+  gboolean do_timestamp;        /* OBJECT_LOCK */
+  guint32 segment_seqnum;       /* OBJECT_LOCK */
 
   /* startup latency is the time it takes between going to PLAYING and producing
    * the first BUFFER with running_time 0. This value is included in the latency
    * reporting. */
-  GstClockTime latency;           /* OBJECT_LOCK */
+  GstClockTime latency;         /* OBJECT_LOCK */
   /* timestamp offset, this is the offset add to the values of gst_times for
    * pseudo live sources */
-  GstClockTimeDiff ts_offset;     /* OBJECT_LOCK */
+  GstClockTimeDiff ts_offset;   /* OBJECT_LOCK */
   /* QoS */
-  gdouble proportion;             /* OBJECT_LOCK */
-  GstClockTime earliest_time;     /* OBJECT_LOCK */
+  gdouble proportion;           /* OBJECT_LOCK */
+  GstClockTime earliest_time;   /* OBJECT_LOCK */
 
-  GstBufferPool *pool;            /* OBJECT_LOCK */
-  GstAllocator *allocator;        /* OBJECT_LOCK */
+  GstBufferPool *pool;          /* OBJECT_LOCK */
+  GstAllocator *allocator;      /* OBJECT_LOCK */
   GQueue *obj_queue;
   GThread *thread;
 
-  GstAllocationParams params;     /* OBJECT_LOCK */
+  GstAllocationParams params;   /* OBJECT_LOCK */
 };
 
 static GstElementClass *parent_class = NULL;
@@ -1193,9 +1193,10 @@ gst_base_idle_src_add_timestamp (GstBaseIdleSrc * src, GstBuffer * buf)
 }
 
 static gboolean
-gst_base_idle_src_buffer_list_add_timestamp_func (GstBuffer ** buf, guint idx, gpointer user_data)
+gst_base_idle_src_buffer_list_add_timestamp_func (GstBuffer ** buf, guint idx,
+    gpointer user_data)
 {
-  GstBaseIdleSrc * src = GST_BASE_IDLE_SRC (user_data);
+  GstBaseIdleSrc *src = GST_BASE_IDLE_SRC (user_data);
   gst_base_idle_src_add_timestamp (src, *buf);
 }
 
@@ -1221,10 +1222,12 @@ gst_base_idle_src_process_object (GstBaseIdleSrc * src, GstMiniObject * obj)
     GstBufferList *buf_list = GST_BUFFER_LIST_CAST (obj);
 
     if (src->priv->do_timestamp) {
-      gst_buffer_list_foreach (buf_list, gst_base_idle_src_buffer_list_add_timestamp_func, src);
+      gst_buffer_list_foreach (buf_list,
+          gst_base_idle_src_buffer_list_add_timestamp_func, src);
     }
 
-    GST_DEBUG_OBJECT (src, "About to push BufferList %" GST_PTR_FORMAT, buf_list);
+    GST_DEBUG_OBJECT (src, "About to push BufferList %" GST_PTR_FORMAT,
+        buf_list);
     ret = gst_pad_push (pad, buf_list);
     goto check_ret_error;
   } else if (GST_IS_EVENT (obj)) {
@@ -1562,7 +1565,8 @@ gst_base_idle_src_alloc_buffer (GstBaseIdleSrc * src,
 
     ret = GST_FLOW_OK;
   } else {
-    GST_WARNING_OBJECT (src, "Not trying to alloc %u bytes. Blocksize not set?", size);
+    GST_WARNING_OBJECT (src, "Not trying to alloc %u bytes. Blocksize not set?",
+        size);
     goto alloc_failed;
   }
 

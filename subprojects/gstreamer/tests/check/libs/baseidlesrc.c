@@ -135,9 +135,12 @@ GST_START_TEST (baseidlesrc_submit_buffer_list)
 GST_END_TEST;
 
 static void
-fail_unless_equals_event_type (const GstEvent * event, GstEventType expected_type)
+fail_unless_equals_event_type (const GstEvent * event,
+    GstEventType expected_type)
 {
-  fail_unless (GST_EVENT_TYPE (event), expected_type, "'%s' expected, got '%s'", gst_event_type_get_name (expected_type), gst_event_type_get_name(GST_EVENT_TYPE (event)));
+  fail_unless (GST_EVENT_TYPE (event), expected_type, "'%s' expected, got '%s'",
+      gst_event_type_get_name (expected_type),
+      gst_event_type_get_name (GST_EVENT_TYPE (event)));
 }
 
 GST_START_TEST (baseidlesrc_handle_eos)
@@ -169,6 +172,7 @@ GST_START_TEST (baseidlesrc_handle_eos)
 
   gst_harness_teardown (h);
 }
+
 GST_END_TEST;
 
 static Suite *
