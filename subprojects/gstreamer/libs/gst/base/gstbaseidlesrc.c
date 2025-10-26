@@ -90,7 +90,7 @@ struct _GstBaseIdleSrcPrivate
   gdouble proportion;           /* OBJECT_LOCK */
   GstClockTime earliest_time;   /* OBJECT_LOCK */
 
-  GstBufferPool *pool;          /* OBJECT_LOCK */
+  GstBufferPool *buf_pool;      /* OBJECT_LOCK */
   GstAllocator *allocator;      /* OBJECT_LOCK */
   GQueue *obj_queue;
   GThread *thread;
@@ -612,16 +612,16 @@ static void
 gst_base_idle_src_set_pool_flushing (GstBaseIdleSrc * src, gboolean flushing)
 {
   GstBaseIdleSrcPrivate *priv = src->priv;
-  GstBufferPool *pool;
+  GstBufferPool *buf_pool;
 
   GST_OBJECT_LOCK (src);
-  if ((pool = priv->pool))
-    pool = gst_object_ref (pool);
+  if ((buf_pool = priv->buf_pool))
+    buf_pool = gst_object_ref (buf_pool);
   GST_OBJECT_UNLOCK (src);
 
-  if (pool) {
-    gst_buffer_pool_set_flushing (pool, flushing);
-    gst_object_unref (pool);
+  if (buf_pool) {
+    gst_buffer_pool_set_flushing (buf_pool, flushing);
+    gst_object_unref (buf_pool);
   }
 }
 
@@ -809,28 +809,28 @@ gst_base_idle_src_get_property (GObject * object, guint prop_id, GValue * value,
 
 static gboolean
 gst_base_idle_src_set_allocation (GstBaseIdleSrc * src,
-    GstBufferPool * pool, GstAllocator * allocator,
+    GstBufferPool * buf_pool, GstAllocator * allocator,
     const GstAllocationParams * params)
 {
-  GstAllocator *oldalloc;
-  GstBufferPool *oldpool;
+  GstAllocator *old_alloc;
+  GstBufferPool *old_buf_pool;
   GstBaseIdleSrcPrivate *priv = src->priv;
 
-  if (pool) {
-    GST_DEBUG_OBJECT (src, "activate pool");
-    if (!gst_buffer_pool_set_active (pool, TRUE))
+  if (buf_pool) {
+    GST_DEBUG_OBJECT (src, "activate buffer pool");
+    if (!gst_buffer_pool_set_active (buf_pool, TRUE))
       goto activate_failed;
   }
 
   GST_OBJECT_LOCK (src);
-  oldpool = priv->pool;
-  priv->pool = pool;
+  old_buf_pool = priv->buf_pool;
+  priv->buf_pool = buf_pool;
 
-  oldalloc = priv->allocator;
+  old_alloc = priv->allocator;
   priv->allocator = allocator;
 
-  if (priv->pool)
-    gst_object_ref (priv->pool);
+  if (priv->buf_pool)
+    gst_object_ref (priv->buf_pool);
   if (priv->allocator)
     gst_object_ref (priv->allocator);
 
@@ -840,16 +840,16 @@ gst_base_idle_src_set_allocation (GstBaseIdleSrc * src,
     gst_allocation_params_init (&priv->params);
   GST_OBJECT_UNLOCK (src);
 
-  if (oldpool) {
+  if (old_buf_pool) {
     /* only deactivate if the pool is not the one we're using */
-    if (oldpool != pool) {
+    if (old_buf_pool != buf_pool) {
       GST_DEBUG_OBJECT (src, "deactivate old pool");
-      gst_buffer_pool_set_active (oldpool, FALSE);
+      gst_buffer_pool_set_active (old_buf_pool, FALSE);
     }
-    gst_object_unref (oldpool);
+    gst_object_unref (old_buf_pool);
   }
-  if (oldalloc) {
-    gst_object_unref (oldalloc);
+  if (old_alloc) {
+    gst_object_unref (old_alloc);
   }
   return TRUE;
 
@@ -866,7 +866,7 @@ gst_base_idle_src_decide_allocation_default (GstBaseIdleSrc * src,
     GstQuery * query)
 {
   GstCaps *outcaps;
-  GstBufferPool *pool;
+  GstBufferPool *buf_pool;
   guint size, min, max;
   GstAllocator *allocator;
   GstAllocationParams params;
@@ -888,40 +888,41 @@ gst_base_idle_src_decide_allocation_default (GstBaseIdleSrc * src,
   }
 
   if (gst_query_get_n_allocation_pools (query) > 0) {
-    gst_query_parse_nth_allocation_pool (query, 0, &pool, &size, &min, &max);
+    gst_query_parse_nth_allocation_pool (query, 0, &buf_pool, &size, &min,
+        &max);
 
-    if (pool == NULL) {
+    if (buf_pool == NULL) {
       /* no pool, we can make our own */
-      GST_DEBUG_OBJECT (src, "no pool, making new pool");
-      pool = gst_buffer_pool_new ();
+      GST_DEBUG_OBJECT (src, "no buffer pool, making new one");
+      buf_pool = gst_buffer_pool_new ();
     }
   } else {
-    pool = NULL;
+    buf_pool = NULL;
     size = min = max = 0;
   }
 
   /* now configure */
-  if (pool) {
-    config = gst_buffer_pool_get_config (pool);
+  if (buf_pool) {
+    config = gst_buffer_pool_get_config (buf_pool);
     gst_buffer_pool_config_set_params (config, outcaps, size, min, max);
     gst_buffer_pool_config_set_allocator (config, allocator, &params);
 
     /* buffer pool may have to do some changes */
-    if (!gst_buffer_pool_set_config (pool, config)) {
-      config = gst_buffer_pool_get_config (pool);
+    if (!gst_buffer_pool_set_config (buf_pool, config)) {
+      config = gst_buffer_pool_get_config (buf_pool);
 
       /* If change are not acceptable, fallback to generic pool */
       if (!gst_buffer_pool_config_validate_params (config, outcaps, size, min,
               max)) {
-        GST_DEBUG_OBJECT (src, "unsupported pool, making new pool");
+        GST_DEBUG_OBJECT (src, "unsupported buffer pool, making new one");
 
-        gst_object_unref (pool);
-        pool = gst_buffer_pool_new ();
+        gst_object_unref (buf_pool);
+        buf_pool = gst_buffer_pool_new ();
         gst_buffer_pool_config_set_params (config, outcaps, size, min, max);
         gst_buffer_pool_config_set_allocator (config, allocator, &params);
       }
 
-      if (!gst_buffer_pool_set_config (pool, config))
+      if (!gst_buffer_pool_set_config (buf_pool, config))
         goto config_failed;
     }
   }
@@ -933,9 +934,9 @@ gst_base_idle_src_decide_allocation_default (GstBaseIdleSrc * src,
   if (allocator)
     gst_object_unref (allocator);
 
-  if (pool) {
-    gst_query_set_nth_allocation_pool (query, 0, pool, size, min, max);
-    gst_object_unref (pool);
+  if (buf_pool) {
+    gst_query_set_nth_allocation_pool (query, 0, buf_pool, size, min, max);
+    gst_object_unref (buf_pool);
   }
 
   return TRUE;
@@ -944,7 +945,7 @@ config_failed:
   GST_ELEMENT_ERROR (src, RESOURCE, SETTINGS,
       ("Failed to configure the buffer pool"),
       ("Configuration is most likely invalid, please report this issue."));
-  gst_object_unref (pool);
+  gst_object_unref (buf_pool);
   return FALSE;
 }
 
@@ -954,7 +955,7 @@ gst_base_idle_src_prepare_allocation (GstBaseIdleSrc * src, GstCaps * caps)
   GstBaseIdleSrcClass *bclass;
   gboolean result = TRUE;
   GstQuery *query;
-  GstBufferPool *pool = NULL;
+  GstBufferPool *buf_pool = NULL;
   GstAllocator *allocator = NULL;
   GstAllocationParams params;
 
@@ -988,14 +989,14 @@ gst_base_idle_src_prepare_allocation (GstBaseIdleSrc * src, GstCaps * caps)
   }
 
   if (gst_query_get_n_allocation_pools (query) > 0)
-    gst_query_parse_nth_allocation_pool (query, 0, &pool, NULL, NULL, NULL);
+    gst_query_parse_nth_allocation_pool (query, 0, &buf_pool, NULL, NULL, NULL);
 
-  result = gst_base_idle_src_set_allocation (src, pool, allocator, &params);
+  result = gst_base_idle_src_set_allocation (src, buf_pool, allocator, &params);
 
   if (allocator)
     gst_object_unref (allocator);
-  if (pool)
-    gst_object_unref (pool);
+  if (buf_pool)
+    gst_object_unref (buf_pool);
 
   gst_query_unref (query);
 
@@ -1134,8 +1135,8 @@ gst_base_idle_src_get_buffer_pool (GstBaseIdleSrc * src)
   g_return_val_if_fail (GST_IS_BASE_IDLE_SRC (src), NULL);
 
   GST_OBJECT_LOCK (src);
-  if (src->priv->pool)
-    ret = gst_object_ref (src->priv->pool);
+  if (src->priv->buf_pool)
+    ret = gst_object_ref (src->priv->buf_pool);
   GST_OBJECT_UNLOCK (src);
 
   return ret;
@@ -1198,6 +1199,7 @@ gst_base_idle_src_buffer_list_add_timestamp_func (GstBuffer ** buf, guint idx,
 {
   GstBaseIdleSrc *src = GST_BASE_IDLE_SRC (user_data);
   gst_base_idle_src_add_timestamp (src, *buf);
+  return TRUE;
 }
 
 static void
@@ -1546,21 +1548,21 @@ gst_base_idle_src_alloc_buffer (GstBaseIdleSrc * src,
 {
   GstFlowReturn ret;
   GstBaseIdleSrcPrivate *priv = src->priv;
-  GstBufferPool *pool = NULL;
+  GstBufferPool *buf_pool = NULL;
   GstAllocator *allocator = NULL;
   GstAllocationParams params;
 
   GST_OBJECT_LOCK (src);
-  if (priv->pool) {
-    pool = gst_object_ref (priv->pool);
+  if (priv->buf_pool) {
+    buf_pool = gst_object_ref (priv->buf_pool);
   } else if (priv->allocator) {
     allocator = gst_object_ref (priv->allocator);
   }
   params = priv->params;
   GST_OBJECT_UNLOCK (src);
 
-  if (pool) {
-    ret = gst_buffer_pool_acquire_buffer (pool, buffer, NULL);
+  if (buf_pool) {
+    ret = gst_buffer_pool_acquire_buffer (buf_pool, buffer, NULL);
   } else if (size != -1) {
     *buffer = gst_buffer_new_allocate (allocator, size, &params);
     if (G_UNLIKELY (*buffer == NULL))
@@ -1574,8 +1576,8 @@ gst_base_idle_src_alloc_buffer (GstBaseIdleSrc * src,
   }
 
 done:
-  if (pool)
-    gst_object_unref (pool);
+  if (buf_pool)
+    gst_object_unref (buf_pool);
   if (allocator)
     gst_object_unref (allocator);
 
