@@ -1203,7 +1203,7 @@ gst_base_idle_src_buffer_list_add_timestamp_func (GstBuffer ** buf, guint idx,
 static void
 gst_base_idle_src_process_object (GstBaseIdleSrc * src, GstMiniObject * obj)
 {
-  GstFlowReturn ret;
+  GstFlowReturn ret = GST_FLOW_OK;
   GstPad *pad = src->srcpad;
 
   GST_PAD_STREAM_LOCK (pad);
