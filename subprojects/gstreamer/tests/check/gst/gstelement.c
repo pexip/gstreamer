@@ -95,8 +95,8 @@ test_add_pad_while_paused_dummy_task (void *user_data)
 }
 
 static gboolean
-test_add_pad_while_paused_pad_activatemode (GstPad * pad, GstObject * parent,
-    GstPadMode mode, gboolean active)
+test_add_pad_while_paused_pad_activatemode (GstPad * pad,
+    G_GNUC_UNUSED GstObject * parent, GstPadMode mode, gboolean active)
 {
   *(gboolean *) pad->activatemodedata = active;
   fail_unless (mode == GST_PAD_MODE_PUSH);
@@ -555,7 +555,7 @@ typedef struct _GstTestElement3Class
 
 static GstPad *
 gst_test_element3_request_new_pad (GstElement * element, GstPadTemplate * templ,
-    const gchar * name, const GstCaps * caps)
+    const gchar * name, G_GNUC_UNUSED const GstCaps * caps)
 {
   GstPad *pad;
   gchar *str;
@@ -896,7 +896,8 @@ typedef struct
 } PadChecks;
 
 static gboolean
-pad_foreach_func (GstElement * e, GstPad * pad, gpointer user_data)
+pad_foreach_func (G_GNUC_UNUSED GstElement * e, GstPad * pad,
+    gpointer user_data)
 {
   PadChecks *checks = user_data;
 
