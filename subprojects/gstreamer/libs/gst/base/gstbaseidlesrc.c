@@ -1232,10 +1232,11 @@ gst_base_idle_src_process_object (GstBaseIdleSrc * src, GstMiniObject * obj)
     goto check_ret_error;
   } else if (GST_IS_EVENT (obj)) {
     GstEvent *event = GST_EVENT_CAST (obj);
-    gboolean ret;
-
     GST_DEBUG_OBJECT (src, "About to push Event %" GST_PTR_FORMAT, event);
-    ret = gst_pad_push_event (pad, event);
+    if (!gst_pad_push_event (pad, event)) {
+      /* TODO: What is the right thing to do here?! */
+      ret = GST_FLOW_CUSTOM_ERROR;
+    }
     goto check_ret_error;
   } else {
     GST_ERROR_OBJECT (src, "Unknown object %" GST_PTR_FORMAT " type", obj);
