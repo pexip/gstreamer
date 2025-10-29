@@ -117,10 +117,7 @@ gst_base_idle_src_get_instance_private (GstBaseIdleSrc * self)
  * @format: the format to use
  *
  * Sets the default format of the source. This will be the format used
- * for sending SEGMENT events and for performing seeks.
- *
- * If a format of GST_FORMAT_BYTES is set, the element will be able to
- * operate in pull mode if the #GstBaseIdleSrcClass::is_seekable returns %TRUE.
+ * for sending SEGMENT events.
  *
  * This function must only be called in states < %GST_STATE_PAUSED.
  */
@@ -129,7 +126,8 @@ gst_base_idle_src_set_format (GstBaseIdleSrc * src, GstFormat format)
 {
   g_return_if_fail (GST_IS_BASE_IDLE_SRC (src));
   g_return_if_fail (GST_STATE (src) <= GST_STATE_READY);
-  g_return_if_fail (GST_FORMAT_BUFFERS == format || GST_FORMAT_BYTES == format);
+  g_return_if_fail (GST_FORMAT_BUFFERS == format || GST_FORMAT_BYTES == format
+      || GST_FORMAT_TIME == format);
 
   GST_OBJECT_LOCK (src);
   gst_segment_init (&src->segment, format);
