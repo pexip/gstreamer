@@ -93,7 +93,8 @@ struct _GstBaseIdleSrcPrivate
   GstBufferPool *buf_pool;      /* OBJECT_LOCK */
   GstAllocator *allocator;      /* OBJECT_LOCK */
   GQueue *obj_queue;
-  GThread *thread;
+  gpointer thread_handle;
+  GstTaskPool *thread_pool;     /* OBJECT_LOCK */
 
   GstAllocationParams params;   /* OBJECT_LOCK */
 };
@@ -1141,6 +1142,54 @@ gst_base_idle_src_get_buffer_pool (GstBaseIdleSrc * src)
 }
 
 /**
+ * gst_base_idle_src_set_thread_pool:
+ * @src: a #GstBaseIdleSrc
+ * @thread_pool: (transfer full): a #GstTaskPool
+ *
+ * Sets the thread pool to be used internally
+ */
+void
+gst_base_idle_src_set_thread_pool (GstBaseIdleSrc * src,
+    GstTaskPool * thread_pool)
+{
+  g_return_if_fail (GST_IS_BASE_IDLE_SRC (src));
+  g_return_if_fail (GST_IS_TASK_POOL (thread_pool));
+
+  GST_OBJECT_LOCK (src);
+  if (src->priv->thread_pool) {
+    GST_DEBUG_OBJECT (src, "Cleaning up old thread pool");
+    gst_task_pool_cleanup (src->priv->thread_pool);
+    gst_object_unref (src->priv->thread_pool);
+  }
+
+  GST_DEBUG_OBJECT (src, "Setting external thread pool %p", thread_pool);
+  src->priv->thread_pool = thread_pool;
+  GST_OBJECT_UNLOCK (src);
+}
+
+/**
+ * gst_base_idle_src_get_thread_pool:
+ * @src: a #GstBaseIdleSrc
+ *
+ * Return: (transfer full): the instance of the #GstTaskPool used
+ * by the src; unref it after usage
+ */
+GstTaskPool *
+gst_base_idle_src_get_thread_pool (GstBaseIdleSrc * src)
+{
+  GstTaskPool *ret = NULL;
+
+  g_return_val_if_fail (GST_IS_BASE_IDLE_SRC (src), NULL);
+
+  GST_OBJECT_LOCK (src);
+  if (src->priv->thread_pool)
+    ret = gst_object_ref (src->priv->thread_pool);
+  GST_OBJECT_UNLOCK (src);
+
+  return ret;
+}
+
+/**
  * gst_base_idle_src_get_allocator:
  * @src: a #GstBaseIdleSrc
  * @allocator: (out) (optional) (nullable) (transfer full): the #GstAllocator
@@ -1264,7 +1313,7 @@ gst_base_idle_src_process_object_queue (GstBaseIdleSrc * src)
   GST_OBJECT_UNLOCK (src);
 }
 
-static gpointer
+static void
 gst_base_idle_src_func (gpointer user_data)
 {
   GstBaseIdleSrc *src = GST_BASE_IDLE_SRC (user_data);
@@ -1277,33 +1326,35 @@ gst_base_idle_src_func (gpointer user_data)
       GST_ELEMENT_FLOW_ERROR (src, GST_FLOW_NOT_NEGOTIATED);
       gst_pad_push_event (src->srcpad, gst_event_new_eos ());
       GST_PAD_STREAM_UNLOCK (src->srcpad);
-      return NULL;
+      return;
     }
   }
   GST_PAD_STREAM_UNLOCK (src->srcpad);
 
   gst_base_idle_src_process_object_queue (src);
 
-  return NULL;
+  return;
 }
 
 static void
-gst_base_idle_src_start_task (GstBaseIdleSrc * src, gboolean wait)
+gst_base_idle_src_start_task (GstBaseIdleSrc * src, G_GNUC_UNUSED gboolean wait)
 {
-  GST_DEBUG_OBJECT (src, "Starting task");
-  /* if we already have an outstanding task, join it */
-  if (src->priv->thread) {
-    GST_DEBUG_OBJECT (src, "Waiting for outstanding task to finish");
-    g_thread_join (src->priv->thread);
-  }
+  GstBaseIdleSrcPrivate *priv = src->priv;
 
-  src->priv->thread =
-      g_thread_new (GST_ELEMENT_NAME (src), gst_base_idle_src_func, src);
+  GST_DEBUG_OBJECT (src, "Starting task");
+
+  /* we don't care of previous result (if any) so simply unref the handler */
+  gst_task_pool_dispose_handle (priv->thread_pool, priv->thread_handle);
+  priv->thread_handle = NULL;
+
+  GError *error = NULL;
+  priv->thread_handle =
+      gst_task_pool_push (src->priv->thread_pool, gst_base_idle_src_func, src,
+      &error);
 
   if (wait) {
-    GST_DEBUG_OBJECT (src, "Waiting for task to finish");
-    g_thread_join (src->priv->thread);
-    src->priv->thread = NULL;
+    gst_task_pool_join (priv->thread_pool, priv->thread_handle);
+    priv->thread_handle = NULL;
   }
 }
 
@@ -1386,16 +1437,15 @@ static gboolean
 gst_base_idle_src_stop (GstBaseIdleSrc * src)
 {
   GstBaseIdleSrcClass *bclass;
+  GstBaseIdleSrcPrivate *priv = src->priv;
   GstMiniObject *obj;
   gboolean result = TRUE;
 
   GST_DEBUG_OBJECT (src, "stopping source");
 
   src->running = FALSE;
-  if (src->priv->thread) {
-    g_thread_join (src->priv->thread);
-    src->priv->thread = NULL;
-  }
+  gst_task_pool_join (priv->thread_pool, priv->thread_handle);
+  priv->thread_handle = NULL;
 
   /* clean up any leftovers on the queue */
   while ((obj = g_queue_pop_head (src->priv->obj_queue))) {
@@ -1601,6 +1651,12 @@ gst_base_idle_src_dispose (GObject * object)
   /* FIXME: empty this queue potentially... */
   // g_queue_clear (src->priv->obj_queue);
 
+  if (src->priv->thread_pool) {
+    gst_task_pool_cleanup (src->priv->thread_pool);
+    gst_object_unref (src->priv->thread_pool);
+    src->priv->thread_pool = NULL;
+  }
+
   G_OBJECT_CLASS (parent_class)->dispose (object);
 }
 
@@ -1691,6 +1747,16 @@ gst_base_idle_src_init (GstBaseIdleSrc * src, gpointer g_class)
   GST_OBJECT_FLAG_SET (src, GST_ELEMENT_FLAG_SOURCE);
 
   src->priv->obj_queue = g_queue_new ();
+
+  /* Create a shared task pool as default thread pool for this base class
+   * with a default thread per pool of 1. This would be suboptimal for most
+   * cases but only be biased to very rare pushes */
+  GstTaskPool *thread_pool = gst_shared_task_pool_new ();
+  gst_shared_task_pool_set_max_threads (GST_SHARED_TASK_POOL (thread_pool), 1);
+  src->priv->thread_pool = thread_pool;
+
+  GError *error = NULL;
+  gst_task_pool_prepare (src->priv->thread_pool, &error);
 
   GST_DEBUG_OBJECT (src, "init done");
 }

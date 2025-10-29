@@ -177,6 +177,130 @@ GST_START_TEST (baseidlesrc_handle_events)
 
 GST_END_TEST;
 
+GST_START_TEST (baseidlesrc_thread_pool_set_and_get)
+{
+  GstElement *src;
+  GstBaseIdleSrc *base_src;
+
+  src = g_object_new (test_idle_src_get_type (), NULL);
+  base_src = GST_BASE_IDLE_SRC (src);
+
+  GstTaskPool *thread_pool = gst_base_idle_src_get_thread_pool (base_src);
+  fail_unless (thread_pool);
+  gst_object_unref (thread_pool);
+
+  GstTaskPool *new_thread_pool = gst_shared_task_pool_new ();
+  gst_shared_task_pool_set_max_threads (GST_SHARED_TASK_POOL (new_thread_pool),
+      2);
+
+  gst_base_idle_src_set_thread_pool (base_src, new_thread_pool);
+  thread_pool = gst_base_idle_src_get_thread_pool (base_src);
+  fail_unless (thread_pool == new_thread_pool);
+  fail_unless_equals_int (2,
+      gst_shared_task_pool_get_max_threads (GST_SHARED_TASK_POOL
+          (thread_pool)));
+
+  gst_object_unref (thread_pool);
+}
+
+GST_END_TEST;
+
+#define MAX_SRCS 16
+
+static gpointer
+_push_func (gpointer data)
+{
+  GstBuffer *buf;
+  GstBufferList *buf_list;
+  guint i, j;
+
+  GstHarness *h = data;
+  GstElement *e = h->element;
+  GstBaseIdleSrc *base_src = GST_BASE_IDLE_SRC (e);
+
+  /* push some buffer lists */
+  GST_LOG ("Pushing some buffer lists from source %s",
+      gst_element_get_name (e));
+  for (i = 0; i < 5; i++) {
+    buf_list = gst_buffer_list_new_sized (20);
+    for (j = 0; j < 5; j++) {
+      fail_unless_equals_int (GST_FLOW_OK,
+          gst_base_idle_src_alloc_buffer (base_src, 100, &buf));
+      gst_buffer_list_insert (buf_list, -1, buf);
+    }
+    gst_base_idle_src_submit_buffer_list (base_src, buf_list);
+    if (g_random_int_range (0, 100) == 3) {
+      GST_LOG ("Randomly yielding during buffer list push from source %s",
+          gst_element_get_name (e));
+      g_thread_yield ();
+    }
+  }
+
+  /* yield to cause some hadvoc */
+  GST_LOG ("Yielding from source %s", gst_element_get_name (e));
+  g_thread_yield ();
+
+  /* push some buffers */
+  GST_LOG ("Pushing some buffers from source %s", gst_element_get_name (e));
+  fail_unless_equals_int (GST_FLOW_OK, gst_base_idle_src_alloc_buffer (base_src,
+          100, &buf));
+  for (i = 0; i < 100; i++) {
+    gst_base_idle_src_submit_buffer (base_src, gst_buffer_ref (buf));
+    if (g_random_int_range (0, 100) == 3) {
+      GST_LOG ("Randomly yielding during buffer push from source %s",
+          gst_element_get_name (e));
+      g_thread_yield ();
+    }
+  }
+  gst_buffer_unref (buf);
+}
+
+GST_START_TEST (baseidlesrc_thread_pool_submit)
+{
+  GstHarness *hs[MAX_SRCS];
+  GstElement *srcs[MAX_SRCS];
+  GThread *threads[MAX_SRCS];
+  GstBaseIdleSrc *base_src;
+  GstTaskPool *thread_pool;
+  GstBuffer *buf;
+  GstBufferList *buf_list;
+  guint i;
+
+  GstTaskPool *pool = gst_shared_task_pool_new ();
+  gst_shared_task_pool_set_max_threads (GST_SHARED_TASK_POOL (pool),
+      MAX_SRCS / 2);
+
+  /* create all sources and harnesses in one go */
+  for (i = 0; i < MAX_SRCS; i++) {
+    srcs[i] = g_object_new (test_idle_src_get_type (), NULL);
+    base_src = GST_BASE_IDLE_SRC (srcs[i]);
+
+    gst_base_idle_src_set_thread_pool (base_src, pool);
+
+    hs[i] = gst_harness_new_with_element (GST_ELEMENT (srcs[i]), NULL, "src");
+    gst_harness_set_sink_caps_str (hs[i], "foo/bar");
+    gst_harness_play (hs[i]);
+  }
+
+  /* start pushing to from all sources */
+  for (i = 0; i < MAX_SRCS; i++) {
+    char *thread_name = g_strdup_printf ("pusher-%d", i);
+    threads[i] = g_thread_new (thread_name, _push_func, hs[i]);
+  }
+
+  /* wait for all sources to finish pushing */
+  for (i = 0; i < MAX_SRCS; i++) {
+    g_thread_join (threads[i]);
+  }
+
+  /* teardown */
+  for (i = 0; i < MAX_SRCS; i++) {
+    gst_harness_teardown (hs[i]);
+  }
+}
+
+GST_END_TEST;
+
 static Suite *
 baseidlesrc_suite (void)
 {
@@ -188,6 +312,8 @@ baseidlesrc_suite (void)
   tcase_add_test (tc, baseidlesrc_submit_buffer);
   tcase_add_test (tc, baseidlesrc_submit_buffer_list);
   tcase_add_test (tc, baseidlesrc_handle_events);
+  tcase_add_test (tc, baseidlesrc_thread_pool_set_and_get);
+  tcase_add_test (tc, baseidlesrc_thread_pool_submit);
 
   return s;
 }
