@@ -2,6 +2,8 @@
  * Copyright (C) 1999,2000 Erik Walthinsen <omega@cse.ogi.edu>
  *                    2000 Wim Taymans <wtay@chello.be>
  *                    2005 Wim Taymans <wim@fluendo.com>
+ *                    2023 Havard Graff <hgr@pexip.com>
+ *                    2023 Camilo Celis Guzman <camilo@pexip.com>
  *
  * gstbaseidlesrc.h:
  *
@@ -94,12 +96,9 @@ struct _GstBaseIdleSrc {
  * @event: Override this to implement custom event handling.
  * @alloc: Ask the subclass to allocate a buffer with for offset and size. The
  *   default implementation will create a new buffer from the negotiated allocator.
- * @fill: Ask the subclass to fill the buffer with data for offset and size. The
- *   passed buffer is guaranteed to hold the requested amount of bytes.
  *
  * Subclasses can override any of the available virtual methods or not, as
- * needed. At the minimum, the @create method should be overridden to produce
- * buffers.
+ * needed.
  */
 struct _GstBaseIdleSrcClass {
   GstElementClass parent_class;
@@ -161,10 +160,6 @@ GST_BASE_API
 void            gst_base_idle_src_set_format       (GstBaseIdleSrc *src, GstFormat format);
 
 GST_BASE_API
-void            gst_base_idle_src_set_automatic_eos (GstBaseIdleSrc * src, gboolean automatic_eos);
-
-
-GST_BASE_API
 gboolean        gst_base_idle_src_negotiate        (GstBaseIdleSrc *src);
 
 
@@ -178,10 +173,6 @@ void            gst_base_idle_src_set_do_timestamp (GstBaseIdleSrc *src, gboolea
 
 GST_BASE_API
 gboolean        gst_base_idle_src_get_do_timestamp (GstBaseIdleSrc *src);
-
-GST_BASE_API
-gboolean        gst_base_idle_src_new_segment      (GstBaseIdleSrc *src,
-                                               const GstSegment * segment);
 
 GST_BASE_API
 gboolean        gst_base_idle_src_set_caps         (GstBaseIdleSrc *src, GstCaps *caps);
