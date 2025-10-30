@@ -1,6 +1,7 @@
 /* GStreamer
  * Copyright (C) 1999,2000 Erik Walthinsen <omega@cse.ogi.edu>
- *               2000,2005 Wim Taymans <wim@fluendo.com>
+ *                    2000 Wim Taymans <wtay@chello.be>
+ *                    2005 Wim Taymans <wim@fluendo.com>
  *                    2023 Havard Graff <hgr@pexip.com>
  *                    2023 Camilo Celis Guzman <camilo@pexip.com>
  *
@@ -25,16 +26,142 @@
 /**
  * SECTION:gstbaseidlesrc
  * @title: GstBaseIdleSrc
- * @short_description: Base class for getrange based source elements
- * @see_also: #GstPushSrc, #GstBaseTransform, #GstBaseSink
+ * @short_description: Base class for push-mode source elements that operate
+ *                     in idle-driven or controlled pacing
+ * @see_also: #GstBaseSrc, #GstPushSrc, #GstBaseSink
  *
- * This is a generic base class for source elements that are mostly
- * idle in its lifetime.
+ * #GstBaseIdleSrc is a base class for source elements that operate purely in
+ * push mode. Unlike #GstBaseSrc, it does not support pull-based scheduling or
+ * random access through #GstBaseSrcClass::create, and instead expects subclasses
+ * to push data downstream at their own pace or from an external producer.
  *
- * Only push-mode is supported.
- * TODO: Complete
+ * ## Purpose
+ *
+ * This base class is intended for elements that generate or forward data
+ * asynchronously, such as live capture devices, idle-loop sources, or
+ * externally-driven producers. It provides the fundamental mechanics of
+ * caps negotiation, allocation setup, buffer timestamping, and live-source
+ * handling, while delegating actual data generation to subclasses.
+ *
+ * The element manages a single source pad named `"src"` and operates only
+ * in push mode.
+ *
+ * ## Features
+ *
+ * - Push-only operation (no getrange/pull support)
+ * - Optional live-source mode using gst_base_idle_src_set_live()
+ * - Built-in buffer allocation via gst_base_idle_src_alloc()
+ * - Negotiation helpers for caps and allocation queries
+ * - Thread-pool support for external or shared producers
+ * - Optional automatic timestamping
+ *
+ * ## Subclass Responsibilities
+ *
+ * A typical subclass of #GstBaseIdleSrc needs to:
+ *
+ * 1. Install a static pad template for the `"src"` pad in `class_init()`.
+ * 2. Implement @start and @stop to open and close resources.
+ * 3. Produce and submit buffers using gst_base_idle_src_submit_buffer() or
+ *    gst_base_idle_src_submit_buffer_list().
+ *
+ * Optionally, the subclass can override virtual methods such as:
+ *
+ * - @get_caps, @fixate, @set_caps, @negotiate — for caps negotiation.
+ * - @decide_allocation — to customize memory allocation.
+ * - @query — to handle custom queries (e.g., latency, position).
+ * - @event — to handle upstream events such as flushes or EOS.
+ * - @alloc — to allocate output buffers.
+ *
+ * ## Live Sources
+ *
+ * Live sources are sources that produce data in real time and may discard
+ * data when paused. Typical examples are capture devices or sensors. Live
+ * sources should call gst_base_idle_src_set_live() during setup.
+ *
+ * A live source does not produce data while in the PAUSED state. The state
+ * change from READY to PAUSED will therefore return
+ * %GST_STATE_CHANGE_NO_PREROLL to indicate that no preroll data is available.
+ *
+ * When PLAYING, live sources may timestamp buffers using the current running
+ * time if gst_base_idle_src_set_do_timestamp() was enabled. This makes it
+ * easier to synchronize generated data to the pipeline clock.
+ *
+ * ## Thread Pool Management
+ *
+ * #GstBaseIdleSrc uses an internal #GstTaskPool to schedule buffer submission
+ * and auxiliary tasks. This mechanism helps to avoid the overhead of creating
+ * and destroying threads too frequently when data is submitted in rapid
+ * successions.
+ *
+ * By default, the internal pool is configured with a maximum of one thread,
+ * which provides a simple but efficient way to handle continuous or bursty
+ * submission patterns without incurring repeated thread creation and teardown
+ * costs.
+ *
+ * Applications or higher-level elements can override the default pool using
+ * gst_base_idle_src_set_thread_pool(). This allows sharing a thread pool
+ * among multiple similar slow-paced sources, reducing context-switch overhead
+ * and improving resource utilization when several sources push data at a
+ * modest rate.
+ *
+ * The currently configured thread pool can be retrieved with
+ * gst_base_idle_src_get_thread_pool().
+ *
+ * ## Example Subclass
+ *
+ * |[<!-- language="C" -->
+ * static void
+ * my_idle_src_class_init (GstMyIdleSrcClass *klass)
+ * {
+ *   GstElementClass *element_class = GST_ELEMENT_CLASS (klass);
+ *   gst_element_class_add_static_pad_template (element_class, &srctemplate);
+ *
+ *   gst_element_class_set_static_metadata (element_class,
+ *      "My Idle Source",
+ *      "Source/Push",
+ *      "Example push-mode idle source",
+ *      "Author <author@example.com>");
+ *
+ *   klass->start = GST_DEBUG_FUNCPTR (my_idle_src_start);
+ *   klass->stop = GST_DEBUG_FUNCPTR (my_idle_src_stop);
+ * }
+ *
+ * static GstFlowReturn
+ * my_idle_src_loop (GstBaseIdleSrc *src)
+ * {
+ *   GstBuffer *buffer = NULL;
+ *   gst_base_idle_src_alloc (src, FRAME_SIZE, &buffer);
+ *   // Fill buffer data
+ *   gst_base_idle_src_submit_buffer (src, buffer);
+ *   return GST_FLOW_OK;
+ * }
+ * ]|
+ *
+ * ## Threading and Data Submission
+ *
+ * Data can be produced in any thread, including one managed by a custom
+ * #GstTaskPool. Use gst_base_idle_src_set_thread_pool() to configure a
+ * task pool and gst_base_idle_src_submit_buffer() or
+ * gst_base_idle_src_submit_buffer_list() to submit data.
+ *
+ * ## Notes
+ *
+ * - Only one source pad named "src" is supported.
+ * - Only push-mode operation is possible.
+ * - Pull-mode functions (e.g., create/getrange) are not implemented.
+ * - gst_base_idle_src_set_format() defines the active #GstFormat used for
+ *   segments and events.
+ * - Subclasses should avoid blocking indefinitely in @start or @stop, as these
+ *   are called during state changes.
+ *
+ * ## Typical Use Cases
+ *
+ * - Synthetic or idle data generators
+ * - Real-time data capture devices
+ * - Streaming relays or adapters that push data from another thread
+ * - Sources that wrap asynchronous external APIs or IO loops
+ *
  */
-
 #ifdef HAVE_CONFIG_H
 #  include "config.h"
 #endif
@@ -102,7 +229,6 @@ struct _GstBaseIdleSrcPrivate
 static GstElementClass *parent_class = NULL;
 static gint private_offset = 0;
 
-/* TODO: Should this be an vmethod? */
 static void gst_base_idle_src_start_task (GstBaseIdleSrc * src, gboolean wait);
 static void gst_base_idle_src_process_object_queue (GstBaseIdleSrc * src);
 
@@ -227,59 +353,6 @@ gst_base_idle_src_get_do_timestamp (GstBaseIdleSrc * src)
   return res;
 }
 
-/**
- * gst_base_idle_src_new_segment:
- * @src: a #GstBaseIdleSrc
- * @segment: a pointer to a #GstSegment
- *
- * Prepare a new segment for emission downstream. This function must
- * only be called by derived sub-classes, and only from the #GstBaseIdleSrcClass::create function,
- * as the stream-lock needs to be held.
- *
- * The format for the @segment must be identical with the current format
- * of the source, as configured with gst_base_idle_src_set_format().
- *
- * The format of @src must not be %GST_FORMAT_UNDEFINED and the format
- * should be configured via gst_base_idle_src_set_format() before calling this method.
- *
- * Returns: %TRUE if preparation of new segment succeeded.
- *
- * Since: 1.18
- */
-gboolean
-gst_base_idle_src_new_segment (GstBaseIdleSrc * src, const GstSegment * segment)
-{
-  g_return_val_if_fail (GST_IS_BASE_IDLE_SRC (src), FALSE);
-  g_return_val_if_fail (segment != NULL, FALSE);
-
-  GST_OBJECT_LOCK (src);
-
-  if (src->segment.format == GST_FORMAT_UNDEFINED) {
-    /* subclass must set valid format before calling this method */
-    GST_WARNING_OBJECT (src, "segment format is not configured yet, ignore");
-    GST_OBJECT_UNLOCK (src);
-    return FALSE;
-  }
-
-  if (src->segment.format != segment->format) {
-    GST_WARNING_OBJECT (src, "segment format mismatched, ignore");
-    GST_OBJECT_UNLOCK (src);
-    return FALSE;
-  }
-
-  gst_segment_copy_into (segment, &src->segment);
-
-  /* Mark pending segment. Will be sent before next data */
-  src->priv->segment_pending = TRUE;
-  src->priv->segment_seqnum = gst_util_seqnum_next ();
-
-  GST_DEBUG_OBJECT (src, "Starting new segment %" GST_SEGMENT_FORMAT, segment);
-
-  GST_OBJECT_UNLOCK (src);
-
-  return TRUE;
-}
-
 static void
 gst_base_idle_src_queue_object (GstBaseIdleSrc * src, GstMiniObject * obj)
 {
@@ -316,7 +389,6 @@ gst_base_idle_src_set_caps (GstBaseIdleSrc * src, GstCaps * caps)
   } else {
     if (bclass->set_caps)
       res = bclass->set_caps (src, caps);
-
     if (res) {
       gst_base_idle_src_queue_object (src,
           (GstMiniObject *) gst_event_new_caps (caps));
@@ -708,7 +780,6 @@ gst_base_idle_src_update_qos (GstBaseIdleSrc * src,
   src->priv->earliest_time = timestamp + diff;
   GST_OBJECT_UNLOCK (src);
 }
-
 
 static gboolean
 gst_base_idle_src_default_event (GstBaseIdleSrc * src, GstEvent * event)
@@ -1518,7 +1589,6 @@ gst_base_idle_src_activate_mode (GstPad * pad, GstObject * parent,
   return res;
 }
 
-
 /**
  * gst_base_idle_src_submit_buffer:
  * @src: a #GstBaseIdleSrc
@@ -1542,7 +1612,6 @@ gst_base_idle_src_submit_buffer (GstBaseIdleSrc * src, GstBuffer * buffer)
 
   gst_base_idle_src_check_pending_segment (src);
 
-  /* we need it to be writable later in get_range() where we use get_writable */
   gst_base_idle_src_queue_object (src, (GstMiniObject *) buffer);
 
   gst_base_idle_src_start_task (src, FALSE);
@@ -1572,7 +1641,6 @@ gst_base_idle_src_submit_buffer_list (GstBaseIdleSrc * src,
 
   gst_base_idle_src_check_pending_segment (src);
 
-  /* we need it to be writable later in get_range() where we use get_writable */
   gst_base_idle_src_queue_object (src, (GstMiniObject *) buffer_list);
 
   GST_LOG_OBJECT (src, "%u buffers submitted in buffer list",
@@ -1637,9 +1705,6 @@ gst_base_idle_src_dispose (GObject * object)
   GstBaseIdleSrc *src;
   src = GST_BASE_IDLE_SRC (object);
   (void) src;
-
-  /* FIXME: empty this queue potentially... */
-  // g_queue_clear (src->priv->obj_queue);
 
   if (src->priv->thread_pool) {
     gst_task_pool_cleanup (src->priv->thread_pool);
