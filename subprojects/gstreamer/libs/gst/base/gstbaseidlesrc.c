@@ -1581,18 +1581,8 @@ gst_base_idle_src_submit_buffer_list (GstBaseIdleSrc * src,
   gst_base_idle_src_start_task (src, FALSE);
 }
 
-/**
- * gst_base_idle_src_alloc_buffer:
- * @src: a #GstBaseIdleSrc
- * @size: a gsize with the size of the buffer
- * @buffer: (transfer full): a #GstBuffer
- *
- * Subclasses can call this to alloc a buffer.
- *
- * Since: 1.22
- */
 GstFlowReturn
-gst_base_idle_src_alloc_buffer (GstBaseIdleSrc * src,
+gst_base_idle_src_default_alloc (GstBaseIdleSrc * src,
     guint size, GstBuffer ** buffer)
 {
   GstFlowReturn ret;
@@ -1706,6 +1696,7 @@ gst_base_idle_src_class_init (GstBaseIdleSrcClass * klass)
   klass->fixate = GST_DEBUG_FUNCPTR (gst_base_idle_src_default_fixate);
   klass->query = GST_DEBUG_FUNCPTR (gst_base_idle_src_default_query);
   klass->event = GST_DEBUG_FUNCPTR (gst_base_idle_src_default_event);
+  klass->alloc = GST_DEBUG_FUNCPTR (gst_base_idle_src_default_alloc);
   klass->decide_allocation =
       GST_DEBUG_FUNCPTR (gst_base_idle_src_decide_allocation_default);
 
