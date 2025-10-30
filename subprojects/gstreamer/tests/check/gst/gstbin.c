@@ -213,6 +213,32 @@ GST_START_TEST (test_interface)
 
 GST_END_TEST;
 
+GST_START_TEST (test_duplicate_element)
+{
+  GstBin *bin;
+  GstElement *filesrc, *filesrc2;
+
+  bin = GST_BIN (gst_bin_new (NULL));
+  fail_unless (bin != NULL, "Could not create bin");
+
+  filesrc = gst_element_factory_make ("filesrc", "commonname");
+  fail_unless (filesrc != NULL, "Could not create filesrc");
+  fail_unless (GST_IS_URI_HANDLER (filesrc), "Filesrc not a URI handler");
+  fail_unless (gst_bin_add (bin, filesrc) == TRUE);
+
+  filesrc2 = gst_element_factory_make ("filesrc", "commonname");
+  fail_unless (filesrc2 != NULL, "Could not create filesrc2");
+  fail_unless (GST_IS_URI_HANDLER (filesrc2), "Filesrc not a URI handler");
+  fail_unless (gst_bin_add (bin, filesrc2) == FALSE);
+
+  fail_unless (gst_bin_get_by_name (bin, "commonname") == filesrc);
+
+  gst_object_unref (filesrc);
+  gst_object_unref (bin);
+}
+
+GST_END_TEST;
+
 GST_START_TEST (test_iterate_all_by_element_factory_name)
 {
   GstBin *bin, *bin2;
@@ -1988,6 +2014,44 @@ GST_START_TEST (test_suppressed_flags_when_removing)
 
 GST_END_TEST;
 
+GST_START_TEST (test_add_remove_performance)
+{
+  gint num_elements = 5000 * 3;
+  GstBin *bin = GST_BIN (gst_bin_new (NULL));
+  GstElement **el = g_new0 (GstElement *, num_elements);
+  gint i;
+  gint64 start;
+  double dur;
+
+  for (i = 0; i < num_elements; i += 3) {
+    el[i + 0] = gst_element_factory_make ("identity", NULL);
+    el[i + 1] = gst_element_factory_make ("fakesrc", NULL);
+    el[i + 2] = gst_element_factory_make ("fakesink", NULL);
+  }
+
+  start = g_get_monotonic_time ();
+
+  for (i = 0; i < num_elements; i++) {
+    gst_bin_add (bin, el[i]);
+  }
+
+  for (i = 0; i < num_elements / 2; i++) {
+    gst_bin_remove (bin, el[i]);
+  }
+  for (i = 0; i < num_elements / 2; i++) {
+    gst_bin_remove (bin, el[num_elements - i - 1]);
+  }
+
+  dur = (g_get_monotonic_time () - start) / (double) G_TIME_SPAN_SECOND;
+
+  GST_ERROR ("duration = %lf", dur);
+
+  g_free (el);
+  gst_object_unref (bin);
+}
+
+GST_END_TEST;
+
 static Suite *
 gst_bin_suite (void)
 {
@@ -1998,6 +2062,7 @@ gst_bin_suite (void)
 
   suite_add_tcase (s, tc_chain);
   tcase_add_test (tc_chain, test_interface);
+  tcase_add_test (tc_chain, test_duplicate_element);
   tcase_add_test (tc_chain, test_iterate_all_by_element_factory_name);
   tcase_add_test (tc_chain, test_eos);
   tcase_add_test (tc_chain, test_eos_recheck);
@@ -2027,6 +2092,8 @@ gst_bin_suite (void)
   /* fails on OSX build bot for some reason, and is a bit silly anyway */
   if (0)
     tcase_add_test (tc_chain, test_many_bins);
+
+  tcase_add_test (tc_chain, test_add_remove_performance);
 
   return s;
 }
