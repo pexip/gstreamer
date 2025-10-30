@@ -42,6 +42,14 @@ static GType test_idle_src_get_type (void);
 
 G_DEFINE_TYPE (TestIdleSrc, test_idle_src, GST_TYPE_BASE_IDLE_SRC);
 
+static GstFlowReturn
+test_idle_src_alloc (TestIdleSrc * src, GstBuffer ** buf)
+{
+  GstBaseIdleSrc *base_src = GST_BASE_IDLE_SRC (src);
+  GstBaseIdleSrcClass *klass = GST_BASE_IDLE_SRC_GET_CLASS (base_src);
+  return klass->alloc (base_src, 100, buf);
+}
+
 static void
 test_idle_src_init (TestIdleSrc * src)
 {
@@ -70,7 +78,7 @@ GST_END_TEST;
 
 GST_START_TEST (baseidlesrc_submit_buffer)
 {
-  GstElement *src;
+  TestIdleSrc *src;
   GstHarness *h;
   GstBaseIdleSrc *base_src;
   GstBuffer *buf;
@@ -85,8 +93,7 @@ GST_START_TEST (baseidlesrc_submit_buffer)
   gst_harness_play (h);
 
   for (i = 0; i < 5; i++) {
-    fail_unless_equals_int (GST_FLOW_OK,
-        gst_base_idle_src_alloc_buffer (base_src, 100, &buf));
+    fail_unless_equals_int (GST_FLOW_OK, test_idle_src_alloc (src, &buf));
     GST_BUFFER_PTS (buf) = i * GST_MSECOND;
     gst_base_idle_src_submit_buffer (base_src, buf);
 
@@ -103,7 +110,7 @@ GST_END_TEST;
 
 GST_START_TEST (baseidlesrc_submit_buffer_list)
 {
-  GstElement *src;
+  TestIdleSrc *src;
   GstHarness *h;
   GstBaseIdleSrc *base_src;
   GstBuffer *buf;
@@ -121,8 +128,7 @@ GST_START_TEST (baseidlesrc_submit_buffer_list)
   buf_list = gst_buffer_list_new_sized (20);
 
   for (i = 0; i < 5; i++) {
-    fail_unless_equals_int (GST_FLOW_OK,
-        gst_base_idle_src_alloc_buffer (base_src, 100, &buf));
+    fail_unless_equals_int (GST_FLOW_OK, test_idle_src_alloc (src, &buf));
     gst_buffer_list_insert (buf_list, -1, buf);
   }
 
@@ -145,7 +151,7 @@ fail_unless_equals_event_type (const GstEvent * event,
 
 GST_START_TEST (baseidlesrc_handle_events)
 {
-  GstElement *src;
+  TestIdleSrc *src;
   GstHarness *h;
   GstBaseIdleSrc *base_src;
   GstBuffer *buf;
@@ -154,12 +160,11 @@ GST_START_TEST (baseidlesrc_handle_events)
   src = g_object_new (test_idle_src_get_type (), NULL);
   base_src = GST_BASE_IDLE_SRC (src);
 
-  h = gst_harness_new_with_element (src, NULL, "src");
+  h = gst_harness_new_with_element (GST_ELEMENT (src), NULL, "src");
   gst_harness_set_sink_caps_str (h, "foo/bar");
   gst_harness_play (h);
 
-  fail_unless_equals_int (GST_FLOW_OK,
-      gst_base_idle_src_alloc_buffer (base_src, 64, &buf));
+  fail_unless_equals_int (GST_FLOW_OK, test_idle_src_alloc (src, &buf));
   gst_base_idle_src_submit_buffer (base_src, buf);
 
   event = gst_harness_pull_event (h);
@@ -216,7 +221,8 @@ _push_func (gpointer data)
 
   GstHarness *h = data;
   GstElement *e = h->element;
-  GstBaseIdleSrc *base_src = GST_BASE_IDLE_SRC (e);
+  TestIdleSrc *src = (TestIdleSrc *) e;
+  GstBaseIdleSrc *base_src = GST_BASE_IDLE_SRC (src);
 
   /* push some buffer lists */
   GST_LOG ("Pushing some buffer lists from source %s",
@@ -224,8 +230,7 @@ _push_func (gpointer data)
   for (i = 0; i < 5; i++) {
     buf_list = gst_buffer_list_new_sized (20);
     for (j = 0; j < 5; j++) {
-      fail_unless_equals_int (GST_FLOW_OK,
-          gst_base_idle_src_alloc_buffer (base_src, 100, &buf));
+      fail_unless_equals_int (GST_FLOW_OK, test_idle_src_alloc (src, &buf));
       gst_buffer_list_insert (buf_list, -1, buf);
     }
     gst_base_idle_src_submit_buffer_list (base_src, buf_list);
@@ -242,8 +247,7 @@ _push_func (gpointer data)
 
   /* push some buffers */
   GST_LOG ("Pushing some buffers from source %s", gst_element_get_name (e));
-  fail_unless_equals_int (GST_FLOW_OK, gst_base_idle_src_alloc_buffer (base_src,
-          100, &buf));
+  fail_unless_equals_int (GST_FLOW_OK, test_idle_src_alloc (src, &buf));
   for (i = 0; i < 100; i++) {
     gst_base_idle_src_submit_buffer (base_src, gst_buffer_ref (buf));
     if (g_random_int_range (0, 100) == 3) {

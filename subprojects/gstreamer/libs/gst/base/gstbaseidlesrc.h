@@ -125,6 +125,15 @@ struct _GstBaseIdleSrcClass {
   /* notify the subclass of new caps */
   gboolean      (*set_caps)     (GstBaseIdleSrc *src, GstCaps *caps);
 
+  /**
+   * GstBaseIdleSrc::alloc:
+   * @buf: (out) (nullable):
+   *
+   * Ask the subclass to allocate an output buffer with @size, the default
+   * implementation will use the negotiated allocator.
+   */
+  GstFlowReturn (*alloc)        (GstBaseIdleSrc *src, guint size, GstBuffer **buf);
+
   /* setup allocation query */
   gboolean      (*decide_allocation)   (GstBaseIdleSrc *src, GstQuery *query);
 
@@ -213,11 +222,6 @@ void            gst_base_idle_src_submit_buffer (GstBaseIdleSrc * src,
 GST_BASE_API
 void            gst_base_idle_src_submit_buffer_list (GstBaseIdleSrc * src,
                                                  GstBufferList * buffer_list);
-
-GST_BASE_API
-GstFlowReturn   gst_base_idle_src_alloc_buffer (GstBaseIdleSrc * src,
-                                                guint size,
-                                                GstBuffer ** buffer);
 
 G_DEFINE_AUTOPTR_CLEANUP_FUNC(GstBaseIdleSrc, gst_object_unref)
 
