@@ -87,13 +87,9 @@ struct _GstBaseIdleSrc {
  *   setting a fixate function on the source pad.
  * @set_caps: Notify subclass of changed output caps
  * @decide_allocation: configure the allocation query
- * @start: Start processing. Subclasses should open resources and prepare
- *    to produce data. Implementation should call gst_base_idle_src_start_complete()
- *    when the operation completes, either from the current thread or any other
- *    thread that finishes the start operation asynchronously.
+ * @start: Start processing. Subclasses should open resources
+ *         and prepare to produce data.
  * @stop: Stop processing. Subclasses should use this to close resources.
- * @get_size: Return the total size of the resource, in the format set by
- *     gst_base_idle_src_set_format().
  * @query: Handle a requested query.
  * @event: Override this to implement custom event handling.
  * @alloc: Ask the subclass to allocate a buffer with for offset and size. The
@@ -140,17 +136,6 @@ struct _GstBaseIdleSrcClass {
   /* start and stop processing, ideal for opening/closing the resource */
   gboolean      (*start)        (GstBaseIdleSrc *src);
   gboolean      (*stop)         (GstBaseIdleSrc *src);
-
-  /**
-   * GstBaseIdleSrcClass::get_size:
-   * @size: (out):
-   *
-   * Get the total size of the resource in the format set by
-   * gst_base_idle_src_set_format().
-   *
-   * Returns: %TRUE if the size is available and has been set.
-   */
-  gboolean      (*get_size)     (GstBaseIdleSrc *src, guint64 *size);
 
   /* notify subclasses of a query */
   gboolean      (*query)        (GstBaseIdleSrc *src, GstQuery *query);
