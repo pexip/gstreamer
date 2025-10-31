@@ -1644,7 +1644,7 @@ gst_base_idle_src_submit_buffer_list (GstBaseIdleSrc * src,
   gst_base_idle_src_start_task (src, FALSE);
 }
 
-GstFlowReturn
+static GstFlowReturn
 gst_base_idle_src_default_alloc (GstBaseIdleSrc * src,
     guint size, GstBuffer ** buffer)
 {
