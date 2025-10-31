@@ -258,6 +258,8 @@ _push_func (gpointer data)
     }
   }
   gst_buffer_unref (buf);
+
+  return NULL;
 }
 
 GST_START_TEST (baseidlesrc_thread_pool_submit)
