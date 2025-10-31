@@ -265,9 +265,6 @@ GST_START_TEST (baseidlesrc_thread_pool_submit)
   GstElement *srcs[MAX_SRCS];
   GThread *threads[MAX_SRCS];
   GstBaseIdleSrc *base_src;
-  GstTaskPool *thread_pool;
-  GstBuffer *buf;
-  GstBufferList *buf_list;
   guint i;
 
   GstTaskPool *pool = gst_shared_task_pool_new ();
