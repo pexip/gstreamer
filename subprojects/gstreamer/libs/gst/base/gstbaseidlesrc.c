@@ -1594,8 +1594,6 @@ gst_base_idle_src_activate_mode (GstPad * pad, GstObject * parent,
  * @buffer: (transfer full): a #GstBuffer
  *
  * Subclasses can call this to submit a buffer to be pushed out later.
- *
- * Since: 1.22
  */
 void
 gst_base_idle_src_submit_buffer (GstBaseIdleSrc * src, GstBuffer * buffer)
@@ -1622,8 +1620,6 @@ gst_base_idle_src_submit_buffer (GstBaseIdleSrc * src, GstBuffer * buffer)
  * @buffer_list: (transfer full): a #GstBufferList
  *
  * Subclasses can call this to submit a buffer list to be pushed out later.
- *
- * Since: 1.22
  */
 void
 gst_base_idle_src_submit_buffer_list (GstBaseIdleSrc * src,
