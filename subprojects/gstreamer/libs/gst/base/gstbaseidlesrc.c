@@ -1354,18 +1354,17 @@ gst_base_idle_src_process_object (GstBaseIdleSrc * src, GstMiniObject * obj)
     GstEvent *event = GST_EVENT_CAST (obj);
     GST_DEBUG_OBJECT (src, "About to push Event %" GST_PTR_FORMAT, event);
     if (!gst_pad_push_event (pad, event)) {
-      /* TODO: What is the right thing to do here?! */
-      ret = GST_FLOW_CUSTOM_ERROR;
+      GST_ELEMENT_ERROR (src, CORE, EVENT,
+          ("Failed to push event."),
+          ("failed to push event from queue during processing loop"));
     }
-    goto check_ret_error;
   } else {
     GST_ERROR_OBJECT (src, "Unknown object %" GST_PTR_FORMAT " type", obj);
   }
 
 check_ret_error:
   if (ret != GST_FLOW_OK && ret != GST_FLOW_FLUSHING) {
-    // XXX: Should we proxy this into the bus in case or error or just ignore?
-    GST_ERROR ("Got ret: %s", gst_flow_get_name (ret));
+    GST_ELEMENT_FLOW_ERROR (src, ret);
   }
 
   GST_PAD_STREAM_UNLOCK (pad);
