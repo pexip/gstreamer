@@ -159,10 +159,9 @@ gst_video_aggregator_pad_set_property (GObject * object, guint prop_id,
       if (vagg) {
         GST_OBJECT_LOCK (vagg);
         pad->priv->zorder = g_value_get_uint (value);
-        GST_ELEMENT (vagg)->sinkpads =
-            g_list_sort (GST_ELEMENT (vagg)->sinkpads,
-            (GCompareFunc) pad_zorder_compare);
         GST_OBJECT_UNLOCK (vagg);
+        gst_element_sort_sink_pads (GST_ELEMENT (vagg),
+            (GCompareFunc) pad_zorder_compare);
         gst_object_unref (vagg);
       } else {
         pad->priv->zorder = g_value_get_uint (value);
@@ -2689,9 +2688,9 @@ gst_video_aggregator_request_new_pad (GstElement * element,
   vaggpad->priv->zorder = GST_ELEMENT (vagg)->numsinkpads;
   vaggpad->priv->start_time = -1;
   vaggpad->priv->end_time = -1;
-  element->sinkpads = g_list_sort (element->sinkpads,
-      (GCompareFunc) pad_zorder_compare);
   GST_OBJECT_UNLOCK (vagg);
+
+  gst_element_sort_sink_pads (element, (GCompareFunc) pad_zorder_compare);
 
   return GST_PAD (vaggpad);
 }
