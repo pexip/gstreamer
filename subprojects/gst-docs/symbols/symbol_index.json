@@ -42927,6 +42927,8 @@
   "gst_element_set_parent",
   "gst_element_set_start_time",
   "gst_element_set_state",
+  "gst_element_sort_sink_pads",
+  "gst_element_sort_src_pads",
   "gst_element_state_change_return_get_name",
   "gst_element_state_get_name",
   "gst_element_sync_state_with_parent",

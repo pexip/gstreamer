@@ -1556,6 +1556,68 @@ gst_element_foreach_pad (GstElement * element, GstElementForeachPadFunc func,
 }
 
 /**
+ * gst_element_sort_sink_pads:
+ * @element: a #GstElement to sort the sinkpads of
+ * @compare_func: (scope call): the comparison function used to sort the sinkpads
+ *
+ * The element sinkpads list will be sorted according to the
+ * supplied GCompareFunc @compare_func. (see g_list_sort() for details)
+ *
+ * Since: 1.27
+ */
+void
+gst_element_sort_sink_pads (GstElement * element, GCompareFunc compare_func)
+{
+  GstElementPrivate *priv = element->priv;
+  GList *walk;
+
+  GST_OBJECT_LOCK (element);
+  element->sinkpads = g_list_sort (element->sinkpads, compare_func);
+
+  /* update sinkpads_links and sinkpads_last */
+  g_hash_table_remove_all (priv->sinkpads_links);
+  for (walk = element->sinkpads; walk; walk = walk->next) {
+    g_hash_table_insert (priv->sinkpads_links, walk->data, walk);
+    priv->sinkpads_last = walk;
+  }
+
+  element->pads_cookie++;
+
+  GST_OBJECT_UNLOCK (element);
+}
+
+/**
+ * gst_element_sort_src_pads:
+ * @element: a #GstElement to sort the srcpads of
+ * @compare_func: (scope call): the comparison function used to sort the srcpads
+ *
+ * The element srcpads list will be sorted according to the
+ * supplied GCompareFunc @compare_func. (see g_list_sort() for details)
+ *
+ * Since: 1.27
+ */
+void
+gst_element_sort_src_pads (GstElement * element, GCompareFunc compare_func)
+{
+  GstElementPrivate *priv = element->priv;
+  GList *walk;
+
+  GST_OBJECT_LOCK (element);
+  element->srcpads = g_list_sort (element->srcpads, compare_func);
+
+  /* update srcpads_links and srcpads_last */
+  g_hash_table_remove_all (priv->srcpads_links);
+  for (walk = element->srcpads; walk; walk = walk->next) {
+    g_hash_table_insert (priv->srcpads_links, walk->data, walk);
+    priv->srcpads_last = walk;
+  }
+
+  element->pads_cookie++;
+
+  GST_OBJECT_UNLOCK (element);
+}
+
+/**
  * gst_element_class_add_pad_template:
  * @klass: the #GstElementClass to add the pad template to.
  * @templ: (transfer floating): a #GstPadTemplate to add to the element class.
