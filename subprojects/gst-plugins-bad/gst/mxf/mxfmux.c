@@ -1754,10 +1754,7 @@ gst_mxf_mux_aggregate (GstAggregator * aggregator, gboolean timeout)
       goto error;
 
     /* Sort pads, we will always write in that order */
-    GST_OBJECT_LOCK (mux);
-    GST_ELEMENT_CAST (mux)->sinkpads =
-        g_list_sort (GST_ELEMENT_CAST (mux)->sinkpads, _sort_mux_pads);
-    GST_OBJECT_UNLOCK (mux);
+    gst_element_sort_sink_pads (GST_ELEMENT (mux), _sort_mux_pads);
 
     /* Write body partition */
     ret = gst_mxf_mux_write_body_partition (mux);
