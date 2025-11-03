@@ -1229,6 +1229,7 @@ gst_base_idle_src_set_thread_pool (GstBaseIdleSrc * src,
   GST_OBJECT_LOCK (src);
   if (src->priv->thread_pool) {
     GST_DEBUG_OBJECT (src, "Cleaning up old thread pool");
+    gst_task_pool_cleanup (src->priv->thread_pool);
     gst_object_unref (src->priv->thread_pool);
   }
 
@@ -1712,6 +1713,7 @@ gst_base_idle_src_finalize (GObject * object)
   g_queue_free (src->priv->obj_queue);
 
   if (src->priv->thread_pool) {
+    gst_task_pool_cleanup (src->priv->thread_pool);
     gst_object_unref (src->priv->thread_pool);
     src->priv->thread_pool = NULL;
   }

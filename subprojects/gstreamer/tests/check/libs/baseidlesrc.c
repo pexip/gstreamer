@@ -72,6 +72,7 @@ GST_START_TEST (baseidlesrc_up_and_down)
   h = gst_harness_new_with_element (GST_ELEMENT (src), NULL, "src");
 
   gst_harness_teardown (h);
+  g_object_unref (src);
 }
 
 GST_END_TEST;
@@ -190,6 +191,7 @@ GST_START_TEST (baseidlesrc_thread_pool_set_and_get)
 {
   GstElement *src;
   GstBaseIdleSrc *base_src;
+  GError *err;
 
   src = g_object_new (test_idle_src_get_type (), NULL);
   base_src = GST_BASE_IDLE_SRC (src);
@@ -201,6 +203,7 @@ GST_START_TEST (baseidlesrc_thread_pool_set_and_get)
   GstTaskPool *new_thread_pool = gst_shared_task_pool_new ();
   gst_shared_task_pool_set_max_threads (GST_SHARED_TASK_POOL (new_thread_pool),
       2);
+  gst_task_pool_prepare (new_thread_pool, &err);
 
   gst_base_idle_src_set_thread_pool (base_src, new_thread_pool);
   thread_pool = gst_base_idle_src_get_thread_pool (base_src);
@@ -209,7 +212,9 @@ GST_START_TEST (baseidlesrc_thread_pool_set_and_get)
       gst_shared_task_pool_get_max_threads (GST_SHARED_TASK_POOL
           (thread_pool)));
 
+  gst_task_pool_cleanup (new_thread_pool);
   gst_object_unref (thread_pool);
+  g_object_unref (src);
 }
 
 GST_END_TEST;
@@ -271,11 +276,13 @@ GST_START_TEST (baseidlesrc_thread_pool_submit)
   GstElement *srcs[MAX_SRCS];
   GThread *threads[MAX_SRCS];
   GstBaseIdleSrc *base_src;
+  GError *err;
   guint i;
 
   GstTaskPool *pool = gst_shared_task_pool_new ();
   gst_shared_task_pool_set_max_threads (GST_SHARED_TASK_POOL (pool),
       MAX_SRCS / 2);
+  gst_task_pool_prepare (pool, &err);
 
   /* create all sources and harnesses in one go */
   for (i = 0; i < MAX_SRCS; i++) {
@@ -293,6 +300,7 @@ GST_START_TEST (baseidlesrc_thread_pool_submit)
   for (i = 0; i < MAX_SRCS; i++) {
     char *thread_name = g_strdup_printf ("pusher-%d", i);
     threads[i] = g_thread_new (thread_name, _push_func, hs[i]);
+    g_free (thread_name);
   }
 
   /* wait for all sources to finish pushing */
@@ -305,6 +313,8 @@ GST_START_TEST (baseidlesrc_thread_pool_submit)
     gst_harness_teardown (hs[i]);
     g_object_unref (srcs[i]);
   }
+  gst_task_pool_cleanup (pool);
+  gst_object_unref (pool);
 }
 
 GST_END_TEST;
