@@ -104,6 +104,7 @@ GST_START_TEST (baseidlesrc_submit_buffer)
   }
 
   gst_harness_teardown (h);
+  g_object_unref (src);
 }
 
 GST_END_TEST;
@@ -137,6 +138,7 @@ GST_START_TEST (baseidlesrc_submit_buffer_list)
   // gst_buffer_list_unref (gst_harness_pull_list (h));
 
   gst_harness_teardown (h);
+  g_object_unref (src);
 }
 
 GST_END_TEST;
@@ -179,6 +181,7 @@ GST_START_TEST (baseidlesrc_handle_events)
   gst_buffer_unref (gst_harness_pull (h));
 
   gst_harness_teardown (h);
+  g_object_unref (src);
 }
 
 GST_END_TEST;
@@ -300,6 +303,7 @@ GST_START_TEST (baseidlesrc_thread_pool_submit)
   /* teardown */
   for (i = 0; i < MAX_SRCS; i++) {
     gst_harness_teardown (hs[i]);
+    g_object_unref (srcs[i]);
   }
 }
 
