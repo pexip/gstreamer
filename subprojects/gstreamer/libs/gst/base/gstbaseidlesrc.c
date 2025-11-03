@@ -1229,7 +1229,6 @@ gst_base_idle_src_set_thread_pool (GstBaseIdleSrc * src,
   GST_OBJECT_LOCK (src);
   if (src->priv->thread_pool) {
     GST_DEBUG_OBJECT (src, "Cleaning up old thread pool");
-    gst_task_pool_cleanup (src->priv->thread_pool);
     gst_object_unref (src->priv->thread_pool);
   }
 
@@ -1419,7 +1418,7 @@ gst_base_idle_src_start_task (GstBaseIdleSrc * src, G_GNUC_UNUSED gboolean wait)
 
   GError *error = NULL;
   priv->thread_handle =
-      gst_task_pool_push (src->priv->thread_pool, gst_base_idle_src_func, src,
+      gst_task_pool_push (priv->thread_pool, gst_base_idle_src_func, src,
       &error);
 
   if (wait) {
@@ -1701,12 +1700,6 @@ gst_base_idle_src_dispose (GObject * object)
   src = GST_BASE_IDLE_SRC (object);
   (void) src;
 
-  if (src->priv->thread_pool) {
-    gst_task_pool_cleanup (src->priv->thread_pool);
-    gst_object_unref (src->priv->thread_pool);
-    src->priv->thread_pool = NULL;
-  }
-
   G_OBJECT_CLASS (parent_class)->dispose (object);
 }
 
@@ -1717,6 +1710,11 @@ gst_base_idle_src_finalize (GObject * object)
   src = GST_BASE_IDLE_SRC (object);
 
   g_queue_free (src->priv->obj_queue);
+
+  if (src->priv->thread_pool) {
+    gst_object_unref (src->priv->thread_pool);
+    src->priv->thread_pool = NULL;
+  }
 
   G_OBJECT_CLASS (parent_class)->finalize (object);
 }
