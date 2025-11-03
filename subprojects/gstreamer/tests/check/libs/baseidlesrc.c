@@ -279,7 +279,7 @@ GST_START_TEST (baseidlesrc_thread_pool_submit)
     srcs[i] = g_object_new (test_idle_src_get_type (), NULL);
     base_src = GST_BASE_IDLE_SRC (srcs[i]);
 
-    gst_base_idle_src_set_thread_pool (base_src, pool);
+    gst_base_idle_src_set_thread_pool (base_src, gst_object_ref (pool));
 
     hs[i] = gst_harness_new_with_element (GST_ELEMENT (srcs[i]), NULL, "src");
     gst_harness_set_sink_caps_str (hs[i], "foo/bar");
