@@ -1310,12 +1310,16 @@ gst_rtp_rtx_send_push_stuffing (GstRtpRtxSend * rtx, SSRCRtxData * rtx_data)
     GstBuffer *rtx_buf;
     BufferQueueItem *item = g_sequence_get (current);
     gsize bufsize = get_buffer_bytes_size (item->buffer) + 2;
-    guint8 padding = MIN (G_MAXUINT8, missing_stuffing_bytes);
-    if (padding && bufsize < 300) {     /* we only pad buffers less than 300 bytes in size */
+    guint8 padding = 0;
+
+    /* we only pad buffers less than 300 bytes in size */
+    if (missing_stuffing_bytes && bufsize < 300) {
+      padding = MIN (G_MAXUINT8, missing_stuffing_bytes);
       missing_stuffing_bytes -= padding;
       GST_LOG_OBJECT (rtx, "adding %u bytes of padding, still missing: %u",
           padding, missing_stuffing_bytes);
     }
+
     rtx_buf = gst_rtp_rtx_buffer_new (rtx, item->buffer, padding);
     GST_LOG_OBJECT (rtx,
         "Pushing 1 stuffing packet with size %u - bucket_size=%d",
