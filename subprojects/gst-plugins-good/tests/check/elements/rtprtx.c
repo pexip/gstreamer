@@ -1480,9 +1480,8 @@ GST_START_TEST (test_rtxsender_stuffing)
   gst_harness_set_time (h, 30 * GST_MSECOND);
   gst_harness_push (h,
       create_rtp_buffer_with_payload_size (master_ssrc, master_pt, 3, 200));
+  pull_and_verify (h, TRUE, rtx_ssrc, rtx_pt, 2, -1, -1);
   pull_and_verify (h, FALSE, master_ssrc, master_pt, 3, 0, 0);
-  pull_and_verify (h, TRUE, rtx_ssrc, rtx_pt, 3, -1, -1);
-  pull_and_verify (h, TRUE, rtx_ssrc, rtx_pt, 3, -1, -1);
 
   gst_harness_set_time (h, 40 * GST_MSECOND);
   gst_harness_push (h,
@@ -1626,9 +1625,9 @@ GST_START_TEST (test_rtxsender_stuffing_non_rtx_packets)
   /* audio packet comes in.. */
   gst_harness_push (h,
       create_rtp_buffer_with_payload_size (audio_ssrc, audio_pt, 0, 200));
-  pull_and_verify (h, FALSE, audio_ssrc, audio_pt, 0, 0, 0);
   /* budget 3000, sent 2000, stuff with #2, 600 bytes */
   pull_and_verify (h, TRUE, rtx_ssrc, rtx_pt, 2, -1, -1);
+  pull_and_verify (h, FALSE, audio_ssrc, audio_pt, 0, 0, 0);
 
   gst_harness_push (h,
       create_rtp_buffer_with_payload_size (video_ssrc, video_pt, 4, 600));
