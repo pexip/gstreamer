@@ -24,6 +24,8 @@ enable_gst_play_tests = get_option('gst_play_tests')
 libsoup_dep = dependency('libsoup-3.0', include_type: 'system', required: enable_gst_play_tests,
                          default_options: {'tests': false})
 
+enable_dcsctp_tests = gstsctp_dep.found() and not get_option('dcsctp').disabled()
+
 # name, condition when to skip the test and extra dependencies
 base_tests = [
   [['elements/aesenc.c'], not aes_dep.found(), [aes_dep]],
@@ -90,6 +92,7 @@ base_tests = [
   [['elements/av1parse.c'], false, [gstcodecparsers_dep]],
   [['elements/wasapi.c'], host_machine.system() != 'windows', ],
   [['elements/wasapi2.c'], host_machine.system() != 'windows', ],
+  [['elements/dcsctp.c', 'elements/sctpharness.c'], not enable_dcsctp_tests, [gstsctp_dep] ],
   [['libs/h264parser.c'], false, [gstcodecparsers_dep]],
   [['libs/h265parser.c'], false, [gstcodecparsers_dep]],
   [['libs/h266parser.c'], false, [gstcodecparsers_dep]],
