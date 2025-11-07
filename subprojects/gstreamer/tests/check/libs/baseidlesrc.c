@@ -42,6 +42,14 @@ static GType test_idle_src_get_type (void);
 
 G_DEFINE_TYPE (TestIdleSrc, test_idle_src, GST_TYPE_BASE_IDLE_SRC);
 
+static GstFlowReturn
+test_idle_src_alloc (TestIdleSrc * src, GstBuffer ** buf)
+{
+  GstBaseIdleSrc *base_src = GST_BASE_IDLE_SRC (src);
+  GstBaseIdleSrcClass *klass = GST_BASE_IDLE_SRC_GET_CLASS (base_src);
+  return klass->alloc (base_src, 100, buf);
+}
+
 static void
 test_idle_src_init (TestIdleSrc * src)
 {
@@ -64,13 +72,14 @@ GST_START_TEST (baseidlesrc_up_and_down)
   h = gst_harness_new_with_element (GST_ELEMENT (src), NULL, "src");
 
   gst_harness_teardown (h);
+  g_object_unref (src);
 }
 
 GST_END_TEST;
 
 GST_START_TEST (baseidlesrc_submit_buffer)
 {
-  GstElement *src;
+  TestIdleSrc *src;
   GstHarness *h;
   GstBaseIdleSrc *base_src;
   GstBuffer *buf;
@@ -81,17 +90,231 @@ GST_START_TEST (baseidlesrc_submit_buffer)
 
   h = gst_harness_new_with_element (GST_ELEMENT (src), NULL, "src");
 
-  gst_harness_set_sink_caps_str (h, "foo/bar");
+  gst_harness_set_sink_caps_str (h, "video/x-raw,format=RGB,width=1,height=1");
   gst_harness_play (h);
 
   for (i = 0; i < 5; i++) {
-    fail_unless_equals_int (GST_FLOW_OK,
-        gst_base_idle_src_alloc_buffer (base_src, 100, &buf));
+    fail_unless_equals_int (GST_FLOW_OK, test_idle_src_alloc (src, &buf));
+    GST_BUFFER_PTS (buf) = i * GST_MSECOND;
     gst_base_idle_src_submit_buffer (base_src, buf);
-    gst_buffer_unref (gst_harness_pull (h));
+
+    buf = gst_harness_pull (h);
+    fail_unless (buf != NULL);
+    fail_unless_equals_uint64 (GST_BUFFER_PTS (buf), i * GST_MSECOND);
+    gst_buffer_unref (buf);
   }
 
   gst_harness_teardown (h);
+  g_object_unref (src);
+}
+
+GST_END_TEST;
+
+GST_START_TEST (baseidlesrc_submit_buffer_list)
+{
+  TestIdleSrc *src;
+  GstHarness *h;
+  GstBaseIdleSrc *base_src;
+  GstBuffer *buf;
+  GstBufferList *buf_list;
+  guint i;
+
+  src = g_object_new (test_idle_src_get_type (), NULL);
+  base_src = GST_BASE_IDLE_SRC (src);
+
+  h = gst_harness_new_with_element (GST_ELEMENT (src), NULL, "src");
+
+  gst_harness_set_sink_caps_str (h, "foo/bar");
+  gst_harness_play (h);
+
+  buf_list = gst_buffer_list_new_sized (20);
+
+  for (i = 0; i < 5; i++) {
+    fail_unless_equals_int (GST_FLOW_OK, test_idle_src_alloc (src, &buf));
+    gst_buffer_list_insert (buf_list, -1, buf);
+  }
+
+  gst_base_idle_src_submit_buffer_list (base_src, buf_list);
+  // FIXME: Enable check once _pull_list API lands.
+  // gst_buffer_list_unref (gst_harness_pull_list (h));
+
+  gst_harness_teardown (h);
+  g_object_unref (src);
+}
+
+GST_END_TEST;
+
+static void
+fail_unless_equals_event_type (const GstEvent * event,
+    GstEventType expected_type)
+{
+  fail_unless (GST_EVENT_TYPE (event) == expected_type,
+      "'%s' expected, got '%s'", gst_event_type_get_name (expected_type),
+      gst_event_type_get_name (GST_EVENT_TYPE (event)));
+}
+
+GST_START_TEST (baseidlesrc_handle_events)
+{
+  TestIdleSrc *src;
+  GstHarness *h;
+  GstBaseIdleSrc *base_src;
+  GstBuffer *buf;
+  GstEvent *event;
+
+  src = g_object_new (test_idle_src_get_type (), NULL);
+  base_src = GST_BASE_IDLE_SRC (src);
+
+  h = gst_harness_new_with_element (GST_ELEMENT (src), NULL, "src");
+  gst_harness_set_sink_caps_str (h, "foo/bar");
+  gst_harness_play (h);
+
+  fail_unless_equals_int (GST_FLOW_OK, test_idle_src_alloc (src, &buf));
+  gst_base_idle_src_submit_buffer (base_src, buf);
+
+  event = gst_harness_pull_event (h);
+  fail_unless_equals_event_type (event, GST_EVENT_STREAM_START);
+  gst_event_unref (event);
+
+  event = gst_harness_pull_event (h);
+  fail_unless_equals_event_type (event, GST_EVENT_SEGMENT);
+  gst_event_unref (event);
+
+  gst_buffer_unref (gst_harness_pull (h));
+
+  gst_harness_teardown (h);
+  g_object_unref (src);
+}
+
+GST_END_TEST;
+
+GST_START_TEST (baseidlesrc_thread_pool_set_and_get)
+{
+  GstElement *src;
+  GstBaseIdleSrc *base_src;
+  GError *err;
+
+  src = g_object_new (test_idle_src_get_type (), NULL);
+  base_src = GST_BASE_IDLE_SRC (src);
+
+  GstTaskPool *thread_pool = gst_base_idle_src_get_thread_pool (base_src);
+  fail_unless (thread_pool);
+  gst_object_unref (thread_pool);
+
+  GstTaskPool *new_thread_pool = gst_shared_task_pool_new ();
+  gst_shared_task_pool_set_max_threads (GST_SHARED_TASK_POOL (new_thread_pool),
+      2);
+  gst_task_pool_prepare (new_thread_pool, &err);
+
+  gst_base_idle_src_set_thread_pool (base_src, new_thread_pool);
+  thread_pool = gst_base_idle_src_get_thread_pool (base_src);
+  fail_unless (thread_pool == new_thread_pool);
+  fail_unless_equals_int (2,
+      gst_shared_task_pool_get_max_threads (GST_SHARED_TASK_POOL
+          (thread_pool)));
+
+  gst_task_pool_cleanup (new_thread_pool);
+  gst_object_unref (thread_pool);
+  g_object_unref (src);
+}
+
+GST_END_TEST;
+
+#define MAX_SRCS 16
+
+static gpointer
+_push_func (gpointer data)
+{
+  GstBuffer *buf;
+  GstBufferList *buf_list;
+  guint i, j;
+
+  GstHarness *h = data;
+  GstElement *e = h->element;
+  TestIdleSrc *src = (TestIdleSrc *) e;
+  GstBaseIdleSrc *base_src = GST_BASE_IDLE_SRC (src);
+
+  /* push some buffer lists */
+  GST_LOG ("Pushing some buffer lists from source %s",
+      gst_element_get_name (e));
+  for (i = 0; i < 5; i++) {
+    buf_list = gst_buffer_list_new_sized (20);
+    for (j = 0; j < 5; j++) {
+      fail_unless_equals_int (GST_FLOW_OK, test_idle_src_alloc (src, &buf));
+      gst_buffer_list_insert (buf_list, -1, buf);
+    }
+    gst_base_idle_src_submit_buffer_list (base_src, buf_list);
+    if (g_random_int_range (0, 100) == 3) {
+      GST_LOG ("Randomly yielding during buffer list push from source %s",
+          gst_element_get_name (e));
+      g_thread_yield ();
+    }
+  }
+
+  /* yield to cause some hadvoc */
+  GST_LOG ("Yielding from source %s", gst_element_get_name (e));
+  g_thread_yield ();
+
+  /* push some buffers */
+  GST_LOG ("Pushing some buffers from source %s", gst_element_get_name (e));
+  fail_unless_equals_int (GST_FLOW_OK, test_idle_src_alloc (src, &buf));
+  for (i = 0; i < 100; i++) {
+    gst_base_idle_src_submit_buffer (base_src, gst_buffer_ref (buf));
+    if (g_random_int_range (0, 100) == 3) {
+      GST_LOG ("Randomly yielding during buffer push from source %s",
+          gst_element_get_name (e));
+      g_thread_yield ();
+    }
+  }
+  gst_buffer_unref (buf);
+
+  return NULL;
+}
+
+GST_START_TEST (baseidlesrc_thread_pool_submit)
+{
+  GstHarness *hs[MAX_SRCS];
+  GstElement *srcs[MAX_SRCS];
+  GThread *threads[MAX_SRCS];
+  GstBaseIdleSrc *base_src;
+  GError *err;
+  guint i;
+
+  GstTaskPool *pool = gst_shared_task_pool_new ();
+  gst_shared_task_pool_set_max_threads (GST_SHARED_TASK_POOL (pool),
+      MAX_SRCS / 2);
+  gst_task_pool_prepare (pool, &err);
+
+  /* create all sources and harnesses in one go */
+  for (i = 0; i < MAX_SRCS; i++) {
+    srcs[i] = g_object_new (test_idle_src_get_type (), NULL);
+    base_src = GST_BASE_IDLE_SRC (srcs[i]);
+
+    gst_base_idle_src_set_thread_pool (base_src, gst_object_ref (pool));
+
+    hs[i] = gst_harness_new_with_element (GST_ELEMENT (srcs[i]), NULL, "src");
+    gst_harness_set_sink_caps_str (hs[i], "foo/bar");
+    gst_harness_play (hs[i]);
+  }
+
+  /* start pushing to from all sources */
+  for (i = 0; i < MAX_SRCS; i++) {
+    char *thread_name = g_strdup_printf ("pusher-%d", i);
+    threads[i] = g_thread_new (thread_name, _push_func, hs[i]);
+    g_free (thread_name);
+  }
+
+  /* wait for all sources to finish pushing */
+  for (i = 0; i < MAX_SRCS; i++) {
+    g_thread_join (threads[i]);
+  }
+
+  /* teardown */
+  for (i = 0; i < MAX_SRCS; i++) {
+    gst_harness_teardown (hs[i]);
+    g_object_unref (srcs[i]);
+  }
+  gst_task_pool_cleanup (pool);
+  gst_object_unref (pool);
 }
 
 GST_END_TEST;
@@ -105,6 +328,10 @@ baseidlesrc_suite (void)
   suite_add_tcase (s, tc);
   tcase_add_test (tc, baseidlesrc_up_and_down);
   tcase_add_test (tc, baseidlesrc_submit_buffer);
+  tcase_add_test (tc, baseidlesrc_submit_buffer_list);
+  tcase_add_test (tc, baseidlesrc_handle_events);
+  tcase_add_test (tc, baseidlesrc_thread_pool_set_and_get);
+  tcase_add_test (tc, baseidlesrc_thread_pool_submit);
 
   return s;
 }

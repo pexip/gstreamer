@@ -2,6 +2,8 @@
  * Copyright (C) 1999,2000 Erik Walthinsen <omega@cse.ogi.edu>
  *                    2000 Wim Taymans <wtay@chello.be>
  *                    2005 Wim Taymans <wim@fluendo.com>
+ *                    2023 Havard Graff <hgr@pexip.com>
+ *                    2023 Camilo Celis Guzman <camilo@pexip.com>
  *
  * gstbaseidlesrc.h:
  *
@@ -87,23 +89,16 @@ struct _GstBaseIdleSrc {
  *   setting a fixate function on the source pad.
  * @set_caps: Notify subclass of changed output caps
  * @decide_allocation: configure the allocation query
- * @start: Start processing. Subclasses should open resources and prepare
- *    to produce data. Implementation should call gst_base_idle_src_start_complete()
- *    when the operation completes, either from the current thread or any other
- *    thread that finishes the start operation asynchronously.
+ * @start: Start processing. Subclasses should open resources
+ *         and prepare to produce data.
  * @stop: Stop processing. Subclasses should use this to close resources.
- * @get_size: Return the total size of the resource, in the format set by
- *     gst_base_idle_src_set_format().
  * @query: Handle a requested query.
  * @event: Override this to implement custom event handling.
  * @alloc: Ask the subclass to allocate a buffer with for offset and size. The
  *   default implementation will create a new buffer from the negotiated allocator.
- * @fill: Ask the subclass to fill the buffer with data for offset and size. The
- *   passed buffer is guaranteed to hold the requested amount of bytes.
  *
  * Subclasses can override any of the available virtual methods or not, as
- * needed. At the minimum, the @create method should be overridden to produce
- * buffers.
+ * needed.
  */
 struct _GstBaseIdleSrcClass {
   GstElementClass parent_class;
@@ -125,23 +120,21 @@ struct _GstBaseIdleSrcClass {
   /* notify the subclass of new caps */
   gboolean      (*set_caps)     (GstBaseIdleSrc *src, GstCaps *caps);
 
+  /**
+   * GstBaseIdleSrc::alloc:
+   * @buf: (out) (nullable):
+   *
+   * Ask the subclass to allocate an output buffer with @size, the default
+   * implementation will use the negotiated allocator.
+   */
+  GstFlowReturn (*alloc)        (GstBaseIdleSrc *src, guint size, GstBuffer **buf);
+
   /* setup allocation query */
   gboolean      (*decide_allocation)   (GstBaseIdleSrc *src, GstQuery *query);
 
   /* start and stop processing, ideal for opening/closing the resource */
   gboolean      (*start)        (GstBaseIdleSrc *src);
   gboolean      (*stop)         (GstBaseIdleSrc *src);
-
-  /**
-   * GstBaseIdleSrcClass::get_size:
-   * @size: (out):
-   *
-   * Get the total size of the resource in the format set by
-   * gst_base_idle_src_set_format().
-   *
-   * Returns: %TRUE if the size is available and has been set.
-   */
-  gboolean      (*get_size)     (GstBaseIdleSrc *src, guint64 *size);
 
   /* notify subclasses of a query */
   gboolean      (*query)        (GstBaseIdleSrc *src, GstQuery *query);
@@ -167,10 +160,6 @@ GST_BASE_API
 void            gst_base_idle_src_set_format       (GstBaseIdleSrc *src, GstFormat format);
 
 GST_BASE_API
-void            gst_base_idle_src_set_automatic_eos (GstBaseIdleSrc * src, gboolean automatic_eos);
-
-
-GST_BASE_API
 gboolean        gst_base_idle_src_negotiate        (GstBaseIdleSrc *src);
 
 
@@ -186,14 +175,16 @@ GST_BASE_API
 gboolean        gst_base_idle_src_get_do_timestamp (GstBaseIdleSrc *src);
 
 GST_BASE_API
-gboolean        gst_base_idle_src_new_segment      (GstBaseIdleSrc *src,
-                                               const GstSegment * segment);
-
-GST_BASE_API
 gboolean        gst_base_idle_src_set_caps         (GstBaseIdleSrc *src, GstCaps *caps);
 
 GST_BASE_API
 GstBufferPool * gst_base_idle_src_get_buffer_pool  (GstBaseIdleSrc *src);
+
+GST_BASE_API
+void gst_base_idle_src_set_thread_pool (GstBaseIdleSrc *src, GstTaskPool * thread_pool);
+
+GST_BASE_API
+GstTaskPool * gst_base_idle_src_get_thread_pool  (GstBaseIdleSrc *src);
 
 GST_BASE_API
 void            gst_base_idle_src_get_allocator    (GstBaseIdleSrc *src,
@@ -207,11 +198,6 @@ void            gst_base_idle_src_submit_buffer (GstBaseIdleSrc * src,
 GST_BASE_API
 void            gst_base_idle_src_submit_buffer_list (GstBaseIdleSrc * src,
                                                  GstBufferList * buffer_list);
-
-GST_BASE_API
-GstFlowReturn   gst_base_idle_src_alloc_buffer (GstBaseIdleSrc * src,
-                                                gsize size,
-                                                GstBuffer ** buffer);
 
 G_DEFINE_AUTOPTR_CLEANUP_FUNC(GstBaseIdleSrc, gst_object_unref)
 

@@ -1,6 +1,7 @@
 /* GStreamer
  * Copyright (C) 1999,2000 Erik Walthinsen <omega@cse.ogi.edu>
- *               2000,2005 Wim Taymans <wim@fluendo.com>
+ *                    2000 Wim Taymans <wtay@chello.be>
+ *                    2005 Wim Taymans <wim@fluendo.com>
  *                    2023 Havard Graff <hgr@pexip.com>
  *                    2023 Camilo Celis Guzman <camilo@pexip.com>
  *
@@ -25,17 +26,146 @@
 /**
  * SECTION:gstbaseidlesrc
  * @title: GstBaseIdleSrc
- * @short_description: Base class for getrange based source elements
- * @see_also: #GstPushSrc, #GstBaseTransform, #GstBaseSink
+ * @short_description: Base class for push-mode source elements that operate
+ *                     in idle-driven or controlled pacing
+ * @see_also: #GstBaseSrc, #GstPushSrc, #GstBaseSink
  *
-
+ * #GstBaseIdleSrc is a base class for source elements that operate purely in
+ * push mode. Unlike #GstBaseSrc, it does not support pull-based scheduling or
+ * random access through #GstBaseSrcClass::create, and instead expects subclasses
+ * to push data downstream at their own pace or from an external producer.
+ *
+ * ## Purpose
+ *
+ * This base class is intended for elements that generate or forward data
+ * asynchronously, such as live capture devices, idle-loop sources, or
+ * externally-driven producers. It provides the fundamental mechanics of
+ * caps negotiation, allocation setup, buffer timestamping, and live-source
+ * handling, while delegating actual data generation to subclasses.
+ *
+ * The element manages a single source pad named `"src"` and operates only
+ * in push mode.
+ *
+ * ## Features
+ *
+ * - Push-only operation (no getrange/pull support)
+ * - Optional live-source mode using gst_base_idle_src_set_live()
+ * - Built-in buffer allocation via gst_base_idle_src_alloc()
+ * - Negotiation helpers for caps and allocation queries
+ * - Thread-pool support for external or shared producers
+ * - Optional automatic timestamping
+ *
+ * ## Subclass Responsibilities
+ *
+ * A typical subclass of #GstBaseIdleSrc needs to:
+ *
+ * 1. Install a static pad template for the `"src"` pad in `class_init()`.
+ * 2. Implement @start and @stop to open and close resources.
+ * 3. Produce and submit buffers using gst_base_idle_src_submit_buffer() or
+ *    gst_base_idle_src_submit_buffer_list().
+ *
+ * Optionally, the subclass can override virtual methods such as:
+ *
+ * - @get_caps, @fixate, @set_caps, @negotiate — for caps negotiation.
+ * - @decide_allocation — to customize memory allocation.
+ * - @query — to handle custom queries (e.g., latency, position).
+ * - @event — to handle upstream events such as flushes or EOS.
+ * - @alloc — to allocate output buffers.
+ *
+ * ## Live Sources
+ *
+ * Live sources are sources that produce data in real time and may discard
+ * data when paused. Typical examples are capture devices or sensors. Live
+ * sources should call gst_base_idle_src_set_live() during setup.
+ *
+ * A live source does not produce data while in the PAUSED state. The state
+ * change from READY to PAUSED will therefore return
+ * %GST_STATE_CHANGE_NO_PREROLL to indicate that no preroll data is available.
+ *
+ * When PLAYING, live sources may timestamp buffers using the current running
+ * time if gst_base_idle_src_set_do_timestamp() was enabled. This makes it
+ * easier to synchronize generated data to the pipeline clock.
+ *
+ * ## Thread Pool Management
+ *
+ * #GstBaseIdleSrc uses an internal #GstTaskPool to schedule buffer submission
+ * and auxiliary tasks. This mechanism helps to avoid the overhead of creating
+ * and destroying threads too frequently when data is submitted in rapid
+ * successions.
+ *
+ * By default, the internal pool is configured with a maximum of one thread,
+ * which provides a simple but efficient way to handle continuous or bursty
+ * submission patterns without incurring repeated thread creation and teardown
+ * costs.
+ *
+ * Applications or higher-level elements can override the default pool using
+ * gst_base_idle_src_set_thread_pool(). This allows sharing a thread pool
+ * among multiple similar slow-paced sources, reducing context-switch overhead
+ * and improving resource utilization when several sources push data at a
+ * modest rate.
+ *
+ * The currently configured thread pool can be retrieved with
+ * gst_base_idle_src_get_thread_pool().
+ *
+ * ## Example Subclass
+ *
+ * |[<!-- language="C" -->
+ * static void
+ * my_idle_src_class_init (GstMyIdleSrcClass *klass)
+ * {
+ *   GstElementClass *element_class = GST_ELEMENT_CLASS (klass);
+ *   gst_element_class_add_static_pad_template (element_class, &srctemplate);
+ *
+ *   gst_element_class_set_static_metadata (element_class,
+ *      "My Idle Source",
+ *      "Source/Push",
+ *      "Example push-mode idle source",
+ *      "Author <author@example.com>");
+ *
+ *   klass->start = GST_DEBUG_FUNCPTR (my_idle_src_start);
+ *   klass->stop = GST_DEBUG_FUNCPTR (my_idle_src_stop);
+ * }
+ *
+ * static GstFlowReturn
+ * my_idle_src_loop (GstBaseIdleSrc *src)
+ * {
+ *   GstBuffer *buffer = NULL;
+ *   gst_base_idle_src_alloc (src, FRAME_SIZE, &buffer);
+ *   // Fill buffer data
+ *   gst_base_idle_src_submit_buffer (src, buffer);
+ *   return GST_FLOW_OK;
+ * }
+ * ]|
+ *
+ * ## Threading and Data Submission
+ *
+ * Data can be produced in any thread, including one managed by a custom
+ * #GstTaskPool. Use gst_base_idle_src_set_thread_pool() to configure a
+ * task pool and gst_base_idle_src_submit_buffer() or
+ * gst_base_idle_src_submit_buffer_list() to submit data.
+ *
+ * ## Notes
+ *
+ * - Only one source pad named "src" is supported.
+ * - Only push-mode operation is possible.
+ * - Pull-mode functions (e.g., create/getrange) are not implemented.
+ * - gst_base_idle_src_set_format() defines the active #GstFormat used for
+ *   segments and events.
+ * - Subclasses should avoid blocking indefinitely in @start or @stop, as these
+ *   are called during state changes.
+ *
+ * ## Typical Use Cases
+ *
+ * - Synthetic or idle data generators
+ * - Real-time data capture devices
+ * - Streaming relays or adapters that push data from another thread
+ * - Sources that wrap asynchronous external APIs or IO loops
+ *
  */
-
 #ifdef HAVE_CONFIG_H
 #  include "config.h"
 #endif
 
-#include <stdlib.h>
 #include <string.h>
 
 #include <gst/gst_private.h>
@@ -70,10 +200,10 @@ struct _GstBaseIdleSrcPrivate
 {
   /* if a stream-start event should be sent */
   gboolean stream_start_pending;        /* STREAM_LOCK */
-
   /* if segment should be sent and a
    * seqnum if it was originated by a seek */
   gboolean segment_pending;     /* OBJECT_LOCK */
+  gboolean do_timestamp;        /* OBJECT_LOCK */
   guint32 segment_seqnum;       /* OBJECT_LOCK */
 
   /* startup latency is the time it takes between going to PLAYING and producing
@@ -83,24 +213,21 @@ struct _GstBaseIdleSrcPrivate
   /* timestamp offset, this is the offset add to the values of gst_times for
    * pseudo live sources */
   GstClockTimeDiff ts_offset;   /* OBJECT_LOCK */
-
-  gboolean do_timestamp;        /* OBJECT_LOCK */
-
-  /* QoS *//* with LOCK */
+  /* QoS */
   gdouble proportion;           /* OBJECT_LOCK */
   GstClockTime earliest_time;   /* OBJECT_LOCK */
 
-  GstBufferPool *pool;          /* OBJECT_LOCK */
+  GstBufferPool *buf_pool;      /* OBJECT_LOCK */
   GstAllocator *allocator;      /* OBJECT_LOCK */
-  GstAllocationParams params;   /* OBJECT_LOCK */
-
   GQueue *obj_queue;
-  GThread *thread;
+  gpointer thread_handle;
+  GstTaskPool *thread_pool;     /* OBJECT_LOCK */
+
+  GstAllocationParams params;   /* OBJECT_LOCK */
 };
 
 static GstElementClass *parent_class = NULL;
 static gint private_offset = 0;
-
 
 static void gst_base_idle_src_start_task (GstBaseIdleSrc * src, gboolean wait);
 static void gst_base_idle_src_process_object_queue (GstBaseIdleSrc * src);
@@ -111,17 +238,13 @@ gst_base_idle_src_get_instance_private (GstBaseIdleSrc * self)
   return (G_STRUCT_MEMBER_P (self, private_offset));
 }
 
-/* TODO: do we support anything other than _BUFFER/_BYTES ? */
 /**
  * gst_base_idle_src_set_format:
  * @src: base source instance
  * @format: the format to use
  *
  * Sets the default format of the source. This will be the format used
- * for sending SEGMENT events and for performing seeks.
- *
- * If a format of GST_FORMAT_BYTES is set, the element will be able to
- * operate in pull mode if the #GstBaseIdleSrcClass::is_seekable returns %TRUE.
+ * for sending SEGMENT events.
  *
  * This function must only be called in states < %GST_STATE_PAUSED.
  */
@@ -130,6 +253,8 @@ gst_base_idle_src_set_format (GstBaseIdleSrc * src, GstFormat format)
 {
   g_return_if_fail (GST_IS_BASE_IDLE_SRC (src));
   g_return_if_fail (GST_STATE (src) <= GST_STATE_READY);
+  g_return_if_fail (GST_FORMAT_BUFFERS == format || GST_FORMAT_BYTES == format
+      || GST_FORMAT_TIME == format);
 
   GST_OBJECT_LOCK (src);
   gst_segment_init (&src->segment, format);
@@ -228,59 +353,6 @@ gst_base_idle_src_get_do_timestamp (GstBaseIdleSrc * src)
   return res;
 }
 
-/**
- * gst_base_idle_src_new_segment:
- * @src: a #GstBaseIdleSrc
- * @segment: a pointer to a #GstSegment
- *
- * Prepare a new segment for emission downstream. This function must
- * only be called by derived sub-classes, and only from the #GstBaseIdleSrcClass::create function,
- * as the stream-lock needs to be held.
- *
- * The format for the @segment must be identical with the current format
- * of the source, as configured with gst_base_idle_src_set_format().
- *
- * The format of @src must not be %GST_FORMAT_UNDEFINED and the format
- * should be configured via gst_base_idle_src_set_format() before calling this method.
- *
- * Returns: %TRUE if preparation of new segment succeeded.
- *
- * Since: 1.18
- */
-gboolean
-gst_base_idle_src_new_segment (GstBaseIdleSrc * src, const GstSegment * segment)
-{
-  g_return_val_if_fail (GST_IS_BASE_IDLE_SRC (src), FALSE);
-  g_return_val_if_fail (segment != NULL, FALSE);
-
-  GST_OBJECT_LOCK (src);
-
-  if (src->segment.format == GST_FORMAT_UNDEFINED) {
-    /* subclass must set valid format before calling this method */
-    GST_WARNING_OBJECT (src, "segment format is not configured yet, ignore");
-    GST_OBJECT_UNLOCK (src);
-    return FALSE;
-  }
-
-  if (src->segment.format != segment->format) {
-    GST_WARNING_OBJECT (src, "segment format mismatched, ignore");
-    GST_OBJECT_UNLOCK (src);
-    return FALSE;
-  }
-
-  gst_segment_copy_into (segment, &src->segment);
-
-  /* Mark pending segment. Will be sent before next data */
-  src->priv->segment_pending = TRUE;
-  src->priv->segment_seqnum = gst_util_seqnum_next ();
-
-  GST_DEBUG_OBJECT (src, "Starting new segment %" GST_SEGMENT_FORMAT, segment);
-
-  GST_OBJECT_UNLOCK (src);
-
-  return TRUE;
-}
-
 static void
 gst_base_idle_src_queue_object (GstBaseIdleSrc * src, GstMiniObject * obj)
 {
@@ -317,7 +389,6 @@ gst_base_idle_src_set_caps (GstBaseIdleSrc * src, GstCaps * caps)
   } else {
     if (bclass->set_caps)
       res = bclass->set_caps (src, caps);
-
     if (res) {
       gst_base_idle_src_queue_object (src,
           (GstMiniObject *) gst_event_new_caps (caps));
@@ -612,16 +683,16 @@ static void
 gst_base_idle_src_set_pool_flushing (GstBaseIdleSrc * src, gboolean flushing)
 {
   GstBaseIdleSrcPrivate *priv = src->priv;
-  GstBufferPool *pool;
+  GstBufferPool *buf_pool;
 
   GST_OBJECT_LOCK (src);
-  if ((pool = priv->pool))
-    pool = gst_object_ref (pool);
+  if ((buf_pool = priv->buf_pool))
+    buf_pool = gst_object_ref (buf_pool);
   GST_OBJECT_UNLOCK (src);
 
-  if (pool) {
-    gst_buffer_pool_set_flushing (pool, flushing);
-    gst_object_unref (pool);
+  if (buf_pool) {
+    gst_buffer_pool_set_flushing (buf_pool, flushing);
+    gst_object_unref (buf_pool);
   }
 }
 
@@ -709,7 +780,6 @@ gst_base_idle_src_update_qos (GstBaseIdleSrc * src,
   src->priv->earliest_time = timestamp + diff;
   GST_OBJECT_UNLOCK (src);
 }
-
 
 static gboolean
 gst_base_idle_src_default_event (GstBaseIdleSrc * src, GstEvent * event)
@@ -809,28 +879,28 @@ gst_base_idle_src_get_property (GObject * object, guint prop_id, GValue * value,
 
 static gboolean
 gst_base_idle_src_set_allocation (GstBaseIdleSrc * src,
-    GstBufferPool * pool, GstAllocator * allocator,
+    GstBufferPool * buf_pool, GstAllocator * allocator,
     const GstAllocationParams * params)
 {
-  GstAllocator *oldalloc;
-  GstBufferPool *oldpool;
+  GstAllocator *old_alloc;
+  GstBufferPool *old_buf_pool;
   GstBaseIdleSrcPrivate *priv = src->priv;
 
-  if (pool) {
-    GST_DEBUG_OBJECT (src, "activate pool");
-    if (!gst_buffer_pool_set_active (pool, TRUE))
+  if (buf_pool) {
+    GST_DEBUG_OBJECT (src, "activate buffer pool");
+    if (!gst_buffer_pool_set_active (buf_pool, TRUE))
       goto activate_failed;
   }
 
   GST_OBJECT_LOCK (src);
-  oldpool = priv->pool;
-  priv->pool = pool;
+  old_buf_pool = priv->buf_pool;
+  priv->buf_pool = buf_pool;
 
-  oldalloc = priv->allocator;
+  old_alloc = priv->allocator;
   priv->allocator = allocator;
 
-  if (priv->pool)
-    gst_object_ref (priv->pool);
+  if (priv->buf_pool)
+    gst_object_ref (priv->buf_pool);
   if (priv->allocator)
     gst_object_ref (priv->allocator);
 
@@ -840,16 +910,16 @@ gst_base_idle_src_set_allocation (GstBaseIdleSrc * src,
     gst_allocation_params_init (&priv->params);
   GST_OBJECT_UNLOCK (src);
 
-  if (oldpool) {
+  if (old_buf_pool) {
     /* only deactivate if the pool is not the one we're using */
-    if (oldpool != pool) {
+    if (old_buf_pool != buf_pool) {
       GST_DEBUG_OBJECT (src, "deactivate old pool");
-      gst_buffer_pool_set_active (oldpool, FALSE);
+      gst_buffer_pool_set_active (old_buf_pool, FALSE);
     }
-    gst_object_unref (oldpool);
+    gst_object_unref (old_buf_pool);
   }
-  if (oldalloc) {
-    gst_object_unref (oldalloc);
+  if (old_alloc) {
+    gst_object_unref (old_alloc);
   }
   return TRUE;
 
@@ -866,7 +936,7 @@ gst_base_idle_src_decide_allocation_default (GstBaseIdleSrc * src,
     GstQuery * query)
 {
   GstCaps *outcaps;
-  GstBufferPool *pool;
+  GstBufferPool *buf_pool;
   guint size, min, max;
   GstAllocator *allocator;
   GstAllocationParams params;
@@ -888,40 +958,41 @@ gst_base_idle_src_decide_allocation_default (GstBaseIdleSrc * src,
   }
 
   if (gst_query_get_n_allocation_pools (query) > 0) {
-    gst_query_parse_nth_allocation_pool (query, 0, &pool, &size, &min, &max);
+    gst_query_parse_nth_allocation_pool (query, 0, &buf_pool, &size, &min,
+        &max);
 
-    if (pool == NULL) {
+    if (buf_pool == NULL) {
       /* no pool, we can make our own */
-      GST_DEBUG_OBJECT (src, "no pool, making new pool");
-      pool = gst_buffer_pool_new ();
+      GST_DEBUG_OBJECT (src, "no buffer pool, making new one");
+      buf_pool = gst_buffer_pool_new ();
     }
   } else {
-    pool = NULL;
+    buf_pool = NULL;
     size = min = max = 0;
   }
 
   /* now configure */
-  if (pool) {
-    config = gst_buffer_pool_get_config (pool);
+  if (buf_pool) {
+    config = gst_buffer_pool_get_config (buf_pool);
     gst_buffer_pool_config_set_params (config, outcaps, size, min, max);
     gst_buffer_pool_config_set_allocator (config, allocator, &params);
 
     /* buffer pool may have to do some changes */
-    if (!gst_buffer_pool_set_config (pool, config)) {
-      config = gst_buffer_pool_get_config (pool);
+    if (!gst_buffer_pool_set_config (buf_pool, config)) {
+      config = gst_buffer_pool_get_config (buf_pool);
 
       /* If change are not acceptable, fallback to generic pool */
       if (!gst_buffer_pool_config_validate_params (config, outcaps, size, min,
               max)) {
-        GST_DEBUG_OBJECT (src, "unsupported pool, making new pool");
+        GST_DEBUG_OBJECT (src, "unsupported buffer pool, making new one");
 
-        gst_object_unref (pool);
-        pool = gst_buffer_pool_new ();
+        gst_object_unref (buf_pool);
+        buf_pool = gst_buffer_pool_new ();
         gst_buffer_pool_config_set_params (config, outcaps, size, min, max);
         gst_buffer_pool_config_set_allocator (config, allocator, &params);
       }
 
-      if (!gst_buffer_pool_set_config (pool, config))
+      if (!gst_buffer_pool_set_config (buf_pool, config))
         goto config_failed;
     }
   }
@@ -933,9 +1004,9 @@ gst_base_idle_src_decide_allocation_default (GstBaseIdleSrc * src,
   if (allocator)
     gst_object_unref (allocator);
 
-  if (pool) {
-    gst_query_set_nth_allocation_pool (query, 0, pool, size, min, max);
-    gst_object_unref (pool);
+  if (buf_pool) {
+    gst_query_set_nth_allocation_pool (query, 0, buf_pool, size, min, max);
+    gst_object_unref (buf_pool);
   }
 
   return TRUE;
@@ -944,7 +1015,7 @@ config_failed:
   GST_ELEMENT_ERROR (src, RESOURCE, SETTINGS,
       ("Failed to configure the buffer pool"),
       ("Configuration is most likely invalid, please report this issue."));
-  gst_object_unref (pool);
+  gst_object_unref (buf_pool);
   return FALSE;
 }
 
@@ -954,7 +1025,7 @@ gst_base_idle_src_prepare_allocation (GstBaseIdleSrc * src, GstCaps * caps)
   GstBaseIdleSrcClass *bclass;
   gboolean result = TRUE;
   GstQuery *query;
-  GstBufferPool *pool = NULL;
+  GstBufferPool *buf_pool = NULL;
   GstAllocator *allocator = NULL;
   GstAllocationParams params;
 
@@ -988,14 +1059,14 @@ gst_base_idle_src_prepare_allocation (GstBaseIdleSrc * src, GstCaps * caps)
   }
 
   if (gst_query_get_n_allocation_pools (query) > 0)
-    gst_query_parse_nth_allocation_pool (query, 0, &pool, NULL, NULL, NULL);
+    gst_query_parse_nth_allocation_pool (query, 0, &buf_pool, NULL, NULL, NULL);
 
-  result = gst_base_idle_src_set_allocation (src, pool, allocator, &params);
+  result = gst_base_idle_src_set_allocation (src, buf_pool, allocator, &params);
 
   if (allocator)
     gst_object_unref (allocator);
-  if (pool)
-    gst_object_unref (pool);
+  if (buf_pool)
+    gst_object_unref (buf_pool);
 
   gst_query_unref (query);
 
@@ -1134,8 +1205,56 @@ gst_base_idle_src_get_buffer_pool (GstBaseIdleSrc * src)
   g_return_val_if_fail (GST_IS_BASE_IDLE_SRC (src), NULL);
 
   GST_OBJECT_LOCK (src);
-  if (src->priv->pool)
-    ret = gst_object_ref (src->priv->pool);
+  if (src->priv->buf_pool)
+    ret = gst_object_ref (src->priv->buf_pool);
+  GST_OBJECT_UNLOCK (src);
+
+  return ret;
+}
+
+/**
+ * gst_base_idle_src_set_thread_pool:
+ * @src: a #GstBaseIdleSrc
+ * @thread_pool: (transfer full): a #GstTaskPool
+ *
+ * Sets the thread pool to be used internally
+ */
+void
+gst_base_idle_src_set_thread_pool (GstBaseIdleSrc * src,
+    GstTaskPool * thread_pool)
+{
+  g_return_if_fail (GST_IS_BASE_IDLE_SRC (src));
+  g_return_if_fail (GST_IS_TASK_POOL (thread_pool));
+
+  GST_OBJECT_LOCK (src);
+  if (src->priv->thread_pool) {
+    GST_DEBUG_OBJECT (src, "Cleaning up old thread pool");
+    gst_task_pool_cleanup (src->priv->thread_pool);
+    gst_object_unref (src->priv->thread_pool);
+  }
+
+  GST_DEBUG_OBJECT (src, "Setting external thread pool %p", thread_pool);
+  src->priv->thread_pool = thread_pool;
+  GST_OBJECT_UNLOCK (src);
+}
+
+/**
+ * gst_base_idle_src_get_thread_pool:
+ * @src: a #GstBaseIdleSrc
+ *
+ * Return: (transfer full): the instance of the #GstTaskPool used
+ * by the src; unref it after usage
+ */
+GstTaskPool *
+gst_base_idle_src_get_thread_pool (GstBaseIdleSrc * src)
+{
+  GstTaskPool *ret = NULL;
+
+  g_return_val_if_fail (GST_IS_BASE_IDLE_SRC (src), NULL);
+
+  GST_OBJECT_LOCK (src);
+  if (src->priv->thread_pool)
+    ret = gst_object_ref (src->priv->thread_pool);
   GST_OBJECT_UNLOCK (src);
 
   return ret;
@@ -1192,36 +1311,60 @@ gst_base_idle_src_add_timestamp (GstBaseIdleSrc * src, GstBuffer * buf)
   GST_BUFFER_DTS (buf) = running_time;
 }
 
+static gboolean
+gst_base_idle_src_buffer_list_add_timestamp_func (GstBuffer ** buf, guint idx,
+    gpointer user_data)
+{
+  GstBaseIdleSrc *src = GST_BASE_IDLE_SRC (user_data);
+  gst_base_idle_src_add_timestamp (src, *buf);
+  return TRUE;
+}
+
 static void
 gst_base_idle_src_process_object (GstBaseIdleSrc * src, GstMiniObject * obj)
 {
+  GstFlowReturn ret = GST_FLOW_OK;
   GstPad *pad = src->srcpad;
 
   GST_PAD_STREAM_LOCK (pad);
 
   if (GST_IS_BUFFER (obj)) {
     GstBuffer *buf = GST_BUFFER_CAST (obj);
-    GstFlowReturn ret;
 
     if (src->priv->do_timestamp) {
       gst_base_idle_src_add_timestamp (src, buf);
     }
 
     GST_DEBUG_OBJECT (src, "About to push Buffer %" GST_PTR_FORMAT, buf);
-
     ret = gst_pad_push (pad, buf);
-    if (ret != GST_FLOW_OK)
-      GST_ERROR ("Got ret: %s", gst_flow_get_name (ret));
+    goto check_ret_error;
+  } else if (GST_IS_BUFFER_LIST (obj)) {
+    GstBufferList *buf_list = GST_BUFFER_LIST_CAST (obj);
+
+    if (src->priv->do_timestamp) {
+      gst_buffer_list_foreach (buf_list,
+          gst_base_idle_src_buffer_list_add_timestamp_func, src);
+    }
+
+    GST_DEBUG_OBJECT (src, "About to push BufferList %" GST_PTR_FORMAT,
+        buf_list);
+    ret = gst_pad_push_list (pad, buf_list);
+    goto check_ret_error;
   } else if (GST_IS_EVENT (obj)) {
     GstEvent *event = GST_EVENT_CAST (obj);
-    gboolean ret;
-
     GST_DEBUG_OBJECT (src, "About to push Event %" GST_PTR_FORMAT, event);
-    ret = gst_pad_push_event (pad, event);
-    if (!ret)
-      GST_ERROR ("HUUUUAA");
-  } else if (GST_IS_CAPS (obj)) {
-    GST_DEBUG_OBJECT (src, "About to push Caps %" GST_PTR_FORMAT, obj);
+    if (!gst_pad_push_event (pad, event)) {
+      GST_ELEMENT_ERROR (src, CORE, EVENT,
+          ("Failed to push event."),
+          ("failed to push event from queue during processing loop"));
+    }
+  } else {
+    GST_ERROR_OBJECT (src, "Unknown object %" GST_PTR_FORMAT " type", obj);
+  }
+
+check_ret_error:
+  if (ret != GST_FLOW_OK && ret != GST_FLOW_FLUSHING) {
+    GST_ELEMENT_FLOW_ERROR (src, ret);
   }
 
   GST_PAD_STREAM_UNLOCK (pad);
@@ -1233,7 +1376,6 @@ gst_base_idle_src_process_object_queue (GstBaseIdleSrc * src)
   GstMiniObject *obj;
   GST_OBJECT_LOCK (src);
   while ((obj = g_queue_pop_head (src->priv->obj_queue))) {
-
     GST_OBJECT_UNLOCK (src);
     gst_base_idle_src_process_object (src, obj);
     GST_OBJECT_LOCK (src);
@@ -1241,7 +1383,7 @@ gst_base_idle_src_process_object_queue (GstBaseIdleSrc * src)
   GST_OBJECT_UNLOCK (src);
 }
 
-static gpointer
+static void
 gst_base_idle_src_func (gpointer user_data)
 {
   GstBaseIdleSrc *src = GST_BASE_IDLE_SRC (user_data);
@@ -1254,29 +1396,35 @@ gst_base_idle_src_func (gpointer user_data)
       GST_ELEMENT_FLOW_ERROR (src, GST_FLOW_NOT_NEGOTIATED);
       gst_pad_push_event (src->srcpad, gst_event_new_eos ());
       GST_PAD_STREAM_UNLOCK (src->srcpad);
-      return NULL;
+      return;
     }
   }
   GST_PAD_STREAM_UNLOCK (src->srcpad);
 
   gst_base_idle_src_process_object_queue (src);
 
-  return NULL;
+  return;
 }
 
 static void
-gst_base_idle_src_start_task (GstBaseIdleSrc * src, gboolean wait)
+gst_base_idle_src_start_task (GstBaseIdleSrc * src, G_GNUC_UNUSED gboolean wait)
 {
-  GST_DEBUG_OBJECT (src, "Starting Task");
-  /* if we already have an outstanding task, join it */
-  if (src->priv->thread)
-    g_thread_join (src->priv->thread);
+  GstBaseIdleSrcPrivate *priv = src->priv;
 
-  src->priv->thread =
-      g_thread_new (GST_ELEMENT_NAME (src), gst_base_idle_src_func, src);
+  GST_DEBUG_OBJECT (src, "Starting task");
+
+  /* we don't care of previous result (if any) so simply unref the handler */
+  gst_task_pool_dispose_handle (priv->thread_pool, priv->thread_handle);
+  priv->thread_handle = NULL;
+
+  GError *error = NULL;
+  priv->thread_handle =
+      gst_task_pool_push (priv->thread_pool, gst_base_idle_src_func, src,
+      &error);
+
   if (wait) {
-    g_thread_join (src->priv->thread);
-    src->priv->thread = NULL;
+    gst_task_pool_join (priv->thread_pool, priv->thread_handle);
+    priv->thread_handle = NULL;
   }
 }
 
@@ -1359,16 +1507,15 @@ static gboolean
 gst_base_idle_src_stop (GstBaseIdleSrc * src)
 {
   GstBaseIdleSrcClass *bclass;
+  GstBaseIdleSrcPrivate *priv = src->priv;
   GstMiniObject *obj;
   gboolean result = TRUE;
 
   GST_DEBUG_OBJECT (src, "stopping source");
 
   src->running = FALSE;
-  if (src->priv->thread) {
-    g_thread_join (src->priv->thread);
-    src->priv->thread = NULL;
-  }
+  gst_task_pool_join (priv->thread_pool, priv->thread_handle);
+  priv->thread_handle = NULL;
 
   /* clean up any leftovers on the queue */
   while ((obj = g_queue_pop_head (src->priv->obj_queue))) {
@@ -1441,15 +1588,12 @@ gst_base_idle_src_activate_mode (GstPad * pad, GstObject * parent,
   return res;
 }
 
-
 /**
  * gst_base_idle_src_submit_buffer:
  * @src: a #GstBaseIdleSrc
  * @buffer: (transfer full): a #GstBuffer
  *
  * Subclasses can call this to submit a buffer to be pushed out later.
- *
- * Since: 1.22
  */
 void
 gst_base_idle_src_submit_buffer (GstBaseIdleSrc * src, GstBuffer * buffer)
@@ -1465,7 +1609,6 @@ gst_base_idle_src_submit_buffer (GstBaseIdleSrc * src, GstBuffer * buffer)
 
   gst_base_idle_src_check_pending_segment (src);
 
-  /* we need it to be writable later in get_range() where we use get_writable */
   gst_base_idle_src_queue_object (src, (GstMiniObject *) buffer);
 
   gst_base_idle_src_start_task (src, FALSE);
@@ -1477,8 +1620,6 @@ gst_base_idle_src_submit_buffer (GstBaseIdleSrc * src, GstBuffer * buffer)
  * @buffer_list: (transfer full): a #GstBufferList
  *
  * Subclasses can call this to submit a buffer list to be pushed out later.
- *
- * Since: 1.22
  */
 void
 gst_base_idle_src_submit_buffer_list (GstBaseIdleSrc * src,
@@ -1495,7 +1636,6 @@ gst_base_idle_src_submit_buffer_list (GstBaseIdleSrc * src,
 
   gst_base_idle_src_check_pending_segment (src);
 
-  /* we need it to be writable later in get_range() where we use get_writable */
   gst_base_idle_src_queue_object (src, (GstMiniObject *) buffer_list);
 
   GST_LOG_OBJECT (src, "%u buffers submitted in buffer list",
@@ -1504,38 +1644,27 @@ gst_base_idle_src_submit_buffer_list (GstBaseIdleSrc * src,
   gst_base_idle_src_start_task (src, FALSE);
 }
 
-
-/**
- * gst_base_idle_src_alloc_buffer:
- * @src: a #GstBaseIdleSrc
- * @size: a gsize with the size of the buffer
- * @buffer: (transfer full): a #GstBuffer
- *
- * Subclasses can call this to alloc a buffer.
- *
- * Since: 1.22
- */
-GstFlowReturn
-gst_base_idle_src_alloc_buffer (GstBaseIdleSrc * src,
-    gsize size, GstBuffer ** buffer)
+static GstFlowReturn
+gst_base_idle_src_default_alloc (GstBaseIdleSrc * src,
+    guint size, GstBuffer ** buffer)
 {
   GstFlowReturn ret;
   GstBaseIdleSrcPrivate *priv = src->priv;
-  GstBufferPool *pool = NULL;
+  GstBufferPool *buf_pool = NULL;
   GstAllocator *allocator = NULL;
   GstAllocationParams params;
 
   GST_OBJECT_LOCK (src);
-  if (priv->pool) {
-    pool = gst_object_ref (priv->pool);
+  if (priv->buf_pool) {
+    buf_pool = gst_object_ref (priv->buf_pool);
   } else if (priv->allocator) {
     allocator = gst_object_ref (priv->allocator);
   }
   params = priv->params;
   GST_OBJECT_UNLOCK (src);
 
-  if (pool) {
-    ret = gst_buffer_pool_acquire_buffer (pool, buffer, NULL);
+  if (buf_pool) {
+    ret = gst_buffer_pool_acquire_buffer (buf_pool, buffer, NULL);
   } else if (size != -1) {
     *buffer = gst_buffer_new_allocate (allocator, size, &params);
     if (G_UNLIKELY (*buffer == NULL))
@@ -1549,8 +1678,8 @@ gst_base_idle_src_alloc_buffer (GstBaseIdleSrc * src,
   }
 
 done:
-  if (pool)
-    gst_object_unref (pool);
+  if (buf_pool)
+    gst_object_unref (buf_pool);
   if (allocator)
     gst_object_unref (allocator);
 
@@ -1566,13 +1695,28 @@ alloc_failed:
 }
 
 static void
+gst_base_idle_src_dispose (GObject * object)
+{
+  GstBaseIdleSrc *src;
+  src = GST_BASE_IDLE_SRC (object);
+  (void) src;
+
+  G_OBJECT_CLASS (parent_class)->dispose (object);
+}
+
+static void
 gst_base_idle_src_finalize (GObject * object)
 {
   GstBaseIdleSrc *src;
   src = GST_BASE_IDLE_SRC (object);
 
   g_queue_free (src->priv->obj_queue);
-  /* FIXME: empty this queue potentially... */
+
+  if (src->priv->thread_pool) {
+    gst_task_pool_cleanup (src->priv->thread_pool);
+    gst_object_unref (src->priv->thread_pool);
+    src->priv->thread_pool = NULL;
+  }
 
   G_OBJECT_CLASS (parent_class)->finalize (object);
 }
@@ -1589,11 +1733,12 @@ gst_base_idle_src_class_init (GstBaseIdleSrcClass * klass)
   if (private_offset != 0)
     g_type_class_adjust_private_offset (klass, &private_offset);
 
-  GST_DEBUG_CATEGORY_INIT (gst_base_idle_src_debug, "idlesrc", 0,
-      "idlesrc element");
+  GST_DEBUG_CATEGORY_INIT (gst_base_idle_src_debug, "baseidlesrc", 0,
+      "base idlesrc element");
 
   parent_class = g_type_class_peek_parent (klass);
 
+  gobject_class->dispose = gst_base_idle_src_dispose;
   gobject_class->finalize = gst_base_idle_src_finalize;
   gobject_class->set_property = gst_base_idle_src_set_property;
   gobject_class->get_property = gst_base_idle_src_get_property;
@@ -1611,11 +1756,11 @@ gst_base_idle_src_class_init (GstBaseIdleSrcClass * klass)
   klass->fixate = GST_DEBUG_FUNCPTR (gst_base_idle_src_default_fixate);
   klass->query = GST_DEBUG_FUNCPTR (gst_base_idle_src_default_query);
   klass->event = GST_DEBUG_FUNCPTR (gst_base_idle_src_default_event);
+  klass->alloc = GST_DEBUG_FUNCPTR (gst_base_idle_src_default_alloc);
   klass->decide_allocation =
       GST_DEBUG_FUNCPTR (gst_base_idle_src_decide_allocation_default);
 
   /* Registering debug symbols for function pointers */
-
   GST_DEBUG_REGISTER_FUNCPTR (gst_base_idle_src_event);
   GST_DEBUG_REGISTER_FUNCPTR (gst_base_idle_src_query);
   GST_DEBUG_REGISTER_FUNCPTR (gst_base_idle_src_fixate);
@@ -1653,6 +1798,16 @@ gst_base_idle_src_init (GstBaseIdleSrc * src, gpointer g_class)
   GST_OBJECT_FLAG_SET (src, GST_ELEMENT_FLAG_SOURCE);
 
   src->priv->obj_queue = g_queue_new ();
+
+  /* Create a shared task pool as default thread pool for this base class
+   * with a default thread per pool of 1. This would be suboptimal for most
+   * cases but only be biased to very rare pushes */
+  GstTaskPool *thread_pool = gst_shared_task_pool_new ();
+  gst_shared_task_pool_set_max_threads (GST_SHARED_TASK_POOL (thread_pool), 1);
+  src->priv->thread_pool = thread_pool;
+
+  GError *error = NULL;
+  gst_task_pool_prepare (src->priv->thread_pool, &error);
 
   GST_DEBUG_OBJECT (src, "init done");
 }
