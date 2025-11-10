@@ -740,6 +740,7 @@ gst_rtp_vp8_pay_handle_buffer (GstRTPBasePayload * payload, GstBuffer * buffer)
   }
 
   mtu = GST_RTP_BASE_PAYLOAD_MTU (payload);
+  mtu -= gst_rtp_base_payload_get_extension_header_size (payload);
   vp8_hdr_len = gst_rtp_vp8_calc_header_len (self);
   max_paylen = gst_rtp_buffer_calc_payload_len (mtu - vp8_hdr_len, 0,
       gst_rtp_base_payload_get_source_count (payload, buffer));

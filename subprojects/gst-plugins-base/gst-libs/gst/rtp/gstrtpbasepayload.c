@@ -2450,3 +2450,39 @@ gst_rtp_base_payload_get_source_count (GstRTPBasePayload * payload,
 
   return count;
 }
+
+
+/**
+ * gst_rtp_base_payload_get_extension_header_size:
+ * @payload: a #GstRTPBasePayload
+ *
+ * Calculate the total size of the RTP header extensions configured on
+ * @payload, rounded up to a multiple of 4 bytes.
+ *
+ * Returns: The size in bytes of the RTP header extensions.
+ */
+gsize
+gst_rtp_base_payload_get_extension_header_size (GstRTPBasePayload * payload)
+{
+  guint unit_size = 0;
+  HeaderExt hdrext = { NULL, };
+  hdrext.payload = payload;
+  GST_OBJECT_LOCK (payload);
+  gsize extlen = payload->priv->header_exts->len;
+  g_ptr_array_foreach (payload->priv->header_exts,
+      (GFunc) determine_header_extension_flags_size, &hdrext);
+  GST_OBJECT_UNLOCK (payload);
+
+  if (hdrext.flags & GST_RTP_HEADER_EXTENSION_ONE_BYTE) {
+    unit_size = 1;
+  } else if (hdrext.flags & GST_RTP_HEADER_EXTENSION_TWO_BYTE) {
+    unit_size = 2;
+  } else {
+    unit_size = 0;
+  }
+
+  extlen = unit_size * extlen + hdrext.allocated_size;
+
+  return ((extlen / 4) + ((extlen % 4) ? 1 : 0)) * 4;
+}
+

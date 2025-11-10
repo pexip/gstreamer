@@ -192,6 +192,9 @@ GST_RTP_API
 guint           gst_rtp_base_payload_get_source_count (GstRTPBasePayload * payload,
                                                        GstBuffer * buffer);
 
+GST_RTP_API
+gsize           gst_rtp_base_payload_get_extension_header_size (GstRTPBasePayload * payload);
+
 G_DEFINE_AUTOPTR_CLEANUP_FUNC(GstRTPBasePayload, gst_object_unref)
 
 G_END_DECLS
