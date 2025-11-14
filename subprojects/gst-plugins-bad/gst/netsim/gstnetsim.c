@@ -77,6 +77,7 @@ enum
   PROP_REPLACE_DROPPED_WITH_EMPTY,
   PROP_THROTTLE_FREQUENCY,
   PROP_THROTTLE_DELAY,
+  PROP_MAX_BUFFER_SIZE,
 };
 
 /* these numbers are nothing but wild guesses and don't reflect any reality */
@@ -95,6 +96,7 @@ enum
 #define DEFAULT_REPLACE_DROPPED_WITH_EMPTY FALSE
 #define DEFAULT_THROTTLE_FREQUENCY 0
 #define DEFAULT_THROTTLE_DELAY 0
+#define DEFAULT_MAX_BUFFER_SIZE 1500
 
 static GstStaticPadTemplate gst_net_sim_sink_template =
 GST_STATIC_PAD_TEMPLATE ("sink",
@@ -573,24 +575,30 @@ gst_net_sim_chain (GstPad * pad, GstObject * parent, GstBuffer * buf)
   GstNetSim *netsim = GST_NET_SIM_CAST (parent);
   gboolean dropped = FALSE;
 
-  if (netsim->drop_packets > 0) {
-    netsim->drop_packets--;
-    GST_DEBUG_OBJECT (netsim, "Dropping packet (%d left)",
-        netsim->drop_packets);
+  if (gst_buffer_get_size (buf) > (netsim->max_buffer_size)) {
+    GST_DEBUG_OBJECT (netsim, "Buffer size %lu exceeds max buffer size %u, dropping packet",
+        gst_buffer_get_size (buf), netsim->max_buffer_size);
     dropped = TRUE;
-  } else if (netsim->drop_probability > 0
-      && g_rand_double (netsim->rand_seed) <
-      (gdouble) netsim->drop_probability) {
-    GST_DEBUG_OBJECT (netsim, "Dropping packet");
-    dropped = TRUE;
-  } else if (netsim->duplicate_probability > 0 &&
-      g_rand_double (netsim->rand_seed) <
-      (gdouble) netsim->duplicate_probability) {
-    GST_DEBUG_OBJECT (netsim, "Duplicating packet");
-    gst_net_sim_queue_buffer (netsim, buf);
-    gst_net_sim_queue_buffer (netsim, buf);
   } else {
-    gst_net_sim_queue_buffer (netsim, buf);
+    if (netsim->drop_packets > 0) {
+      netsim->drop_packets--;
+      GST_DEBUG_OBJECT (netsim, "Dropping packet (%d left)",
+          netsim->drop_packets);
+      dropped = TRUE;
+    } else if (netsim->drop_probability > 0
+        && g_rand_double (netsim->rand_seed) <
+        (gdouble) netsim->drop_probability) {
+      GST_DEBUG_OBJECT (netsim, "Dropping packet");
+      dropped = TRUE;
+    } else if (netsim->duplicate_probability > 0 &&
+        g_rand_double (netsim->rand_seed) <
+        (gdouble) netsim->duplicate_probability) {
+      GST_DEBUG_OBJECT (netsim, "Duplicating packet");
+      gst_net_sim_queue_buffer (netsim, buf);
+      gst_net_sim_queue_buffer (netsim, buf);
+    } else {
+      gst_net_sim_queue_buffer (netsim, buf);
+    }
   }
 
   if (dropped && netsim->replace_droppped_with_empty) {
@@ -743,6 +751,9 @@ gst_net_sim_set_property (GObject * object,
     case PROP_THROTTLE_DELAY:
       netsim->throttle_delay = g_value_get_int (value);
       break;
+    case PROP_MAX_BUFFER_SIZE:
+      netsim->max_buffer_size = g_value_get_uint (value);
+      break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
       break;
@@ -800,6 +811,9 @@ gst_net_sim_get_property (GObject * object,
       break;
     case PROP_THROTTLE_DELAY:
       g_value_set_int (value, netsim->throttle_delay);
+      break;
+    case PROP_MAX_BUFFER_SIZE:
+      g_value_set_uint (value, netsim->max_buffer_size);
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
@@ -917,6 +931,12 @@ gst_net_sim_class_init (GstNetSimClass * klass)
       g_param_spec_float ("duplicate-probability", "Duplicate Probability",
           "The Probability a buffer is duplicated",
           0.0, 1.0, DEFAULT_DUPLICATE_PROBABILITY,
+          G_PARAM_READWRITE | G_PARAM_CONSTRUCT | G_PARAM_STATIC_STRINGS));
+
+  g_object_class_install_property (gobject_class, PROP_MAX_BUFFER_SIZE,
+      g_param_spec_uint ("max-buffer-size", "Max Buffer Size",
+          "Maximum Transmission Unit",
+          0, 9000, DEFAULT_MAX_BUFFER_SIZE,
           G_PARAM_READWRITE | G_PARAM_CONSTRUCT | G_PARAM_STATIC_STRINGS));
 
   g_object_class_install_property (gobject_class, PROP_DROP_PACKETS,
