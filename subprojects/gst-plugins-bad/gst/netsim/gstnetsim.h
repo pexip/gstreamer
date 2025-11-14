@@ -100,6 +100,7 @@ struct _GstNetSim
   gboolean replace_droppped_with_empty;
   gint throttle_frequency;
   gint throttle_delay;
+  guint max_buffer_size;
 };
 
 struct _GstNetSimClass
