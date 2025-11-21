@@ -96,7 +96,7 @@ enum
 #define DEFAULT_REPLACE_DROPPED_WITH_EMPTY FALSE
 #define DEFAULT_THROTTLE_FREQUENCY 0
 #define DEFAULT_THROTTLE_DELAY 0
-#define DEFAULT_MAX_BUFFER_SIZE 1500
+#define DEFAULT_MAX_BUFFER_SIZE 0
 
 static GstStaticPadTemplate gst_net_sim_sink_template =
 GST_STATIC_PAD_TEMPLATE ("sink",
@@ -575,8 +575,10 @@ gst_net_sim_chain (GstPad * pad, GstObject * parent, GstBuffer * buf)
   GstNetSim *netsim = GST_NET_SIM_CAST (parent);
   gboolean dropped = FALSE;
 
-  if (gst_buffer_get_size (buf) > (netsim->max_buffer_size)) {
-    GST_DEBUG_OBJECT (netsim, "Buffer size %lu exceeds max buffer size %u, dropping packet",
+  if (netsim->max_buffer_size
+      && gst_buffer_get_size (buf) > (netsim->max_buffer_size)) {
+    GST_DEBUG_OBJECT (netsim,
+        "Buffer size %lu exceeds max buffer size %u, dropping packet",
         gst_buffer_get_size (buf), netsim->max_buffer_size);
     dropped = TRUE;
   } else {
@@ -935,8 +937,12 @@ gst_net_sim_class_init (GstNetSimClass * klass)
 
   g_object_class_install_property (gobject_class, PROP_MAX_BUFFER_SIZE,
       g_param_spec_uint ("max-buffer-size", "Max Buffer Size",
-          "Maximum Transmission Unit",
-          0, 9000, DEFAULT_MAX_BUFFER_SIZE,
+          "Maximum Transmission Unit. Buffers larger than this size will be dropped"
+          "Use it to simulate MTU limits in networks. Note! max-buffer-size is not "
+          "the same as MTU, as MTU includes headers from lower layers like Ethernet,"
+          "IP and UDP. But max-buffer-size limits the size of the payload of UDP packets."
+          "Set to 0 for unlimited.",
+          0, G_MAXUINT, DEFAULT_MAX_BUFFER_SIZE,
           G_PARAM_READWRITE | G_PARAM_CONSTRUCT | G_PARAM_STATIC_STRINGS));
 
   g_object_class_install_property (gobject_class, PROP_DROP_PACKETS,
