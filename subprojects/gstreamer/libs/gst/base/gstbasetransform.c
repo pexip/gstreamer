@@ -286,6 +286,8 @@ static GstFlowReturn gst_base_transform_getrange (GstPad * pad,
     GstObject * parent, guint64 offset, guint length, GstBuffer ** buffer);
 static GstFlowReturn gst_base_transform_chain (GstPad * pad, GstObject * parent,
     GstBuffer * buffer);
+static GstFlowReturn gst_base_transform_chain_list (GstPad * pad, GstObject * parent,
+    GstBufferList * buffers);
 static GstCaps *gst_base_transform_default_transform_caps (GstBaseTransform *
     trans, GstPadDirection direction, GstCaps * caps, GstCaps * filter);
 static GstCaps *gst_base_transform_default_fixate_caps (GstBaseTransform *
@@ -403,6 +405,8 @@ gst_base_transform_init (GstBaseTransform * trans,
       GST_DEBUG_FUNCPTR (gst_base_transform_sink_event));
   gst_pad_set_chain_function (trans->sinkpad,
       GST_DEBUG_FUNCPTR (gst_base_transform_chain));
+  gst_pad_set_chain_list_function (trans->sinkpad,
+      GST_DEBUG_FUNCPTR (gst_base_transform_chain_list));
   gst_pad_set_activatemode_function (trans->sinkpad,
       GST_DEBUG_FUNCPTR (gst_base_transform_sink_activate_mode));
   gst_pad_set_query_function (trans->sinkpad,
@@ -2335,27 +2339,22 @@ pull_error:
   }
 }
 
-/* The flow of the chain function is the reverse of the
- * getrange() function - we have data, feed it to the sub-class
- * and then iterate, pushing buffers it generates until it either
- * wants more data or returns an error */
+/* This function processes incoming data by passing it to the sub-class,
+ * then repeatedly generates and pushes output buffers (or collects them in outbufs)
+ * until more input is needed or an error occurs. This is the opposite flow of getrange(). */
 static GstFlowReturn
-gst_base_transform_chain (GstPad * pad, GstObject * parent, GstBuffer * buffer)
+gst_base_transform_process_buffer (GstBaseTransform *trans, GstBuffer * buffer, GstBufferList * outbufs)
 {
-  GstBaseTransform *trans = GST_BASE_TRANSFORM_CAST (parent);
+  GstClockTime timestamp, duration;
   GstBaseTransformClass *klass = GST_BASE_TRANSFORM_GET_CLASS (trans);
   GstBaseTransformPrivate *priv = trans->priv;
-  GstFlowReturn ret;
   GstClockTime position = GST_CLOCK_TIME_NONE;
-  GstClockTime timestamp, duration;
-  GstBuffer *outbuf = NULL;
-
-  PRIV_LOCK (trans);
+  GstFlowReturn ret = GST_FLOW_OK;
 
   timestamp = GST_BUFFER_TIMESTAMP (buffer);
   duration = GST_BUFFER_DURATION (buffer);
 
-  /* calculate end position of the incoming buffer */
+  /* calculate end position of the buffer */
   if (timestamp != GST_CLOCK_TIME_NONE) {
     if (duration != GST_CLOCK_TIME_NONE)
       position = timestamp + duration;
@@ -2363,27 +2362,24 @@ gst_base_transform_chain (GstPad * pad, GstObject * parent, GstBuffer * buffer)
       position = timestamp;
   }
 
-  if (klass->before_transform)
+  if (klass->before_transform) {
+    PRIV_LOCK (trans);
     klass->before_transform (trans, buffer);
+    PRIV_UNLOCK (trans);
+  }
 
   /* Set discont flag so we can mark the outgoing buffer */
   if (GST_BUFFER_IS_DISCONT (buffer)) {
     GST_DEBUG_OBJECT (trans, "got DISCONT buffer %p", buffer);
     priv->discont = TRUE;
   }
-
   /* Takes ownership of input buffer */
-  PRIV_UNLOCK (trans);
   ret = klass->submit_input_buffer (trans, priv->discont, buffer);
-  PRIV_LOCK (trans);
-  if (ret != GST_FLOW_OK)
-    goto done;
 
-  do {
-    outbuf = NULL;
-
+  while (ret == GST_FLOW_OK) {
+    GstBuffer * outbuf = NULL;
+    PRIV_LOCK (trans);
     ret = klass->generate_output (trans, &outbuf);
-
     PRIV_UNLOCK (trans);
 
     /* outbuf can be NULL, this means a dropped buffer, if we have a buffer but
@@ -2399,20 +2395,22 @@ gst_base_transform_chain (GstPad * pad, GstObject * parent, GstBuffer * buffer)
 
         if (GST_BUFFER_TIMESTAMP_IS_VALID (outbuf)) {
           position_out = GST_BUFFER_TIMESTAMP (outbuf);
-          if (GST_BUFFER_DURATION_IS_VALID (outbuf))
+          if (GST_BUFFER_DURATION_IS_VALID (outbuf)) {
             position_out += GST_BUFFER_DURATION (outbuf);
+          }
         } else if (position != GST_CLOCK_TIME_NONE) {
           position_out = position;
         }
-        if (position_out != GST_CLOCK_TIME_NONE
-            && trans->segment.format == GST_FORMAT_TIME)
+        if (position_out != GST_CLOCK_TIME_NONE &&
+           trans->segment.format == GST_FORMAT_TIME) {
           priv->position_out = position_out;
+        }
 
-        /* apply DISCONT flag if the buffer is not yet marked as such */
-        if (trans->priv->discont) {
-          GST_DEBUG_OBJECT (trans, "we have a pending DISCONT");
+        if (priv->discont) {
+          /* apply DISCONT flag if the buffer is not yet marked as such */
+          GST_DEBUG_OBJECT (trans, "pending DISCONT");
           if (!GST_BUFFER_IS_DISCONT (outbuf)) {
-            GST_DEBUG_OBJECT (trans, "marking DISCONT on output buffer");
+            GST_DEBUG_OBJECT (trans, "setting DISCONT on output buffer");
             outbuf = gst_buffer_make_writable (outbuf);
             GST_BUFFER_FLAG_SET (outbuf, GST_BUFFER_FLAG_DISCONT);
           }
@@ -2420,23 +2418,61 @@ gst_base_transform_chain (GstPad * pad, GstObject * parent, GstBuffer * buffer)
         }
         priv->processed++;
 
-        ret = gst_pad_push (trans->srcpad, outbuf);
+        if (outbufs) {
+          gst_buffer_list_add (outbufs, outbuf);
+        } else {
+          ret = gst_pad_push (trans->srcpad, outbuf);
+        }
       } else {
         GST_DEBUG_OBJECT (trans, "we got return %s", gst_flow_get_name (ret));
         gst_buffer_unref (outbuf);
       }
+    } else {
+      break; /* no more output buffers */
     }
-    PRIV_LOCK (trans);
-  } while (ret == GST_FLOW_OK && outbuf != NULL);
-
-done:
-  PRIV_UNLOCK (trans);
+  } // end while
 
   /* convert internal flow to OK and mark discont for the next buffer. */
   if (ret == GST_BASE_TRANSFORM_FLOW_DROPPED) {
     GST_DEBUG_OBJECT (trans, "dropped a buffer, marking DISCONT");
     priv->discont = TRUE;
     ret = GST_FLOW_OK;
+  }
+  return ret;
+}
+
+/* This function processes a single incoming buffer by passing it to the
+ * sub-class, then pushes all of them one by one. */
+static GstFlowReturn
+gst_base_transform_chain (GstPad * pad, GstObject * parent, GstBuffer * buffer)
+{
+  return gst_base_transform_process_buffer (GST_BASE_TRANSFORM_CAST (parent), buffer, NULL);
+}
+
+/* This function processes a list of incoming buffers by passing them to the
+ * sub-class, then collects all output buffers in outbufs and pushes them at once
+ * as a BufferList. */
+static GstFlowReturn
+gst_base_transform_chain_list (GstPad *pad, GstObject *parent,
+    GstBufferList *buffers)
+{
+  GstBaseTransform *trans = GST_BASE_TRANSFORM_CAST (parent);
+  GstFlowReturn ret = GST_FLOW_OK;
+  GstBufferList *outbufs = gst_buffer_list_new ();
+
+  while (gst_buffer_list_length (buffers) && ret == GST_FLOW_OK) {
+    GstBuffer *buffer = gst_buffer_ref (gst_buffer_list_get (buffers, 0));
+    gst_buffer_list_remove (buffers, 0, 1);
+
+    ret = gst_base_transform_process_buffer (trans, buffer, outbufs);
+  }
+  gst_buffer_list_unref (buffers);
+
+  /* push all output buffers at once */
+  if (ret == GST_FLOW_OK && gst_buffer_list_length (outbufs) > 0) {
+    ret = gst_pad_push_list (trans->srcpad, outbufs);
+  } else {
+    gst_buffer_list_unref (outbufs);
   }
 
   return ret;
