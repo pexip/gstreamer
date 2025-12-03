@@ -1900,6 +1900,7 @@ not_in_bin:
     GST_OBJECT_UNLOCK (bin);
     GST_WARNING_OBJECT (bin, "Element '%s' is not in bin", elem_name);
     g_free (elem_name);
+    g_assert_not_reached ();
     return FALSE;
   }
 }
