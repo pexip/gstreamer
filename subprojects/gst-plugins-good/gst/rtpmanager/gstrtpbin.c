@@ -2375,8 +2375,10 @@ free_stream (GstRtpBinStream * stream, GstRtpBin * bin)
   gst_element_set_state (buffer, GST_STATE_NULL);
   if (demux)
     gst_element_set_state (demux, GST_STATE_NULL);
-
-  gst_bin_remove (GST_BIN_CAST (bin), buffer);
+  
+  /* only call gst_bin_remove on the jitterbuffer once */
+  if (find)
+    gst_bin_remove (GST_BIN_CAST (bin), buffer);
   if (demux)
     gst_bin_remove (GST_BIN_CAST (bin), demux);
 
