@@ -1302,6 +1302,9 @@ GST_START_TEST (test_ignore_suspicious_bye)
   g_signal_connect (h->session, "notify::stats",
       G_CALLBACK (suspicious_bye_cb), &cb_called);
 
+  /* push latency or the RTPSource won't be ready to produce RTCP */
+  gst_harness_push_upstream_event (h->send_rtp_h, gst_event_new_latency (0));
+
   /* Push RTP buffer making our internal SSRC=0xDEADBEEF */
   fail_unless_equals_int (GST_FLOW_OK,
       session_harness_send_rtp (h, generate_test_buffer (0, 0xDEADBEEF)));
@@ -5784,7 +5787,7 @@ GST_START_TEST (test_twcc_feedback_wraparound)
 
 GST_END_TEST;
 
-GArray *
+static GArray *
 cook_fci (const guint16 base_seqnum, const guint8 counter,
     const gsize len, gboolean received)
 {
@@ -5814,11 +5817,11 @@ GST_START_TEST (test_twcc_reordered_feedback)
 
   GArray *fci[] = {
     cook_fci (BASE_SEQNUM, 0, 8, TRUE), /* received 0 7 */
-    cook_fci (BASE_SEQNUM + 16, 1, 8, FALSE),   /* lost 16 23 */
-    cook_fci (BASE_SEQNUM + 32, 2, 8, FALSE),   /* lost 32 39 */
-    cook_fci (BASE_SEQNUM + 8, 3, 8, TRUE),     /* received 8 15 */
-    cook_fci (BASE_SEQNUM + 16, 4, 8, TRUE),    /* received 16 23 */
-    cook_fci (BASE_SEQNUM + 24, 5, 16, TRUE)    /* received 24 39 */
+    cook_fci (BASE_SEQNUM + 16, 2, 8, FALSE),   /* lost 16 23 */
+    cook_fci (BASE_SEQNUM + 32, 4, 8, FALSE),   /* lost 32 39 */
+    cook_fci (BASE_SEQNUM + 8, 1, 8, TRUE),     /* received 8 15 */
+    cook_fci (BASE_SEQNUM + 16, 2, 8, TRUE),    /* received 16 23 */
+    cook_fci (BASE_SEQNUM + 24, 3, 16, TRUE)    /* received 24 39 */
   };
 
   session_harness_add_twcc_caps_for_pt (h, TEST_BUF_PT);
@@ -5837,7 +5840,11 @@ GST_START_TEST (test_twcc_reordered_feedback)
   twcc_stats = session_harness_get_twcc_stats_full (h,
       nbuffs * TEST_BUF_DURATION, 0);
 
-  twcc_verify_stats (twcc_stats, 532800, 1298700, nbuffs, nbuffs, 0.f, 0);
+  /* Reception timestamp delta is not transmitted in this test, so TWCC statistics
+   * assumes remote duration to be equal the local duration, then bitrates become 
+   * equal.
+   */
+  twcc_verify_stats (twcc_stats, 532800, 532800, nbuffs, nbuffs, 0.f, 0);
   gst_structure_free (twcc_stats);
 
   session_harness_free (h);

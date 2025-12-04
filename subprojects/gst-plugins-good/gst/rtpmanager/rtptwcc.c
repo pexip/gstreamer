@@ -65,6 +65,10 @@ typedef enum
   RTP_TWCC_PACKET_STATUS_NOT_RECV = 0,
   RTP_TWCC_PACKET_STATUS_SMALL_DELTA = 1,
   RTP_TWCC_PACKET_STATUS_LARGE_NEGATIVE_DELTA = 2,
+  /* Packet is reported to be receieved but
+   * no delta is provided in the current feedback packet
+   * */
+  RTP_TWCC_PACKET_STATUS_NO_DELTA = 3,
 } RTPTWCCPacketStatus;
 
 typedef struct
@@ -91,21 +95,21 @@ typedef struct
   gboolean lost;
   gint redundant_idx;           /* if it's redudndant packet -- series number in a block,
                                    -1 otherwise */
-  gint redundant_num;           /* if it'r a redundant packet -- how many packets are 
+  gint redundant_num;           /* if it'r a redundant packet -- how many packets are
                                    in the block, -1 otherwise */
   guint32 protects_ssrc;        /* for redundant packets: SSRC of the data stream */
 
-  /* For redundant packets: seqnums of the packets being protected 
-   * by this packet. 
+  /* For redundant packets: seqnums of the packets being protected
+   * by this packet.
    * IMPORTANT: Once the packet is checked in before transmission, this array
    * contains rtp seqnums. After receiving a feedback on the packet, the array
-   * is converted to TWCC seqnums. This is done to shift some work to the 
+   * is converted to TWCC seqnums. This is done to shift some work to the
    * get_windowed_stats function, which should be less time-critical.
    */
   GArray *protects_seqnums;
   gboolean stats_processed;
 
-  TWCCPktState state;
+  TWCCPktState status;
   gint update_stats;
 } SentPacket;
 
@@ -278,8 +282,8 @@ rtp_twcc_manager_set_mtu (RTPTWCCManager * twcc, guint mtu)
   twcc->mtu = mtu;
 
   /* the absolute worst case is that 7 packets uses
-     header (4 * 4 * 4) 32 bytes) and 
-     packet_chunk 2 bytes +  
+     header (4 * 4 * 4) 32 bytes) and
+     packet_chunk 2 bytes +
      recv_deltas (2 * 7) 14 bytes */
   twcc->max_packets_per_rtcp = ((twcc->mtu - 32) * 7) / (2 + 14);
 }
@@ -353,7 +357,7 @@ _get_twcc_buffer_ext_data (GstRTPBuffer * rtpbuf, guint8 ext_id)
 
 /**
   * Set TWCC seqnum and remember the packet for statistics.
-  * 
+  *
   * Fill in SentPacket structure with the seqnum and the packet info,
   * and add it to the sent_packets queue, which is used by the statistics thread
   *
@@ -1263,9 +1267,27 @@ rtp_twcc_manager_parse_fci (RTPTWCCManager * twcc,
     }
 
     if (pkt->status != RTP_TWCC_PACKET_STATUS_NOT_RECV) {
-      delta_ts = delta * DELTA_UNIT;
-      ts_rounded += delta_ts;
-      pkt->remote_ts = ts_rounded;
+      /* https://datatracker.ietf.org/doc/html/draft-holmer-rmcat-transport-wide-cc-extensions-01
+       * Though status 3 is labeld as [Reserved] in 3.1.1, in the following text it is
+       * treated more explicitly:
+       * Example 2:
+       *
+       *     0                   1
+       *     0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5
+       *     +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+       *     |0|1 1|0 0 0 0 0 0 0 0 1 1 0 0 0|
+       *     +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+       *
+       * This is a run of the "packet received, w/o recv delta" status of
+       * length 24.
+       */
+      if (pkt->status != RTP_TWCC_PACKET_STATUS_NO_DELTA) {
+        delta_ts = delta * DELTA_UNIT;
+        ts_rounded += delta_ts;
+        pkt->remote_ts = ts_rounded;
+      } else {
+        pkt->remote_ts = GST_CLOCK_TIME_NONE;
+      }
 
       GST_DEBUG_OBJECT (twcc, "pkt: #%u, remote_ts: %" GST_TIME_FORMAT
           " delta_ts: %" GST_STIME_FORMAT
