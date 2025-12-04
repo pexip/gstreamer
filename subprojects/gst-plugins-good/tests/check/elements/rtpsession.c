@@ -461,7 +461,7 @@ session_harness_force_key_unit (SessionHarness * h,
   GstClockTime running_time = GST_CLOCK_TIME_NONE;
   gboolean all_headers = TRUE;
 
-  GstStructure *s = gst_structure_new ("GstForceKeyUnit",
+  GstStructure *s = gst_structure_new_static_str ("GstForceKeyUnit",
       "running-time", GST_TYPE_CLOCK_TIME, running_time,
       "all-headers", G_TYPE_BOOLEAN, all_headers,
       "count", G_TYPE_UINT, count,
@@ -470,9 +470,9 @@ session_harness_force_key_unit (SessionHarness * h,
       NULL);
 
   if (reqid)
-    gst_structure_set (s, "reqid", G_TYPE_INT, *reqid, NULL);
+    gst_structure_set_static_str (s, "reqid", G_TYPE_INT, *reqid, NULL);
   if (sfr)
-    gst_structure_set (s, "sfr", G_TYPE_UINT64, *sfr, NULL);
+    gst_structure_set_static_str (s, "sfr", G_TYPE_UINT64, *sfr, NULL);
 
   gst_harness_push_upstream_event (h->recv_rtp_h,
       gst_event_new_custom (GST_EVENT_CUSTOM_UPSTREAM, s));
@@ -484,7 +484,7 @@ session_harness_rtp_retransmission_request (SessionHarness * h,
 {
   GstClockTime running_time = GST_CLOCK_TIME_NONE;
 
-  GstStructure *s = gst_structure_new ("GstRTPRetransmissionRequest",
+  GstStructure *s = gst_structure_new_static_str ("GstRTPRetransmissionRequest",
       "running-time", GST_TYPE_CLOCK_TIME, running_time,
       "ssrc", G_TYPE_UINT, ssrc,
       "seqnum", G_TYPE_UINT, seqnum,
@@ -692,6 +692,9 @@ GST_START_TEST (test_no_rbs_for_internal_senders)
   GHashTable *sr_ssrcs;
   GHashTable *rb_ssrcs, *tmp_set;
 
+  /* push latency or the RTPSource won't be ready to produce RTCP */
+  gst_harness_push_upstream_event (h->send_rtp_h, gst_event_new_latency (0));
+
   /* Push RTP from our send SSRCs */
   for (j = 0; j < 5; j++) {     /* packets per ssrc */
     for (k = 0; k < 2; k++) {   /* number of ssrcs */
@@ -827,6 +830,9 @@ GST_START_TEST (test_internal_sources_timeout)
     res = session_harness_recv_rtp (h, buf);
     fail_unless_equals_int (GST_FLOW_OK, res);
   }
+
+  /* push latency or the RTPSource won't be ready to produce RTCP */
+  gst_harness_push_upstream_event (h->send_rtp_h, gst_event_new_latency (0));
 
   /* verify that rtpsession has sent RR for an internally-created
    * RTPSource that is using the internal-ssrc */
@@ -1218,6 +1224,9 @@ GST_START_TEST (test_dont_lock_on_stats)
   g_signal_connect (h->session, "notify::stats",
       G_CALLBACK (stats_test_cb), &cb_called);
 
+  /* push latency or the RTPSource won't be ready to produce RTCP */
+  gst_harness_push_upstream_event (h->send_rtp_h, gst_event_new_latency (0));
+
   /* Push RTP buffer to make sure RTCP-thread have started */
   fail_unless_equals_int (GST_FLOW_OK,
       session_harness_send_rtp (h, generate_test_buffer (0, 0xDEADBEEF)));
@@ -1300,6 +1309,9 @@ GST_START_TEST (test_ignore_suspicious_bye)
   /* connect to the stats-reporting */
   g_signal_connect (h->session, "notify::stats",
       G_CALLBACK (suspicious_bye_cb), &cb_called);
+
+  /* push latency or the RTPSource won't be ready to produce RTCP */
+  gst_harness_push_upstream_event (h->send_rtp_h, gst_event_new_latency (0));
 
   /* Push RTP buffer making our internal SSRC=0xDEADBEEF */
   fail_unless_equals_int (GST_FLOW_OK,
@@ -2486,7 +2498,7 @@ GST_START_TEST (test_change_sent_sdes)
   /* and that no RTCP has been pushed */
   fail_unless_equals_int (0, gst_harness_buffers_in_queue (h->rtcp_h));
 
-  s = gst_structure_new ("application/x-rtp-source-sdes",
+  s = gst_structure_new_static_str ("application/x-rtp-source-sdes",
       "other", G_TYPE_STRING, "first", NULL);
   g_object_set (h->internal_session, "sdes", s, NULL);
   gst_structure_free (s);
@@ -2505,7 +2517,7 @@ GST_START_TEST (test_change_sent_sdes)
   gst_buffer_unref (buf);
 
   /* Change the SDES */
-  s = gst_structure_new ("application/x-rtp-source-sdes",
+  s = gst_structure_new_static_str ("application/x-rtp-source-sdes",
       "other", G_TYPE_STRING, "second", NULL);
   g_object_set (h->internal_session, "sdes", s, NULL);
   gst_structure_free (s);
@@ -2742,7 +2754,8 @@ GST_START_TEST (test_request_nack_surplus)
 
   /* sdes cname has variable size, fix it */
   g_object_get (h->internal_session, "sdes", &sdes, NULL);
-  gst_structure_set (sdes, "cname", G_TYPE_STRING, "user@test", NULL);
+  gst_structure_set_static_str (sdes, "cname", G_TYPE_STRING, "user@test",
+      NULL);
   g_object_set (h->internal_session, "sdes", sdes, NULL);
   gst_structure_free (sdes);
 
@@ -2941,6 +2954,9 @@ GST_START_TEST (test_disable_sr_timestamp)
   guint32 rtptime;
 
   g_object_set (h->internal_session, "disable-sr-timestamp", TRUE, NULL);
+
+  /* push latency or the RTPSource won't be ready to produce RTCP */
+  gst_harness_push_upstream_event (h->send_rtp_h, gst_event_new_latency (0));
 
   /* Push RTP buffer to make sure RTCP-thread have started */
   fail_unless_equals_int (GST_FLOW_OK,
@@ -5783,7 +5799,7 @@ GST_START_TEST (test_twcc_feedback_wraparound)
 
 GST_END_TEST;
 
-GArray *
+static GArray *
 cook_fci (const guint16 base_seqnum, const guint8 counter,
     const gsize len, gboolean received)
 {
@@ -5813,11 +5829,11 @@ GST_START_TEST (test_twcc_reordered_feedback)
 
   GArray *fci[] = {
     cook_fci (BASE_SEQNUM, 0, 8, TRUE), /* received 0 7 */
-    cook_fci (BASE_SEQNUM + 16, 1, 8, FALSE),   /* lost 16 23 */
-    cook_fci (BASE_SEQNUM + 32, 2, 8, FALSE),   /* lost 32 39 */
-    cook_fci (BASE_SEQNUM + 8, 3, 8, TRUE),     /* received 8 15 */
-    cook_fci (BASE_SEQNUM + 16, 4, 8, TRUE),    /* received 16 23 */
-    cook_fci (BASE_SEQNUM + 24, 5, 16, TRUE)    /* received 24 39 */
+    cook_fci (BASE_SEQNUM + 16, 2, 8, FALSE),   /* lost 16 23 */
+    cook_fci (BASE_SEQNUM + 32, 4, 8, FALSE),   /* lost 32 39 */
+    cook_fci (BASE_SEQNUM + 8, 1, 8, TRUE),     /* received 8 15 */
+    cook_fci (BASE_SEQNUM + 16, 2, 8, TRUE),    /* received 16 23 */
+    cook_fci (BASE_SEQNUM + 24, 3, 16, TRUE)    /* received 24 39 */
   };
 
   session_harness_add_twcc_caps_for_pt (h, TEST_BUF_PT);
@@ -5836,7 +5852,11 @@ GST_START_TEST (test_twcc_reordered_feedback)
   twcc_stats = session_harness_get_twcc_stats_full (h,
       nbuffs * TEST_BUF_DURATION, 0);
 
-  twcc_verify_stats (twcc_stats, 532800, 1298700, nbuffs, nbuffs, 0.f, 0);
+  /* Reception timestamp delta is not transmitted in this test, so TWCC statistics
+   * assumes remote duration to be equal the local duration, then bitrates become 
+   * equal.
+   */
+  twcc_verify_stats (twcc_stats, 532800, 532800, nbuffs, nbuffs, 0.f, 0);
   gst_structure_free (twcc_stats);
 
   session_harness_free (h);
