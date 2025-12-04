@@ -52,8 +52,14 @@
 #define TEST_BUF_SSRC 0x01BADBAD
 #define TEST_BUF_MS  20
 #define TEST_BUF_DURATION (TEST_BUF_MS * GST_MSECOND)
-#define TEST_BUF_BPS 512000
-#define TEST_BUF_SIZE (TEST_BUF_BPS * TEST_BUF_MS / (1000 * 8))
+#define TEST_BUF_BPS 532800
+/* Buffer content size from BPS
+ * 28 -- udp + ip header;
+ * 12 -- minimal rtp packet header;
+ * 12 -- magigc number in TWCC stats makes packet size reading equal to
+ *    wireshark values.
+ */
+#define TEST_BUF_PAYLOAD_SZ (TEST_BUF_BPS * TEST_BUF_MS / (1000 * 8) - 28 - 12 - 12)
 #define TEST_RTP_TS_DURATION (TEST_BUF_CLOCK_RATE * TEST_BUF_MS / 1000)
 
 #define TEST_TWCC_EXT_ID 5
@@ -85,7 +91,7 @@ generate_test_buffer_full (GstClockTime ts,
   guint i;
   GstRTPBuffer rtp = GST_RTP_BUFFER_INIT;
 
-  buf = gst_rtp_buffer_new_allocate (TEST_BUF_SIZE, 0, 0);
+  buf = gst_rtp_buffer_new_allocate (TEST_BUF_PAYLOAD_SZ, 0, 0);
   GST_BUFFER_PTS (buf) = ts;
   GST_BUFFER_DTS (buf) = ts;
 
@@ -97,7 +103,7 @@ generate_test_buffer_full (GstClockTime ts,
   gst_rtp_buffer_set_marker (&rtp, marker_bit);
 
   payload = gst_rtp_buffer_get_payload (&rtp);
-  for (i = 0; i < TEST_BUF_SIZE; i++)
+  for (i = 0; i < TEST_BUF_PAYLOAD_SZ; i++)
     payload[i] = 0xff;
 
   if (twcc_ext_id > 0) {
@@ -5687,6 +5693,62 @@ GST_START_TEST (test_twcc_stats_block_fec_recover)
 
 GST_END_TEST;
 
+GST_START_TEST (test_twcc_stats_dod)
+{
+  const guint window_size_ms = 400;
+  /* Due to the fact that TWCC stats are calculated with the delay of 100ms
+   * (which more or less reflects reality) */
+  const guint num_buffers = window_size_ms / TEST_BUF_MS + 1;
+  const guint bitrate = TEST_BUF_BPS;
+  const GstClockTimeDiff dod = GST_USECOND * 500;
+  GstClockTimeDiff clock_drift = 0;
+  SessionHarness * h_send = session_harness_new ();
+  SessionHarness * h_recv = session_harness_new ();
+  GstStructure * twcc_stats;
+  guint i, next_seqnum;
+  next_seqnum = 0;
+
+  session_harness_add_twcc_caps_for_pt (h_send, TEST_BUF_PT);
+  session_harness_add_twcc_caps_for_pt (h_send, TEST_RTX_BUF_PT);
+  session_harness_set_twcc_recv_ext_id (h_recv, TEST_TWCC_EXT_ID);
+
+  for (i = 0; i < num_buffers; i++) {
+    GstBuffer * buf;
+    GstFlowReturn ret;
+
+    const guint seqnum = next_seqnum++;
+    buf = generate_test_buffer_full (seqnum * TEST_BUF_DURATION, seqnum, seqnum * TEST_RTP_TS_DURATION, TEST_BUF_SSRC, FALSE,
+                                    TEST_BUF_PT, 0, 0, -1, -1, 0, NULL, 0);
+
+
+    ret = session_harness_send_rtp (h_send, buf);
+    fail_unless_equals_int64 (ret, GST_FLOW_OK);
+
+    session_harness_advance_and_crank (h_send, TEST_BUF_DURATION);
+
+    GstBuffer * to_transmit = session_harness_pull_send_rtp (h_send);
+    GST_BUFFER_PTS (to_transmit) += clock_drift;
+    GST_BUFFER_DTS (to_transmit) += clock_drift;
+    GST_ERROR("Receive DTS %" GST_TIME_FORMAT, GST_TIME_ARGS(GST_BUFFER_DTS(to_transmit)));
+    ret = session_harness_recv_rtp (h_recv, to_transmit);
+    fail_unless_equals_int64 (ret, GST_FLOW_OK);
+    session_harness_advance_and_crank (h_recv, TEST_BUF_DURATION + clock_drift);
+    clock_drift += dod;
+}
+
+  /* push a last buffer with the marker bit to trigger the report */
+  send_recv_buffer (h_send, h_recv, generate_twcc_send_buffer (next_seqnum++, TRUE), TRUE);
+  fail_unless_equals_int64 (GST_FLOW_OK, session_harness_recv_rtcp (h_send, session_harness_produce_twcc (h_recv)));
+
+  twcc_stats = session_harness_get_twcc_stats (h_send);
+  GST_ERROR ("We've got stats: %" GST_PTR_FORMAT, twcc_stats);
+  twcc_verify_stats (twcc_stats, bitrate, 519804, 12, 12, 0.0f, dod);
+  gst_structure_free (twcc_stats);
+
+  session_harness_free (h_send);
+  session_harness_free (h_recv);
+}
+GST_END_TEST;
 
 GST_START_TEST (test_twcc_feedback_max_sent_packets)
 {
@@ -5813,11 +5875,11 @@ GST_START_TEST (test_twcc_reordered_feedback)
 
   GArray *fci[] = {
     cook_fci (BASE_SEQNUM, 0, 8, TRUE), /* received 0 7 */
-    cook_fci (BASE_SEQNUM + 16, 1, 8, FALSE),   /* lost 16 23 */
-    cook_fci (BASE_SEQNUM + 32, 2, 8, FALSE),   /* lost 32 39 */
-    cook_fci (BASE_SEQNUM + 8, 3, 8, TRUE),     /* received 8 15 */
-    cook_fci (BASE_SEQNUM + 16, 4, 8, TRUE),    /* received 16 23 */
-    cook_fci (BASE_SEQNUM + 24, 5, 16, TRUE)    /* received 24 39 */
+    cook_fci (BASE_SEQNUM + 16, 2, 8, FALSE),   /* lost 16 23 */
+    cook_fci (BASE_SEQNUM + 32, 4, 8, FALSE),   /* lost 32 39 */
+    cook_fci (BASE_SEQNUM + 8, 1, 8, TRUE),     /* received 8 15 */
+    cook_fci (BASE_SEQNUM + 16, 2, 8, TRUE),    /* received 16 23 */
+    cook_fci (BASE_SEQNUM + 24, 3, 16, TRUE)    /* received 24 39 */
   };
 
   session_harness_add_twcc_caps_for_pt (h, TEST_BUF_PT);
@@ -5836,7 +5898,11 @@ GST_START_TEST (test_twcc_reordered_feedback)
   twcc_stats = session_harness_get_twcc_stats_full (h,
       nbuffs * TEST_BUF_DURATION, 0);
 
-  twcc_verify_stats (twcc_stats, 532800, 1298700, nbuffs, nbuffs, 0.f, 0);
+  /* Reception timestamp delta is not transmitted in this test, so TWCC statistics
+   * assumes remote duration to be equal the local duration, then bitrates become
+   * equal.
+   */
+  twcc_verify_stats (twcc_stats, TEST_BUF_BPS, TEST_BUF_BPS, nbuffs, nbuffs, 0.f, 0);
   gst_structure_free (twcc_stats);
 
   session_harness_free (h);
@@ -6860,6 +6926,7 @@ rtpsession_suite (void)
   tcase_add_test (tc_chain, test_twcc_stats_long_rtx_recover);
   tcase_add_test (tc_chain, test_twcc_stats_rtx_recover_not_lost_stuff);
   tcase_add_test (tc_chain, test_twcc_stats_block_fec_recover);
+  tcase_add_test (tc_chain, test_twcc_stats_dod);
   tcase_add_test (tc_chain, test_twcc_feedback_max_sent_packets);
   tcase_add_test (tc_chain, test_twcc_feedback_wraparound);
   tcase_add_test (tc_chain, test_twcc_reordered_feedback);

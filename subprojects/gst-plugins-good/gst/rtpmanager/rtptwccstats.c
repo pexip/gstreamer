@@ -61,7 +61,7 @@ typedef struct
   GArray *protects_seqnums;
   gboolean stats_processed;
 
-  TWCCPktState state;
+  TWCCPktState status;
 } SentPacket;
 
 typedef struct
@@ -79,6 +79,8 @@ typedef struct
   guint packets_recv;
   guint bitrate_sent;
   guint bitrate_recv;
+  guint bitrate_sent_non_recovery;
+  guint bitrate_recv_non_recovery;
   gdouble packet_loss_pct;
   gdouble recovery_pct;
   gint64 avg_delta_of_delta;
@@ -179,7 +181,7 @@ _better_pkt_state (TWCCPktState state1, TWCCPktState state2)
 }
 
 static const gchar *
-_pkt_state_s (TWCCPktState state)
+_pkt_status_s (TWCCPktState state)
 {
   switch (state) {
     case RTP_TWCC_FECBLOCK_PKT_UNKNOWN:
@@ -255,7 +257,7 @@ _sent_packet_init (SentPacket * packet, guint16 seqnum, RTPPacketInfo * pinfo,
   packet->remote_ts = GST_CLOCK_TIME_NONE;
   packet->socket_ts = GST_CLOCK_TIME_NONE;
   packet->lost = FALSE;
-  packet->state = RTP_TWCC_FECBLOCK_PKT_UNKNOWN;
+  packet->status = RTP_TWCC_FECBLOCK_PKT_UNKNOWN;
   packet->redundant_idx = redundant_idx;
   packet->redundant_num = redundant_num;
   packet->protects_ssrc = protect_ssrc;
@@ -573,6 +575,8 @@ twcc_stats_ctx_calculate_windowed_stats (TWCCStatsCtx * ctx,
   guint i;
   guint bits_sent = 0;
   guint bits_recv = 0;
+  guint bits_sent_non_recovery = 0;
+  guint bits_recv_non_recovery = 0;
 
   GstClockTimeDiff delta_delta_sum = 0;
   guint delta_delta_count = 0;
@@ -599,6 +603,8 @@ twcc_stats_ctx_calculate_windowed_stats (TWCCStatsCtx * ctx,
   ctx->delta_of_delta_growth = 0.0;
   ctx->bitrate_sent = 0;
   ctx->bitrate_recv = 0;
+  ctx->bitrate_sent_non_recovery = 0;
+  ctx->bitrate_recv_non_recovery = 0;
   ctx->recovery_pct = -1.0;
   ctx->queueing_slope = 0.;
 
@@ -619,45 +625,51 @@ twcc_stats_ctx_calculate_windowed_stats (TWCCStatsCtx * ctx,
   for (i = 0; i < packets_overall; i++) {
     SentPacket *prev = NULL;
     if (i + start_idx >= 1)
-      prev = _sent_pkt_get (packets, i + start_idx)->sentpkt;
+      prev = _sent_pkt_get (packets, i + start_idx - 1)->sentpkt;
 
     SentPacket *pkt = _sent_pkt_get (packets, i + start_idx)->sentpkt;
     if (!pkt) {
       continue;
     }
-    GST_LOG ("STATS WINDOW: %u/%u: pkt #%u, pt: %u, size: %u, arrived: %s, "
+    GST_LOG ("STATS WINDOW: %u/%u: pkt #%u, pt: %u, size: %u, status: %s, "
         "local-ts: %" GST_TIME_FORMAT ", remote-ts %" GST_TIME_FORMAT,
         i + 1, packets_overall, pkt->seqnum, pkt->pt, pkt->size * 8,
-        GST_CLOCK_TIME_IS_VALID (pkt->remote_ts) ? "YES" : "NO",
+        _pkt_status_s (pkt->status),
         GST_TIME_ARGS (_pkt_stats_ts (pkt)), GST_TIME_ARGS (pkt->remote_ts));
 
     if (GST_CLOCK_TIME_IS_VALID (_pkt_stats_ts (pkt))
-        && pkt->state != RTP_TWCC_FECBLOCK_PKT_UNKNOWN) {
+        && pkt->status != RTP_TWCC_FECBLOCK_PKT_UNKNOWN) {
       /* don't count the bits for the first packet in the window */
       if (first_local_pkt == NULL) {
         first_local_pkt = pkt;
       } else {
         bits_sent += pkt->size * 8;
+        if (pkt->redundant_num <= 0) {
+          bits_sent_non_recovery += pkt->size * 8;
+        }
       }
       last_local_pkt = pkt;
     }
 
-    if (pkt->state == RTP_TWCC_FECBLOCK_PKT_RECEIVED) {
+    if (pkt->status == RTP_TWCC_FECBLOCK_PKT_RECEIVED) {
       /* don't count the bits for the first packet in the window */
       if (first_remote_pkt == NULL) {
         first_remote_pkt = pkt;
       } else {
         bits_recv += pkt->size * 8;
+        if (pkt->redundant_num <= 0) {
+          bits_recv_non_recovery += pkt->size * 8;
+        }
       }
       last_remote_pkt = pkt;
       packets_sent++;
       packets_recv++;
-    } else if (pkt->state == RTP_TWCC_FECBLOCK_PKT_RECOVERED) {
+    } else if (pkt->status == RTP_TWCC_FECBLOCK_PKT_RECOVERED) {
       GST_LOG ("Packet #%u is lost and recovered", pkt->seqnum);
       packets_sent++;
       packets_lost++;
       packets_recovered++;
-    } else if (pkt->state == RTP_TWCC_FECBLOCK_PKT_LOST) {
+    } else if (pkt->status == RTP_TWCC_FECBLOCK_PKT_LOST) {
       GST_LOG ("Packet #%u is lost", pkt->seqnum);
       packets_sent++;
       packets_lost++;
@@ -666,7 +678,7 @@ twcc_stats_ctx_calculate_windowed_stats (TWCCStatsCtx * ctx,
       packets_unknown++;
     }
 
-    if (!prev || prev->state == RTP_TWCC_FECBLOCK_PKT_UNKNOWN) {
+    if (!prev || prev->status == RTP_TWCC_FECBLOCK_PKT_UNKNOWN) {
       continue;
     }
 
@@ -712,9 +724,15 @@ twcc_stats_ctx_calculate_windowed_stats (TWCCStatsCtx * ctx,
         _pkt_stats_ts (last_local_pkt));
   }
   if (first_remote_pkt && last_remote_pkt) {
-    remote_duration =
-        GST_CLOCK_DIFF (first_remote_pkt->remote_ts,
-        last_remote_pkt->remote_ts);
+    if (GST_CLOCK_TIME_IS_VALID(first_remote_pkt->remote_ts)
+        && GST_CLOCK_TIME_IS_VALID(last_remote_pkt->remote_ts)){
+      remote_duration =
+          GST_CLOCK_DIFF (first_remote_pkt->remote_ts,
+          last_remote_pkt->remote_ts);
+    } else {
+      remote_duration = GST_CLOCK_DIFF(first_remote_pkt->local_ts,
+                                       last_remote_pkt->local_ts);
+    }
   }
 
   if (packets_sent)
@@ -744,19 +762,23 @@ twcc_stats_ctx_calculate_windowed_stats (TWCCStatsCtx * ctx,
   if (local_duration > 0) {
     ctx->bitrate_sent =
         gst_util_uint64_scale (bits_sent, GST_SECOND, local_duration);
+    ctx->bitrate_sent_non_recovery =
+        gst_util_uint64_scale (bits_sent_non_recovery, GST_SECOND, local_duration);
   }
   if (remote_duration > 0) {
     ctx->bitrate_recv =
         gst_util_uint64_scale (bits_recv, GST_SECOND, remote_duration);
+    ctx->bitrate_recv_non_recovery =
+        gst_util_uint64_scale (bits_recv_non_recovery, GST_SECOND, remote_duration);
   }
 
   _linear_compute (&dod_regression, &ctx->queueing_slope, NULL);
 
   GST_INFO ("Got stats: bits_sent: %u, bits_recv: %u, packets_sent = %u, "
       "packets_recv: %u, packetlost_pct = %lf, recovery_pct = %lf, "
-      "recovered: %u, packets unknown: %u",
+      "recovered: %u, packets unknown: %u, dod-count: %u",
       bits_sent, bits_recv, packets_sent, packets_recv, ctx->packet_loss_pct,
-      ctx->recovery_pct, packets_recovered, packets_unknown);
+      ctx->recovery_pct, packets_recovered, packets_unknown, delta_delta_count);
   GST_INFO ("local_duration=%" GST_STIME_FORMAT ", "
       "remote_duration=%" GST_STIME_FORMAT ", "
       "sent_bitrate = %u, " "recv_bitrate = %u, delta-delta-avg = %"
@@ -776,6 +798,8 @@ twcc_stats_ctx_get_structure (TWCCStatsCtx * ctx)
       "packets-recv", G_TYPE_UINT, ctx->packets_recv,
       "bitrate-sent", G_TYPE_UINT, ctx->bitrate_sent,
       "bitrate-recv", G_TYPE_UINT, ctx->bitrate_recv,
+      "bitrate-sent-non-recovery", G_TYPE_UINT, ctx->bitrate_sent_non_recovery,
+      "bitrate-recv-non-recovery", G_TYPE_UINT, ctx->bitrate_recv_non_recovery,
       "packet-loss-pct", G_TYPE_DOUBLE, ctx->packet_loss_pct,
       "recovery-pct", G_TYPE_DOUBLE, ctx->recovery_pct,
       "avg-delta-of-delta", G_TYPE_INT64, ctx->avg_delta_of_delta,
@@ -950,8 +974,8 @@ _redblock_reconsider (TWCCStatsManager * statsman, RedBlock * block)
     SentPacket *media_pkt = _find_stats_sentpacket (statsman,
         g_array_index (block->seqs, guint16, 0));
 
-    if (media_pkt && (media_pkt->state == RTP_TWCC_FECBLOCK_PKT_LOST
-            || media_pkt->state == RTP_TWCC_FECBLOCK_PKT_UNKNOWN)) {
+    if (media_pkt && (media_pkt->status == RTP_TWCC_FECBLOCK_PKT_LOST
+            || media_pkt->status == RTP_TWCC_FECBLOCK_PKT_UNKNOWN)) {
       for (gsize i = 0; i < block->fec_seqs->len; ++i) {
         if (g_array_index (block->fec_states, TWCCPktState, i)
             == RTP_TWCC_FECBLOCK_PKT_UNKNOWN) {
@@ -960,13 +984,13 @@ _redblock_reconsider (TWCCStatsManager * statsman, RedBlock * block)
         }
         SentPacket *redundant_pkt = _find_stats_sentpacket (statsman,
             g_array_index (block->fec_seqs, guint16, i));
-        if (redundant_pkt->state == RTP_TWCC_FECBLOCK_PKT_RECEIVED) {
+        if (redundant_pkt->status == RTP_TWCC_FECBLOCK_PKT_RECEIVED) {
           nrecovered++;
           break;
         }
       }
       if (nrecovered == 1) {
-        media_pkt->state = RTP_TWCC_FECBLOCK_PKT_RECOVERED;
+        media_pkt->status = RTP_TWCC_FECBLOCK_PKT_RECOVERED;
       }
     }
 
@@ -977,20 +1001,20 @@ _redblock_reconsider (TWCCStatsManager * statsman, RedBlock * block)
   for (gsize i = 0; i < block->seqs->len; ++i) {
     SentPacket *pkt = _find_stats_sentpacket (statsman,
         g_array_index (block->seqs, guint16, i));
-    if (!pkt || pkt->state == RTP_TWCC_FECBLOCK_PKT_UNKNOWN) {
+    if (!pkt || pkt->status == RTP_TWCC_FECBLOCK_PKT_UNKNOWN) {
       lost++;
       if (i < G_N_ELEMENTS (states_media)) {
         states_media[i] = 'U';
       }
-    } else if (pkt->state == RTP_TWCC_FECBLOCK_PKT_RECEIVED) {
+    } else if (pkt->status == RTP_TWCC_FECBLOCK_PKT_RECEIVED) {
       nreceived++;
       if (i < G_N_ELEMENTS (states_media))
         states_media[i] = '+';
-    } else if (pkt->state == RTP_TWCC_FECBLOCK_PKT_RECOVERED) {
+    } else if (pkt->status == RTP_TWCC_FECBLOCK_PKT_RECOVERED) {
       nrecovered++;
       if (i < G_N_ELEMENTS (states_media))
         states_media[i] = 'R';
-    } else if (pkt->state == RTP_TWCC_FECBLOCK_PKT_LOST) {
+    } else if (pkt->status == RTP_TWCC_FECBLOCK_PKT_LOST) {
       lost++;
       if (i < G_N_ELEMENTS (states_media))
         states_media[i] = '-';
@@ -1006,20 +1030,20 @@ _redblock_reconsider (TWCCStatsManager * statsman, RedBlock * block)
       pkt = _find_stats_sentpacket (statsman,
           g_array_index (block->fec_seqs, guint16, i));
     }
-    if (!pkt || pkt->state == RTP_TWCC_FECBLOCK_PKT_UNKNOWN) {
+    if (!pkt || pkt->status == RTP_TWCC_FECBLOCK_PKT_UNKNOWN) {
       lost++;
       if (i < G_N_ELEMENTS (states_fec)) {
         states_fec[i] = 'U';
       }
-    } else if (pkt->state == RTP_TWCC_FECBLOCK_PKT_RECEIVED) {
+    } else if (pkt->status == RTP_TWCC_FECBLOCK_PKT_RECEIVED) {
       nreceived++;
       if (i < G_N_ELEMENTS (states_fec))
         states_fec[i] = '+';
-    } else if (pkt->state == RTP_TWCC_FECBLOCK_PKT_RECOVERED) {
+    } else if (pkt->status == RTP_TWCC_FECBLOCK_PKT_RECOVERED) {
       nrecovered++;
       if (i < G_N_ELEMENTS (states_fec))
         states_fec[i] = 'R';
-    } else if (pkt->state == RTP_TWCC_FECBLOCK_PKT_LOST) {
+    } else if (pkt->status == RTP_TWCC_FECBLOCK_PKT_LOST) {
       lost++;
       if (i < G_N_ELEMENTS (states_fec))
         states_fec[i] = '-';
@@ -1044,8 +1068,8 @@ _redblock_reconsider (TWCCStatsManager * statsman, RedBlock * block)
       if (!pkt) {
         GST_WARNING_OBJECT (statsman->parent, "Packet #%u not found in stats",
             seqnum);
-      } else if (pkt->state == RTP_TWCC_FECBLOCK_PKT_LOST) {
-        pkt->state = RTP_TWCC_FECBLOCK_PKT_RECOVERED;
+      } else if (pkt->status == RTP_TWCC_FECBLOCK_PKT_LOST) {
+        pkt->status = RTP_TWCC_FECBLOCK_PKT_RECOVERED;
         nrecovered++;
       }
     }
@@ -1058,8 +1082,8 @@ _redblock_reconsider (TWCCStatsManager * statsman, RedBlock * block)
       }
       SentPacket *pkt = _find_stats_sentpacket (statsman,
           seqnum);
-      if (pkt && pkt->state == RTP_TWCC_FECBLOCK_PKT_LOST) {
-        pkt->state = RTP_TWCC_FECBLOCK_PKT_RECOVERED;
+      if (pkt && pkt->status == RTP_TWCC_FECBLOCK_PKT_LOST) {
+        pkt->status = RTP_TWCC_FECBLOCK_PKT_RECOVERED;
         nrecovered++;
       }
     }
@@ -1163,7 +1187,7 @@ _process_pkt_feedback (SentPacket * pkt, TWCCStatsManager * statsman)
 {
   GST_TRACE_OBJECT (statsman->parent,
       "Processing feedback for packet #%u, state: %s", pkt->seqnum,
-      _pkt_state_s (pkt->state));
+      _pkt_status_s (pkt->status));
   if (pkt->stats_processed) {
     /* This packet was already added to stats structures, but we've got
        one more feedback for it
@@ -1195,7 +1219,7 @@ _process_pkt_feedback (SentPacket * pkt, TWCCStatsManager * statsman)
 
   pkt->stats_processed = TRUE;
   GST_LOG_OBJECT (statsman->parent, "Processing #%u packet in stats, state: %s",
-      pkt->seqnum, _pkt_state_s (pkt->state));
+      pkt->seqnum, _pkt_status_s (pkt->status));
 
   /* This is either RTX or FEC packet */
   if (pkt->protects_seqnums && pkt->protects_seqnums->len > 0) {
@@ -1254,7 +1278,7 @@ _process_pkt_feedback (SentPacket * pkt, TWCCStatsManager * statsman)
       g_array_index (block->fec_seqs, guint16, (gsize) pkt->redundant_idx)
           = pkt->seqnum;
       g_array_index (block->fec_states, TWCCPktState,
-          (gsize) pkt->redundant_idx) = pkt->state;
+          (gsize) pkt->redundant_idx) = pkt->status;
 
       _redblock_key_free (key);
 
@@ -1270,7 +1294,7 @@ _process_pkt_feedback (SentPacket * pkt, TWCCStatsManager * statsman)
       g_array_index (block->fec_seqs, guint16, (gsize) pkt->redundant_idx)
           = pkt->seqnum;
       g_array_index (block->fec_states, TWCCPktState,
-          (gsize) pkt->redundant_idx) = pkt->state;
+          (gsize) pkt->redundant_idx) = pkt->status;
       g_hash_table_insert (statsman->redund_2_redblocks, key, block);
       /* Link this seqnum to the block in order to be able to
          release the block once this packet outlives its lifetime */
@@ -1308,7 +1332,7 @@ _process_pkt_feedback (SentPacket * pkt, TWCCStatsManager * statsman)
         if (g_array_index (block->seqs, guint16, i) == pkt->seqnum) {
           g_array_index (block->states, TWCCPktState, i) =
               _better_pkt_state (g_array_index (block->states, TWCCPktState, i),
-              pkt->state);
+              pkt->status);
           break;
         }
       }
@@ -1453,9 +1477,9 @@ rtp_twcc_stats_pkt_feedback (TWCCStatsManager * statsman,
   SentPacket *found;
   if (!!(found = _find_sentpacket (statsman, seqnum))) {
     /* Do not process feedback on packets we have got feedback previously */
-    if (found->state < status) {
+    if (found->status < status) {
       found->remote_ts = remote_ts;
-      found->state = status;
+      found->status = status;
       gst_vec_deque_push_tail (statsman->sent_packets_feedbacks, found);
       GST_LOG_OBJECT (statsman->parent,
           "matching pkt: #%u with local_ts: %" GST_TIME_FORMAT
@@ -1471,8 +1495,8 @@ rtp_twcc_stats_pkt_feedback (TWCCStatsManager * statsman,
          so we just ignore it. */
       GST_LOG_OBJECT (statsman->parent,
           "Rejecting second feedback on a packet #%u: current state: %s, "
-          "received fb: %s", seqnum, _pkt_state_s (found->state),
-          _pkt_state_s (status));
+          "received fb: %s", seqnum, _pkt_status_s (found->status),
+          _pkt_status_s (status));
     }
   } else {
     GST_WARNING_OBJECT (statsman->parent, "Feedback on unknown packet #%u",
@@ -1607,8 +1631,8 @@ rtp_twcc_stats_check_for_lost_packets (TWCCStatsManager * statsman,
     SentPacket *found;
     if (!!(found = _find_sentpacket (statsman, seqnum))) {
       /* Do not process feedback on packets we have got feedback previously */
-      if (found->state == RTP_TWCC_FECBLOCK_PKT_UNKNOWN) {
-        found->state = RTP_TWCC_FECBLOCK_PKT_LOST;
+      if (found->status == RTP_TWCC_FECBLOCK_PKT_UNKNOWN) {
+        found->status = RTP_TWCC_FECBLOCK_PKT_LOST;
         gst_vec_deque_push_tail (statsman->sent_packets_feedbacks, found);
         GST_LOG_OBJECT (statsman->parent,
             "Processing lost pkt feedback: #%u with local_ts: %" GST_TIME_FORMAT
