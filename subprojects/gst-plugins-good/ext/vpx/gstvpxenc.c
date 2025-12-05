@@ -1951,12 +1951,16 @@ gst_vpx_enc_set_format (GstVideoEncoder * video_encoder,
     GST_VPX_ENC_WARN (encoder, "Failed to set VP8E_SET_ENABLEAUTOALTREF",
         status);
   }
+#ifndef PEXIP_MODIFICATION
+  // Our version of libvpx has no such control
+  // See: comments for VP8E_SET_NOISE_SENSITIVITY enum
   status = vpx_codec_control (&encoder->encoder, VP8E_SET_NOISE_SENSITIVITY,
       encoder->noise_sensitivity);
   if (status != VPX_CODEC_OK) {
     GST_VPX_ENC_WARN (encoder, "Failed to set VP8E_SET_NOISE_SENSITIVITY",
         status);
   }
+#endif
   status = vpx_codec_control (&encoder->encoder, VP8E_SET_SHARPNESS,
       encoder->sharpness);
   if (status != VPX_CODEC_OK) {
@@ -1968,11 +1972,15 @@ gst_vpx_enc_set_format (GstVideoEncoder * video_encoder,
     GST_VPX_ENC_WARN (encoder, "Failed to set VP8E_SET_STATIC_THRESHOLD",
         status);
   }
+#ifndef PEXIP_MODIFICATION
+  // Our version of libvpx does not have this control
+  // See: comments for VP8E_SET_TOKEN_PARTITIONS enum
   status = vpx_codec_control (&encoder->encoder, VP8E_SET_TOKEN_PARTITIONS,
       encoder->token_partitions);
   if (status != VPX_CODEC_OK) {
     GST_VPX_ENC_WARN (encoder, "Failed to set VP8E_SET_TOKEN_PARTIONS", status);
   }
+#endif
   status = vpx_codec_control (&encoder->encoder, VP8E_SET_ARNR_MAXFRAMES,
       encoder->arnr_maxframes);
   if (status != VPX_CODEC_OK) {
