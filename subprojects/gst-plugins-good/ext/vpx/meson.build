@@ -93,6 +93,11 @@ if vpx_dep.found()
     vpx_args += '-DHAVE_VPX_1_8'
   endif
 
+  if vpx_dep.version().version_compare('== 1.6.0')
+    message('Found vpx 1.6.0 - applying Pexip modifications flag')
+    vpx_args += '-DPEXIP_MODIFICATION'
+  endif
+
   gnome = import('gnome')
 
   gstvpx_enums = gnome.mkenums_simple('gstvpx-enumtypes',
@@ -136,6 +141,7 @@ vpx_args = [
   '-DHAVE_VP8_DECODER',
   '-DHAVE_VP9_ENCODER',
   '-DHAVE_VP9_DECODER',
+  '-DPEXIP_MODIFICATION',
 ]
 
 plugins_install_dir_isa = '@0@-'.format(plugins_install_dir)
