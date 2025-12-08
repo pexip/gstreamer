@@ -1885,7 +1885,8 @@ failure_header:
   gst_buffer_unref (metadata);
 
 failure_metadata:
-  gst_buffer_list_unref (codec_data_list);
+  if (codec_data_list != NULL)
+    gst_buffer_list_unref (codec_data_list);
 
 failure_codec_data:
   return ret;
