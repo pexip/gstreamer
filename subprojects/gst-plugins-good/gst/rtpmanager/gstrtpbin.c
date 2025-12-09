@@ -2331,20 +2331,14 @@ no_demux:
 static void
 free_stream (GstRtpBinStream * stream, GstRtpBin * bin)
 {
-  GstRtpBinPrivate *priv = bin->priv;
   GstRtpBinSession *sess = stream->session;
   GSList *clients, *next_client;
   GstElement *buffer = stream->buffer;
   GstElement *demux = stream->demux;
-  GList *find;
 
   GST_INFO_OBJECT (bin, "freeing stream %p", stream);
 
   sess->elements = g_slist_remove (sess->elements, buffer);
-  find = g_list_find (priv->elements, buffer);
-  if (find) {
-    priv->elements = g_list_delete_link (priv->elements, find);
-  }
 
   if (stream->buffer_ptreq_sig != 0)
     g_signal_handler_disconnect (buffer, stream->buffer_ptreq_sig);
@@ -2368,18 +2362,17 @@ free_stream (GstRtpBinStream * stream, GstRtpBin * bin)
      cause a deadlock if we are not unlocked here */
   GST_RTP_BIN_DYN_UNLOCK (bin);
 
-  gst_element_set_locked_state (buffer, TRUE);
-  if (demux)
+  GST_RTP_BIN_LOCK (bin);
+  remove_bin_element (buffer, bin);
+  GST_RTP_BIN_UNLOCK (bin);
+
+  if (demux) {
     gst_element_set_locked_state (demux, TRUE);
-
-  gst_element_set_state (buffer, GST_STATE_NULL);
-  if (demux)
     gst_element_set_state (demux, GST_STATE_NULL);
-
-  gst_bin_remove (GST_BIN_CAST (bin), buffer);
-  if (demux)
     gst_bin_remove (GST_BIN_CAST (bin), demux);
+  }
 
+  /* unref from the ref we did in create_stream() */
   gst_object_unref (buffer);
 
   GST_RTP_BIN_DYN_LOCK (bin);
