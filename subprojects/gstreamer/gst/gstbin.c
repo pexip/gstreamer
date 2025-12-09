@@ -1854,6 +1854,9 @@ not_in_bin:
     GST_OBJECT_UNLOCK (bin);
     GST_WARNING_OBJECT (bin, "Element '%s' is not in bin", elem_name);
     g_free (elem_name);
+#ifdef GST_ENABLE_EXTRA_CHECKS
+    g_assert_not_reached ();
+#endif
     return FALSE;
   }
 }
