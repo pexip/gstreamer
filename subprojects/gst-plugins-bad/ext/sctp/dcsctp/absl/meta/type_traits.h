@@ -508,7 +508,7 @@ using swap_internal::StdSwapIsUnconstrained;
     !defined(__NVCC__)
 template <class T>
 struct is_trivially_relocatable
-    : std::integral_constant<bool, __is_trivially_relocatable(T)> {};
+    : std::integral_constant<bool, __builtin_is_cpp_trivially_relocatable(T)> {};
 #else
 // Otherwise we use a fallback that detects only those types we can feasibly
 // detect. Any time that has trivial move-construction and destruction
