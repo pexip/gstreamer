@@ -341,6 +341,7 @@ gst_alsa_device_provider_probe (GstDeviceProvider * provider)
 beach:
   snd_ctl_card_info_free (info);
   snd_pcm_info_free (pcminfo);
+  snd_config_update_free_global ();
 
   return gst_alsa_device_provider_probe_pcm_sinks (provider, list);
 }
