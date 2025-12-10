@@ -503,7 +503,7 @@ using swap_internal::StdSwapIsUnconstrained;
 //
 // According to https://github.com/abseil/abseil-cpp/issues/1479, this does not
 // work with NVCC either.
-#if ABSL_HAVE_BUILTIN(__is_trivially_relocatable) &&                 \
+#if ABSL_HAVE_BUILTIN(__builtin_is_cpp_trivially_relocatable) &&     \
     !(defined(__clang__) && (defined(_WIN32) || defined(_WIN64))) && \
     !defined(__NVCC__)
 template <class T>
