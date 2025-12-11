@@ -42,7 +42,6 @@ vpx_features = [
 vpx_option = get_option('vpx')
 vpx_dep = dependency('vpx-avx', version : '>=1.5.0', required : vpx_option)
 
-pexip_vpx_args = ''
 if vpx_dep.found()
   vpx_args = ['-DHAVE_VPX_1_3']
   foreach f : vpx_features
@@ -94,18 +93,8 @@ if vpx_dep.found()
     vpx_args += '-DHAVE_VPX_1_8'
   endif
 
-  if vpx_dep.version().version_compare('== 1.6.0')
-    if host_machine.system() == 'windows'
-      message('Found vpx 1.6.0 - applying Pexip modifications flag')
-      pexip_vpx_args = '/DPEXIP_MODIFICATION'
-    elif cc.get_id().startswith('intel')
-      message('Found vpx 1.6.0 - applying Pexip modifications flag')
-      pexip_vpx_args = '-DPEXIP_MODIFICATION'
-    endif
-  endif
-
-  if pexip_vpx_args != ''
-    vpx_args += pexip_vpx_args
+  if vpx_dep.found() and vpx_dep.type_name() == 'pkgconfig' and vpx_dep.get_pkgconfig_variable('pexip_modification') != ''
+    vpx_args += vpx_dep.get_pkgconfig_variable('pexip_modification')
   endif
 
   gnome = import('gnome')
@@ -153,10 +142,6 @@ vpx_args = [
   '-DHAVE_VP9_DECODER',
 ]
 
-if pexip_vpx_args != ''
-  vpx_args += pexip_vpx_args
-endif
-
 plugins_install_dir_isa = '@0@-'.format(plugins_install_dir)
 
 foreach isa_flags : pex_isas
@@ -164,6 +149,9 @@ foreach isa_flags : pex_isas
   flags = isa_flags[1]
 
   vpxisa_dep = dependency('vpx-@0@'.format(isa), required : false)
+  if vpxisa_dep.found() and vpxisa_dep.type_name() == 'pkgconfig' and vpxisa_dep.get_pkgconfig_variable('pexip_modification') != ''
+    vpx_args += vpxisa_dep.get_pkgconfig_variable('pexip_modification')
+  endif
 
   if vpxisa_dep.found()
     gstvpxisa = library('gstvpx_' + isa,
