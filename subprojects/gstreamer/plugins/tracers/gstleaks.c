@@ -305,15 +305,18 @@ object_log_free (ObjectLog * obj)
 }
 
 static guint
-object_log_hash (const ObjectLog * obj)
+object_log_hash (gconstpointer key)
 {
-  return (guint) obj->object + (guint) obj->type_qname;
+  const ObjectLog *obj = key;
+  return (guintptr) obj->object + (guintptr) obj->type_qname;
 }
 
 static gboolean
-object_log_compare (const ObjectLog * a, const ObjectLog * b)
+object_log_compare (gconstpointer a, gconstpointer b)
 {
-  if ((a->object == b->object) && (a->type_qname == b->type_qname))
+  const ObjectLog *_a = a;
+  const ObjectLog *_b = b;
+  if ((_a->object == _b->object) && (_a->type_qname == _b->type_qname))
     return TRUE;
   return FALSE;
 }
