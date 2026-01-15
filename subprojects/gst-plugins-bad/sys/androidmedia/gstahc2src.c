@@ -1195,8 +1195,10 @@ gst_ahc2_src_set_caps (GstBaseSrc * src, GstCaps * caps)
         self->referenced_images);
   }
 
+  GST_OBJECT_UNLOCK (self);
   /* this will possibly invalidate any AImge currently in the pipeline */
   g_clear_pointer (&self->image_reader, (GDestroyNotify) AImageReader_delete);
+  GST_OBJECT_LOCK (self);
 
   if (AImageReader_new (self->width, self->height, fmt, self->max_images,
           &self->image_reader) != AMEDIA_OK) {
@@ -1480,7 +1482,11 @@ gst_ahc2_src_camera_close (GstAHC2Src * self)
 
   if (self->image_reader) {
     AImageReader_setImageListener (self->image_reader, NULL);
+
+    /* callbacks might be waiting for the elements lock */
+    GST_OBJECT_UNLOCK (self);
     g_clear_pointer (&self->image_reader, (GDestroyNotify) AImageReader_delete);
+    GST_OBJECT_LOCK (self);
   }
 
   g_clear_pointer (&self->capture_sout,
@@ -1572,7 +1578,8 @@ gst_ahc2_src_stop (GstBaseSrc * src)
   GstAHC2Src *self = GST_AHC2_SRC (src);
 
   GST_OBJECT_LOCK (self);
-  ACameraCaptureSession_abortCaptures (self->camera_capture_session);
+  if (self->camera_capture_session != NULL)
+    ACameraCaptureSession_abortCaptures (self->camera_capture_session);
   gst_ahc2_src_camera_close (self);
 
   gst_data_queue_flush (self->outbound_queue);
@@ -1905,11 +1912,8 @@ image_reader_on_image_available (void *context, AImageReader * reader)
     gst_object_unref (clock);
   }
 
-  GST_OBJECT_LOCK (self);
-
   if (AImageReader_acquireLatestImage (reader, &image) != AMEDIA_OK) {
     GST_DEBUG_OBJECT (self, "No image available");
-    GST_OBJECT_UNLOCK (self);
     return;
   }
 
@@ -1926,6 +1930,7 @@ image_reader_on_image_available (void *context, AImageReader * reader)
   }
 #endif
 
+  GST_OBJECT_LOCK (self);
   if (!self->started || GST_CLOCK_TIME_IS_VALID (self->previous_ts)) {
     duration = current_ts - self->previous_ts;
     self->previous_ts = current_ts;
