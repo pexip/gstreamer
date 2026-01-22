@@ -299,6 +299,49 @@ GST_START_TEST (rtpfunnel_stress)
 
 GST_END_TEST;
 
+
+static void
+_add_remove_pad (GstHarnessThread *ct, gpointer data)
+{
+  GstHarness *h = (GstHarness *) data;
+  (void) ct;
+  guint ssrc = g_random_int_range (100, 9999);
+  gchar *caps_str =
+      g_strdup_printf ("application/x-rtp, ssrc=(uint)%u, media=(string)video",
+      ssrc);
+  GstHarness *h1 = gst_harness_new_with_element (h->element, "sink_%u", NULL);
+  gst_harness_set_src_caps_str (h1, caps_str);
+
+  g_usleep (g_random_int_range (1000, 2000));
+  g_free (caps_str);
+  gst_harness_teardown (h1);
+}
+
+
+GST_START_TEST (rtpfunnel_stress_add_remove_pads)
+{
+#define NUM_THREADS 50
+  GstHarness *h = gst_harness_new_with_padnames ("rtpfunnel", NULL, "src");
+  GstHarnessThread *pad_threads[NUM_THREADS];
+
+  for (guint i = 0; i < NUM_THREADS; i++) {
+    pad_threads[i] =
+        gst_harness_stress_custom_start (h, NULL, (GFunc) _add_remove_pad, h,
+        0);
+  }
+
+  g_usleep (G_USEC_PER_SEC * 5);
+
+  for (guint i = 0; i < NUM_THREADS; i++) {
+    gst_harness_stress_thread_stop (pad_threads[i]);
+  }
+
+  gst_harness_teardown (h);
+#undef NUM_THREADS
+}
+
+GST_END_TEST;
+
 GST_START_TEST (rtpfunnel_flush)
 {
   GstHarness *h = gst_harness_new_with_padnames ("rtpfunnel", NULL, "src");

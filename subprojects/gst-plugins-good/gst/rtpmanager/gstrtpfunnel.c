@@ -674,11 +674,12 @@ gst_rtp_funnel_release_pad (GstElement * element, GstPad * pad)
 
   GST_DEBUG_OBJECT (funnel, "releasing pad %s:%s", GST_DEBUG_PAD_NAME (pad));
 
+  GST_OBJECT_LOCK (funnel);
   if (pad == funnel->current_pad)
     funnel->current_pad = NULL;
 
   g_hash_table_foreach_remove (funnel->ssrc_to_pad, _remove_pad_func, pad);
-
+  GST_OBJECT_UNLOCK (funnel);
   gst_pad_set_active (pad, FALSE);
   gst_element_remove_pad (GST_ELEMENT_CAST (funnel), pad);
 }
