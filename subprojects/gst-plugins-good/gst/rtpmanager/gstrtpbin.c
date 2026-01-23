@@ -2362,9 +2362,7 @@ free_stream (GstRtpBinStream * stream, GstRtpBin * bin)
      cause a deadlock if we are not unlocked here */
   GST_RTP_BIN_DYN_UNLOCK (bin);
 
-  GST_RTP_BIN_LOCK (bin);
   remove_bin_element (buffer, bin);
-  GST_RTP_BIN_UNLOCK (bin);
 
   if (demux) {
     gst_element_set_locked_state (demux, TRUE);
