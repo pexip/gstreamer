@@ -505,8 +505,14 @@ gst_sctp_association_handle_error (GstSctpAssociation * assoc,
   if (error == SCTP_SOCKET_ERROR_TOO_MANY_RETRIES
       || error == SCTP_SOCKET_ERROR_PEER_REPORTED) {
     GST_DEBUG_OBJECT (assoc, "Too many retries! disconnecting...");
-    force_close_async (assoc);
-    return;
+
+    GST_SCTP_ASSOC_MUTEX_LOCK (assoc);
+     if (assoc->state == GST_SCTP_ASSOCIATION_STATE_CONNECTED) {
+          gst_sctp_association_call_async (assoc, 0,
+            (GSourceFunc) force_close_async, NULL, NULL);
+     }
+    GST_SCTP_ASSOC_MUTEX_UNLOCK (assoc);
+
   }
 }
 
@@ -626,12 +632,29 @@ typedef struct
   guint16 stream_id;
 } GstSctpAssociationResetStreamCtx;
 
+static void
+gst_sctp_association_reset_stream_ctx_free (GstSctpAssociationResetStreamCtx * ctx)
+{
+  if (ctx->assoc)
+    g_object_unref (ctx->assoc);
+  g_free (ctx);
+}
+
+static GstSctpAssociationResetStreamCtx *
+gst_sctp_association_reset_stream_ctx_new (GstSctpAssociation * assoc,
+    guint16 stream_id)
+{
+  GstSctpAssociationResetStreamCtx *ctx =
+      g_new0 (GstSctpAssociationResetStreamCtx, 1);
+  ctx->assoc = g_object_ref (assoc);
+  ctx->stream_id = stream_id;
+  return ctx;
+}
 
 static gboolean
 gst_sctp_association_reset_stream_async (GstSctpAssociationResetStreamCtx * ctx)
 {
   GstSctpAssociation *assoc = ctx->assoc;
-
 
   GST_SCTP_ASSOC_MUTEX_LOCK (assoc);
 
@@ -692,13 +715,11 @@ gst_sctp_association_handle_stream_reset (GstSctpAssociation * assoc,
         // procedure, the association needs to reset the stream in the other
         // direction too.
         GstSctpAssociationResetStreamCtx *ctx =
-            g_new0 (GstSctpAssociationResetStreamCtx, 1);
-        ctx->assoc = assoc;
-        ctx->stream_id = stream_id;
+            gst_sctp_association_reset_stream_ctx_new (assoc, stream_id);
 
         gst_sctp_association_call_async (assoc, 0,
             (GSourceFunc) gst_sctp_association_reset_stream_async,
-            ctx, (GDestroyNotify) g_free);
+            ctx, (GDestroyNotify) gst_sctp_association_reset_stream_ctx_free);
 
         // do not notify until we get the next reset notification from the socket
         notify_reset = FALSE;
@@ -767,6 +788,8 @@ gst_sctp_association_timeout_handle_async (GstSctpTimeout * timeout)
   GstSctpAssociation *assoc = timeout->assoc;
   g_assert (assoc);
 
+  GST_SCTP_ASSOC_MUTEX_LOCK (assoc);
+
   if (assoc->socket) {
     GST_LOG_OBJECT (assoc,
         "timeout=%p  timeout_id=%" G_GUINT64_FORMAT, timeout,
@@ -778,6 +801,8 @@ gst_sctp_association_timeout_handle_async (GstSctpTimeout * timeout)
         timeout->timeout_id);
   }
 
+  GST_SCTP_ASSOC_MUTEX_UNLOCK (assoc);
+
   return gst_sctp_association_async_return (assoc);
 }
 
@@ -788,7 +813,7 @@ gst_sctp_association_timeout_start (void *user_data, void *void_timeout,
   GstSctpAssociation *assoc = user_data;
   GstSctpTimeout *timeout = void_timeout;
 
-  timeout->assoc = assoc;
+  timeout->assoc = g_object_ref (assoc);
   timeout->timeout_id = timeout_id;
 
   g_assert (milliseconds > 0);
@@ -843,6 +868,10 @@ gst_sctp_association_timeout_delete (void *user_data, void *void_timeout)
 {
   GST_LOG ("timeout=%p", void_timeout);
   GstSctpTimeout *timeout = void_timeout;
+  
+  if (timeout->assoc)
+    g_object_unref (timeout->assoc);
+
   g_free (timeout);
 }
 
@@ -898,9 +927,19 @@ gst_sctp_association_async_ctx_free (GstSctpAssociationAsyncContext * ctx)
 {
   if (ctx->data)
     g_free (ctx->data);
+  if (ctx->assoc)
+    g_object_unref (ctx->assoc);
   g_free (ctx);
 }
 
+static GstSctpAssociationAsyncContext *
+gst_sctp_association_async_ctx_new (GstSctpAssociation * assoc)
+{
+  GstSctpAssociationAsyncContext *ctx =
+      g_new0 (GstSctpAssociationAsyncContext, 1);
+  ctx->assoc = g_object_ref (assoc);
+  return ctx;
+}
 
 static gboolean
 gst_sctp_association_on_closed_async (GstSctpAssociationAsyncContext * ctx)
@@ -910,9 +949,9 @@ gst_sctp_association_on_closed_async (GstSctpAssociationAsyncContext * ctx)
   GST_SCTP_ASSOC_MUTEX_LOCK (assoc);
   gst_sctp_association_change_state_unlocked (assoc,
       GST_SCTP_ASSOCIATION_STATE_DISCONNECTED);
-  GST_SCTP_ASSOC_MUTEX_UNLOCK (assoc);
 
   gst_sctp_association_free_socket (assoc);
+  GST_SCTP_ASSOC_MUTEX_UNLOCK (assoc);
 
   return gst_sctp_association_async_return (assoc);
 }
@@ -922,9 +961,7 @@ gst_sctp_association_on_closed (void *user_data)
 {
   GstSctpAssociation *assoc = user_data;
 
-  GstSctpAssociationAsyncContext *ctx =
-      g_new0 (GstSctpAssociationAsyncContext, 1);
-  ctx->assoc = assoc;
+  GstSctpAssociationAsyncContext *ctx = gst_sctp_association_async_ctx_new (assoc);
 
   GST_SCTP_ASSOC_MUTEX_LOCK (assoc);
 
@@ -972,7 +1009,6 @@ gst_sctp_association_connect_async (GstSctpAssociation * assoc)
   aggressive_heartbeat = assoc->aggressive_heartbeat;
   gst_sctp_association_change_state_unlocked (assoc,
       GST_SCTP_ASSOCIATION_STATE_CONNECTING);
-  GST_SCTP_ASSOC_MUTEX_UNLOCK (assoc);
 
 
   SctpSocket_Options opts;
@@ -1002,6 +1038,8 @@ gst_sctp_association_connect_async (GstSctpAssociation * assoc)
   assoc->socket = sctp_socket_new (&opts, &callbacks);
   sctp_socket_connect (assoc->socket);
 
+  GST_SCTP_ASSOC_MUTEX_UNLOCK (assoc);
+
   return gst_sctp_association_async_return (assoc);
 }
 
@@ -1011,6 +1049,7 @@ gst_sctp_association_incoming_packet_async (GstSctpAssociationAsyncContext *
 {
   GstSctpAssociation *assoc = ctx->assoc;
 
+  GST_SCTP_ASSOC_MUTEX_LOCK (assoc);
   // We could receive a packet from DTLS-RTP via sctpdec before sctpenc has set
   // up our socket.
   if (assoc->socket) {
@@ -1021,6 +1060,7 @@ gst_sctp_association_incoming_packet_async (GstSctpAssociationAsyncContext *
         "Couldn't process buffer (%p with length %" G_GSIZE_FORMAT
         "), missing socket", ctx->data, ctx->len);
   }
+  GST_SCTP_ASSOC_MUTEX_UNLOCK (assoc);
 
   return gst_sctp_association_async_return (assoc);
 }
@@ -1049,12 +1089,15 @@ static gboolean
 gst_sctp_association_send_abort_async (GstSctpAssociationAsyncContext * ctx)
 {
   GstSctpAssociation *assoc = ctx->assoc;
+
+  GST_SCTP_ASSOC_MUTEX_LOCK (assoc);
   g_assert (assoc);
   if (assoc->socket) {
     sctp_socket_send_abort (assoc->socket, (const char *) ctx->data);
   } else {
     GST_WARNING_OBJECT (ctx->assoc, "Couldn't send abort, missing socket");
   }
+  GST_SCTP_ASSOC_MUTEX_UNLOCK (assoc);
 
   return gst_sctp_association_async_return (assoc);
 }
@@ -1064,10 +1107,13 @@ gst_sctp_association_send_data_async (GstSctpAssociationAsyncContext * ctx)
 {
   GstSctpAssociation *assoc = ctx->assoc;
   g_assert (assoc);
+
+  GST_SCTP_ASSOC_MUTEX_LOCK (assoc);
   if (!assoc->socket) {
     GST_WARNING_OBJECT (ctx->assoc,
         "Couldn't send data (%p with length %" G_GSIZE_FORMAT
         "), missing socket", ctx->data, ctx->len);
+    GST_SCTP_ASSOC_MUTEX_UNLOCK (assoc);
     return gst_sctp_association_async_return (assoc);
   }
 
@@ -1101,6 +1147,8 @@ gst_sctp_association_send_data_async (GstSctpAssociationAsyncContext * ctx)
   g_free (lifetime);
   g_free (max_retransmissions);
 
+  GST_SCTP_ASSOC_MUTEX_UNLOCK (assoc);
+
   return gst_sctp_association_async_return (assoc);
 }
 
@@ -1110,14 +1158,12 @@ force_close_async (GstSctpAssociation * assoc)
   GST_SCTP_ASSOC_MUTEX_LOCK (assoc);
   gst_sctp_association_change_state_unlocked (assoc,
       GST_SCTP_ASSOCIATION_STATE_DISCONNECTING);
-  GST_SCTP_ASSOC_MUTEX_UNLOCK (assoc);
 
   if (assoc->socket) {
     sctp_socket_close (assoc->socket);
   }
   gst_sctp_association_free_socket (assoc);
 
-  GST_SCTP_ASSOC_MUTEX_LOCK (assoc);
   gst_sctp_association_change_state_unlocked (assoc,
       GST_SCTP_ASSOCIATION_STATE_DISCONNECTED);
   GST_SCTP_ASSOC_MUTEX_UNLOCK (assoc);
@@ -1131,13 +1177,14 @@ gst_sctp_association_disconnect_async (GstSctpAssociation * assoc)
   GST_SCTP_ASSOC_MUTEX_LOCK (assoc);
   gst_sctp_association_change_state_unlocked (assoc,
       GST_SCTP_ASSOCIATION_STATE_DISCONNECTING);
-  GST_SCTP_ASSOC_MUTEX_UNLOCK (assoc);
 
   if (assoc->socket) {
     sctp_socket_shutdown (assoc->socket);
   } else {
     GST_WARNING_OBJECT (assoc, "Couldn't disconnect association; no socket");
   }
+
+  GST_SCTP_ASSOC_MUTEX_UNLOCK (assoc);
 
   return gst_sctp_association_async_return (assoc);
 }
@@ -1184,10 +1231,8 @@ void
 gst_sctp_association_incoming_packet (GstSctpAssociation * assoc,
     const guint8 * buf, guint32 length)
 {
-  GstSctpAssociationAsyncContext *ctx =
-      g_new0 (GstSctpAssociationAsyncContext, 1);
+  GstSctpAssociationAsyncContext *ctx = gst_sctp_association_async_ctx_new (assoc);
 
-  ctx->assoc = assoc;
   ctx->data = g_memdup2 (buf, length);
   ctx->len = length;
 
@@ -1228,9 +1273,7 @@ gst_sctp_association_send_abort (GstSctpAssociation * assoc,
 {
   GST_SCTP_ASSOC_MUTEX_LOCK (assoc);
 
-  GstSctpAssociationAsyncContext *ctx =
-      g_new0 (GstSctpAssociationAsyncContext, 1);
-  ctx->assoc = assoc;
+  GstSctpAssociationAsyncContext *ctx = gst_sctp_association_async_ctx_new (assoc);
   ctx->data = (uint8_t *) g_strdup (message);
 
   gst_sctp_association_call_async (assoc, 0,
@@ -1255,9 +1298,7 @@ gst_sctp_association_send_data (GstSctpAssociation * assoc, const guint8 * buf,
     return GST_FLOW_ERROR;
   }
 
-  GstSctpAssociationAsyncContext *ctx =
-      g_new0 (GstSctpAssociationAsyncContext, 1);
-  ctx->assoc = assoc;
+  GstSctpAssociationAsyncContext *ctx = gst_sctp_association_async_ctx_new (assoc);
   ctx->data = g_memdup2 (buf, length);
   ctx->len = length;
   ctx->stream_id = stream_id;
@@ -1312,13 +1353,11 @@ gst_sctp_association_reset_stream (GstSctpAssociation * assoc,
   }
 
   GstSctpAssociationResetStreamCtx *ctx =
-      g_new0 (GstSctpAssociationResetStreamCtx, 1);
-  ctx->assoc = assoc;
-  ctx->stream_id = stream_id;
+      gst_sctp_association_reset_stream_ctx_new (assoc, stream_id);
 
   gst_sctp_association_call_async (assoc, 0,
       (GSourceFunc) gst_sctp_association_reset_stream_async,
-      ctx, (GDestroyNotify) g_free);
+      ctx, (GDestroyNotify) gst_sctp_association_reset_stream_ctx_free);
 
   GST_SCTP_ASSOC_MUTEX_UNLOCK (assoc);
 }
