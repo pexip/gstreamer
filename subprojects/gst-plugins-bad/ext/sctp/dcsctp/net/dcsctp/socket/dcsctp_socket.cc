@@ -484,6 +484,12 @@ StreamPriority DcSctpSocket::GetStreamPriority(StreamID stream_id) const {
 }
 
 void DcSctpSocket::SendAbort(const char *message) {
+  if (state_ == State::kClosed || tcb_ == nullptr) {
+    RTC_DLOG(LS_INFO) << log_prefix()
+                      << "Called SendAbort on a closed socket - ignoring";
+    return;
+  }
+
   packet_sender_.Send(tcb_->PacketBuilder().Add(
       AbortChunk(true, Parameters::Builder()
                            .Add(UserInitiatedAbortCause(
