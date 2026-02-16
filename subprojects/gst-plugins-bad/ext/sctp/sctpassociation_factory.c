@@ -47,10 +47,14 @@ static GMainContext *main_context = NULL;
 static GMainLoop *main_loop = NULL;
 static GThread *main_loop_thread = NULL;
 
-static GMutex unref_mutex;
-static GCond unref_cond;
-static gboolean unref_called;
+typedef struct {
+  GstSctpAssociation *assoc;
 
+  GMutex mutex;
+  GCond cond;
+  gboolean called;
+
+} FactoryUnrefData;
 
 static gpointer
 gst_sctp_association_factory_main_loop_run (gpointer data)
@@ -80,9 +84,6 @@ gst_sctp_association_factory_init (void)
         "debug category for sctpassociation factory");
     g_once_init_leave (&initialized, _initialized);
   }
-
-  g_mutex_init (&unref_mutex);
-  g_cond_init (&unref_cond);
 
   associations_by_id =
       g_hash_table_new_full (g_direct_hash, g_direct_equal, NULL, NULL);
@@ -121,20 +122,17 @@ gst_sctp_association_factory_deinit (void)
   main_loop_thread = NULL;
   main_context = NULL;
   main_loop = NULL;
-
-  g_mutex_clear (&unref_mutex);
-  g_cond_clear (&unref_cond);
 }
 
 static gboolean
-gst_sctp_association_factory_unref_in_main_loop (GstSctpAssociation * assoc)
+gst_sctp_association_factory_unref_in_main_loop (FactoryUnrefData * data)
 {
-  g_object_unref (assoc);
+  g_object_unref (data->assoc);
 
-  g_mutex_lock (&unref_mutex);
-  unref_called = TRUE;
-  g_cond_signal (&unref_cond);
-  g_mutex_unlock (&unref_mutex);
+  g_mutex_lock (&data->mutex);
+  data->called = TRUE;
+  g_cond_signal (&data->cond);
+  g_mutex_unlock (&data->mutex);
 
   return FALSE;
 }
@@ -167,7 +165,6 @@ gst_sctp_association_factory_association_unref (GstSctpAssociation * assoc)
     g_hash_table_remove (associations_refs, GUINT_TO_POINTER (association_id));
   }
 }
-
 
 /* PUBLIC */
 
@@ -211,19 +208,26 @@ gst_sctp_association_factory_release (GstSctpAssociation * assoc)
 
   gst_sctp_association_factory_association_unref (assoc);
 
-  g_mutex_lock (&unref_mutex);
-  unref_called = FALSE;
+  FactoryUnrefData *data = g_new0 (FactoryUnrefData, 1);
+  data->assoc = assoc;
+  g_mutex_init (&data->mutex);
+  g_cond_init (&data->cond);
 
   g_source_set_callback (source,
-      (GSourceFunc) gst_sctp_association_factory_unref_in_main_loop, assoc,
-      NULL);
+      (GSourceFunc) gst_sctp_association_factory_unref_in_main_loop,
+      data, NULL);
 
   g_source_attach (source, main_context);
   g_source_unref (source);
 
-  while (!unref_called)
-    g_cond_wait (&unref_cond, &unref_mutex);
-  g_mutex_unlock (&unref_mutex);
+  g_mutex_lock (&data->mutex);
+  while (!data->called)
+    g_cond_wait (&data->cond, &data->mutex);
+  g_mutex_unlock (&data->mutex);
+
+  g_mutex_clear (&data->mutex);
+  g_cond_clear (&data->cond);
+  g_free (data);
 
   if (g_hash_table_size (associations_by_id) == 0)
     gst_sctp_association_factory_deinit ();
