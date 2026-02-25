@@ -960,7 +960,7 @@ _redblock_reconsider (TWCCStatsManager * statsman, RedBlock * block)
         }
         SentPacket *redundant_pkt = _find_stats_sentpacket (statsman,
             g_array_index (block->fec_seqs, guint16, i));
-        if (redundant_pkt->state == RTP_TWCC_FECBLOCK_PKT_RECEIVED) {
+        if (redundant_pkt && redundant_pkt->state == RTP_TWCC_FECBLOCK_PKT_RECEIVED) {
           nrecovered++;
           break;
         }
