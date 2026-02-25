@@ -288,6 +288,22 @@ static void
 _rm_pkt_stats (TWCCStatsManager * statsman, SentPacket * pkt)
 {
   _rm_redundancy_links_pkt (statsman, pkt);
+
+  /* Prune stale ssrc_to_seqmap entry for this packet only if
+     the mapping still points to this packet's TWCC seqnum */
+  GHashTable *seq_to_twcc = g_hash_table_lookup (statsman->ssrc_to_seqmap,
+      GUINT_TO_POINTER (pkt->ssrc));
+  if (seq_to_twcc) {
+    gpointer val;
+    if (g_hash_table_lookup_extended (seq_to_twcc,
+            GUINT_TO_POINTER (pkt->orig_seqnum), NULL, &val)
+        && GPOINTER_TO_UINT (val) == pkt->seqnum) {
+      g_hash_table_remove (seq_to_twcc,
+          GUINT_TO_POINTER (pkt->orig_seqnum));
+    }
+  }
+
+
   GST_LOG_OBJECT (statsman->parent,
       "Removing #%u from history, main ctx length: %d, pkt ts: %"
       GST_TIME_FORMAT, pkt->seqnum,
@@ -960,7 +976,7 @@ _redblock_reconsider (TWCCStatsManager * statsman, RedBlock * block)
         }
         SentPacket *redundant_pkt = _find_stats_sentpacket (statsman,
             g_array_index (block->fec_seqs, guint16, i));
-        if (redundant_pkt->state == RTP_TWCC_FECBLOCK_PKT_RECEIVED) {
+        if (redundant_pkt && redundant_pkt->state == RTP_TWCC_FECBLOCK_PKT_RECEIVED) {
           nrecovered++;
           break;
         }
@@ -1117,12 +1133,14 @@ static gint32
 _lookup_seqnum (TWCCStatsManager * statsman, guint32 ssrc, guint16 seqnum)
 {
   gint32 ret = -1;
+  gpointer val;
 
   GHashTable *seq_to_twcc =
       g_hash_table_lookup (statsman->ssrc_to_seqmap, GUINT_TO_POINTER (ssrc));
   if (seq_to_twcc) {
     if (g_hash_table_lookup_extended (seq_to_twcc, GUINT_TO_POINTER (seqnum),
-            NULL, (gpointer *) & ret)) {
+            NULL, &val)) {
+      ret = GPOINTER_TO_INT (val);
       return ret;
     } else {
       return -1;
@@ -1264,6 +1282,20 @@ _process_pkt_feedback (SentPacket * pkt, TWCCStatsManager * statsman)
           GUINT_TO_POINTER (pkt->seqnum), block);
       /* There is no such block, add a new one */
     } else {
+/* Verify all the packets this redundant packet is protecting
+       * are not covered by any other existing block, because if
+       * they do it means some weird state of the data structures.
+      */
+      for (gsize i = 0; i < pkt->protects_seqnums->len; ++i) {
+        const guint16 data_key = g_array_index (pkt->protects_seqnums,
+            guint16, i);
+        RedBlock *data_block = NULL;
+        if (g_hash_table_lookup_extended (statsman->seqnum_2_redblocks,
+                GUINT_TO_POINTER (data_key), NULL, (gpointer *) & data_block)) {
+          _redblock_key_free (key);
+          return;
+        }
+      }
       /* Add every data packet into seqnum_2_redblocks  */
       block = _redblock_new (pkt->protects_seqnums, pkt->seqnum,
           pkt->redundant_idx, pkt->redundant_num);
@@ -1277,7 +1309,7 @@ _process_pkt_feedback (SentPacket * pkt, TWCCStatsManager * statsman)
       g_hash_table_insert (statsman->seqnum_2_redblocks,
           GUINT_TO_POINTER (pkt->seqnum), block);
       for (gsize i = 0; i < pkt->protects_seqnums->len; ++i) {
-        const guint64 data_key = g_array_index (pkt->protects_seqnums,
+        const guint16 data_key = g_array_index (pkt->protects_seqnums,
             guint16, i);
         RedBlock *data_block = NULL;
         if (!g_hash_table_lookup_extended (statsman->seqnum_2_redblocks,
@@ -1594,14 +1626,16 @@ rtp_twcc_stats_check_for_lost_packets (TWCCStatsManager * statsman,
     goto done;
   }
 
-  if (base_seqnum < statsman->expected_parsed_seqnum) {
+  const gint seqnum_diff = gst_rtp_buffer_compare_seqnum (
+statsman->expected_parsed_seqnum, base_seqnum);
+  if (seqnum_diff < 0) {
     GST_DEBUG_OBJECT (statsman->parent,
         "twcc seqnum is older than expected  (%u < %u)", base_seqnum,
         statsman->expected_parsed_seqnum);
     goto done;
   }
 
-  packets_lost = base_seqnum - statsman->expected_parsed_seqnum;
+  packets_lost = (guint) seqnum_diff;
   for (i = 0; i < packets_lost; i++) {
     const guint16 seqnum = statsman->expected_parsed_seqnum + i;
     SentPacket *found;
