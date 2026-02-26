@@ -413,6 +413,319 @@ GST_START_TEST (test_rtxreceive_empty_rtx_packet)
 
 GST_END_TEST;
 
+GST_START_TEST (test_rtxreceive_chain_list_passthrough)
+{
+  /* Test that a buffer list of normal (non-RTX) packets passes through
+   * rtprtxreceive as a buffer list */
+  guint master_ssrc = 1234567;
+  guint master_pt = 96;
+  guint rtx_pt = 99;
+  const guint num_buffers = 5;
+  GstStructure *pt_map;
+  GstBufferList *in_list, *out_list;
+  GstHarness *h = gst_harness_new ("rtprtxreceive");
+  guint i;
+
+  pt_map = gst_structure_new ("application/x-rtp-pt-map",
+      "96", G_TYPE_UINT, rtx_pt, NULL);
+  g_object_set (h->element, "payload-type-map", pt_map, NULL);
+  gst_harness_set_src_caps_str (h, "application/x-rtp, "
+      "clock-rate = (int)90000");
+
+  in_list = gst_buffer_list_new_sized (num_buffers);
+  for (i = 0; i < num_buffers; i++) {
+    gst_buffer_list_add (in_list,
+        create_rtp_buffer (master_ssrc, master_pt, 100 + i));
+  }
+
+  fail_unless_equals_int (GST_FLOW_OK,
+      gst_harness_push_list (h, in_list));
+
+  /* All buffers should come out as a single buffer list */
+  out_list = gst_harness_pull_list (h);
+  fail_unless (out_list != NULL);
+  fail_unless_equals_int (gst_buffer_list_length (out_list), num_buffers);
+
+  for (i = 0; i < num_buffers; i++) {
+    GstBuffer *buf = gst_buffer_list_get (out_list, i);
+    verify_buf (buf, FALSE, master_ssrc, master_pt, 100 + i, 0, 0);
+  }
+
+  gst_buffer_list_unref (out_list);
+  gst_structure_free (pt_map);
+  gst_harness_teardown (h);
+}
+
+GST_END_TEST;
+
+GST_START_TEST (test_rtxreceive_chain_list_with_rtx)
+{
+  /* Test that a buffer list containing both normal and RTX packets
+   * is correctly processed: RTX packets are restored with original SSRC/PT,
+   * normal packets pass through unchanged */
+  guint master_ssrc = 1234567;
+  guint rtx_ssrc = 7654321;
+  guint master_pt = 96;
+  guint rtx_pt = 99;
+  GstStructure *pt_map;
+  GstStructure *ssrc_map;
+  GstBufferList *in_list, *out_list;
+  GstRTPBuffer *rtp;
+  GstBuffer *rtp_buf;
+  GstHarness *h = gst_harness_new ("rtprtxreceive");
+
+  pt_map = gst_structure_new ("application/x-rtp-pt-map",
+      "96", G_TYPE_UINT, rtx_pt, NULL);
+  ssrc_map = create_rtx_map ("application/x-rtp-ssrc-map",
+      master_ssrc, rtx_ssrc);
+  g_object_set (h->element, "payload-type-map", pt_map, NULL);
+  g_object_set (h->element, "ssrc-map", ssrc_map, NULL);
+  gst_harness_set_src_caps_str (h, "application/x-rtp, "
+      "clock-rate = (int)90000");
+
+  /* Build a buffer list with: normal, rtx, normal, rtx */
+  in_list = gst_buffer_list_new_sized (4);
+
+  /* normal packet seqnum=100 */
+  gst_buffer_list_add (in_list,
+      create_rtp_buffer (master_ssrc, master_pt, 100));
+
+  /* RTX packet for orig seqnum=50: first we need to request it */
+  gst_harness_push_upstream_event (h,
+      create_rtx_event (master_ssrc, master_pt, 50));
+  rtp = create_rtp_buffer_ex (rtx_ssrc, rtx_pt, 200, 0, 2);
+  rtp_buf = rtp->buffer;
+  GST_WRITE_UINT16_BE (gst_rtp_buffer_get_payload (rtp), 50);
+  gst_rtp_buffer_unmap (rtp);
+  g_free (rtp);
+  gst_buffer_list_add (in_list, rtp_buf);
+
+  /* normal packet seqnum=101 */
+  gst_buffer_list_add (in_list,
+      create_rtp_buffer (master_ssrc, master_pt, 101));
+
+  /* RTX packet for orig seqnum=51 */
+  gst_harness_push_upstream_event (h,
+      create_rtx_event (master_ssrc, master_pt, 51));
+  rtp = create_rtp_buffer_ex (rtx_ssrc, rtx_pt, 201, 0, 2);
+  rtp_buf = rtp->buffer;
+  GST_WRITE_UINT16_BE (gst_rtp_buffer_get_payload (rtp), 51);
+  gst_rtp_buffer_unmap (rtp);
+  g_free (rtp);
+  gst_buffer_list_add (in_list, rtp_buf);
+
+  fail_unless_equals_int (GST_FLOW_OK,
+      gst_harness_push_list (h, in_list));
+
+  out_list = gst_harness_pull_list (h);
+  fail_unless (out_list != NULL);
+  fail_unless_equals_int (gst_buffer_list_length (out_list), 4);
+
+  /* Verify normal packet 100 */
+  verify_buf (gst_buffer_list_get (out_list, 0), FALSE,
+      master_ssrc, master_pt, 100, 0, 0);
+
+  /* Verify restored RTX packet with orig seqnum 50.
+   * The output of rtxreceive looks like a normal packet (SSRC and PT
+   * restored, OSN set as seqnum) with the retransmission flag set. */
+  {
+    GstBuffer *buf = gst_buffer_list_get (out_list, 1);
+    GstRTPBuffer rtpbuf = GST_RTP_BUFFER_INIT;
+    fail_unless (gst_rtp_buffer_map (buf, GST_MAP_READ, &rtpbuf));
+    fail_unless_equals_int (gst_rtp_buffer_get_ssrc (&rtpbuf), master_ssrc);
+    fail_unless_equals_int (gst_rtp_buffer_get_payload_type (&rtpbuf),
+        master_pt);
+    fail_unless_equals_int (gst_rtp_buffer_get_seq (&rtpbuf), 50);
+    gst_rtp_buffer_unmap (&rtpbuf);
+    fail_unless (GST_BUFFER_FLAG_IS_SET (buf,
+        GST_RTP_BUFFER_FLAG_RETRANSMISSION));
+  }
+
+  /* Verify normal packet 101 */
+  verify_buf (gst_buffer_list_get (out_list, 2), FALSE,
+      master_ssrc, master_pt, 101, 0, 0);
+
+  /* Verify restored RTX packet with orig seqnum 51 */
+  {
+    GstBuffer *buf = gst_buffer_list_get (out_list, 3);
+    GstRTPBuffer rtpbuf = GST_RTP_BUFFER_INIT;
+    fail_unless (gst_rtp_buffer_map (buf, GST_MAP_READ, &rtpbuf));
+    fail_unless_equals_int (gst_rtp_buffer_get_ssrc (&rtpbuf), master_ssrc);
+    fail_unless_equals_int (gst_rtp_buffer_get_payload_type (&rtpbuf),
+        master_pt);
+    fail_unless_equals_int (gst_rtp_buffer_get_seq (&rtpbuf), 51);
+    gst_rtp_buffer_unmap (&rtpbuf);
+    fail_unless (GST_BUFFER_FLAG_IS_SET (buf,
+        GST_RTP_BUFFER_FLAG_RETRANSMISSION));
+  }
+
+  /* Check RTX stats */
+  {
+    guint rtx_packets, rtx_assoc_packets;
+    g_object_get (G_OBJECT (h->element),
+        "num-rtx-packets", &rtx_packets,
+        "num-rtx-assoc-packets", &rtx_assoc_packets, NULL);
+    fail_unless_equals_int (rtx_packets, 2);
+    fail_unless_equals_int (rtx_assoc_packets, 2);
+  }
+
+  gst_buffer_list_unref (out_list);
+  gst_structure_free (pt_map);
+  gst_structure_free (ssrc_map);
+  gst_harness_teardown (h);
+}
+
+GST_END_TEST;
+
+GST_START_TEST (test_rtxreceive_chain_list_all_dropped)
+{
+  /* Test that when all RTX packets in a buffer list are dropped
+   * (unassociated), no output is produced */
+  guint rtx_ssrc = 7654321;
+  guint rtx_pt = 99;
+  GstStructure *pt_map;
+  GstRTPBuffer *rtp;
+  GstBuffer *rtp_buf;
+  GstBufferList *in_list;
+  GstHarness *h = gst_harness_new ("rtprtxreceive");
+
+  pt_map = gst_structure_new ("application/x-rtp-pt-map",
+      "96", G_TYPE_UINT, rtx_pt, NULL);
+  g_object_set (h->element, "payload-type-map", pt_map, NULL);
+  gst_harness_set_src_caps_str (h, "application/x-rtp, "
+      "clock-rate = (int)90000");
+
+  /* Push RTX packets without any retransmission requests, so they
+   * cannot be associated and should be dropped */
+  in_list = gst_buffer_list_new_sized (3);
+  for (guint i = 0; i < 3; i++) {
+    rtp = create_rtp_buffer_ex (rtx_ssrc, rtx_pt, 200 + i, 0, 2);
+    rtp_buf = rtp->buffer;
+    GST_WRITE_UINT16_BE (gst_rtp_buffer_get_payload (rtp), 50 + i);
+    gst_rtp_buffer_unmap (rtp);
+    g_free (rtp);
+    gst_buffer_list_add (in_list, rtp_buf);
+  }
+
+  fail_unless_equals_int (GST_FLOW_OK,
+      gst_harness_push_list (h, in_list));
+
+  /* All packets should have been dropped */
+  fail_unless_equals_int (gst_harness_buffers_in_queue (h), 0);
+
+  gst_structure_free (pt_map);
+  gst_harness_teardown (h);
+}
+
+GST_END_TEST;
+
+GST_START_TEST (test_rtxreceive_chain_list_no_map_passthrough)
+{
+  /* Test that a buffer list passes through unmodified when no
+   * payload-type-map is set */
+  guint master_ssrc = 1234567;
+  guint master_pt = 96;
+  const guint num_buffers = 3;
+  GstBufferList *in_list, *out_list;
+  GstHarness *h = gst_harness_new ("rtprtxreceive");
+  guint i;
+
+  /* Don't set any payload-type-map */
+  gst_harness_set_src_caps_str (h, "application/x-rtp, "
+      "clock-rate = (int)90000");
+
+  in_list = gst_buffer_list_new_sized (num_buffers);
+  for (i = 0; i < num_buffers; i++) {
+    gst_buffer_list_add (in_list,
+        create_rtp_buffer (master_ssrc, master_pt, 100 + i));
+  }
+
+  fail_unless_equals_int (GST_FLOW_OK,
+      gst_harness_push_list (h, in_list));
+
+  out_list = gst_harness_pull_list (h);
+  fail_unless (out_list != NULL);
+  fail_unless_equals_int (gst_buffer_list_length (out_list), num_buffers);
+
+  for (i = 0; i < num_buffers; i++) {
+    GstBuffer *buf = gst_buffer_list_get (out_list, i);
+    verify_buf (buf, FALSE, master_ssrc, master_pt, 100 + i, 0, 0);
+  }
+
+  gst_buffer_list_unref (out_list);
+  gst_harness_teardown (h);
+}
+
+GST_END_TEST;
+
+GST_START_TEST (test_rtxreceive_chain_list_empty_rtx_packet)
+{
+  /* Test that empty RTX packets in a buffer list are dropped while
+   * valid packets pass through */
+  guint rtx_ssrc = 7654321;
+  guint master_ssrc = 1234567;
+  guint master_pt = 96;
+  guint rtx_pt = 99;
+  GstStructure *pt_map;
+  GstRTPBuffer *rtp;
+  GstBuffer *rtp_buf;
+  GstBufferList *in_list, *out_list;
+  GstHarness *h = gst_harness_new ("rtprtxreceive");
+
+  pt_map = gst_structure_new ("application/x-rtp-pt-map",
+      "96", G_TYPE_UINT, rtx_pt, NULL);
+  g_object_set (h->element, "payload-type-map", pt_map, NULL);
+  gst_harness_set_src_caps_str (h, "application/x-rtp, "
+      "clock-rate = (int)90000");
+
+  /* Associate the master stream and rtx stream first */
+  gst_harness_push_upstream_event (h,
+      create_rtx_event (master_ssrc, master_pt, 100));
+  rtp = create_rtp_buffer_ex (rtx_ssrc, rtx_pt, 200, 0, 2);
+  rtp_buf = rtp->buffer;
+  GST_WRITE_UINT16_BE (gst_rtp_buffer_get_payload (rtp), 100);
+  gst_rtp_buffer_unmap (rtp);
+  g_free (rtp);
+  gst_buffer_unref (gst_harness_push_and_pull (h, rtp_buf));
+
+  /* Now push a buffer list with: normal, empty-rtx, normal */
+  in_list = gst_buffer_list_new_sized (3);
+
+  /* normal packet */
+  gst_buffer_list_add (in_list,
+      create_rtp_buffer (master_ssrc, master_pt, 101));
+
+  /* empty RTX packet (payload_size=0) */
+  rtp = create_rtp_buffer_ex (rtx_ssrc, rtx_pt, 202, 0, 0);
+  rtp_buf = rtp->buffer;
+  gst_rtp_buffer_unmap (rtp);
+  g_free (rtp);
+  gst_buffer_list_add (in_list, rtp_buf);
+
+  /* normal packet */
+  gst_buffer_list_add (in_list,
+      create_rtp_buffer (master_ssrc, master_pt, 102));
+
+  fail_unless_equals_int (GST_FLOW_OK,
+      gst_harness_push_list (h, in_list));
+
+  /* Only the 2 normal packets should come out, empty RTX dropped */
+  out_list = gst_harness_pull_list (h);
+  fail_unless (out_list != NULL);
+  fail_unless_equals_int (gst_buffer_list_length (out_list), 2);
+
+  verify_buf (gst_buffer_list_get (out_list, 0), FALSE,
+      master_ssrc, master_pt, 101, 0, 0);
+  verify_buf (gst_buffer_list_get (out_list, 1), FALSE,
+      master_ssrc, master_pt, 102, 0, 0);
+
+  gst_buffer_list_unref (out_list);
+  gst_structure_free (pt_map);
+  gst_harness_teardown (h);
+}
+
+GST_END_TEST;
+
 GST_START_TEST (test_rtxsend_rtxreceive)
 {
   /* use the largest SSRC possible */
@@ -1927,6 +2240,11 @@ rtprtx_suite (void)
   tcase_add_test (tc_chain, test_rtxsend_configured_not_playing_cleans_up);
 
   tcase_add_test (tc_chain, test_rtxreceive_empty_rtx_packet);
+  tcase_add_test (tc_chain, test_rtxreceive_chain_list_passthrough);
+  tcase_add_test (tc_chain, test_rtxreceive_chain_list_with_rtx);
+  tcase_add_test (tc_chain, test_rtxreceive_chain_list_all_dropped);
+  tcase_add_test (tc_chain, test_rtxreceive_chain_list_no_map_passthrough);
+  tcase_add_test (tc_chain, test_rtxreceive_chain_list_empty_rtx_packet);
   tcase_add_test (tc_chain, test_rtxsend_rtxreceive);
   tcase_add_test (tc_chain, test_rtxsend_rtxreceive_with_packet_loss);
   tcase_add_test (tc_chain, test_multi_rtxsend_rtxreceive_with_packet_loss);

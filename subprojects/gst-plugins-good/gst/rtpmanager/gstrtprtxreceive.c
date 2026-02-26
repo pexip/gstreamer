@@ -195,6 +195,8 @@ static gboolean gst_rtp_rtx_receive_src_event (GstPad * pad, GstObject * parent,
     GstEvent * event);
 static GstFlowReturn gst_rtp_rtx_receive_chain (GstPad * pad,
     GstObject * parent, GstBuffer * buffer);
+static GstFlowReturn gst_rtp_rtx_receive_chain_list (GstPad * pad,
+    GstObject * parent, GstBufferList * bufferlist);
 
 static GstStateChangeReturn gst_rtp_rtx_receive_change_state (GstElement *
     element, GstStateChange transition);
@@ -416,6 +418,8 @@ gst_rtp_rtx_receive_init (GstRtpRtxReceive * rtx)
   GST_PAD_SET_PROXY_ALLOCATION (rtx->sinkpad);
   gst_pad_set_chain_function (rtx->sinkpad,
       GST_DEBUG_FUNCPTR (gst_rtp_rtx_receive_chain));
+  gst_pad_set_chain_list_function (rtx->sinkpad,
+      GST_DEBUG_FUNCPTR (gst_rtp_rtx_receive_chain_list));
   gst_element_add_pad (GST_ELEMENT (rtx), rtx->sinkpad);
 
   rtx->ssrc2_ssrc1_map = g_hash_table_new (g_direct_hash, g_direct_equal);
@@ -777,12 +781,18 @@ _gst_rtp_buffer_new_from_rtx (GstRtpRtxReceive * rtx, GstRTPBuffer * rtp,
   return new_buffer;
 }
 
+/* Process a single buffer through RTX receive logic.
+ * Takes ownership of @buffer. Returns the processed output buffer in
+ * @out_buffer (which may be a new RTX-restored buffer or the original).
+ * If the buffer should be dropped, *out_buffer is set to NULL.
+ * Returns: GST_FLOW_OK on success (including drops), or GST_FLOW_ERROR
+ * on invalid input.
+ */
 static GstFlowReturn
-gst_rtp_rtx_receive_chain (GstPad * pad, GstObject * parent, GstBuffer * buffer)
+gst_rtp_rtx_receive_process_buffer (GstRtpRtxReceive * rtx,
+    GstBuffer * buffer, GstBuffer ** out_buffer)
 {
-  GstRtpRtxReceive *rtx = GST_RTP_RTX_RECEIVE_CAST (parent);
   GstRTPBuffer rtp = GST_RTP_BUFFER_INIT;
-  GstFlowReturn ret = GST_FLOW_OK;
   GstBuffer *new_buffer = NULL;
   guint32 ssrc = 0;
   gpointer ssrc1 = 0;
@@ -795,12 +805,20 @@ gst_rtp_rtx_receive_chain (GstPad * pad, GstObject * parent, GstBuffer * buffer)
   gboolean is_rtx;
   gboolean drop = FALSE;
 
-  if (rtx->rtx_pt_map_structure == NULL)
-    goto no_map;
+  *out_buffer = NULL;
+
+  if (rtx->rtx_pt_map_structure == NULL) {
+    GST_DEBUG_OBJECT (rtx, "No map set, passthrough");
+    *out_buffer = buffer;
+    return GST_FLOW_OK;
+  }
 
   /* map current rtp packet to parse its header */
-  if (!gst_rtp_buffer_map (buffer, GST_MAP_READ, &rtp))
-    goto invalid_buffer;
+  if (!gst_rtp_buffer_map (buffer, GST_MAP_READ, &rtp)) {
+    GST_INFO_OBJECT (rtx, "Received invalid RTP payload, dropping");
+    gst_buffer_unref (buffer);
+    return GST_FLOW_OK;
+  }
 
   GST_MEMDUMP_OBJECT (rtx, "rtp header", rtp.map[0].data, rtp.map[0].size);
   GST_MEMDUMP_OBJECT (rtx, "rtp ext", rtp.map[1].data, rtp.map[1].size);
@@ -823,7 +841,9 @@ gst_rtp_rtx_receive_chain (GstPad * pad, GstObject * parent, GstBuffer * buffer)
     if (!payload || gst_rtp_buffer_get_payload_len (&rtp) < 2) {
       GST_OBJECT_UNLOCK (rtx);
       gst_rtp_buffer_unmap (&rtp);
-      goto invalid_buffer;
+      GST_INFO_OBJECT (rtx, "Received invalid RTP payload, dropping");
+      gst_buffer_unref (buffer);
+      return GST_FLOW_OK;
     }
   }
 
@@ -938,39 +958,86 @@ gst_rtp_rtx_receive_chain (GstPad * pad, GstObject * parent, GstBuffer * buffer)
   }
 
   /* create the retransmission packet */
-  if (is_rtx)
+  if (is_rtx) {
     new_buffer =
         _gst_rtp_buffer_new_from_rtx (rtx, &rtp, GPOINTER_TO_UINT (ssrc1),
         orign_seqnum, origin_payload_type);
+  }
 
   gst_rtp_buffer_unmap (&rtp);
 
-  /* push the packet */
   if (is_rtx) {
     gst_buffer_unref (buffer);
-    GST_LOG_OBJECT (rtx, "pushing packet seqnum:%u from restransmission "
+    GST_LOG_OBJECT (rtx, "processed packet seqnum:%u from retransmission "
         "stream ssrc: %X (master ssrc %X)", orign_seqnum, ssrc2,
         GPOINTER_TO_UINT (ssrc1));
-    ret = gst_pad_push (rtx->srcpad, new_buffer);
+    *out_buffer = new_buffer;
   } else {
-    GST_TRACE_OBJECT (rtx, "pushing packet seqnum:%u from master stream "
+    GST_TRACE_OBJECT (rtx, "processed packet seqnum:%u from master stream "
         "ssrc: %X", seqnum, ssrc);
-    ret = gst_pad_push (rtx->srcpad, buffer);
+    *out_buffer = buffer;
   }
+
+  return GST_FLOW_OK;
+}
+
+static GstFlowReturn
+gst_rtp_rtx_receive_chain (GstPad * pad, GstObject * parent, GstBuffer * buffer)
+{
+  GstRtpRtxReceive *rtx = GST_RTP_RTX_RECEIVE_CAST (parent);
+  GstBuffer *out_buffer = NULL;
+  GstFlowReturn ret;
+
+  ret = gst_rtp_rtx_receive_process_buffer (rtx, buffer, &out_buffer);
+  if (ret != GST_FLOW_OK)
+    return ret;
+
+  if (out_buffer)
+    ret = gst_pad_push (rtx->srcpad, out_buffer);
 
   return ret;
+}
 
-no_map:
-  {
-    GST_DEBUG_OBJECT (pad, "No map set, passthrough");
-    return gst_pad_push (rtx->srcpad, buffer);
+static GstFlowReturn
+gst_rtp_rtx_receive_chain_list (GstPad * pad, GstObject * parent,
+    GstBufferList * bufferlist)
+{
+  GstRtpRtxReceive *rtx = GST_RTP_RTX_RECEIVE_CAST (parent);
+  GstBufferList *out_list;
+  GstFlowReturn ret = GST_FLOW_OK;
+  guint i, len;
+
+  len = gst_buffer_list_length (bufferlist);
+  out_list = gst_buffer_list_new_sized (len);
+
+  for (i = 0; i < len; i++) {
+    GstBuffer *buffer, *out_buffer = NULL;
+
+    buffer = gst_buffer_list_get (bufferlist, i);
+    /* take a ref since the buffer list still owns the buffer */
+    gst_buffer_ref (buffer);
+
+    ret = gst_rtp_rtx_receive_process_buffer (rtx, buffer, &out_buffer);
+    if (ret != GST_FLOW_OK)
+      break;
+
+    if (out_buffer)
+      gst_buffer_list_add (out_list, out_buffer);
   }
-invalid_buffer:
-  {
-    GST_INFO_OBJECT (pad, "Received invalid RTP payload, dropping");
-    gst_buffer_unref (buffer);
-    return GST_FLOW_OK;
+
+  gst_buffer_list_unref (bufferlist);
+
+  if (ret != GST_FLOW_OK) {
+    gst_buffer_list_unref (out_list);
+    return ret;
   }
+
+  if (gst_buffer_list_length (out_list) > 0)
+    ret = gst_pad_push_list (rtx->srcpad, out_list);
+  else
+    gst_buffer_list_unref (out_list);
+
+  return ret;
 }
 
 static void
