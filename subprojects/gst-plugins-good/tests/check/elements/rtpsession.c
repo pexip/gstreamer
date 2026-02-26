@@ -7269,6 +7269,67 @@ GST_START_TEST (test_sender_timeout)
 
 GST_END_TEST;
 
+GST_START_TEST (test_recv_rtp_list_shared_buffer_list)
+{
+  /* Regression test: gst_rtp_session_chain_recv_rtp_list must make the
+   * incoming buffer list writable before iterating over it, because the
+   * processing callback sets *buffer = NULL to remove already-processed
+   * entries. Without gst_buffer_list_make_writable() this corrupts any
+   * other owner that still holds a ref on the same list. */
+  SessionHarness *h = session_harness_new ();
+  GstBufferList *list, *shared_ref;
+  GstBuffer *buf;
+  const guint num_buffers = 3;
+  guint i;
+
+  /* Set probation to 1 so that the very first buffer validates the source
+   * and subsequent buffers are pushed through immediately. */
+  g_object_set (h->internal_session, "probation", 1, NULL);
+
+  /* Send one buffer first to pass probation for this SSRC. */
+  fail_unless_equals_int (GST_FLOW_OK,
+      session_harness_recv_rtp (h, generate_test_buffer (0, TEST_BUF_SSRC)));
+  /* Pull the probation-passing buffer out. */
+  buf = gst_harness_pull (h->recv_rtp_h);
+  gst_buffer_unref (buf);
+
+  /* Build a buffer list with sequential RTP buffers. */
+  list = gst_buffer_list_new_sized (num_buffers);
+  for (i = 0; i < num_buffers; i++) {
+    gst_buffer_list_add (list,
+        generate_test_buffer (1 + i, TEST_BUF_SSRC));
+  }
+
+  /* Take an extra ref so that the list is *not* writable when pushed.
+   * Before the fix, this would cause the element to modify a shared
+   * (non-writable) buffer list, leading to assertion failures or
+   * memory corruption. */
+  shared_ref = gst_buffer_list_ref (list);
+
+  fail_unless_equals_int (GST_FLOW_OK,
+      gst_harness_push_list (h->recv_rtp_h, list));
+
+  /* Verify that the output contains our buffers (as a buffer list). */
+  {
+    GstBufferList *out_list = gst_harness_pull_list (h->recv_rtp_h);
+    fail_unless (out_list != NULL);
+    fail_unless_equals_int (num_buffers, gst_buffer_list_length (out_list));
+    gst_buffer_list_unref (out_list);
+  }
+
+  /* The shared ref must still be alive and have the original length.
+   * Before the fix the entries would have been NULLed out in-place. */
+  fail_unless_equals_int (num_buffers, gst_buffer_list_length (shared_ref));
+  for (i = 0; i < num_buffers; i++) {
+    fail_unless (gst_buffer_list_get (shared_ref, i) != NULL);
+  }
+  gst_buffer_list_unref (shared_ref);
+
+  session_harness_free (h);
+}
+
+GST_END_TEST;
+
 static Suite *
 rtpsession_suite (void)
 {
@@ -7393,6 +7454,7 @@ rtpsession_suite (void)
   tcase_add_test (tc_chain, test_stats_transmission_duration);
   tcase_add_test (tc_chain, test_stats_transmission_duration_reordering);
   tcase_add_test (tc_chain, test_sender_timeout);
+  tcase_add_test (tc_chain, test_recv_rtp_list_shared_buffer_list);
   return s;
 }
 

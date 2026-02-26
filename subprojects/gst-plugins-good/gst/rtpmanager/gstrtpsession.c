@@ -2153,7 +2153,7 @@ push_error:
 static gboolean
 process_received_buffer_in_list (GstBuffer ** buffer, guint idx, gpointer data)
 {
-  gint ret;
+  GstFlowReturn ret;
 
   ret = gst_rtp_session_chain_recv_rtp (NULL, data, *buffer);
   if (ret != GST_FLOW_OK)
@@ -2180,6 +2180,10 @@ gst_rtp_session_chain_recv_rtp_list (GstPad * pad, GstObject * parent,
   /* Set some private data to detect that a buffer list is being pushed. */
   rtpsession->priv->processed_list = processed_list;
 
+  /* Make the list writable as we are going to remove buffers from it by
+   * processing function.
+   */
+  list = gst_buffer_list_make_writable (list);
   /*
    * Individually process the buffers from the incoming buffer list as the
    * incoming RTP packets in the list can be mixed in all sorts of ways:
