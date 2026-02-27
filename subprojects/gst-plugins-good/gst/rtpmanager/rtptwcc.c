@@ -1250,7 +1250,7 @@ rtp_twcc_manager_parse_fci (RTPTWCCManager * twcc,
   for (i = 0; i < twcc->parsed_packets->len; i++) {
     ParsedPacket *pkt = &g_array_index (twcc->parsed_packets, ParsedPacket, i);
     gint16 delta = 0;
-    GstClockTimeDiff delta_ts;
+    GstClockTimeDiff delta_ts = 0;
 
     if (pkt->status == RTP_TWCC_PACKET_STATUS_SMALL_DELTA) {
       delta = fci_data[fci_parsed];
