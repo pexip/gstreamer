@@ -90,11 +90,46 @@ GST_ELEMENT_REGISTER_DEFINE_WITH_CODE (rtpstorage, "rtpstorage", GST_RANK_NONE,
 static GstFlowReturn
 gst_rtp_storage_chain (GstPad * pad, GstObject * parent, GstBuffer * buf)
 {
-  GstRtpStorage *self = GST_RTP_STORAGE (parent);;
+  GstRtpStorage *self = GST_RTP_STORAGE (parent);
+  (void) pad;
 
   if (rtp_storage_append_buffer (self->storage, buf))
     return gst_pad_push (self->srcpad, buf);
+
+  gst_buffer_unref (buf);
   return GST_FLOW_OK;
+}
+
+static gboolean
+gst_rtp_storage_chain_list_foreach (GstBuffer ** buffer, guint idx,
+    gpointer user_data)
+{
+  GstRtpStorage *self = user_data;
+
+  if (!rtp_storage_append_buffer (self->storage, *buffer)) {
+    gst_buffer_unref (*buffer);
+    *buffer = NULL;
+  }
+
+  return TRUE;
+}
+
+static GstFlowReturn
+gst_rtp_storage_chain_list (GstPad * pad, GstObject * parent,
+    GstBufferList * list)
+{
+  GstRtpStorage *self = GST_RTP_STORAGE (parent);
+  (void) pad;
+
+  list = gst_buffer_list_make_writable (list);
+  gst_buffer_list_foreach (list, gst_rtp_storage_chain_list_foreach, self);
+
+  if (gst_buffer_list_length (list) == 0) {
+    gst_buffer_list_unref (list);
+    return GST_FLOW_OK;
+  }
+
+  return gst_pad_push_list (self->srcpad, list);
 }
 
 static void
@@ -160,6 +195,7 @@ gst_rtp_storage_init (GstRtpStorage * self)
   GST_PAD_SET_PROXY_CAPS (self->sinkpad);
   GST_PAD_SET_PROXY_ALLOCATION (self->sinkpad);
   gst_pad_set_chain_function (self->sinkpad, gst_rtp_storage_chain);
+  gst_pad_set_chain_list_function (self->sinkpad, gst_rtp_storage_chain_list);
 
   gst_pad_set_query_function (self->srcpad, gst_rtp_storage_src_query);
 
@@ -186,6 +222,7 @@ gst_rtp_storage_class_init (GstRtpStorageClass * klass)
   GST_DEBUG_CATEGORY_INIT (gst_rtp_storage_debug,
       "rtpstorage", 0, "RTP Storage");
   GST_DEBUG_REGISTER_FUNCPTR (gst_rtp_storage_chain);
+  GST_DEBUG_REGISTER_FUNCPTR (gst_rtp_storage_chain_list);
 
   gst_element_class_add_pad_template (element_class,
       gst_static_pad_template_get (&srctemplate));
