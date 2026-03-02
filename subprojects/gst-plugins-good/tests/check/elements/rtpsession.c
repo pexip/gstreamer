@@ -5916,9 +5916,9 @@ GST_START_TEST (test_twcc_stats_dod)
   const guint bitrate = TEST_BUF_BPS;
   const GstClockTimeDiff dod = GST_USECOND * 500;
   GstClockTimeDiff clock_drift = 0;
-  SessionHarness * h_send = session_harness_new ();
-  SessionHarness * h_recv = session_harness_new ();
-  GstStructure * twcc_stats;
+  SessionHarness *h_send = session_harness_new ();
+  SessionHarness *h_recv = session_harness_new ();
+  GstStructure *twcc_stats;
   guint i, next_seqnum;
   next_seqnum = 0;
 
@@ -5927,12 +5927,14 @@ GST_START_TEST (test_twcc_stats_dod)
   session_harness_set_twcc_recv_ext_id (h_recv, TEST_TWCC_EXT_ID);
 
   for (i = 0; i < num_buffers; i++) {
-    GstBuffer * buf;
+    GstBuffer *buf;
     GstFlowReturn ret;
 
     const guint seqnum = next_seqnum++;
-    buf = generate_test_buffer_full (seqnum * TEST_BUF_DURATION, seqnum, seqnum * TEST_RTP_TS_DURATION, TEST_BUF_SSRC, FALSE,
-                                    TEST_BUF_PT, 0, 0, -1, -1, 0, NULL, 0);
+    buf =
+        generate_test_buffer_full (seqnum * TEST_BUF_DURATION, seqnum,
+        seqnum * TEST_RTP_TS_DURATION, TEST_BUF_SSRC, FALSE, TEST_BUF_PT, 0, 0,
+        -1, -1, 0, NULL, 0);
 
 
     ret = session_harness_send_rtp (h_send, buf);
@@ -5940,19 +5942,22 @@ GST_START_TEST (test_twcc_stats_dod)
 
     session_harness_advance_and_crank (h_send, TEST_BUF_DURATION);
 
-    GstBuffer * to_transmit = session_harness_pull_send_rtp (h_send);
+    GstBuffer *to_transmit = session_harness_pull_send_rtp (h_send);
     GST_BUFFER_PTS (to_transmit) += clock_drift;
     GST_BUFFER_DTS (to_transmit) += clock_drift;
-    GST_ERROR("Receive DTS %" GST_TIME_FORMAT, GST_TIME_ARGS(GST_BUFFER_DTS(to_transmit)));
+    GST_ERROR ("Receive DTS %" GST_TIME_FORMAT,
+        GST_TIME_ARGS (GST_BUFFER_DTS (to_transmit)));
     ret = session_harness_recv_rtp (h_recv, to_transmit);
     fail_unless_equals_int64 (ret, GST_FLOW_OK);
     session_harness_advance_and_crank (h_recv, TEST_BUF_DURATION + clock_drift);
     clock_drift += dod;
-}
+  }
 
   /* push a last buffer with the marker bit to trigger the report */
-  send_recv_buffer (h_send, h_recv, generate_twcc_send_buffer (next_seqnum++, TRUE), TRUE);
-  fail_unless_equals_int64 (GST_FLOW_OK, session_harness_recv_rtcp (h_send, session_harness_produce_twcc (h_recv)));
+  send_recv_buffer (h_send, h_recv, generate_twcc_send_buffer (next_seqnum++,
+          TRUE), TRUE);
+  fail_unless_equals_int64 (GST_FLOW_OK, session_harness_recv_rtcp (h_send,
+          session_harness_produce_twcc (h_recv)));
 
   twcc_stats = session_harness_get_twcc_stats (h_send);
   GST_ERROR ("We've got stats: %" GST_PTR_FORMAT, twcc_stats);
@@ -5962,6 +5967,7 @@ GST_START_TEST (test_twcc_stats_dod)
   session_harness_free (h_send);
   session_harness_free (h_recv);
 }
+
 GST_END_TEST;
 
 GST_START_TEST (test_twcc_feedback_max_sent_packets)
@@ -6116,7 +6122,8 @@ GST_START_TEST (test_twcc_reordered_feedback)
    * assumes remote duration to be equal the local duration, then bitrates become
    * equal.
    */
-  twcc_verify_stats (twcc_stats, TEST_BUF_BPS, TEST_BUF_BPS, nbuffs, nbuffs, 0.f, 0);
+  twcc_verify_stats (twcc_stats, TEST_BUF_BPS, TEST_BUF_BPS, nbuffs, nbuffs,
+      0.f, 0);
   gst_structure_free (twcc_stats);
 
   session_harness_free (h);
@@ -7296,8 +7303,7 @@ GST_START_TEST (test_recv_rtp_list_shared_buffer_list)
   /* Build a buffer list with sequential RTP buffers. */
   list = gst_buffer_list_new_sized (num_buffers);
   for (i = 0; i < num_buffers; i++) {
-    gst_buffer_list_add (list,
-        generate_test_buffer (1 + i, TEST_BUF_SSRC));
+    gst_buffer_list_add (list, generate_test_buffer (1 + i, TEST_BUF_SSRC));
   }
 
   /* Take an extra ref so that the list is *not* writable when pushed.
@@ -7324,6 +7330,35 @@ GST_START_TEST (test_recv_rtp_list_shared_buffer_list)
     fail_unless (gst_buffer_list_get (shared_ref, i) != NULL);
   }
   gst_buffer_list_unref (shared_ref);
+
+  session_harness_free (h);
+}
+
+GST_END_TEST;
+
+GST_START_TEST (test_rtpsession_recv_rtcp_chain_list)
+{
+  SessionHarness *h = session_harness_new ();
+  GstBufferList *list;
+  GstFlowReturn res;
+  guint i;
+
+  /* First send some RTP so the session knows about the SSRC */
+  for (i = 0; i < 3; i++) {
+    GstBuffer *buf = generate_test_buffer (i, 0xDEADBEEF);
+    res = session_harness_recv_rtp (h, buf);
+    fail_unless_equals_int (GST_FLOW_OK, res);
+  }
+
+  /* Create a buffer list with 3 RTCP SR packets */
+  list = gst_buffer_list_new ();
+  for (i = 0; i < 3; i++) {
+    gst_buffer_list_add (list, generate_rtcp_sr_buffer (0xDEADBEEF));
+  }
+
+  /* Push the RTCP buffer list — should succeed */
+  res = gst_harness_push_list (h->rtcp_h, list);
+  fail_unless_equals_int (GST_FLOW_OK, res);
 
   session_harness_free (h);
 }
@@ -7455,6 +7490,7 @@ rtpsession_suite (void)
   tcase_add_test (tc_chain, test_stats_transmission_duration_reordering);
   tcase_add_test (tc_chain, test_sender_timeout);
   tcase_add_test (tc_chain, test_recv_rtp_list_shared_buffer_list);
+  tcase_add_test (tc_chain, test_rtpsession_recv_rtcp_chain_list);
   return s;
 }
 

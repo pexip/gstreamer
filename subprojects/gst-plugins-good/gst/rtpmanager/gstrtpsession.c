@@ -340,6 +340,8 @@ static GstFlowReturn gst_rtp_session_chain_recv_rtp_list (GstPad * pad,
     GstObject * parent, GstBufferList * list);
 static GstFlowReturn gst_rtp_session_chain_recv_rtcp (GstPad * pad,
     GstObject * parent, GstBuffer * buffer);
+static GstFlowReturn gst_rtp_session_chain_recv_rtcp_list (GstPad * pad,
+    GstObject * parent, GstBufferList * list);
 static GstFlowReturn gst_rtp_session_chain_send_rtp (GstPad * pad,
     GstObject * parent, GstBuffer * buffer);
 static GstFlowReturn gst_rtp_session_chain_send_rtp_list (GstPad * pad,
@@ -928,6 +930,7 @@ gst_rtp_session_class_init (GstRtpSessionClass * klass)
   GST_DEBUG_REGISTER_FUNCPTR (gst_rtp_session_chain_recv_rtp);
   GST_DEBUG_REGISTER_FUNCPTR (gst_rtp_session_chain_recv_rtp_list);
   GST_DEBUG_REGISTER_FUNCPTR (gst_rtp_session_chain_recv_rtcp);
+  GST_DEBUG_REGISTER_FUNCPTR (gst_rtp_session_chain_recv_rtcp_list);
   GST_DEBUG_REGISTER_FUNCPTR (gst_rtp_session_chain_send_rtp);
   GST_DEBUG_REGISTER_FUNCPTR (gst_rtp_session_chain_send_rtp_list);
 
@@ -2241,23 +2244,16 @@ gst_rtp_session_event_recv_rtcp_sink (GstPad * pad, GstObject * parent,
   return ret;
 }
 
-/* Receive an RTCP packet from a sender, send it to the RTP session manager and
- * forward the SR packets to the sync_src pad.
- */
-static GstFlowReturn
-gst_rtp_session_chain_recv_rtcp (GstPad * pad, GstObject * parent,
+/* Process a single RTCP buffer: signal the RTCP thread, get clock times and
+ * hand the buffer to the RTP session manager. */
+static void
+gst_rtp_session_process_recv_rtcp_buffer (GstRtpSession * rtpsession,
     GstBuffer * buffer)
 {
-  GstRtpSession *rtpsession;
-  GstRtpSessionPrivate *priv;
+  GstRtpSessionPrivate *priv = rtpsession->priv;
   GstClockTime current_time;
   GstClockTime running_time;
   guint64 ntpnstime;
-
-  rtpsession = GST_RTP_SESSION (parent);
-  priv = rtpsession->priv;
-
-  GST_LOG_OBJECT (rtpsession, "received RTCP packet");
 
   GST_RTP_SESSION_LOCK (rtpsession);
   signal_waiting_rtcp_thread_unlocked (rtpsession);
@@ -2268,6 +2264,43 @@ gst_rtp_session_chain_recv_rtcp (GstPad * pad, GstObject * parent,
 
   rtp_session_process_rtcp (priv->session, buffer, current_time, running_time,
       ntpnstime);
+}
+
+/* Receive an RTCP packet from a sender, send it to the RTP session manager and
+ * forward the SR packets to the sync_src pad.
+ */
+static GstFlowReturn
+gst_rtp_session_chain_recv_rtcp (GstPad * pad, GstObject * parent,
+    GstBuffer * buffer)
+{
+  GstRtpSession *rtpsession = GST_RTP_SESSION (parent);
+  (void) pad;
+
+  GST_LOG_OBJECT (rtpsession, "received RTCP packet");
+
+  gst_rtp_session_process_recv_rtcp_buffer (rtpsession, buffer);
+
+  return GST_FLOW_OK;           /* always return OK */
+}
+
+static GstFlowReturn
+gst_rtp_session_chain_recv_rtcp_list (GstPad * pad, GstObject * parent,
+    GstBufferList * list)
+{
+  GstRtpSession *rtpsession = GST_RTP_SESSION (parent);
+  guint i, len;
+  (void) pad;
+
+  len = gst_buffer_list_length (list);
+  GST_LOG_OBJECT (rtpsession, "received RTCP buffer list with %u packets", len);
+
+  for (i = 0; i < len; i++) {
+    GstBuffer *buffer = gst_buffer_list_get (list, i);
+    gst_buffer_ref (buffer);
+    gst_rtp_session_process_recv_rtcp_buffer (rtpsession, buffer);
+  }
+
+  gst_buffer_list_unref (list);
 
   return GST_FLOW_OK;           /* always return OK */
 }
@@ -2760,6 +2793,8 @@ create_recv_rtcp_sink (GstRtpSession * rtpsession)
       "recv_rtcp_sink");
   gst_pad_set_chain_function (rtpsession->recv_rtcp_sink,
       gst_rtp_session_chain_recv_rtcp);
+  gst_pad_set_chain_list_function (rtpsession->recv_rtcp_sink,
+      gst_rtp_session_chain_recv_rtcp_list);
   gst_pad_set_event_function (rtpsession->recv_rtcp_sink,
       gst_rtp_session_event_recv_rtcp_sink);
   gst_pad_set_iterate_internal_links_function (rtpsession->recv_rtcp_sink,
