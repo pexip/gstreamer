@@ -516,6 +516,136 @@ GST_START_TEST (rtpstorage_stress)
 
 GST_END_TEST;
 
+GST_START_TEST (rtpstorage_chain_list_redundant)
+{
+  /* Test that REDUNDANT-flagged buffers in a buffer list are dropped from
+   * downstream output but still stored internally.
+   *
+   * We keep an extra ref on the REDUNDANT buffer so we can verify after
+   * the push that the storage also holds a ref (refcount >= 2).  Without
+   * the fix, the storage's ref is lost when the buffer is removed from
+   * the list, leaving refcount == 1 (only our held ref). */
+  GstHarness *h = gst_harness_new ("rtpstorage");
+  GstBuffer *red_buf;
+  GstBufferList *in_list, *out_list;
+  GstBufferList *recovery;
+  const guint storage_depth = 5;
+  guint i;
+
+  gst_harness_set_src_caps_str (h, "application/x-rtp");
+  g_object_set (h->element,
+      "size-time", (guint64) storage_depth * RTP_PACKET_DUR, NULL);
+
+  /* Build list: normal(seq=0), REDUNDANT(seq=1), normal(seq=2) */
+  in_list = gst_buffer_list_new ();
+  gst_buffer_list_add (in_list,
+      create_rtp_packet (96, 0xabe2b0b, RTP_TSTAMP (0), 0));
+
+  red_buf = create_rtp_packet (96, 0xabe2b0b, RTP_TSTAMP (1), 1);
+  GST_BUFFER_FLAG_SET (red_buf, GST_RTP_BUFFER_FLAG_REDUNDANT);
+  gst_buffer_ref (red_buf);   /* keep our own ref for validation */
+  gst_buffer_list_add (in_list, red_buf);
+
+  gst_buffer_list_add (in_list,
+      create_rtp_packet (96, 0xabe2b0b, RTP_TSTAMP (2), 2));
+
+  fail_unless_equals_int (GST_FLOW_OK, gst_harness_push_list (h, in_list));
+
+  /* Only the 2 non-REDUNDANT buffers should appear downstream */
+  out_list = gst_harness_pull_list (h);
+  fail_unless (out_list != NULL);
+  fail_unless_equals_int (gst_buffer_list_length (out_list), 2);
+  gst_buffer_list_unref (out_list);
+
+  /* The REDUNDANT buffer must still be alive: our ref + the storage's ref.
+   * If the storage lost its ref, the buffer would be writable (refcount==1). */
+  fail_unless (!gst_buffer_is_writable (red_buf),
+      "Storage did not keep a ref on the REDUNDANT buffer (use-after-free)");
+
+  /* The REDUNDANT buffer (seq=1) must be retrievable from storage */
+  recovery = get_packets_for_recovery (h, 100, 0xabe2b0b, 1);
+  fail_unless (recovery != NULL);
+  gst_buffer_list_unref (recovery);
+
+  /* Push enough new packets to evict the stored REDUNDANT buffer.
+   * rtp_storage_item_free must call gst_buffer_unref on a valid buffer. */
+  for (i = 3; i < 3 + storage_depth + 2; i++) {
+    gst_buffer_unref (gst_harness_push_and_pull (h,
+            create_rtp_packet (96, 0xabe2b0b, RTP_TSTAMP (i), i)));
+  }
+
+  /* After eviction the storage has dropped its ref, only ours remains */
+  fail_unless (gst_buffer_is_writable (red_buf),
+      "Storage should have dropped its ref after eviction");
+  gst_buffer_unref (red_buf);
+
+  gst_harness_teardown (h);
+}
+
+GST_END_TEST;
+
+GST_START_TEST (rtpstorage_chain_list_passthrough)
+{
+  GstHarness *h = gst_harness_new ("rtpstorage");
+  GstBufferList *in_list, *out_list;
+
+  gst_harness_set_src_caps_str (h, "application/x-rtp");
+  g_object_set (h->element, "size-time", (guint64) 0, NULL);
+
+  in_list = gst_buffer_list_new ();
+  for (guint i = 0; i < 3; i++)
+    gst_buffer_list_add (in_list,
+        create_rtp_packet (96, 0xabe2b0b, RTP_TSTAMP (i), i));
+
+  gst_harness_push_list (h, in_list);
+  out_list = gst_harness_pull_list (h);
+  fail_unless (out_list != NULL);
+  fail_unless_equals_int (gst_buffer_list_length (out_list), 3);
+
+  /* With size-time=0 (passthrough), buffers should be writable (refcount==1) */
+  for (guint i = 0; i < 3; i++) {
+    GstBuffer *buf = gst_buffer_list_get (out_list, i);
+    fail_unless (gst_buffer_is_writable (buf));
+  }
+
+  gst_buffer_list_unref (out_list);
+  gst_harness_teardown (h);
+}
+
+GST_END_TEST;
+
+GST_START_TEST (rtpstorage_chain_list_stores_and_pushes)
+{
+  GstHarness *h = gst_harness_new ("rtpstorage");
+  GstBufferList *in_list, *out_list;
+  guint num_buffers = 3;
+
+  gst_harness_set_src_caps_str (h, "application/x-rtp");
+  g_object_set (h->element,
+      "size-time", (guint64) num_buffers * RTP_PACKET_DUR, NULL);
+
+  in_list = gst_buffer_list_new ();
+  for (guint i = 0; i < num_buffers; i++)
+    gst_buffer_list_add (in_list,
+        create_rtp_packet (96, 0xabe2b0b, RTP_TSTAMP (i), i));
+
+  gst_harness_push_list (h, in_list);
+  out_list = gst_harness_pull_list (h);
+  fail_unless (out_list != NULL);
+  fail_unless_equals_int (gst_buffer_list_length (out_list), num_buffers);
+
+  /* With storage active, buffers should have refcount > 1 (not writable) */
+  for (guint i = 0; i < num_buffers; i++) {
+    GstBuffer *buf = gst_buffer_list_get (out_list, i);
+    fail_unless (!gst_buffer_is_writable (buf));
+  }
+
+  gst_buffer_list_unref (out_list);
+  gst_harness_teardown (h);
+}
+
+GST_END_TEST;
+
 static Suite *
 rtpstorage_suite (void)
 {
@@ -543,6 +673,9 @@ rtpstorage_suite (void)
   tcase_add_test (tc_chain, rtpstorage_loss_pattern9);
   tcase_add_test (tc_chain, test_rtpstorage_put_recovered_packet);
   tcase_add_test (tc_chain, rtpstorage_stress);
+  tcase_add_test (tc_chain, rtpstorage_chain_list_redundant);
+  tcase_add_test (tc_chain, rtpstorage_chain_list_passthrough);
+  tcase_add_test (tc_chain, rtpstorage_chain_list_stores_and_pushes);
 
   return s;
 }

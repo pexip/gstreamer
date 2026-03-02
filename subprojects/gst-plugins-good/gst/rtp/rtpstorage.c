@@ -222,10 +222,8 @@ rtp_storage_append_buffer (RtpStorage * self, GstBuffer * buf)
 
   gst_rtp_buffer_unmap (&rtpbuf);
 
-  if (GST_BUFFER_FLAG_IS_SET (buf, GST_RTP_BUFFER_FLAG_REDUNDANT)) {
-    gst_buffer_unref (buf);
+  if (GST_BUFFER_FLAG_IS_SET (buf, GST_RTP_BUFFER_FLAG_REDUNDANT))
     return FALSE;
-  }
 
   return TRUE;
 }
