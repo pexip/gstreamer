@@ -5470,6 +5470,220 @@ GST_START_TEST (test_twcc_stats_rtx_recover_lost)
 
 GST_END_TEST;
 
+static GstBuffer *
+create_twcc_rtcp_from_fci (const guint8 * fci, guint fci_len,
+    guint32 sender_ssrc, guint32 media_ssrc)
+{
+  GstBuffer *buf;
+  GstRTCPBuffer rtcp = GST_RTCP_BUFFER_INIT;
+  GstRTCPPacket packet;
+
+  buf = gst_rtcp_buffer_new (1400);
+  gst_rtcp_buffer_map (buf, GST_MAP_READWRITE, &rtcp);
+
+  gst_rtcp_buffer_add_packet (&rtcp, GST_RTCP_TYPE_RTPFB, &packet);
+  gst_rtcp_packet_fb_set_type (&packet, GST_RTCP_RTPFB_TYPE_TWCC);
+  gst_rtcp_packet_fb_set_sender_ssrc (&packet, sender_ssrc);
+  gst_rtcp_packet_fb_set_media_ssrc (&packet, media_ssrc);
+
+  /* Set FCI: round up to 32-bit words */
+  guint fci_words = (fci_len + 3) / 4;
+  if (gst_rtcp_packet_fb_set_fci_length (&packet, fci_words)) {
+    guint8 *fci_data = gst_rtcp_packet_fb_get_fci (&packet);
+    memcpy (fci_data, fci, fci_len);
+    /* zero-pad the rest */
+    if (fci_words * 4 > fci_len)
+      memset (fci_data + fci_len, 0, fci_words * 4 - fci_len);
+  }
+
+  gst_rtcp_buffer_unmap (&rtcp);
+  return buf;
+}
+
+GST_START_TEST (test_twcc_parse_fci_robustness)
+{
+  SessionHarness *h_send = session_harness_new ();
+  SessionHarness *h_recv = session_harness_new ();
+  guint next_seqnum;
+
+  session_harness_add_twcc_caps_for_pt (h_send, TEST_BUF_PT);
+  session_harness_set_twcc_recv_ext_id (h_recv, TEST_TWCC_EXT_ID);
+
+  /* Build up initial state: send packets 0..N so the sender has
+     seqnums to match when it receives TWCC feedback */
+  next_seqnum = construct_initial_state_for_rtx (h_send, h_recv);
+
+  /* --- Test 1: FCI too short (4 bytes, less than the 8-byte header) --- */
+  {
+    guint8 fci[] = { 0x00, 0x00, 0x00, 0x04 };
+    session_harness_recv_rtcp (h_send,
+        create_twcc_rtcp_from_fci (fci, sizeof (fci), 1, 0xDEAD));
+  }
+
+  /* --- Test 2: packet_count claiming 100 packets, but only 1 chunk --- */
+  {
+    guint8 fci[] = {
+      0x00, 0x00,               /* base_seqnum: 0 */
+      0x00, 0x64,               /* packet_count: 100 */
+      0x00, 0x00, 0x00,         /* reference_time: 0 */
+      0x00,                     /* fb_pkt_count: 0 */
+      0x20, 0x01,               /* 1 run-length chunk: status=1, length=1 */
+      0x01,                     /* 1 small delta */
+    };
+    session_harness_recv_rtcp (h_send,
+        create_twcc_rtcp_from_fci (fci, sizeof (fci), 1, 0xDEAD));
+  }
+
+  /* --- Test 3: packet_count = 0 --- */
+  {
+    guint8 fci[] = {
+      0x00, 0x00,               /* base_seqnum: 0 */
+      0x00, 0x00,               /* packet_count: 0 */
+      0x00, 0x00, 0x00,         /* reference_time: 0 */
+      0x00,                     /* fb_pkt_count: 0 */
+      0x20, 0x01,               /* a chunk (shouldn't be parsed) */
+    };
+    session_harness_recv_rtcp (h_send,
+        create_twcc_rtcp_from_fci (fci, sizeof (fci), 1, 0xDEAD));
+  }
+
+  /* --- Test 4: Huge run-length chunk --- */
+  {
+    guint8 fci[] = {
+      0x00, 0x00,               /* base_seqnum: 0 */
+      0xFF, 0xFF,               /* packet_count: 65535 */
+      0x00, 0x00, 0x00,         /* reference_time: 0 */
+      0x00,                     /* fb_pkt_count: 0 */
+      0x1F, 0xFF,               /* run-length: status=0 (NOT_RECV), length=8191 */
+    };
+    session_harness_recv_rtcp (h_send,
+        create_twcc_rtcp_from_fci (fci, sizeof (fci), 1, 0xDEAD));
+  }
+
+  /* --- Test 5: Status vector with all status=3 (NO_DELTA) --- */
+  {
+    guint8 fci[] = {
+      0x00, 0x00,               /* base_seqnum: 0 */
+      0x00, 0x07,               /* packet_count: 7 */
+      0x00, 0x00, 0x00,         /* reference_time: 0 */
+      0x00,                     /* fb_pkt_count: 0 */
+      0xFF, 0xFE,               /* status vector: 2-bit symbols, all 11 (status=3) */
+    };
+    session_harness_recv_rtcp (h_send,
+        create_twcc_rtcp_from_fci (fci, sizeof (fci), 1, 0xDEAD));
+  }
+
+  /* --- Test 6: Same base_seqnum range fed twice (overlapping feedback) --- */
+  {
+    guint8 fci[] = {
+      0x00, 0x00,               /* base_seqnum: 0 */
+      0x00, 0x04,               /* packet_count: 4 */
+      0x00, 0x00, 0x00,         /* reference_time: 0 */
+      0x00,                     /* fb_pkt_count: 0 */
+      0x20, 0x04,               /* run-length: status=1, length=4 */
+      0x01, 0x01, 0x01, 0x01,   /* 4 small deltas */
+    };
+    /* Feed the same feedback twice */
+    session_harness_recv_rtcp (h_send,
+        create_twcc_rtcp_from_fci (fci, sizeof (fci), 1, 0xDEAD));
+    session_harness_recv_rtcp (h_send,
+        create_twcc_rtcp_from_fci (fci, sizeof (fci), 1, 0xDEAD));
+  }
+
+  /* --- Test 7: base_seqnum referencing seqnums far in the future --- */
+  {
+    guint8 fci[] = {
+      0xFF, 0x00,               /* base_seqnum: 65280 (never sent) */
+      0x00, 0x04,               /* packet_count: 4 */
+      0x00, 0x00, 0x00,         /* reference_time: 0 */
+      0x00,                     /* fb_pkt_count: 0 */
+      0x20, 0x04,               /* run-length: status=1, length=4 */
+      0x01, 0x01, 0x01, 0x01,   /* 4 small deltas */
+    };
+    session_harness_recv_rtcp (h_send,
+        create_twcc_rtcp_from_fci (fci, sizeof (fci), 1, 0xDEAD));
+  }
+
+  /* --- Test 8: fb_pkt_count going backwards --- */
+  {
+    guint8 fci_first[] = {
+      0x00, 0x00,               /* base_seqnum: 0 */
+      0x00, 0x02,               /* packet_count: 2 */
+      0x00, 0x00, 0x00,         /* reference_time: 0 */
+      0x05,                     /* fb_pkt_count: 5 */
+      0x20, 0x02,               /* run-length: status=1, length=2 */
+      0x01, 0x01,               /* 2 small deltas */
+    };
+    guint8 fci_backwards[] = {
+      0x00, 0x02,               /* base_seqnum: 2 */
+      0x00, 0x02,               /* packet_count: 2 */
+      0x00, 0x00, 0x00,         /* reference_time: 0 */
+      0x02,                     /* fb_pkt_count: 2 (< 5, going backwards!) */
+      0x20, 0x02,               /* run-length: status=1, length=2 */
+      0x01, 0x01,               /* 2 small deltas */
+    };
+    session_harness_recv_rtcp (h_send,
+        create_twcc_rtcp_from_fci (fci_first, sizeof (fci_first), 1, 0xDEAD));
+    session_harness_recv_rtcp (h_send,
+        create_twcc_rtcp_from_fci (fci_backwards, sizeof (fci_backwards),
+            1, 0xDEAD));
+  }
+
+  /* --- Test 9: Just the 8-byte header, no chunks at all --- */
+  {
+    guint8 fci[] = {
+      0x00, 0x00,               /* base_seqnum: 0 */
+      0x00, 0x04,               /* packet_count: 4 */
+      0x00, 0x00, 0x00,         /* reference_time: 0 */
+      0x00,                     /* fb_pkt_count: 0 */
+      /* NO chunks, NO deltas */
+    };
+    session_harness_recv_rtcp (h_send,
+        create_twcc_rtcp_from_fci (fci, sizeof (fci), 1, 0xDEAD));
+  }
+
+  /* --- Test 10: Random garbage (fuzz) --- */
+  {
+    guint8 fci[64];
+    GRand *rng = g_rand_new_with_seed (42);
+    for (guint run = 0; run < 100; run++) {
+      guint len = g_rand_int_range (rng, 8, sizeof (fci));
+      /* keep a valid-looking packet_count to actually exercise the parser */
+      guint16 base_seq = g_rand_int_range (rng, 0, next_seqnum);
+      guint16 pkt_count = g_rand_int_range (rng, 1, 20);
+      fci[0] = base_seq >> 8;
+      fci[1] = base_seq & 0xFF;
+      fci[2] = pkt_count >> 8;
+      fci[3] = pkt_count & 0xFF;
+      for (guint j = 4; j < len; j++)
+        fci[j] = g_rand_int_range (rng, 0, 256);
+
+      session_harness_recv_rtcp (h_send,
+          create_twcc_rtcp_from_fci (fci, len, 1, 0xDEAD));
+    }
+    g_rand_free (rng);
+  }
+
+  /* --- Test 11: Feed valid TWCC then get stats (exercise the
+     full feedback → stats → prune pipeline after all the malformed input) --- */
+  {
+    GstBuffer *buf;
+    for (guint i = 0; i < 20; i++) {
+      buf = generate_twcc_send_buffer (next_seqnum++, i == 19);
+      send_recv_buffer (h_send, h_recv, buf, TRUE);
+    }
+    session_harness_recv_rtcp (h_send, session_harness_produce_twcc (h_recv));
+    GstStructure *stats = session_harness_get_twcc_stats (h_send);
+    fail_unless (stats != NULL);
+    gst_structure_free (stats);
+  }
+
+  session_harness_free (h_send);
+  session_harness_free (h_recv);
+}
+
+GST_END_TEST;
+
 GST_START_TEST (test_twcc_stats_no_rtx_no_recover)
 {
   test_twcc_stats_rtx_recovery (FALSE, 0.0);
@@ -6421,15 +6635,246 @@ GST_START_TEST (test_twcc_keep_queue_size)
       session_harness_recv_rtcp (h_send,
           session_harness_produce_twcc (h_recv)));
 
+  /* expected_parsed_seqnum = BASE_SEQNUM + 16 + 11 = 65307
+       recovery base_seqnum  = (65307 + 70000) mod 65536 + 11 = 4235
+       gap = (gint16)(4235 - 65307) = 4464 packets marked LOST.
+     Within the 500ms stats window (25 intervals at 20ms = 26 packets
+     from TWCC 4220 to 4245):
+       15 LOST flood packets  (TWCC 4220-4234)
+     + 11 RECEIVED recovery   (TWCC 4235-4245)
+     = 26 total sent */
+  const guint gap_pkts_in_window = 15;
+  const guint expected_sent = pkt_in_frame + 1 + gap_pkts_in_window;
+
   GstStructure *twcc_stats = session_harness_get_twcc_stats_full (h_send,
       500 * GST_MSECOND, 0 * GST_MSECOND);
-  twcc_verify_stats (twcc_stats, 532800, 532800, pkt_in_frame + 1,
-      pkt_in_frame + 1, 0.f, 0);
+  twcc_verify_stats (twcc_stats, 532800, 532800, expected_sent,
+      pkt_in_frame + 1, (gap_pkts_in_window * 100) / (gfloat) expected_sent, 0);
   gst_structure_free (twcc_stats);
 
   session_harness_free (h_send);
   session_harness_free (h_recv);
 
+}
+
+GST_END_TEST;
+
+/* Helper: send many packets through sender only (not delivered to receiver),
+   advancing the clock each time. This forces ring buffer eviction of old
+   packets without producing any TWCC feedback. */
+static void
+flood_sender_packets (SessionHarness * h_send, guint * next_seqnum, guint count)
+{
+  for (guint i = 0; i < count; i++) {
+    GstBuffer *buf = generate_twcc_send_buffer ((*next_seqnum)++, FALSE);
+    fail_unless_equals_int64 (session_harness_send_rtp (h_send, buf),
+        GST_FLOW_OK);
+    session_harness_advance_and_crank (h_send, TEST_BUF_DURATION);
+    GstBuffer *out_buf = session_harness_pull_send_rtp (h_send);
+    fail_unless (out_buf);
+    gst_buffer_unref (out_buf);
+  }
+}
+
+/* Checks that _lookup_seqnum  works correctly after RTP seqnum wrap (65536+
+   packets from the same SSRC). ssrc_to_seqmap[SSRC][rtp_seq] gets
+   overwritten when the same RTP seqnum is reused, causing RTX feedback
+   to create a RedBlock linking the wrong data packet to the retransmission.
+
+   1. Send data D (RTP=16, TWCC=65296, LOST) + RTX1 for D (RECEIVED)
+   2. Process feedback → D recovered correctly via RTX1
+   3. Send 2 dummy RTX to offset TWCC counter (avoid TWCC reuse after wrap)
+   4. Flood 65534 data packets → RTP seqnum wraps back to 16
+   5. Send P (RTP=16 from wrap, TWCC=65299, LOST) + RTX2 protecting
+      RTP=16 (RECEIVED)
+   6. Process feedback → _lookup_seqnum(SSRC, 16) returns 65299 (P's TWCC)
+      instead of 65296 (D's original TWCC) → block created as
+      seqs=[65299]=P, fec=[65300]=RTX2 → P falsely marked RECOVERED
+*/
+GST_START_TEST (test_twcc_rtx_rtp_seqnum_wrap_corruption)
+{
+  /* test sends ~65560 packets */
+  if (RUNNING_ON_VALGRIND)
+    return;
+
+  SessionHarness *h_send = session_harness_new ();
+  SessionHarness *h_recv = session_harness_new ();
+  guint next_seqnum;
+
+  session_harness_add_twcc_caps_for_pt (h_send, TEST_BUF_PT);
+  session_harness_add_twcc_caps_for_pt (h_send, TEST_RTX_BUF_PT);
+  session_harness_set_twcc_recv_ext_id (h_recv, TEST_TWCC_EXT_ID);
+
+  next_seqnum = construct_initial_state_for_rtx (h_send, h_recv);
+
+  /* Send data D: RTP=16, TWCC=65296. Not received → will be LOST.
+     Send RTX1 for D: TWCC=65297. Received.
+     ssrc_to_seqmap[TEST_BUF_SSRC][16] = 65296 */
+  GstBuffer *data_buf = generate_twcc_send_buffer (next_seqnum, FALSE);
+  GstBuffer *rtx1_buf = generate_rtx_buffer (0, data_buf);
+  next_seqnum++;
+  send_recv_buffer (h_send, h_recv, data_buf, FALSE);
+  send_recv_buffer (h_send, h_recv, rtx1_buf, TRUE);
+
+  /* Marker + TWCC feedback:
+     D(65296)=NOT_RECV, RTX1(65297)=RECV, marker(65298)=RECV.
+     Block: seqs=[65296], fec=[65297]. D recovered via RTX1. */
+  send_recv_buffer (h_send, h_recv,
+      generate_twcc_send_buffer (next_seqnum++, TRUE), TRUE);
+  fail_unless_equals_int64 (GST_FLOW_OK,
+      session_harness_recv_rtcp (h_send,
+          session_harness_produce_twcc (h_recv)));
+
+  /* Dummy RTX to offset TWCC counter
+     These consume TWCC 65299-65300 without advancing data SSRC's RTP counter.
+     After the flood+wrap, TWCC values 65299-65301 won't collide with phase 1's
+     already-reported TWCC 65296-65298 on the receiver side. */
+  for (guint i = 0; i < 2; i++) {
+    GstBuffer *ref = generate_twcc_send_buffer (16, FALSE);
+    GstBuffer *dummy_rtx = generate_rtx_buffer (i + 1, ref);
+    gst_buffer_unref (ref);
+    send_recv_buffer (h_send, h_recv, dummy_rtx, FALSE);
+  }
+  /* TWCC consumed=21, next TWCC=65301, next_seqnum=18 */
+
+  /*
+     65534 data packets: RTP 18..65551 → (guint16): 18..65535, 0..15.
+     RTP=16 is NOT in the flood (flood stops at 15).
+     After: next_seqnum=65552, (guint16)65552=16 → wraps to same as D
+     TWCC: 65301 + 65534 - 1 = 130834 → mod 65536 = 65298 (last flood pkt).
+     Next TWCC = 65299.
+     ssrc_to_seqmap[TEST_BUF_SSRC][16] = 65296 (unchanged — no flood pkt
+     has RTP=16). */
+  flood_sender_packets (h_send, &next_seqnum, 65534);
+
+  /* P: RTP=(guint16)65552=16 (wrapped), TWCC=65299. Not received.
+     _register_seqnum(SSRC, 16, 65299) OVERWRITES old mapping (65296→65299).
+     Now ssrc_to_seqmap[TEST_BUF_SSRC][16] = 65299 (P's TWCC, not D's). */
+  send_recv_buffer (h_send, h_recv,
+      generate_twcc_send_buffer (next_seqnum++, FALSE), FALSE);
+
+  /* RTX2: protects RTP=16 (same orig seqnum as D). TWCC=65300. Received. */
+  {
+    GstBuffer *ref = generate_twcc_send_buffer (16, FALSE);
+    GstBuffer *rtx2_buf = generate_rtx_buffer (3, ref);
+    gst_buffer_unref (ref);
+    send_recv_buffer (h_send, h_recv, rtx2_buf, TRUE);
+  }
+
+  /* Marker + TWCC feedback:
+     Receiver report covers TWCC 65299-65301 (P, RTX2, marker).
+     P(65299)=NOT_RECV → LOST. RTX2(65300)=RECV. marker(65301)=RECV.
+
+     During inline processing in rtp_session_process_twcc:
+     _process_pkt_feedback(RTX2):
+     - protects_seqnums=[16], _lookup_seqnum(TEST_BUF_SSRC, 16) returns 65299
+       (overwritten by P) instead of 65296 (original D's TWCC).
+     - Block created: seqs=[65299], fec=[65300].
+     - _redblock_reconsider: media=P(65299, LOST), RTX2(65300, RECEIVED)
+       → P.state = RECOVERED.. */
+  send_recv_buffer (h_send, h_recv,
+      generate_twcc_send_buffer (next_seqnum++, TRUE), TRUE);
+  fail_unless_equals_int64 (GST_FLOW_OK,
+      session_harness_recv_rtcp (h_send,
+          session_harness_produce_twcc (h_recv)));
+
+  /* Expected correct behavior: recovery_pct should be <= 0 because P should
+     NOT be recovered (RTX2 carries D's payload, an entirely different packet).
+     This assertion FAILS because the _lookup_seqnum corruption causes P to be
+     falsely linked to RTX2's RedBlock and marked RECOVERED. */
+  GstStructure *twcc_stats = session_harness_get_twcc_stats_full (h_send,
+      300 * GST_MSECOND, 0);
+  gdouble recovery_pct;
+  fail_unless (gst_structure_get (twcc_stats,
+          "recovery-pct", G_TYPE_DOUBLE, &recovery_pct, NULL));
+  fail_unless (recovery_pct <= 0.0,
+      "False recovery detected: P (RTP=16 after wrap) was incorrectly "
+      "RECOVERED by RTX2 which actually protects the original D. "
+      "_lookup_seqnum returned P's TWCC instead of D's due to "
+      "ssrc_to_seqmap overwrite on RTP seqnum wrap. recovery_pct=%f",
+      recovery_pct);
+  gst_structure_free (twcc_stats);
+
+  session_harness_free (h_send);
+  session_harness_free (h_recv);
+}
+
+GST_END_TEST;
+
+/* Checks that check_for_lost_packets correctly
+   detects gaps after RTP seqnum wrap.
+
+   Sequence:
+   1. Send 266 packets (TWCC 65280-65535, 0-9) through sender only
+   2. FCI #1: base=65520, count=10, fb_pkt_count=0, all received
+      → Sets expected_parsed_seqnum = 65530
+   3. FCI #2: base=0, count=10, fb_pkt_count=1, all received
+      → check_for_lost_packets(0, 10, 1): 0 < 65530 → "older" → SKIP!
+      Gap packets 65530-65535 never marked LOST.
+   4. Stats: gap packets remain UNKNOWN, loss_pct = 0.
+*/
+GST_START_TEST (test_twcc_seqnum_wrap_gap_detection)
+{
+  SessionHarness *h = session_harness_new ();
+  guint i;
+
+  /* BASE_SEQNUM = 0xFF00 = 65280. We need TWCC to wrap past 65535.
+     Send 266 packets: TWCC 65280-65535 (256 pkts) + TWCC 0-9 (10 pkts). */
+  const guint n_packets = 266;
+
+  guint8 fci1[] = {
+    0xFF, 0xF0,                 /* base: 65520 */
+    0x00, 0x0A,                 /* count: 10 */
+    0x00, 0x00, 0x00,           /* reference time: 0 */
+    0x00,                       /* fb_pkt_count: 0 */
+    0x20, 0x0A,                 /* run-length: received small_delta, count=10 */
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0  /* 10 recv-deltas, all 0 */
+  };
+
+  guint8 fci2[] = {
+    0x00, 0x00,                 /* base: 0 */
+    0x00, 0x0A,                 /* count: 10 */
+    0x00, 0x00, 0x00,           /* reference time: 0 */
+    0x01,                       /* fb_pkt_count: 1 */
+    0x20, 0x0A,                 /* run-length: received small_delta, count=10 */
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0  /* 10 recv-deltas, all 0 */
+  };
+
+  session_harness_add_twcc_caps_for_pt (h, TEST_BUF_PT);
+
+  for (i = 0; i < n_packets; i++) {
+    fail_unless_equals_int64 (GST_FLOW_OK,
+                              session_harness_send_rtp (h, generate_twcc_send_buffer (i, FALSE)));
+    session_harness_advance_and_crank (h, TEST_BUF_DURATION);
+  }
+
+  session_harness_recv_rtcp (h,
+      generate_twcc_feedback_rtcp (fci1, sizeof (fci1)));
+  session_harness_recv_rtcp (h,
+      generate_twcc_feedback_rtcp (fci2, sizeof (fci2)));
+
+  /* Stats window 500ms/0delay covers:
+     - Packet 240 (TWCC 65520, t=4800ms) through 265 (TWCC 9, t=5300ms)
+     - 10 RECEIVED (65520-65529 from FCI #1) + 6 UNKNOWN (65530-65535 gap)
+       + 10 RECEIVED (0-9 from FCI #2)
+     - If gap detection worked: 6 LOST → loss_pct = 6/26 ≈ 23%
+     - Bug: 6 UNKNOWN (not counted) → loss_pct = 0/20 = 0
+
+     Expected correct behavior: loss_pct > 0 because 6 packets in the gap
+     were sent but never received. This assertion FAILS because
+     check_for_lost_packets skips the gap across the TWCC wrap boundary. */
+  GstStructure *twcc_stats = session_harness_get_twcc_stats_full (h,
+      500 * GST_MSECOND, 0);
+  gdouble loss_pct;
+  fail_unless (gst_structure_get (twcc_stats,
+          "packet-loss-pct", G_TYPE_DOUBLE, &loss_pct, NULL));
+  fail_unless (loss_pct > 0.0,
+      "Gap packets 65530-65535 across the TWCC wrap boundary should be "
+      "detected as LOST, but check_for_lost_packets skipped them due to "
+      "plain unsigned comparison (0 < 65530). loss_pct=%f", loss_pct);
+  gst_structure_free (twcc_stats);
+
+  session_harness_free (h);
 }
 
 GST_END_TEST;
@@ -6922,6 +7367,7 @@ rtpsession_suite (void)
   tcase_add_test (tc_chain, test_twcc_reference_time_wrap);
   tcase_add_test (tc_chain, test_twcc_reference_time_wrap_start_negative);
   tcase_add_test (tc_chain, test_twcc_stats_rtx_recover_lost);
+  tcase_add_test (tc_chain, test_twcc_parse_fci_robustness);
   tcase_add_test (tc_chain, test_twcc_stats_no_rtx_no_recover);
   tcase_add_test (tc_chain, test_twcc_stats_long_rtx_recover);
   tcase_add_test (tc_chain, test_twcc_stats_rtx_recover_not_lost_stuff);
@@ -6935,6 +7381,11 @@ rtpsession_suite (void)
   tcase_add_test (tc_chain, test_twcc_overwrites_exthdr_seqnum_if_present);
   tcase_add_test (tc_chain, test_twcc_sent_packets_wrap);
   tcase_add_test (tc_chain, test_twcc_keep_queue_size);
+  /* Test could be enabled if repair meta seqnums are adjusted to twcc seqnums
+     before transmission, but that would be a non-trivial change.
+  */
+  tcase_skip_broken_test (tc_chain, test_twcc_rtx_rtp_seqnum_wrap_corruption);
+  tcase_add_test (tc_chain, test_twcc_seqnum_wrap_gap_detection);
 
   tcase_add_test (tc_chain, test_send_rtcp_instantly);
   tcase_add_test (tc_chain, test_send_bye_signal);
