@@ -2344,6 +2344,8 @@ free_stream (GstRtpBinStream * stream, GstRtpBin * bin)
     g_signal_handler_disconnect (buffer, stream->buffer_ptreq_sig);
   if (stream->buffer_ntpstop_sig != 0)
     g_signal_handler_disconnect (buffer, stream->buffer_ntpstop_sig);
+  if (stream->buffer_handlesync_sig != 0)
+    g_signal_handler_disconnect (buffer, stream->buffer_handlesync_sig);
   if (stream->demux_newpad_sig != 0)
     g_signal_handler_disconnect (demux, stream->demux_newpad_sig);
   if (stream->demux_padremoved_sig != 0)
@@ -2356,25 +2358,10 @@ free_stream (GstRtpBinStream * stream, GstRtpBin * bin)
   /* remove all ghostpads for this stream */
   g_hash_table_remove_all (stream->ptpad_to_ghostpad);
 
-  /* It is important to unlock before shutting down our stream elements,
-     because some of them might be interacting with GstRTPBin through
-     signals that might be taking the GST_RTP_BIN_DYN_LOCK(), and that would
-     cause a deadlock if we are not unlocked here */
-  GST_RTP_BIN_DYN_UNLOCK (bin);
-
-  remove_bin_element (buffer, bin);
-
-  if (demux) {
-    gst_element_set_locked_state (demux, TRUE);
-    gst_element_set_state (demux, GST_STATE_NULL);
-    gst_bin_remove (GST_BIN_CAST (bin), demux);
-  }
-
-  /* unref from the ref we did in create_stream() */
-  gst_object_unref (buffer);
-
-  GST_RTP_BIN_DYN_LOCK (bin);
-
+  /* Remove the stream from its client before destroying the buffer.
+   * Other threads (e.g. gst_rtp_bin_associate via the sync handler) iterate
+   * client->streams under BIN_LOCK and dereference stream->buffer.  If we
+   * destroy the buffer first, those threads hit a finalized object. */
   GST_RTP_BIN_LOCK (bin);
   for (clients = bin->clients; clients; clients = next_client) {
     GstRtpBinClient *client = (GstRtpBinClient *) clients->data;
@@ -2400,6 +2387,25 @@ free_stream (GstRtpBinStream * stream, GstRtpBin * bin)
     }
   }
   GST_RTP_BIN_UNLOCK (bin);
+
+  /* It is important to unlock before shutting down our stream elements,
+     because some of them might be interacting with GstRTPBin through
+     signals that might be taking the GST_RTP_BIN_DYN_LOCK(), and that would
+     cause a deadlock if we are not unlocked here */
+  GST_RTP_BIN_DYN_UNLOCK (bin);
+
+  remove_bin_element (buffer, bin);
+
+  if (demux) {
+    gst_element_set_locked_state (demux, TRUE);
+    gst_element_set_state (demux, GST_STATE_NULL);
+    gst_bin_remove (GST_BIN_CAST (bin), demux);
+  }
+
+  /* unref from the ref we did in create_stream() */
+  gst_object_unref (buffer);
+
+  GST_RTP_BIN_DYN_LOCK (bin);
 
   g_hash_table_destroy (stream->ptpad_to_ghostpad);
   g_free (stream);
