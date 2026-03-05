@@ -1310,16 +1310,16 @@ _process_pkt_feedback (SentPacket * pkt, TWCCStatsManager * statsman)
        * are not covered by any other existing block, because if
        * they do it means some weird state of the data structures.
       */
-      for (gsize i = 0; i < pkt->protects_seqnums->len; ++i) {
-        const guint16 data_key = g_array_index (pkt->protects_seqnums,
-            guint16, i);
-        RedBlock *data_block = NULL;
-        if (g_hash_table_lookup_extended (statsman->seqnum_2_redblocks,
-                GUINT_TO_POINTER (data_key), NULL, (gpointer *) & data_block)) {
-          _redblock_key_free (key);
-          return;
-        }
-      }
+      // for (gsize i = 0; i < pkt->protects_seqnums->len; ++i) {
+      //   const guint16 data_key = g_array_index (pkt->protects_seqnums,
+      //       guint16, i);
+      //   RedBlock *data_block = NULL;
+      //   if (g_hash_table_lookup_extended (statsman->seqnum_2_redblocks,
+      //           GUINT_TO_POINTER (data_key), NULL, (gpointer *) & data_block)) {
+      //     _redblock_key_free (key);
+      //     return;
+      //   }
+      // }
       /* Add every data packet into seqnum_2_redblocks  */
       block = _redblock_new (pkt->protects_seqnums, pkt->seqnum,
           pkt->redundant_idx, pkt->redundant_num);
@@ -1479,6 +1479,28 @@ rtp_twcc_stats_sent_pkt (TWCCStatsManager * statsman,
       GST_TIME_ARGS (pinfo->current_time));
 }
 
+#include <stdio.h>
+gchar*
+_sprint_sent_packet (const SentPacket * pkt)
+{
+  const gsize res_len = 128;
+  gchar * res = g_new0(gchar, res_len);
+  if (!pkt) {
+    snprintf (res, res_len, "null");
+  } else {
+
+    snprintf (res, res_len,
+              "twcc-seqnum: %u, seqnum: %u, pt: %u, "
+              "redundant_idx: %d, redundant_num: %d, protected_seqnums: %u,"
+              "size: %u, sock-ts: %" GST_TIME_FORMAT " local-ts: %" GST_TIME_FORMAT,
+              pkt->seqnum, pkt->seqnum,
+              pkt->pt, pkt->redundant_idx, pkt->redundant_num,
+              pkt->protects_seqnums ? pkt->protects_seqnums->len : 0, pkt->size,
+              GST_TIME_ARGS (pkt->socket_ts), GST_TIME_ARGS(pkt->local_ts));
+  }
+  return res;
+}
+
 void
 rtp_twcc_stats_set_sock_ts (TWCCStatsManager * statsman,
     guint16 seqnum, GstClockTime sock_ts)
@@ -1490,8 +1512,23 @@ rtp_twcc_stats_set_sock_ts (TWCCStatsManager * statsman,
         "packet #%u, setting socket-ts %" GST_TIME_FORMAT, seqnum,
         GST_TIME_ARGS (sock_ts));
   } else {
-    GST_WARNING_OBJECT (statsman->parent,
-        "Unable to update send-time for twcc-seqnum #%u", seqnum);
+    const gsize rblen = gst_vec_deque_get_length (statsman->sent_packets);
+    SentPacket * tail = NULL;
+    SentPacket * head = NULL;
+    if (rblen > 0) {
+      tail = gst_vec_deque_peek_tail_struct (statsman->sent_packets);
+      head = gst_vec_deque_peek_head_struct (statsman->sent_packets);
+    }
+    gchar * heads = _sprint_sent_packet(head);
+    gchar * tails = _sprint_sent_packet(tail);
+    GST_ERROR_OBJECT (statsman->parent,
+        "Unable to update send-time for twcc-seqnum #%u,"
+                      " ring-buffer-len: %" G_GSIZE_FORMAT ", sock-ts: %" GST_TIME_FORMAT
+                      " HEAD: %s, TAIL: %s", seqnum, rblen, GST_TIME_ARGS (sock_ts), heads, tails);
+    g_free(heads);
+    g_free(tails);
+    g_usleep (GST_SECOND);
+    g_assert_not_reached();
   }
 }
 
