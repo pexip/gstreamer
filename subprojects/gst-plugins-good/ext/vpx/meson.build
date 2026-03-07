@@ -40,7 +40,11 @@ vpx_features = [
 ]
 
 vpx_option = get_option('vpx')
-vpx_dep = dependency('vpx-avx', version : '>=1.5.0', required : vpx_option)
+if host_machine.cpu_family() == 'arm' or host_machine.cpu_family() == 'aarch64'
+  vpx_dep = dependency('vpx-neon', version : '>=1.5.0', required : vpx_option)
+else
+  vpx_dep = dependency('vpx-avx', version : '>=1.5.0', required : vpx_option)
+endif
 
 if vpx_dep.found()
   vpx_args = ['-DHAVE_VPX_1_3']
@@ -127,11 +131,18 @@ endif
 
 #Pexip spesific
 
-pex_isas = [
-  ['avx',    ['-DGST_ISA_AVX'] ],
-  ['avx2',   ['-DGST_ISA_AVX2'] ],
-  ['avx512', ['-DGST_ISA_AVX512'] ],
-]
+if host_machine.cpu_family() == 'arm' or host_machine.cpu_family() == 'aarch64'
+  pex_isas = [
+    ['neon', ['-DGST_ISA_NEON'] ],
+  ]
+else
+  pex_isas = [
+    ['avx',    ['-DGST_ISA_AVX'] ],
+    ['avx2',   ['-DGST_ISA_AVX2'] ],
+    ['avx512', ['-DGST_ISA_AVX512'] ],
+  ]
+endif
+
 
 vpx_args = [
   '-DHAVE_VPX_1_3',

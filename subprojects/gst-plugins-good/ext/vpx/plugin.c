@@ -62,6 +62,8 @@ plugin_init (GstPlugin * plugin)
 #  define GST_ISA_SUFFIX(name) G_PASTE (name, _avx2)
 #elif defined (GST_ISA_AVX512)
 #  define GST_ISA_SUFFIX(name) G_PASTE (name, _avx512)
+#elif defined (GST_ISA_NEON)
+#  define GST_ISA_SUFFIX(name) G_PASTE (name, _neon)
 #else
 #  define GST_ISA_SUFFIX(name) name
 #endif
