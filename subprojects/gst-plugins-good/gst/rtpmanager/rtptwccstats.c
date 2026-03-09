@@ -107,6 +107,7 @@ struct _TWCCStatsManager
   GstClockTime prev_stat_window_beginning;
 
   GstVecDeque *sent_packets;
+  GMutex sent_packets_lock;
   gsize sent_packets_size;
 
   /* Ring Buffer of pointers to SentPacket struct from sent_packets
@@ -412,14 +413,44 @@ _keep_history_length (TWCCStatsManager * statsman, gsize max_len,
   }
 }
 
+static void
+_sent_packets_lock (TWCCStatsManager * statsman)
+{
+  g_mutex_lock (&statsman->sent_packets_lock);
+}
+
+static void
+_sent_packets_unlock (TWCCStatsManager * statsman)
+{
+  g_mutex_unlock (&statsman->sent_packets_lock);
+}
+
+/* Mutex-protected manipulation of the sent_packets ring buffer.
+ * If new_packet is non-NULL: evict one if needed, push new_packet,
+ *   return pointer to the inserted element.
+ * If new_packet is NULL: evict all eligible packets (time/size based),
+ *   return NULL.
+ */
 static SentPacket *
 _sent_pkt_keep_length (TWCCStatsManager * statsman, gsize max_len,
-    SentPacket * new_packet)
+    SentPacket * new_packet, GstClockTime cur_time,
+    GstClockTime max_history_duration)
 {
-  _keep_history_length (statsman, max_len, GST_CLOCK_TIME_NONE,
-      GST_CLOCK_TIME_NONE);
-  gst_vec_deque_push_tail_struct (statsman->sent_packets, new_packet);
-  return (SentPacket *) gst_vec_deque_peek_tail_struct (statsman->sent_packets);
+  SentPacket *ret = NULL;
+  _sent_packets_lock (statsman);
+  if (GST_CLOCK_TIME_IS_VALID (cur_time)
+      && GST_CLOCK_TIME_IS_VALID (max_history_duration)) {
+    while (_keep_history_length (statsman, max_len, cur_time,
+            max_history_duration));
+  } else {
+    _keep_history_length (statsman, max_len, cur_time, max_history_duration);
+  }
+  if (new_packet) {
+    gst_vec_deque_push_tail_struct (statsman->sent_packets, new_packet);
+    ret = (SentPacket *) gst_vec_deque_peek_tail_struct (statsman->sent_packets);
+  }
+  _sent_packets_unlock (statsman);
+  return ret;
 }
 
 static TWCCStatsCtx *
@@ -1389,6 +1420,7 @@ rtp_twcc_stats_manager_new (GObject * parent)
       (GDestroyNotify) g_hash_table_destroy);
   statsman->sent_packets = gst_vec_deque_new_for_struct (sizeof (SentPacket),
       PACKETS_HIST_LEN_DEFAULT);
+  g_mutex_init (&statsman->sent_packets_lock);
   statsman->sent_packets_size = PACKETS_HIST_LEN_DEFAULT;
   gst_vec_deque_set_clear_func (statsman->sent_packets,
       (GDestroyNotify) _free_sentpacket);
@@ -1419,6 +1451,7 @@ rtp_twcc_stats_manager_free (TWCCStatsManager * statsman)
 {
   g_hash_table_destroy (statsman->ssrc_to_seqmap);
   gst_vec_deque_free (statsman->sent_packets);
+  g_mutex_clear (&statsman->sent_packets_lock);
   gst_vec_deque_free (statsman->sent_packets_feedbacks);
   g_hash_table_destroy (statsman->stats_ctx_by_pt);
   g_hash_table_destroy (statsman->redund_2_redblocks);
@@ -1458,7 +1491,8 @@ rtp_twcc_stats_sent_pkt (TWCCStatsManager * statsman,
   /* Add packet to the sent_packets ring buffer and
      make sure that it is within max_size, if not shrink by 1 pkt */
   SentPacket *sent_pkt =
-      _sent_pkt_keep_length (statsman, statsman->sent_packets_size, &packet);
+      _sent_pkt_keep_length (statsman, statsman->sent_packets_size, &packet,
+      GST_CLOCK_TIME_NONE, GST_CLOCK_TIME_NONE);
   twcc_stats_ctx_add_packet (statsman, sent_pkt);
 
   for (guint i = 0; protect_seqnums_array && i < protect_seqnums_array->len;
@@ -1483,9 +1517,13 @@ void
 rtp_twcc_stats_set_sock_ts (TWCCStatsManager * statsman,
     guint16 seqnum, GstClockTime sock_ts)
 {
+  _sent_packets_lock (statsman);
   SentPacket *pkt = _find_sentpacket (statsman, seqnum);
   if (pkt) {
     pkt->socket_ts = sock_ts;
+  }
+  _sent_packets_unlock (statsman);
+  if (pkt) {
     GST_LOG_OBJECT (statsman->parent,
         "packet #%u, setting socket-ts %" GST_TIME_FORMAT, seqnum,
         GST_TIME_ARGS (sock_ts));
@@ -1507,29 +1545,34 @@ rtp_twcc_stats_pkt_feedback (TWCCStatsManager * statsman,
     TWCCPktState status)
 {
   SentPacket *found;
+  gboolean updated = FALSE;
+
+  _sent_packets_lock (statsman);
   if (!!(found = _find_sentpacket (statsman, seqnum))) {
     /* Do not process feedback on packets we have got feedback previously */
     if (found->status < status) {
       found->remote_ts = remote_ts;
       found->status = status;
-      gst_vec_deque_push_tail (statsman->sent_packets_feedbacks, found);
-      GST_LOG_OBJECT (statsman->parent,
-          "matching pkt: #%u with local_ts: %" GST_TIME_FORMAT
-          " size: %u, remote-ts: %" GST_TIME_FORMAT, seqnum,
-          GST_TIME_ARGS (found->local_ts), found->size * 8,
-          GST_TIME_ARGS (remote_ts));
-
-      /* calculate the round-trip time */
-      statsman->rtt = GST_CLOCK_DIFF (found->local_ts, current_time);
-    } else {
-      /* We've got feed back on the packet that was covered with the previous TWCC report.
-         Receiver could send two feedbacks on a single packet on purpose,
-         so we just ignore it. */
-      GST_LOG_OBJECT (statsman->parent,
-          "Rejecting second feedback on a packet #%u: current state: %s, "
-          "received fb: %s", seqnum, _pkt_status_s (found->status),
-          _pkt_status_s (status));
+      updated = TRUE;
     }
+  }
+  _sent_packets_unlock (statsman);
+
+  if (found && updated) {
+    gst_vec_deque_push_tail (statsman->sent_packets_feedbacks, found);
+    GST_LOG_OBJECT (statsman->parent,
+        "matching pkt: #%u with local_ts: %" GST_TIME_FORMAT
+        " size: %u, remote-ts: %" GST_TIME_FORMAT, seqnum,
+        GST_TIME_ARGS (found->local_ts), found->size * 8,
+        GST_TIME_ARGS (remote_ts));
+
+    /* calculate the round-trip time */
+    statsman->rtt = GST_CLOCK_DIFF (found->local_ts, current_time);
+  } else if (found && !updated) {
+    GST_LOG_OBJECT (statsman->parent,
+        "Rejecting second feedback on a packet #%u: current state: %s, "
+        "received fb: %s", seqnum, _pkt_status_s (found->status),
+        _pkt_status_s (status));
   } else {
     GST_WARNING_OBJECT (statsman->parent, "Feedback on unknown packet #%u",
         seqnum);
@@ -1569,8 +1612,8 @@ rtp_twcc_stats_do_stats (TWCCStatsManager * statsman,
     return twcc_stats_ctx_get_structure (statsman->stats_ctx);
 
   /* Prune old packets in stats */
-  while (_keep_history_length (statsman, statsman->sent_packets_size, last_ts,
-          PACKETS_HIST_DUR));
+  _sent_pkt_keep_length (statsman, statsman->sent_packets_size, NULL, last_ts,
+      PACKETS_HIST_DUR);
 
   array = g_value_array_new (0);
   end_time = GST_CLOCK_DIFF (stats_window_delay, last_ts);
@@ -1663,23 +1706,27 @@ rtp_twcc_stats_check_for_lost_packets (TWCCStatsManager * statsman,
   for (i = 0; i < packets_lost; i++) {
     const guint16 seqnum = statsman->expected_parsed_seqnum + i;
     SentPacket *found;
+    gboolean updated = FALSE;
+
+    _sent_packets_lock (statsman);
     if (!!(found = _find_sentpacket (statsman, seqnum))) {
       /* Do not process feedback on packets we have got feedback previously */
       if (found->status == RTP_TWCC_FECBLOCK_PKT_UNKNOWN) {
         found->status = RTP_TWCC_FECBLOCK_PKT_LOST;
-        gst_vec_deque_push_tail (statsman->sent_packets_feedbacks, found);
-        GST_LOG_OBJECT (statsman->parent,
-            "Processing lost pkt feedback: #%u with local_ts: %" GST_TIME_FORMAT
-            " size: %u", seqnum,
-            GST_TIME_ARGS (found->local_ts), found->size * 8);
-
-      } else {
-        /* We've got feed back on the packet that was covered with the previous TWCC report.
-           Receiver could send two feedbacks on a single packet on purpose,
-           so we just ignore it. */
-        GST_LOG_OBJECT (statsman->parent,
-            "Rejecting second feedback on a packet #%u", seqnum);
+        updated = TRUE;
       }
+    }
+    _sent_packets_unlock (statsman);
+
+    if (found && updated) {
+      gst_vec_deque_push_tail (statsman->sent_packets_feedbacks, found);
+      GST_LOG_OBJECT (statsman->parent,
+          "Processing lost pkt feedback: #%u with local_ts: %" GST_TIME_FORMAT
+          " size: %u", seqnum,
+          GST_TIME_ARGS (found->local_ts), found->size * 8);
+    } else if (found) {
+      GST_LOG_OBJECT (statsman->parent,
+          "Rejecting second feedback on a packet #%u", seqnum);
     }
   }
 
@@ -1692,5 +1739,8 @@ done:
 guint
 rtp_twcc_stats_queue_len (TWCCStatsManager * stats_manager)
 {
-  return gst_vec_deque_get_length (stats_manager->sent_packets);
+  _sent_packets_lock (stats_manager);
+  guint len = gst_vec_deque_get_length (stats_manager->sent_packets);
+  _sent_packets_unlock (stats_manager);
+  return len;
 }
