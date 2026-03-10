@@ -133,6 +133,12 @@ static gboolean gst_rtp_ssrc_demux_sink_event (GstPad * pad, GstObject * parent,
 
 static GstFlowReturn gst_rtp_ssrc_demux_rtcp_chain (GstPad * pad,
     GstObject * parent, GstBuffer * buf);
+static GstFlowReturn gst_rtp_ssrc_demux_chain_list (GstPad * pad,
+    GstObject * parent, GstBufferList * list);
+static GstFlowReturn gst_rtp_ssrc_demux_rtcp_chain_list (GstPad * pad,
+    GstObject * parent, GstBufferList * list);
+static gboolean gst_rtp_ssrc_demux_get_rtcp_ssrc (GstBuffer * buf,
+    guint32 * ssrc);
 static GstIterator *gst_rtp_ssrc_demux_iterate_internal_links_sink (GstPad *
     pad, GstObject * parent);
 
@@ -504,7 +510,9 @@ gst_rtp_ssrc_demux_class_init (GstRtpSsrcDemuxClass * klass)
       "rtpssrcdemux", 0, "RTP SSRC demuxer");
 
   GST_DEBUG_REGISTER_FUNCPTR (gst_rtp_ssrc_demux_chain);
+  GST_DEBUG_REGISTER_FUNCPTR (gst_rtp_ssrc_demux_chain_list);
   GST_DEBUG_REGISTER_FUNCPTR (gst_rtp_ssrc_demux_rtcp_chain);
+  GST_DEBUG_REGISTER_FUNCPTR (gst_rtp_ssrc_demux_rtcp_chain_list);
 }
 
 static void
@@ -516,6 +524,8 @@ gst_rtp_ssrc_demux_init (GstRtpSsrcDemux * demux)
       gst_pad_new_from_template (gst_element_class_get_pad_template (klass,
           "sink"), "sink");
   gst_pad_set_chain_function (demux->rtp_sink, gst_rtp_ssrc_demux_chain);
+  gst_pad_set_chain_list_function (demux->rtp_sink,
+      gst_rtp_ssrc_demux_chain_list);
   gst_pad_set_event_function (demux->rtp_sink, gst_rtp_ssrc_demux_sink_event);
   gst_pad_set_iterate_internal_links_function (demux->rtp_sink,
       gst_rtp_ssrc_demux_iterate_internal_links_sink);
@@ -525,6 +535,8 @@ gst_rtp_ssrc_demux_init (GstRtpSsrcDemux * demux)
       gst_pad_new_from_template (gst_element_class_get_pad_template (klass,
           "rtcp_sink"), "rtcp_sink");
   gst_pad_set_chain_function (demux->rtcp_sink, gst_rtp_ssrc_demux_rtcp_chain);
+  gst_pad_set_chain_list_function (demux->rtcp_sink,
+      gst_rtp_ssrc_demux_rtcp_chain_list);
   gst_pad_set_event_function (demux->rtcp_sink, gst_rtp_ssrc_demux_sink_event);
   gst_pad_set_iterate_internal_links_function (demux->rtcp_sink,
       gst_rtp_ssrc_demux_iterate_internal_links_sink);
@@ -751,44 +763,12 @@ gst_rtp_ssrc_demux_rtcp_chain (GstPad * pad, GstObject * parent,
   GstFlowReturn ret;
   GstRtpSsrcDemux *demux;
   guint32 ssrc;
-  GstRTCPPacket packet;
-  GstRTCPBuffer rtcp = { NULL, };
   GstPad *srcpad;
 
   demux = GST_RTP_SSRC_DEMUX (parent);
 
-  if (!gst_rtcp_buffer_validate_reduced (buf))
+  if (!gst_rtp_ssrc_demux_get_rtcp_ssrc (buf, &ssrc))
     goto invalid_rtcp;
-
-  gst_rtcp_buffer_map (buf, GST_MAP_READ, &rtcp);
-  if (!gst_rtcp_buffer_get_first_packet (&rtcp, &packet)) {
-    gst_rtcp_buffer_unmap (&rtcp);
-    goto invalid_rtcp;
-  }
-
-  /* first packet must be SR or RR, or in case of a reduced size RTCP packet
-   * it must be APP, RTPFB or PSFB feeadback, or else the validate would
-   * have failed */
-  switch (gst_rtcp_packet_get_type (&packet)) {
-    case GST_RTCP_TYPE_SR:
-      /* get the ssrc so that we can route it to the right source pad */
-      gst_rtcp_packet_sr_get_sender_info (&packet, &ssrc, NULL, NULL, NULL,
-          NULL);
-      break;
-    case GST_RTCP_TYPE_RR:
-      ssrc = gst_rtcp_packet_rr_get_ssrc (&packet);
-      break;
-    case GST_RTCP_TYPE_APP:
-      ssrc = gst_rtcp_packet_app_get_ssrc (&packet);
-      break;
-    case GST_RTCP_TYPE_RTPFB:
-    case GST_RTCP_TYPE_PSFB:
-      ssrc = gst_rtcp_packet_fb_get_sender_ssrc (&packet);
-      break;
-    default:
-      goto unexpected_rtcp;
-  }
-  gst_rtcp_buffer_unmap (&rtcp);
 
   GST_DEBUG_OBJECT (demux, "received RTCP of SSRC %08x", ssrc);
 
@@ -825,12 +805,6 @@ invalid_rtcp:
     gst_buffer_unref (buf);
     return GST_FLOW_OK;
   }
-unexpected_rtcp:
-  {
-    GST_DEBUG_OBJECT (demux, "dropping unexpected RTCP packet");
-    gst_buffer_unref (buf);
-    return GST_FLOW_OK;
-  }
 create_failed:
   {
     gst_buffer_unref (buf);
@@ -856,6 +830,232 @@ find_demux_pad_for_pad (GstRtpSsrcDemux * demux, GstPad * pad)
   }
 
   return NULL;
+}
+
+static GstFlowReturn
+gst_rtp_ssrc_demux_chain_list (GstPad * pad, GstObject * parent,
+    GstBufferList * list)
+{
+  GstFlowReturn ret = GST_FLOW_OK;
+  GstRtpSsrcDemux *demux;
+  guint i, len;
+  GHashTable *ssrc_lists;
+  GList *ssrc_order = NULL;
+  GList *walk;
+
+  demux = GST_RTP_SSRC_DEMUX (parent);
+
+  len = gst_buffer_list_length (list);
+  if (len == 0) {
+    gst_buffer_list_unref (list);
+    return GST_FLOW_OK;
+  }
+
+  /* Group buffers by SSRC and push per-SSRC buffer lists */
+  ssrc_lists = g_hash_table_new_full (g_direct_hash,
+      g_direct_equal, NULL, (GDestroyNotify) gst_buffer_list_unref);
+
+  for (i = 0; i < len; i++) {
+    GstBuffer *buf = gst_buffer_list_get (list, i);
+    GstRTPBuffer rtp = { NULL };
+    guint32 ssrc;
+    GstBufferList *ssrc_list;
+
+    if (!gst_rtp_buffer_map (buf, GST_MAP_READ, &rtp)) {
+      GST_DEBUG_OBJECT (demux, "Dropping invalid RTP packet from list");
+      continue;
+    }
+    ssrc = gst_rtp_buffer_get_ssrc (&rtp);
+    gst_rtp_buffer_unmap (&rtp);
+
+    ssrc_list = g_hash_table_lookup (ssrc_lists, GUINT_TO_POINTER (ssrc));
+    if (!ssrc_list) {
+      ssrc_list = gst_buffer_list_new ();
+      g_hash_table_insert (ssrc_lists, GUINT_TO_POINTER (ssrc), ssrc_list);
+      ssrc_order = g_list_prepend (ssrc_order, GUINT_TO_POINTER (ssrc));
+    }
+    gst_buffer_list_add (ssrc_list, gst_buffer_ref (buf));
+  }
+  gst_buffer_list_unref (list);
+
+  GST_DEBUG_OBJECT (demux, "grouped %u RTP buffers into %u SSRCs",
+      len, g_hash_table_size (ssrc_lists));
+
+  ssrc_order = g_list_reverse (ssrc_order);
+
+  /* Push each per-SSRC buffer list.
+   * Steal from the hash table before pushing to avoid double-free
+   * via the hash table's destroy notify. */
+  for (walk = ssrc_order; walk; walk = walk->next) {
+    guint32 ssrc = GPOINTER_TO_UINT (walk->data);
+    GstBufferList *ssrc_list;
+    GstPad *srcpad;
+
+    g_hash_table_steal_extended (ssrc_lists, GUINT_TO_POINTER (ssrc),
+        NULL, (gpointer *) &ssrc_list);
+
+    srcpad = find_or_create_demux_pad_for_ssrc (demux, ssrc, RTP_PAD);
+    if (srcpad == NULL) {
+      gst_buffer_list_unref (ssrc_list);
+      if ((demux->err_num & 0xff) == 0)
+        GST_WARNING_OBJECT (demux,
+            "Dropping buffer list SSRC %08x. "
+            "Max streams number reached (%u)", ssrc, demux->max_streams);
+      ++demux->err_num;
+      continue;
+    }
+
+    if (!GST_PAD_STICKIES_SENT (srcpad)) {
+      forward_initial_events (demux, ssrc, srcpad, RTP_PAD);
+      GST_PAD_SET_STICKIES_SENT (srcpad);
+    }
+
+    ret = gst_pad_push_list (srcpad, ssrc_list);
+
+    if (ret == GST_FLOW_NOT_LINKED || ret == GST_FLOW_FLUSHING
+        || ret == GST_FLOW_EOS) {
+      ret = GST_FLOW_OK;
+    }
+
+    gst_object_unref (srcpad);
+
+    if (ret != GST_FLOW_OK)
+      break;
+  }
+
+  g_list_free (ssrc_order);
+  g_hash_table_destroy (ssrc_lists);
+
+  return ret;
+}
+
+static gboolean
+gst_rtp_ssrc_demux_get_rtcp_ssrc (GstBuffer * buf, guint32 * ssrc)
+{
+  GstRTCPPacket packet;
+  GstRTCPBuffer rtcp = { NULL, };
+
+  if (!gst_rtcp_buffer_validate_reduced (buf))
+    return FALSE;
+
+  gst_rtcp_buffer_map (buf, GST_MAP_READ, &rtcp);
+  if (!gst_rtcp_buffer_get_first_packet (&rtcp, &packet)) {
+    gst_rtcp_buffer_unmap (&rtcp);
+    return FALSE;
+  }
+
+  switch (gst_rtcp_packet_get_type (&packet)) {
+    case GST_RTCP_TYPE_SR:
+      gst_rtcp_packet_sr_get_sender_info (&packet, ssrc, NULL, NULL, NULL,
+          NULL);
+      break;
+    case GST_RTCP_TYPE_RR:
+      *ssrc = gst_rtcp_packet_rr_get_ssrc (&packet);
+      break;
+    case GST_RTCP_TYPE_APP:
+      *ssrc = gst_rtcp_packet_app_get_ssrc (&packet);
+      break;
+    case GST_RTCP_TYPE_RTPFB:
+    case GST_RTCP_TYPE_PSFB:
+      *ssrc = gst_rtcp_packet_fb_get_sender_ssrc (&packet);
+      break;
+    default:
+      gst_rtcp_buffer_unmap (&rtcp);
+      return FALSE;
+  }
+  gst_rtcp_buffer_unmap (&rtcp);
+  return TRUE;
+}
+
+static GstFlowReturn
+gst_rtp_ssrc_demux_rtcp_chain_list (GstPad * pad, GstObject * parent,
+    GstBufferList * list)
+{
+  GstFlowReturn ret = GST_FLOW_OK;
+  GstRtpSsrcDemux *demux;
+  guint i, len;
+  GHashTable *ssrc_lists;
+  GList *ssrc_order = NULL;
+  GList *walk;
+
+  demux = GST_RTP_SSRC_DEMUX (parent);
+
+  len = gst_buffer_list_length (list);
+  if (len == 0) {
+    gst_buffer_list_unref (list);
+    return GST_FLOW_OK;
+  }
+
+  /* Group RTCP buffers by SSRC and push per-SSRC buffer lists */
+  ssrc_lists = g_hash_table_new_full (g_direct_hash,
+      g_direct_equal, NULL, (GDestroyNotify) gst_buffer_list_unref);
+
+  for (i = 0; i < len; i++) {
+    GstBuffer *buf = gst_buffer_list_get (list, i);
+    guint32 ssrc;
+    GstBufferList *ssrc_list;
+
+    if (!gst_rtp_ssrc_demux_get_rtcp_ssrc (buf, &ssrc)) {
+      GST_DEBUG_OBJECT (demux, "Dropping invalid RTCP packet from list");
+      continue;
+    }
+
+    ssrc_list = g_hash_table_lookup (ssrc_lists, GUINT_TO_POINTER (ssrc));
+    if (!ssrc_list) {
+      ssrc_list = gst_buffer_list_new ();
+      g_hash_table_insert (ssrc_lists, GUINT_TO_POINTER (ssrc), ssrc_list);
+      ssrc_order = g_list_prepend (ssrc_order, GUINT_TO_POINTER (ssrc));
+    }
+    gst_buffer_list_add (ssrc_list, gst_buffer_ref (buf));
+  }
+  gst_buffer_list_unref (list);
+
+  GST_DEBUG_OBJECT (demux, "grouped %u RTCP buffers into %u SSRCs",
+      len, g_hash_table_size (ssrc_lists));
+
+  ssrc_order = g_list_reverse (ssrc_order);
+
+  /* Push each per-SSRC buffer list.
+   * Steal from the hash table before pushing to avoid double-free
+   * via the hash table's destroy notify. */
+  for (walk = ssrc_order; walk; walk = walk->next) {
+    guint32 ssrc = GPOINTER_TO_UINT (walk->data);
+    GstBufferList *ssrc_list;
+    GstPad *srcpad;
+
+    g_hash_table_steal_extended (ssrc_lists, GUINT_TO_POINTER (ssrc),
+        NULL, (gpointer *) &ssrc_list);
+
+    srcpad = find_or_create_demux_pad_for_ssrc (demux, ssrc, RTCP_PAD);
+    if (srcpad == NULL) {
+      gst_buffer_list_unref (ssrc_list);
+      GST_WARNING_OBJECT (demux,
+          "Dropping RTCP buffer list SSRC %08x. "
+          "Max streams number reached (%u)", ssrc, demux->max_streams);
+      continue;
+    }
+
+    if (!GST_PAD_STICKIES_SENT (srcpad)) {
+      forward_initial_events (demux, ssrc, srcpad, RTCP_PAD);
+      GST_PAD_SET_STICKIES_SENT (srcpad);
+    }
+
+    ret = gst_pad_push_list (srcpad, ssrc_list);
+
+    if (ret == GST_FLOW_NOT_LINKED) {
+      ret = GST_FLOW_OK;
+    }
+
+    gst_object_unref (srcpad);
+
+    if (ret != GST_FLOW_OK)
+      break;
+  }
+
+  g_list_free (ssrc_order);
+  g_hash_table_destroy (ssrc_lists);
+
+  return ret;
 }
 
 
