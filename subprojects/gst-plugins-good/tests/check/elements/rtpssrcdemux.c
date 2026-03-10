@@ -618,6 +618,377 @@ GST_START_TEST (test_stress_rtp_clear_ssrc)
 
 GST_END_TEST;
 
+static GstBufferList *
+create_rtp_buffer_list (guint num_buffers, guint32 ssrc)
+{
+  GstBufferList *list = gst_buffer_list_new_sized (num_buffers);
+  guint i;
+
+  for (i = 0; i < num_buffers; i++)
+    gst_buffer_list_add (list, create_buffer (i, ssrc));
+
+  return list;
+}
+
+typedef struct
+{
+  GSList *rtp_harnesses;
+  GSList *rtcp_harnesses;
+} ChainListTestCtx;
+
+static void
+chain_list_test_pad_added (GstElement * element, guint ssrc,
+    GstPad * rtp_pad, ChainListTestCtx * ctx)
+{
+  GstHarness *rtp_h;
+  GstHarness *rtcp_h;
+  GstPad *rtcp_pad;
+  gchar *name;
+
+  rtp_h = gst_harness_new_with_element (element, NULL, NULL);
+  gst_harness_add_element_src_pad (rtp_h, rtp_pad);
+  ctx->rtp_harnesses = g_slist_append (ctx->rtp_harnesses, rtp_h);
+
+  name = g_strdup_printf ("rtcp_src_%u", ssrc);
+  rtcp_pad = gst_element_get_static_pad (element, name);
+  rtcp_h = gst_harness_new_with_element (element, NULL, NULL);
+  gst_harness_add_element_src_pad (rtcp_h, rtcp_pad);
+  gst_object_unref (rtcp_pad);
+  g_free (name);
+  ctx->rtcp_harnesses = g_slist_append (ctx->rtcp_harnesses, rtcp_h);
+}
+
+GST_START_TEST (test_rtp_chain_list_same_ssrc)
+{
+  GstHarness *h;
+  ChainListTestCtx ctx = { NULL, NULL };
+  GstBufferList *out_list;
+
+  h = gst_harness_new_with_padnames ("rtpssrcdemux", "sink", NULL);
+  g_signal_connect (h->element, "new-ssrc-pad",
+      G_CALLBACK (chain_list_test_pad_added), &ctx);
+  gst_harness_set_src_caps (h, generate_caps ());
+
+  fail_unless_equals_int (GST_FLOW_OK,
+      gst_harness_push_list (h, create_rtp_buffer_list (3, TEST_BUF_SSRC)));
+
+  fail_unless_equals_int (g_slist_length (ctx.rtp_harnesses), 1);
+
+  /* The element should push a buffer list downstream, not individual buffers */
+  out_list = gst_harness_try_pull_list (ctx.rtp_harnesses->data);
+  fail_unless (out_list != NULL,
+      "Expected a buffer list on the output, got individual buffers");
+  fail_unless_equals_int (gst_buffer_list_length (out_list), 3);
+  gst_buffer_list_unref (out_list);
+
+  g_slist_free_full (ctx.rtp_harnesses, (GDestroyNotify) gst_harness_teardown);
+  g_slist_free_full (ctx.rtcp_harnesses, (GDestroyNotify) gst_harness_teardown);
+  gst_harness_teardown (h);
+}
+
+GST_END_TEST;
+
+GST_START_TEST (test_rtp_chain_list_mixed_ssrc)
+{
+  GstHarness *h;
+  ChainListTestCtx ctx = { NULL, NULL };
+  GstBufferList *in_list;
+  guint32 ssrc_a = 0xAAAAAAAA;
+  guint32 ssrc_b = 0xBBBBBBBB;
+  guint total_out = 0;
+
+  h = gst_harness_new_with_padnames ("rtpssrcdemux", "sink", NULL);
+  g_signal_connect (h->element, "new-ssrc-pad",
+      G_CALLBACK (chain_list_test_pad_added), &ctx);
+  gst_harness_set_src_caps (h, generate_caps ());
+
+  /* Interleaved SSRCs: A, B, A, B */
+  in_list = gst_buffer_list_new_sized (4);
+  gst_buffer_list_add (in_list, create_buffer (0, ssrc_a));
+  gst_buffer_list_add (in_list, create_buffer (1, ssrc_b));
+  gst_buffer_list_add (in_list, create_buffer (2, ssrc_a));
+  gst_buffer_list_add (in_list, create_buffer (3, ssrc_b));
+
+  fail_unless_equals_int (GST_FLOW_OK, gst_harness_push_list (h, in_list));
+
+  /* Two SSRCs should have created two pairs of pads */
+  fail_unless_equals_int (g_slist_length (ctx.rtp_harnesses), 2);
+
+  /* Each output should have received a buffer list with 2 buffers */
+  {
+    GSList *walk;
+    for (walk = ctx.rtp_harnesses; walk; walk = walk->next) {
+      GstBufferList *out = gst_harness_try_pull_list (walk->data);
+      fail_unless (out != NULL, "Expected buffer list output for each SSRC");
+      total_out += gst_buffer_list_length (out);
+      gst_buffer_list_unref (out);
+    }
+  }
+  fail_unless_equals_int (total_out, 4);
+
+  g_slist_free_full (ctx.rtp_harnesses, (GDestroyNotify) gst_harness_teardown);
+  g_slist_free_full (ctx.rtcp_harnesses, (GDestroyNotify) gst_harness_teardown);
+  gst_harness_teardown (h);
+}
+
+GST_END_TEST;
+
+GST_START_TEST (test_rtp_chain_list_with_invalid_buffer)
+{
+  GstHarness *h;
+  ChainListTestCtx ctx = { NULL, NULL };
+  GstBufferList *in_list;
+  GstBufferList *out_list;
+  guint8 bad_pkt[] = { 0x01, 0x02, 0x03 };
+
+  h = gst_harness_new_with_padnames ("rtpssrcdemux", "sink", NULL);
+  g_signal_connect (h->element, "new-ssrc-pad",
+      G_CALLBACK (chain_list_test_pad_added), &ctx);
+  gst_harness_set_src_caps (h, generate_caps ());
+
+  in_list = gst_buffer_list_new_sized (2);
+  gst_buffer_list_add (in_list, create_buffer (0, TEST_BUF_SSRC));
+  gst_buffer_list_add (in_list,
+      gst_buffer_new_wrapped_full (0, bad_pkt, sizeof bad_pkt, 0,
+          sizeof bad_pkt, NULL, NULL));
+
+  fail_unless_equals_int (GST_FLOW_OK, gst_harness_push_list (h, in_list));
+
+  fail_unless_equals_int (g_slist_length (ctx.rtp_harnesses), 1);
+
+  /* Should get a list with only the valid buffer */
+  out_list = gst_harness_try_pull_list (ctx.rtp_harnesses->data);
+  fail_unless (out_list != NULL,
+      "Expected a buffer list with the valid buffer");
+  fail_unless_equals_int (gst_buffer_list_length (out_list), 1);
+  gst_buffer_list_unref (out_list);
+
+  g_slist_free_full (ctx.rtp_harnesses, (GDestroyNotify) gst_harness_teardown);
+  g_slist_free_full (ctx.rtcp_harnesses, (GDestroyNotify) gst_harness_teardown);
+  gst_harness_teardown (h);
+}
+
+GST_END_TEST;
+
+GST_START_TEST (test_rtcp_chain_list)
+{
+  GstHarness *h_rtp;
+  GstHarness *h_rtcp;
+  ChainListTestCtx ctx = { NULL, NULL };
+  GstBufferList *in_list;
+  GstBufferList *out_list;
+  guint32 ssrc = 0x12345678;
+
+  h_rtp = gst_harness_new_with_padnames ("rtpssrcdemux", "sink", NULL);
+  g_signal_connect (h_rtp->element, "new-ssrc-pad",
+      G_CALLBACK (chain_list_test_pad_added), &ctx);
+  h_rtcp = gst_harness_new_with_element (h_rtp->element, "rtcp_sink", NULL);
+
+  /* First push one RTP buffer to create the pads for this SSRC */
+  gst_harness_set_src_caps (h_rtp, generate_caps ());
+  fail_unless_equals_int (GST_FLOW_OK,
+      gst_harness_push (h_rtp, create_buffer (0, ssrc)));
+
+  fail_unless_equals_int (g_slist_length (ctx.rtp_harnesses), 1);
+  fail_unless_equals_int (g_slist_length (ctx.rtcp_harnesses), 1);
+
+  /* Drain the RTP buffer we just pushed */
+  gst_buffer_unref (gst_harness_pull (ctx.rtp_harnesses->data));
+
+  /* Now push a buffer list of 2 RTCP SR packets on rtcp_sink */
+  gst_harness_set_src_caps_str (h_rtcp, "application/x-rtcp");
+  in_list = gst_buffer_list_new_sized (2);
+  gst_buffer_list_add (in_list, generate_rtcp_sr_buffer (ssrc));
+  gst_buffer_list_add (in_list, generate_rtcp_sr_buffer (ssrc));
+
+  fail_unless_equals_int (GST_FLOW_OK, gst_harness_push_list (h_rtcp, in_list));
+
+  out_list = gst_harness_try_pull_list (ctx.rtcp_harnesses->data);
+  fail_unless (out_list != NULL, "Expected a RTCP buffer list on the output");
+  fail_unless_equals_int (gst_buffer_list_length (out_list), 2);
+  gst_buffer_list_unref (out_list);
+
+  g_slist_free_full (ctx.rtp_harnesses, (GDestroyNotify) gst_harness_teardown);
+  g_slist_free_full (ctx.rtcp_harnesses, (GDestroyNotify) gst_harness_teardown);
+  gst_harness_teardown (h_rtcp);
+  gst_harness_teardown (h_rtp);
+}
+
+GST_END_TEST;
+
+GST_START_TEST (test_rtcp_chain_list_mixed_ssrc)
+{
+  GstHarness *h_rtp;
+  GstHarness *h_rtcp;
+  ChainListTestCtx ctx = { NULL, NULL };
+  GstBufferList *in_list;
+  guint32 ssrc_a = 0xAAAAAAAA;
+  guint32 ssrc_b = 0xBBBBBBBB;
+  guint total_out = 0;
+
+  h_rtp = gst_harness_new_with_padnames ("rtpssrcdemux", "sink", NULL);
+  g_signal_connect (h_rtp->element, "new-ssrc-pad",
+      G_CALLBACK (chain_list_test_pad_added), &ctx);
+  h_rtcp = gst_harness_new_with_element (h_rtp->element, "rtcp_sink", NULL);
+
+  /* Push one RTP buffer per SSRC to create the pads */
+  gst_harness_set_src_caps (h_rtp, generate_caps ());
+  fail_unless_equals_int (GST_FLOW_OK,
+      gst_harness_push (h_rtp, create_buffer (0, ssrc_a)));
+  fail_unless_equals_int (GST_FLOW_OK,
+      gst_harness_push (h_rtp, create_buffer (0, ssrc_b)));
+
+  fail_unless_equals_int (g_slist_length (ctx.rtp_harnesses), 2);
+  fail_unless_equals_int (g_slist_length (ctx.rtcp_harnesses), 2);
+
+  /* Drain the RTP buffers */
+  {
+    GSList *walk;
+    for (walk = ctx.rtp_harnesses; walk; walk = walk->next)
+      gst_buffer_unref (gst_harness_pull (walk->data));
+  }
+
+  /* Push interleaved RTCP: A, B, A, B */
+  gst_harness_set_src_caps_str (h_rtcp, "application/x-rtcp");
+  in_list = gst_buffer_list_new_sized (4);
+  gst_buffer_list_add (in_list, generate_rtcp_sr_buffer (ssrc_a));
+  gst_buffer_list_add (in_list, generate_rtcp_sr_buffer (ssrc_b));
+  gst_buffer_list_add (in_list, generate_rtcp_sr_buffer (ssrc_a));
+  gst_buffer_list_add (in_list, generate_rtcp_sr_buffer (ssrc_b));
+
+  fail_unless_equals_int (GST_FLOW_OK, gst_harness_push_list (h_rtcp, in_list));
+
+  /* Each SSRC should have received a buffer list with 2 RTCP packets */
+  {
+    GSList *walk;
+    for (walk = ctx.rtcp_harnesses; walk; walk = walk->next) {
+      GstBufferList *out = gst_harness_try_pull_list (walk->data);
+      fail_unless (out != NULL, "Expected RTCP buffer list for each SSRC");
+      total_out += gst_buffer_list_length (out);
+      gst_buffer_list_unref (out);
+    }
+  }
+  fail_unless_equals_int (total_out, 4);
+
+  g_slist_free_full (ctx.rtp_harnesses, (GDestroyNotify) gst_harness_teardown);
+  g_slist_free_full (ctx.rtcp_harnesses, (GDestroyNotify) gst_harness_teardown);
+  gst_harness_teardown (h_rtcp);
+  gst_harness_teardown (h_rtp);
+}
+
+GST_END_TEST;
+
+GST_START_TEST (test_rtcp_chain_list_with_invalid_buffer)
+{
+  GstHarness *h_rtp;
+  GstHarness *h_rtcp;
+  ChainListTestCtx ctx = { NULL, NULL };
+  GstBufferList *in_list;
+  GstBufferList *out_list;
+  guint32 ssrc = 0x12345678;
+  guint8 bad_pkt[] = { 0x01, 0x02, 0x03 };
+
+  h_rtp = gst_harness_new_with_padnames ("rtpssrcdemux", "sink", NULL);
+  g_signal_connect (h_rtp->element, "new-ssrc-pad",
+      G_CALLBACK (chain_list_test_pad_added), &ctx);
+  h_rtcp = gst_harness_new_with_element (h_rtp->element, "rtcp_sink", NULL);
+
+  /* Push one RTP buffer to create the pad */
+  gst_harness_set_src_caps (h_rtp, generate_caps ());
+  fail_unless_equals_int (GST_FLOW_OK,
+      gst_harness_push (h_rtp, create_buffer (0, ssrc)));
+
+  fail_unless_equals_int (g_slist_length (ctx.rtp_harnesses), 1);
+  fail_unless_equals_int (g_slist_length (ctx.rtcp_harnesses), 1);
+
+  /* Drain the RTP buffer */
+  gst_buffer_unref (gst_harness_pull (ctx.rtp_harnesses->data));
+
+  /* Push RTCP list: 1 valid SR + 1 garbage */
+  gst_harness_set_src_caps_str (h_rtcp, "application/x-rtcp");
+  in_list = gst_buffer_list_new_sized (2);
+  gst_buffer_list_add (in_list, generate_rtcp_sr_buffer (ssrc));
+  gst_buffer_list_add (in_list,
+      gst_buffer_new_wrapped_full (0, bad_pkt, sizeof bad_pkt, 0,
+          sizeof bad_pkt, NULL, NULL));
+
+  fail_unless_equals_int (GST_FLOW_OK, gst_harness_push_list (h_rtcp, in_list));
+
+  /* Only the valid RTCP buffer should come through */
+  out_list = gst_harness_try_pull_list (ctx.rtcp_harnesses->data);
+  fail_unless (out_list != NULL,
+      "Expected a RTCP buffer list with the valid packet");
+  fail_unless_equals_int (gst_buffer_list_length (out_list), 1);
+  gst_buffer_list_unref (out_list);
+
+  g_slist_free_full (ctx.rtp_harnesses, (GDestroyNotify) gst_harness_teardown);
+  g_slist_free_full (ctx.rtcp_harnesses, (GDestroyNotify) gst_harness_teardown);
+  gst_harness_teardown (h_rtcp);
+  gst_harness_teardown (h_rtp);
+}
+
+GST_END_TEST;
+
+GST_START_TEST (test_rtp_chain_list_max_streams)
+{
+  GstHarness *h;
+  ChainListTestCtx ctx = { NULL, NULL };
+  GstBufferList *in_list;
+  GstBufferList *out_list;
+  guint32 ssrc_a = 0xAAAAAAAA;
+  guint32 ssrc_b = 0xBBBBBBBB;
+
+  h = gst_harness_new_with_padnames ("rtpssrcdemux", "sink", NULL);
+  g_object_set (h->element, "max-streams", 1, NULL);
+  g_signal_connect (h->element, "new-ssrc-pad",
+      G_CALLBACK (chain_list_test_pad_added), &ctx);
+  gst_harness_set_src_caps (h, generate_caps ());
+
+  /* Push list with two different SSRCs; only the first should get through */
+  in_list = gst_buffer_list_new_sized (2);
+  gst_buffer_list_add (in_list, create_buffer (0, ssrc_a));
+  gst_buffer_list_add (in_list, create_buffer (1, ssrc_b));
+
+  fail_unless_equals_int (GST_FLOW_OK, gst_harness_push_list (h, in_list));
+
+  /* Only one SSRC pad should have been created */
+  fail_unless_equals_int (g_slist_length (ctx.rtp_harnesses), 1);
+
+  /* The output list should contain only the buffer for SSRC A */
+  out_list = gst_harness_try_pull_list (ctx.rtp_harnesses->data);
+  fail_unless (out_list != NULL, "Expected buffer list output");
+  fail_unless_equals_int (gst_buffer_list_length (out_list), 1);
+  gst_buffer_list_unref (out_list);
+
+  g_slist_free_full (ctx.rtp_harnesses, (GDestroyNotify) gst_harness_teardown);
+  g_slist_free_full (ctx.rtcp_harnesses, (GDestroyNotify) gst_harness_teardown);
+  gst_harness_teardown (h);
+}
+
+GST_END_TEST;
+
+GST_START_TEST (test_rtp_chain_list_empty)
+{
+  GstHarness *h;
+  ChainListTestCtx ctx = { NULL, NULL };
+  GstBufferList *in_list;
+
+  h = gst_harness_new_with_padnames ("rtpssrcdemux", "sink", NULL);
+  g_signal_connect (h->element, "new-ssrc-pad",
+      G_CALLBACK (chain_list_test_pad_added), &ctx);
+  gst_harness_set_src_caps (h, generate_caps ());
+
+  in_list = gst_buffer_list_new ();
+  fail_unless_equals_int (GST_FLOW_OK, gst_harness_push_list (h, in_list));
+
+  /* No pads should have been created */
+  fail_unless_equals_int (g_slist_length (ctx.rtp_harnesses), 0);
+
+  gst_harness_teardown (h);
+}
+
+GST_END_TEST;
+
 static Suite *
 rtpssrcdemux_suite (void)
 {
@@ -633,6 +1004,14 @@ rtpssrcdemux_suite (void)
   tcase_add_test (tc_chain, test_rtpssrcdemux_invalid_rtcp);
   tcase_add_test (tc_chain, test_rtp_and_rtcp_arrives_simultaneously);
   tcase_add_test (tc_chain, test_stress_rtp_clear_ssrc);
+  tcase_add_test (tc_chain, test_rtp_chain_list_same_ssrc);
+  tcase_add_test (tc_chain, test_rtp_chain_list_mixed_ssrc);
+  tcase_add_test (tc_chain, test_rtp_chain_list_with_invalid_buffer);
+  tcase_add_test (tc_chain, test_rtcp_chain_list);
+  tcase_add_test (tc_chain, test_rtcp_chain_list_mixed_ssrc);
+  tcase_add_test (tc_chain, test_rtcp_chain_list_with_invalid_buffer);
+  tcase_add_test (tc_chain, test_rtp_chain_list_max_streams);
+  tcase_add_test (tc_chain, test_rtp_chain_list_empty);
 
   return s;
 }
