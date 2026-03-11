@@ -6886,6 +6886,151 @@ GST_START_TEST (test_twcc_seqnum_wrap_gap_detection)
 
 GST_END_TEST;
 
+/*
+ * Stress-test for the race between rtp_twcc_stats_sent_pkt() (called from the
+ * session thread under RTP_SESSION_LOCK) and rtp_twcc_stats_set_sock_ts()
+ * (called from the network sink thread via GstTxFeedback, WITHOUT
+ * RTP_SESSION_LOCK).
+ *
+ * Without the sent_packets_lock mutex the concurrent access to the
+ * sent_packets ring buffer causes _find_sentpacket() to occasionally return
+ * NULL, producing "Unable to update send-time for twcc-seqnum ..." warnings.
+ */
+static void
+_count_twcc_sock_ts_warns_log_func (GstDebugCategory * category,
+    GstDebugLevel level,
+    const gchar * file,
+    const gchar * function,
+    gint line, GObject * object, GstDebugMessage * message, gpointer user_data)
+{
+  (void) category;
+  (void) file;
+  (void) line;
+  (void) object;
+  (void) message;
+  if ((level == GST_LEVEL_ERROR || level == GST_LEVEL_WARNING) &&
+      function && strstr (function, "rtp_twcc_stats_set_sock_ts")) {
+    gint *count = user_data;
+    g_atomic_int_inc (count);
+  }
+}
+
+typedef struct
+{
+  GAsyncQueue *sent_bufs;       /* GstBuffer* with TxFeedbackMeta */
+  gint sender_done;             /* atomic flag */
+} TwccSetSockTsRaceCtx;
+
+static gpointer
+_twcc_set_sock_ts_race_feedback_thread (gpointer data)
+{
+  TwccSetSockTsRaceCtx *ctx = data;
+  while (TRUE) {
+    GstBuffer *buf =
+        g_async_queue_timeout_pop (ctx->sent_bufs, 100 * 1000);
+    if (buf) {
+      GstTxFeedbackMeta *meta = gst_buffer_get_tx_feedback_meta (buf);
+      if (meta)
+        gst_tx_feedback_meta_set_tx_time (meta, GST_MSECOND);
+      gst_buffer_unref (buf);
+    } else if (g_atomic_int_get (&ctx->sender_done)) {
+      /* Drain remaining buffers */
+      while ((buf = g_async_queue_try_pop (ctx->sent_bufs)) != NULL) {
+        GstTxFeedbackMeta *meta = gst_buffer_get_tx_feedback_meta (buf);
+        if (meta)
+          gst_tx_feedback_meta_set_tx_time (meta, GST_MSECOND);
+        gst_buffer_unref (buf);
+      }
+      break;
+    }
+  }
+  return NULL;
+}
+
+GST_START_TEST (test_twcc_set_sock_ts_race)
+{
+  SessionHarness *h;
+  gint logged_sock_ts_warnings = 0;
+  GstDebugLevel level;
+  GThread *feedback_thread = NULL;
+  TwccSetSockTsRaceCtx ctx = { NULL, FALSE };
+  guint i;
+  GstFlowReturn send_res;
+  gint final_warn_count;
+  /*
+   * The sent_packets ring buffer has a compile-time capacity of 30 000
+   * (MAX_STATS_PACKETS).  We first fill it up, then keep sending while a
+   * second thread concurrently calls gst_tx_feedback_meta_set_tx_time().
+   * Once the buffer is full every send evicts the oldest entry, changing
+   * the deque head — exactly the operation that races with
+   * _find_sentpacket() in the un-fixed code.
+   */
+  const guint warmup_packets = 30000;
+  const guint stress_packets = 5000;
+  const guint total_packets = warmup_packets + stress_packets;
+  h = session_harness_new ();
+  session_harness_add_twcc_caps_for_pt (h, TEST_BUF_PT);
+  gst_element_send_event (h->session, gst_event_new_latency (10 * GST_MSECOND));
+  level = gst_debug_get_default_threshold ();
+  gst_debug_set_default_threshold (GST_LEVEL_WARNING);
+  gst_debug_add_log_function (_count_twcc_sock_ts_warns_log_func,
+      &logged_sock_ts_warnings, NULL);
+  /* Phase 1: fill the ring buffer without concurrent feedback */
+  for (i = 0; i < warmup_packets; i++) {
+    GstBuffer *buf = generate_twcc_send_buffer (i, FALSE);
+    send_res = session_harness_send_rtp (h, buf);
+    if (send_res != GST_FLOW_OK)
+      goto SET_SOCK_TS_RACE_CLEAR;
+    buf = session_harness_pull_send_rtp (h);
+    gst_buffer_unref (buf);
+  }
+  /*
+   * Phase 2: keep sending packets (each one triggers an eviction + push in
+   * the ring buffer) while a feedback thread concurrently calls
+   * gst_tx_feedback_meta_set_tx_time(), which ends up in
+   * rtp_twcc_stats_set_sock_ts() → _find_sentpacket().
+   */
+  ctx.sent_bufs = g_async_queue_new ();
+  g_atomic_int_set (&ctx.sender_done, FALSE);
+  feedback_thread = g_thread_new ("tx-feedback",
+      _twcc_set_sock_ts_race_feedback_thread, &ctx);
+  for (i = warmup_packets; i < total_packets; i++) {
+    GstBuffer *buf = generate_twcc_send_buffer (i, i == total_packets - 1);
+    send_res = session_harness_send_rtp (h, buf);
+    if (send_res != GST_FLOW_OK)
+      goto SET_SOCK_TS_RACE_CLEAR;
+    buf = session_harness_pull_send_rtp (h);
+    g_async_queue_push (ctx.sent_bufs, buf);
+  }
+
+SET_SOCK_TS_RACE_CLEAR:
+  /* Signal the feedback thread to stop and join it before touching shared
+   * state so we can safely read the warning counter and tear down. */
+  g_atomic_int_set (&ctx.sender_done, TRUE);
+  if (feedback_thread)
+    g_thread_join (feedback_thread);
+
+  /* Always restore process-wide debug state — even on assertion failure. */
+  gst_debug_remove_log_function (_count_twcc_sock_ts_warns_log_func);
+  gst_debug_set_default_threshold (level);
+
+  if (ctx.sent_bufs)
+    g_async_queue_unref (ctx.sent_bufs);
+  session_harness_free (h);
+
+  /* Defer assertions to after cleanup so global state is always restored. */
+  fail_unless_equals_int64 (send_res, GST_FLOW_OK);
+  /*
+   * With the sent_packets_lock fix no "Unable to update send-time"
+   * warnings should appear.  Without the fix the concurrent ring buffer
+   * access causes _find_sentpacket() to occasionally miss a packet.
+   */
+  final_warn_count = g_atomic_int_get (&logged_sock_ts_warnings);
+  fail_unless_equals_int (final_warn_count, 0);
+}
+
+GST_END_TEST;
+
 GST_START_TEST (test_send_rtcp_instantly)
 {
   SessionHarness *h = session_harness_new ();
@@ -7482,6 +7627,7 @@ rtpsession_suite (void)
   */
   tcase_skip_broken_test (tc_chain, test_twcc_rtx_rtp_seqnum_wrap_corruption);
   tcase_add_test (tc_chain, test_twcc_seqnum_wrap_gap_detection);
+  tcase_add_test (tc_chain, test_twcc_set_sock_ts_race);
 
   tcase_add_test (tc_chain, test_send_rtcp_instantly);
   tcase_add_test (tc_chain, test_send_bye_signal);
