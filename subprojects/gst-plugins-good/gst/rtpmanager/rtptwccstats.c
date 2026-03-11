@@ -51,14 +51,14 @@ typedef struct
                                    in the block, -1 otherwise */
   guint32 protects_ssrc;        /* for redundant packets: SSRC of the data stream */
 
-  /* For redundant packets: seqnums of the packets being protected
-   * by this packet.
-   * IMPORTANT: Once the packet is checked in before transmission, this array
-   * contains rtp seqnums. After receiving a feedback on the packet, the array
-   * is converted to TWCC seqnums. This is done to shift some work to the
-   * get_windowed_stats function, which should be less time-critical.
+  /* For redundant packets: original RTP seqnums of the packets being protected
+   * by this packet. Kept for debugging/logging purposes only.
    */
   GArray *protects_seqnums;
+
+  /* For redundant packets: TWCC seqnums of the packets being protected.
+   */
+  GArray *protects_twcc_seqnums;
   gboolean stats_processed;
 
   TWCCPktState status;
@@ -250,7 +250,8 @@ _register_seqnum (TWCCStatsManager * statsman,
 static void
 _sent_packet_init (SentPacket * packet, guint16 seqnum, RTPPacketInfo * pinfo,
     GstRTPBuffer * rtp, gint redundant_idx, gint redundant_num,
-    guint32 protect_ssrc, GArray * protect_seqnums_array)
+    guint32 protect_ssrc, GArray * protect_seqnums_array,
+    GArray * protect_twcc_seqnums_array)
 {
   packet->seqnum = seqnum;
   packet->orig_seqnum = gst_rtp_buffer_get_seq (rtp);
@@ -266,14 +267,22 @@ _sent_packet_init (SentPacket * packet, guint16 seqnum, RTPPacketInfo * pinfo,
   packet->redundant_num = redundant_num;
   packet->protects_ssrc = protect_ssrc;
   packet->protects_seqnums = protect_seqnums_array;
+  packet->protects_twcc_seqnums = protect_twcc_seqnums_array;
   packet->stats_processed = FALSE;
 }
 
 static void
 _free_sentpacket (SentPacket * pkt)
 {
-  if (pkt && pkt->protects_seqnums) {
-    g_array_unref (pkt->protects_seqnums);
+  if (pkt) {
+    if (pkt->protects_seqnums) {
+      g_array_unref (pkt->protects_seqnums);
+      pkt->protects_seqnums = NULL;
+    }
+    if (pkt->protects_twcc_seqnums) {
+      g_array_unref (pkt->protects_twcc_seqnums);
+      pkt->protects_twcc_seqnums = NULL;
+    }
   }
 }
 
@@ -1254,10 +1263,8 @@ _process_pkt_feedback (SentPacket * pkt, TWCCStatsManager * statsman)
   GST_LOG_OBJECT (statsman->parent, "Processing #%u packet in stats, state: %s",
       pkt->seqnum, _pkt_status_s (pkt->status));
 
-  /* This is either RTX or FEC packet */
-  if (pkt->protects_seqnums && pkt->protects_seqnums->len > 0) {
-    /* We are expecting non-twcc seqnums in the buffer's meta here, so
-       change them to twcc seqnums. */
+  /* This is either RTX or FEC packet — use pre-converted TWCC seqnums */
+  if (pkt->protects_twcc_seqnums && pkt->protects_twcc_seqnums->len > 0) {
 
     if (pkt->redundant_idx < 0 || pkt->redundant_num <= 0
         || pkt->redundant_idx >= pkt->redundant_num) {
@@ -1267,22 +1274,8 @@ _process_pkt_feedback (SentPacket * pkt, TWCCStatsManager * statsman)
       g_assert_not_reached ();
     }
 
-    for (gsize i = 0; i < pkt->protects_seqnums->len; i++) {
-      const guint16 prot_seqnum = g_array_index (pkt->protects_seqnums,
-          guint16, i);
-      gint32 twcc_seqnum = _lookup_seqnum (statsman, pkt->protects_ssrc,
-          prot_seqnum);
-      if (twcc_seqnum != -1) {
-        g_array_index (pkt->protects_seqnums, guint16, i)
-            = (guint16) twcc_seqnum;
-      }
-      GST_LOG_OBJECT (statsman->parent,
-          "FEC sn: #%u covers twcc sn: #%u, orig sn: %u", pkt->seqnum,
-          twcc_seqnum, prot_seqnum);
-    }
-
     /* Check if this packet covers the same block that was already added. */
-    RedBlockKey key = _redblock_key_new (pkt->protects_seqnums);
+    RedBlockKey key = _redblock_key_new (pkt->protects_twcc_seqnums);
     RedBlock *block = NULL;
     if (g_hash_table_lookup_extended (statsman->redund_2_redblocks, key, NULL,
             (gpointer *) & block)) {
@@ -1325,8 +1318,8 @@ _process_pkt_feedback (SentPacket * pkt, TWCCStatsManager * statsman)
        * are not covered by any other existing block, because if
        * they do it means some weird state of the data structures.
       */
-      for (gsize i = 0; i < pkt->protects_seqnums->len; ++i) {
-        const guint16 data_key = g_array_index (pkt->protects_seqnums,
+      for (gsize i = 0; i < pkt->protects_twcc_seqnums->len; ++i) {
+        const guint16 data_key = g_array_index (pkt->protects_twcc_seqnums,
             guint16, i);
         RedBlock *data_block = NULL;
         if (g_hash_table_lookup_extended (statsman->seqnum_2_redblocks,
@@ -1336,7 +1329,7 @@ _process_pkt_feedback (SentPacket * pkt, TWCCStatsManager * statsman)
         }
       }
       /* Add every data packet into seqnum_2_redblocks  */
-      block = _redblock_new (pkt->protects_seqnums, pkt->seqnum,
+      block = _redblock_new (pkt->protects_twcc_seqnums, pkt->seqnum,
           pkt->redundant_idx, pkt->redundant_num);
       g_array_index (block->fec_seqs, guint16, (gsize) pkt->redundant_idx)
           = pkt->seqnum;
@@ -1347,8 +1340,8 @@ _process_pkt_feedback (SentPacket * pkt, TWCCStatsManager * statsman)
          release the block once this packet outlives its lifetime */
       g_hash_table_insert (statsman->seqnum_2_redblocks,
           GUINT_TO_POINTER (pkt->seqnum), block);
-      for (gsize i = 0; i < pkt->protects_seqnums->len; ++i) {
-        const guint16 data_key = g_array_index (pkt->protects_seqnums,
+      for (gsize i = 0; i < pkt->protects_twcc_seqnums->len; ++i) {
+        const guint16 data_key = g_array_index (pkt->protects_twcc_seqnums,
             guint16, i);
         RedBlock *data_block = NULL;
         if (!g_hash_table_lookup_extended (statsman->seqnum_2_redblocks,
@@ -1462,16 +1455,40 @@ rtp_twcc_stats_sent_pkt (TWCCStatsManager * statsman,
 
   /* If this packet is RTX/FEC packet, keep track of its meta */
   GstRTPRepairMeta *repair_meta = NULL;
+  GArray *protect_twcc_seqnums_array = NULL;
   if ((repair_meta = gst_rtp_repair_meta_get (buf)) != NULL) {
     protect_ssrc = repair_meta->ssrc;
     protect_seqnums_array = g_array_ref (repair_meta->seqnums);
     redundant_pkt_idx = repair_meta->idx_red_packets;
     redundant_pkt_num = repair_meta->num_red_packets;
+
+    /* Convert RTP seqnums to TWCC seqnums. The protected data packets
+       are always sent before their RTX/FEC packets, so their RTP->TWCC
+       mappings are guaranteed to exist in ssrc_to_seqmap at this point. */
+    protect_twcc_seqnums_array =
+        g_array_sized_new (FALSE, FALSE, sizeof (guint16),
+        protect_seqnums_array->len);
+    for (guint i = 0; i < protect_seqnums_array->len; i++) {
+      const guint16 rtp_seqnum =
+          g_array_index (protect_seqnums_array, guint16, i);
+      gint32 twcc_sn =
+          _lookup_seqnum (statsman, protect_ssrc, rtp_seqnum);
+      if (twcc_sn != -1) {
+        const guint16 twcc_sn16 = (guint16) twcc_sn;
+        g_array_append_val (protect_twcc_seqnums_array, twcc_sn16);
+      } else {
+        GST_ERROR_OBJECT (statsman->parent,
+            "Failed to convert RTP seqnum %u (ssrc: %u) to TWCC seqnum "
+            "for redundant packet #%u — protected data packet not registered",
+            rtp_seqnum, protect_ssrc, twcc_seqnum);
+        g_assert_not_reached ();
+      }
+    }
   }
 
   _sent_packet_init (&packet, twcc_seqnum, pinfo, rtp,
       redundant_pkt_idx, redundant_pkt_num,
-      protect_ssrc, protect_seqnums_array);
+      protect_ssrc, protect_seqnums_array, protect_twcc_seqnums_array);
   /* Add packet to the sent_packets ring buffer and
      make sure that it is within max_size, if not shrink by 1 pkt */
   SentPacket *sent_pkt =
@@ -1481,20 +1498,26 @@ rtp_twcc_stats_sent_pkt (TWCCStatsManager * statsman,
 
   for (guint i = 0; protect_seqnums_array && i < protect_seqnums_array->len;
       i++) {
-    const guint16 prot_seqnum_ =
+    const guint16 rtp_sn =
         g_array_index (protect_seqnums_array, guint16, i);
-    GST_DEBUG_OBJECT (statsman->parent, "%u protects seqnum: %u", twcc_seqnum,
-        prot_seqnum_);
+    const guint16 twcc_sn = protect_twcc_seqnums_array
+        && i < protect_twcc_seqnums_array->len
+        ? g_array_index (protect_twcc_seqnums_array, guint16, i) : 0;
+    GST_DEBUG_OBJECT (statsman->parent,
+        "%u protects rtp-seqnum: %u (twcc: %u)", twcc_seqnum, rtp_sn,
+        twcc_sn);
   }
 
   GST_DEBUG_OBJECT
       (statsman->parent,
       "Send: twcc-seqnum: %u, seqnum: %u, pt: %u, marker: %d, "
-      "redundant_idx: %d, redundant_num: %d, protected_seqnums: %u,"
+      "redundant_idx: %d, redundant_num: %d, protected_seqnums(rtp): %u, "
+      "protected_seqnums(twcc): %u, "
       "size: %u, ts: %" GST_TIME_FORMAT, packet.seqnum, pinfo->seqnum,
       packet.pt, pinfo->marker, packet.redundant_idx, packet.redundant_num,
-      packet.protects_seqnums ? packet.protects_seqnums->len : 0, packet.size,
-      GST_TIME_ARGS (pinfo->current_time));
+      packet.protects_seqnums ? packet.protects_seqnums->len : 0,
+      packet.protects_twcc_seqnums ? packet.protects_twcc_seqnums->len : 0,
+      packet.size, GST_TIME_ARGS (pinfo->current_time));
 }
 
 void
