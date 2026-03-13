@@ -19,6 +19,8 @@
  */
 
 #include "rtptwccstats.h"
+#include "glib.h"
+#include "gst/gstinfo.h"
 #include <gst/rtp/gstrtprepairmeta.h>
 #include <gst/gstvecdeque.h>
 
@@ -1477,11 +1479,22 @@ rtp_twcc_stats_sent_pkt (TWCCStatsManager * statsman,
         const guint16 twcc_sn16 = (guint16) twcc_sn;
         g_array_append_val (protect_twcc_seqnums_array, twcc_sn16);
       } else {
-        GST_ERROR_OBJECT (statsman->parent,
+        /* RTX can start sending stuffing packets right after a data packet was pushed
+         * through, so it's queue can have very few packets. If the data packet
+         * and stuffing packets be reordered on their way downstream, TWCC
+         * statistics element couldn't track protecting seqnum.
+         *
+         * No reason to crash here, just act as if it was a data packet
+         */
+        GST_WARNING_OBJECT (statsman->parent,
             "Failed to convert RTP seqnum %u (ssrc: %u) to TWCC seqnum "
             "for redundant packet #%u — protected data packet not registered",
             rtp_seqnum, protect_ssrc, twcc_seqnum);
-        g_assert_not_reached ();
+        g_array_unref (protect_seqnums_array);
+        protect_seqnums_array = NULL;
+        g_array_unref (protect_twcc_seqnums_array);
+        protect_twcc_seqnums_array = NULL;
+        break;
       }
     }
   }
