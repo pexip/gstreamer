@@ -2225,6 +2225,131 @@ GST_START_TEST (test_rtxsender_stuffing_max_burst_packets)
 
 GST_END_TEST;
 
+/*
+ * This test verifies that when a video stream pauses (no new video packets
+ * arrive), stale video packets are evicted from the RTX queue based on
+ * wall-clock time when an audio packet triggers stuffing.  Without this
+ * fix, the video queue retained stale packets whose TWCC mappings had
+ * already been pruned, causing a crash in rtptwccstats.
+ */
+GST_START_TEST (test_rtxsender_stale_video_eviction_on_audio_stuffing)
+{
+  guint video_ssrc = 1234567;
+  guint video_pt = 96;
+  guint rtx_ssrc = 7777777;
+  guint rtx_pt = 99;
+  guint audio_ssrc = 6789123;
+  guint audio_pt = 111;
+  GstStructure *pt_map, *ssrc_map;
+  GstHarness *h = gst_harness_new ("rtprtxsend");
+
+  pt_map = gst_structure_new ("application/x-rtp-pt-map",
+      "96", G_TYPE_UINT, rtx_pt, NULL);
+  ssrc_map = gst_structure_new ("application/x-rtp-ssrc-map",
+      "1234567", G_TYPE_UINT, rtx_ssrc, NULL);
+  g_object_set (h->element,
+      "payload-type-map", pt_map,
+      "ssrc-map", ssrc_map,
+      "max-size-time", 1000, "max-size-packets", 0, "stuffing-kbps", 800, NULL);
+
+  gst_harness_set_src_caps_str (h, "application/x-rtp, "
+      "payload = (int)96, " "ssrc = (uint)1234567, " "clock-rate = (int)90000");
+
+  /* Push several video packets at t=0..80ms */
+  for (guint i = 0; i < 3; i++) {
+    gst_harness_set_time (h, i * 40 * GST_MSECOND);
+    gst_harness_push (h,
+        create_rtp_buffer_with_payload_size (video_ssrc, video_pt, i, 200));
+    /* pull the media packet (and any stuffing) */
+    while (gst_harness_buffers_in_queue (h) > 0)
+      gst_buffer_unref (gst_harness_pull (h));
+  }
+
+  /* Advance clock >1s past the last video packet, simulating a video pause.
+   * No video packets arrive during this time. */
+  gst_harness_set_time (h, 1200 * GST_MSECOND);
+
+  /* Push an audio packet (PT not in rtx_pt_map) — this triggers the
+   * last_stuffing_ssrc fallback in get_rtx_data, which picks the video
+   * SSRC's queue.  The wall-clock eviction should empty it first. */
+  gst_harness_push (h,
+      create_rtp_buffer_with_payload_size (audio_ssrc, audio_pt, 0, 200));
+
+  /* Pull everything; we should see only the audio media packet and
+   * NO stuffing RTX (the video queue should be empty after eviction). */
+  {
+    guint rtx_count = 0;
+    while (gst_harness_buffers_in_queue (h) > 0) {
+      GstBuffer *buf = gst_harness_pull (h);
+      if (GST_BUFFER_FLAG_IS_SET (buf, GST_RTP_BUFFER_FLAG_RETRANSMISSION))
+        rtx_count++;
+      gst_buffer_unref (buf);
+    }
+    fail_unless_equals_int (rtx_count, 0);
+  }
+
+  gst_structure_free (pt_map);
+  gst_structure_free (ssrc_map);
+  gst_harness_teardown (h);
+}
+
+GST_END_TEST;
+
+/*
+ * This test verifies that when new video arrives after a long pause,
+ * process_buffer's wall-clock eviction removes the stale packets so they
+ * are no longer available for RTX retransmission requests.
+ */
+GST_START_TEST (test_rtxsender_stale_video_eviction_in_process_buffer)
+{
+  guint master_ssrc = 1234567;
+  guint master_pt = 96;
+  guint rtx_ssrc = 7654321;
+  guint rtx_pt = 99;
+  GstStructure *pt_map, *ssrc_map;
+  GstHarness *h = gst_harness_new ("rtprtxsend");
+
+  pt_map = gst_structure_new ("application/x-rtp-pt-map",
+      "96", G_TYPE_UINT, rtx_pt, NULL);
+  ssrc_map = gst_structure_new ("application/x-rtp-ssrc-map",
+      "1234567", G_TYPE_UINT, rtx_ssrc, NULL);
+  g_object_set (h->element,
+      "payload-type-map", pt_map,
+      "ssrc-map", ssrc_map, "max-size-time", 1000, "max-size-packets", 0, NULL);
+
+  gst_harness_set_src_caps_str (h, "application/x-rtp, "
+      "payload = (int)96, " "ssrc = (uint)1234567, " "clock-rate = (int)90000");
+
+  /* Push a video packet at t=0 */
+  gst_harness_set_time (h, 0);
+  gst_harness_push (h,
+      create_rtp_buffer_with_payload_size (master_ssrc, master_pt, 0x100, 200));
+  pull_and_verify (h, FALSE, master_ssrc, master_pt, 0x100, 0, 0);
+
+  /* Advance clock >1s (simulate video pause) and push new video packet.
+   * process_buffer should wall-clock-evict seqnum 0x100. */
+  gst_harness_set_time (h, 1200 * GST_MSECOND);
+  gst_harness_push (h,
+      create_rtp_buffer_with_payload_size (master_ssrc, master_pt, 0x101, 200));
+  pull_and_verify (h, FALSE, master_ssrc, master_pt, 0x101, 0, 0);
+
+  /* Request retransmission of the old packet — it should have been evicted */
+  gst_harness_push_upstream_event (h,
+      create_rtx_event (master_ssrc, master_pt, 0x100));
+  fail_unless_equals_int (gst_harness_buffers_in_queue (h), 0);
+
+  /* The recent packet should still be available */
+  gst_harness_push_upstream_event (h,
+      create_rtx_event (master_ssrc, master_pt, 0x101));
+  pull_and_verify (h, TRUE, rtx_ssrc, rtx_pt, 0x101, master_ssrc, 0x101);
+
+  gst_structure_free (pt_map);
+  gst_structure_free (ssrc_map);
+  gst_harness_teardown (h);
+}
+
+GST_END_TEST;
+
 static Suite *
 rtprtx_suite (void)
 {
@@ -2272,6 +2397,10 @@ rtprtx_suite (void)
   tcase_add_loop_test (tc_chain, test_rtxsender_stuffing_max_burst_packets,
       0, G_N_ELEMENTS (MAX_BURST_PACKETS));
 
+  tcase_add_test (tc_chain,
+      test_rtxsender_stale_video_eviction_on_audio_stuffing);
+  tcase_add_test (tc_chain,
+      test_rtxsender_stale_video_eviction_in_process_buffer);
 
   return s;
 }

@@ -41,6 +41,7 @@
 #endif
 
 #include <gst/gst.h>
+#include "gst/gstclock.h"
 #include <string.h>
 #include <stdlib.h>
 
@@ -181,6 +182,7 @@ typedef struct
 {
   guint16 seqnum;
   guint32 timestamp;
+  GstClockTime sys_time;
   GstBuffer *buffer;
 } BufferQueueItem;
 
@@ -785,8 +787,8 @@ gst_rtp_rtx_buffer_new (GstRtpRtxSend * rtx, GstBuffer * buffer, guint8 padlen)
   GST_DEBUG_OBJECT (rtx, "creating rtx buffer, orig seqnum: %u, "
       "rtx seqnum: %u, rtx ssrc: %X", orig_seqnum, seqnum, ssrc);
 
-  /*Add repair packet meta so that TWCC will be able to to tie it 
-     with a lost data packet */
+  /* Add repair packet meta so that TWCC will be able to to tie it
+   * with a lost data packet */
   gst_rtp_repair_meta_add (new_buffer, 0, 1, orig_ssrc, &orig_seqnum, 1);
 
   /* gst_rtp_buffer_map does not map the payload so do it now */
@@ -1108,6 +1110,35 @@ gst_rtp_rtx_send_sink_event (GstPad * pad, GstObject * parent, GstEvent * event)
   return gst_pad_event_default (pad, parent, event);
 }
 
+/* Must be called with lock. Evicts packets from the head of data->queue
+ * whose wall-clock storage time is older than max_size_time ms from now. */
+static void
+gst_rtp_rtx_send_evict_stale (GstRtpRtxSend * rtx, SSRCRtxData * data,
+    GstClockTime now)
+{
+  if (!GST_CLOCK_TIME_IS_VALID (now) || rtx->max_size_time == 0)
+    return;
+
+  while (!g_sequence_is_empty (data->queue)) {
+    GSequenceIter *iter = g_sequence_get_begin_iter (data->queue);
+    BufferQueueItem *item = g_sequence_get (iter);
+
+    if (!GST_CLOCK_TIME_IS_VALID (item->sys_time))
+      break;
+
+    if (now > item->sys_time &&
+        (now - item->sys_time) >
+        (GstClockTime) rtx->max_size_time * GST_MSECOND) {
+      GST_LOG_OBJECT (rtx,
+          "Evicting stale packet seqnum %u (age: %" GST_TIME_FORMAT ")",
+          item->seqnum, GST_TIME_ARGS (now - item->sys_time));
+      g_sequence_remove (iter);
+    } else {
+      break;
+    }
+  }
+}
+
 /* like rtp_jitter_buffer_get_ts_diff() */
 static guint32
 gst_rtp_rtx_send_get_ts_diff (SSRCRtxData * data)
@@ -1181,6 +1212,9 @@ process_buffer (GstRtpRtxSend * rtx, GstBuffer * buffer)
     item->seqnum = seqnum;
     item->timestamp = rtptime;
     item->buffer = gst_buffer_ref (buffer);
+    item->sys_time =
+          gst_clock_get_time (GST_ELEMENT_CLOCK (rtx)) -
+          GST_ELEMENT_CAST (rtx)->base_time;
     g_sequence_append (data->queue, item);
 
     /* remove oldest packets from history if they are too many */
@@ -1189,8 +1223,10 @@ process_buffer (GstRtpRtxSend * rtx, GstBuffer * buffer)
         g_sequence_remove (g_sequence_get_begin_iter (data->queue));
     }
     if (rtx->max_size_time) {
-      while (gst_rtp_rtx_send_get_ts_diff (data) > rtx->max_size_time)
+      while (gst_rtp_rtx_send_get_ts_diff (data) > rtx->max_size_time) {
         g_sequence_remove (g_sequence_get_begin_iter (data->queue));
+      }
+      gst_rtp_rtx_send_evict_stale (rtx, data, item->sys_time);
     }
   }
 
@@ -1356,7 +1392,18 @@ gst_rtp_rtx_send_get_rtx_data (GstRtpRtxSend * rtx, GstBuffer * buffer)
 
   if (rtx->last_stuffing_ssrc != -1) {
     /* we do not have rtx data from the current buffer, so fetch the last one sent */
-    return gst_rtp_rtx_send_get_ssrc_data (rtx, rtx->last_stuffing_ssrc);
+    SSRCRtxData *data =
+        gst_rtp_rtx_send_get_ssrc_data (rtx, rtx->last_stuffing_ssrc);
+
+    /* The fallback queue may contain stale packets if no new packet arrived
+     * for this SSRC recently.  Evict before using it for stuffing. */
+    if (rtx->max_size_time) {
+      const GstClockTime now = gst_clock_get_time (GST_ELEMENT_CLOCK (rtx)) -
+          GST_ELEMENT_CAST (rtx)->base_time;
+      gst_rtp_rtx_send_evict_stale (rtx, data, now);
+    }
+
+    return data;
   }
 
   return NULL;
