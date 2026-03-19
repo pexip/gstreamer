@@ -90,7 +90,8 @@ gst_rtp_repair_meta_get (GstBuffer * buffer)
 GstRTPRepairMeta *
 gst_rtp_repair_meta_add (GstBuffer * buffer,
     const guint16 idx_red_packets, const guint16 num_red_packets,
-    const guint32 ssrc, const guint16 * seqnum, guint seqnum_count)
+    const guint32 ssrc, const guint16 * seqnum, const guint32 *timestamps,
+    guint pkt_count)
 {
   GstRTPRepairMeta *repair_meta =
       (GstRTPRepairMeta *) gst_buffer_add_meta (buffer,
@@ -102,7 +103,8 @@ gst_rtp_repair_meta_add (GstBuffer * buffer,
   repair_meta->idx_red_packets = idx_red_packets;
   repair_meta->num_red_packets = num_red_packets;
   repair_meta->ssrc = ssrc;
-  g_array_insert_vals (repair_meta->seqnums, 0, seqnum, seqnum_count);
+  g_array_insert_vals (repair_meta->seqnums, 0, seqnum, pkt_count);
+  g_array_insert_vals (repair_meta->timestamps, 0, timestamps, pkt_count);
 
   return repair_meta;
 }
@@ -110,7 +112,7 @@ gst_rtp_repair_meta_add (GstBuffer * buffer,
 /* Check if SSRC and seqnum is covered by the redundant packet. */
 gboolean
 gst_rtp_repair_meta_seqnum_chk (GstBuffer * buffer, guint16 seqnum,
-    guint32 ssrc)
+    guint32 ssrc, guint32 timestamp)
 {
   GstRTPRepairMeta *repair_meta = gst_rtp_repair_meta_get (buffer);
   if (!repair_meta) {
@@ -122,7 +124,8 @@ gst_rtp_repair_meta_seqnum_chk (GstBuffer * buffer, guint16 seqnum,
 
   for (guint i = 0; i < repair_meta->seqnums->len; i++) {
     guint16 stored_seqnum = g_array_index (repair_meta->seqnums, guint16, i);
-    if (stored_seqnum == seqnum) {
+    guint32 stored_ts = g_array_index (repair_meta->timestamps, guint32, i);
+    if (stored_seqnum == seqnum && stored_ts == timestamp) {
       return TRUE;
     }
   }
@@ -140,7 +143,7 @@ gst_rtp_repair_meta_idx (GstBuffer * buffer)
   return -1;
 }
 
-/* If this packet is a FEC/RTX packet, how many redundancy packets are 
+/* If this packet is a FEC/RTX packet, how many redundancy packets are
  * in the same block.
  * -1 if not a repair packet
  */
@@ -154,7 +157,7 @@ gst_rtp_repair_meta_repair_num (GstBuffer * buffer)
   return -1;
 }
 
-/* 
+/*
  * If this packet is a FEC/RTX packet, return the SSRC and the array of
  * sequence numbers of the data packets being protected by this packet.
  * The array is ref-counted, so it should be unrefed when not needed anymore.
@@ -162,7 +165,7 @@ gst_rtp_repair_meta_repair_num (GstBuffer * buffer)
 */
 gboolean
 gst_rtp_repair_meta_get_seqnums (GstBuffer * buffer, guint32 * ssrc,
-    GArray ** seqnums)
+    GArray ** seqnums, GArray ** timestamps)
 {
   GstRTPRepairMeta *repair_meta = gst_rtp_repair_meta_get (buffer);
   if (repair_meta && repair_meta->seqnums->len > 0) {
@@ -172,10 +175,14 @@ gst_rtp_repair_meta_get_seqnums (GstBuffer * buffer, guint32 * ssrc,
     if (seqnums) {
       *seqnums = g_array_ref (repair_meta->seqnums);
     }
+    if (timestamps) {
+      *timestamps = g_array_ref (repair_meta->timestamps);
+    }
     return TRUE;
   } else {
     *ssrc = 0;
     *seqnums = NULL;
+    *timestamps = NULL;
   }
   return FALSE;
 }
@@ -189,7 +196,8 @@ static gboolean gst_rtp_repair_meta_transform (GstBuffer * dst, GstMeta * meta,
 
     dmeta = gst_rtp_repair_meta_add (dst,
       smeta->idx_red_packets, smeta->num_red_packets,
-      smeta->ssrc, (guint16*)smeta->seqnums->data, smeta->seqnums->len);
+      smeta->ssrc, (guint16*)smeta->seqnums->data, (guint32*)smeta->timestamps->data,
+                       smeta->seqnums->len);
     if (dmeta == NULL)
       return FALSE;
   } else {
@@ -208,6 +216,7 @@ gst_rtp_repair_meta_init (GstRTPRepairMeta * meta,
   meta->num_red_packets = 0;
   meta->ssrc = 0;
   meta->seqnums = g_array_new (FALSE, FALSE, sizeof (guint16));
+  meta->timestamps = g_array_new (FALSE, FALSE, sizeof (guint32));
 
   return TRUE;
 }
@@ -217,4 +226,5 @@ gst_rtp_repair_meta_free (GstRTPRepairMeta * meta,
     G_GNUC_UNUSED GstBuffer * buffer)
 {
   g_array_unref (meta->seqnums);
+  g_array_unref (meta->timestamps);
 }

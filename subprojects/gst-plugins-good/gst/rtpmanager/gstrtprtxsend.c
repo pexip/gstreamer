@@ -768,6 +768,7 @@ gst_rtp_rtx_buffer_new (GstRtpRtxSend * rtx, GstBuffer * buffer, guint8 padlen)
   guint16 seqnum;
   guint32 orig_ssrc;
   guint16 orig_seqnum;
+  guint32 orig_timestamp;
   guint8 fmtp;
 
   gst_rtp_buffer_map (buffer, GST_MAP_READ, &rtp);
@@ -781,13 +782,15 @@ gst_rtp_rtx_buffer_new (GstRtpRtxSend * rtx, GstBuffer * buffer, guint8 padlen)
           GUINT_TO_POINTER (gst_rtp_buffer_get_payload_type (&rtp))));
 
   orig_seqnum = gst_rtp_buffer_get_seq (&rtp);
+  orig_timestamp = gst_rtp_buffer_get_timestamp (&rtp);
 
   GST_DEBUG_OBJECT (rtx, "creating rtx buffer, orig seqnum: %u, "
       "rtx seqnum: %u, rtx ssrc: %X", orig_seqnum, seqnum, ssrc);
 
   /*Add repair packet meta so that TWCC will be able to to tie it 
      with a lost data packet */
-  gst_rtp_repair_meta_add (new_buffer, 0, 1, orig_ssrc, &orig_seqnum, 1);
+  gst_rtp_repair_meta_add (new_buffer, 0, 1, orig_ssrc, &orig_seqnum,
+      &orig_timestamp, 1);
 
   /* gst_rtp_buffer_map does not map the payload so do it now */
   gst_rtp_buffer_get_payload (&rtp);
@@ -834,13 +837,11 @@ gst_rtp_rtx_buffer_new (GstRtpRtxSend * rtx, GstBuffer * buffer, guint8 padlen)
   gst_rtp_buffer_map (new_buffer, GST_MAP_WRITE, &new_rtp);
   gst_rtp_buffer_set_ssrc (&new_rtp, ssrc);
   gst_rtp_buffer_set_seq (&new_rtp, seqnum);
+  gst_rtp_buffer_set_timestamp (&new_rtp, orig_timestamp);
   gst_rtp_buffer_set_payload_type (&new_rtp, fmtp);
   /* RFC 4588: let other elements do the padding, as normal */
   gst_rtp_buffer_set_padding (&new_rtp, padlen != 0);
   gst_rtp_buffer_unmap (&new_rtp);
-
-  /* Copy over timestamps */
-  gst_buffer_copy_into (new_buffer, buffer, GST_BUFFER_COPY_TIMESTAMPS, 0, -1);
 
   /* mark this is a RETRANSMISSION buffer */
   GST_BUFFER_FLAG_SET (new_buffer, GST_RTP_BUFFER_FLAG_RETRANSMISSION);

@@ -44,6 +44,7 @@ typedef struct
   guint16 seqnum;
   guint16 orig_seqnum;
   guint32 ssrc;
+  guint32 timestamp;
   guint8 pt;
   guint size;
   gboolean lost;
@@ -57,6 +58,7 @@ typedef struct
    * by this packet. Kept for debugging/logging purposes only.
    */
   GArray *protects_seqnums;
+  GArray *protects_timestamps;
 
   /* For redundant packets: TWCC seqnums of the packets being protected.
    */
@@ -131,7 +133,7 @@ struct _TWCCStatsManager
 };
 
 static SentPacket *_find_sentpacket (TWCCStatsManager * statsman,
-    guint16 seqnum);
+    guint16 seqnum, const guint32 * timestamp);
 
 #define SENT_PKT_LOCK(statsman)  g_mutex_lock (&(statsman)->sent_packets_lock)
 #define SENT_PKT_UNLOCK(statsman)  g_mutex_unlock (&(statsman)->sent_packets_lock)
@@ -253,11 +255,12 @@ static void
 _sent_packet_init (SentPacket * packet, guint16 seqnum, RTPPacketInfo * pinfo,
     GstRTPBuffer * rtp, gint redundant_idx, gint redundant_num,
     guint32 protect_ssrc, GArray * protect_seqnums_array,
-    GArray * protect_twcc_seqnums_array)
+    GArray * protects_timestamps, GArray * protect_twcc_seqnums_array)
 {
   packet->seqnum = seqnum;
   packet->orig_seqnum = gst_rtp_buffer_get_seq (rtp);
   packet->ssrc = gst_rtp_buffer_get_ssrc (rtp);
+  packet->timestamp = gst_rtp_buffer_get_timestamp (rtp);
   packet->local_ts = pinfo->current_time;
   packet->size = pinfo->bytes + 12;     /* the reported wireshark size */
   packet->pt = gst_rtp_buffer_get_payload_type (rtp);
@@ -269,6 +272,7 @@ _sent_packet_init (SentPacket * packet, guint16 seqnum, RTPPacketInfo * pinfo,
   packet->redundant_num = redundant_num;
   packet->protects_ssrc = protect_ssrc;
   packet->protects_seqnums = protect_seqnums_array;
+  packet->protects_timestamps = protects_timestamps;
   packet->protects_twcc_seqnums = protect_twcc_seqnums_array;
   packet->stats_processed = FALSE;
 }
@@ -280,6 +284,10 @@ _free_sentpacket (SentPacket * pkt)
     if (pkt->protects_seqnums) {
       g_array_unref (pkt->protects_seqnums);
       pkt->protects_seqnums = NULL;
+    }
+    if (pkt->protects_timestamps) {
+      g_array_unref (pkt->protects_timestamps);
+      pkt->protects_timestamps = NULL;
     }
     if (pkt->protects_twcc_seqnums) {
       g_array_unref (pkt->protects_twcc_seqnums);
@@ -322,7 +330,7 @@ _rm_pkt_stats (TWCCStatsManager * statsman, SentPacket * pkt)
 
 
   GST_LOG_OBJECT (statsman->parent,
-      "Removing #%u from history, main ctx length: %d, pkt ts: %"
+      "Removing #%u from history, main ctx length: %" G_GSIZE_FORMAT ", pkt ts: %"
       GST_TIME_FORMAT, pkt->seqnum,
       gst_vec_deque_get_length (statsman->stats_ctx->pt_packets),
       GST_TIME_ARGS (_pkt_stats_ts (pkt)));
@@ -1200,28 +1208,32 @@ _lookup_seqnum (TWCCStatsManager * statsman, guint32 ssrc, guint16 seqnum)
 }
 
 static SentPacket *
-_find_sentpacket (TWCCStatsManager * statsman, guint16 seqnum)
+_find_sentpacket (TWCCStatsManager * statsman, guint16 seqnum, const guint32 * timestamp)
 {
+  SentPacket *result = NULL;
+
+  SENT_PKT_LOCK (statsman);
   if (gst_vec_deque_is_empty (statsman->sent_packets) == TRUE) {
-    return NULL;
+    goto FIND_SEND_PKT_RETURN;
   }
 
   SentPacket *first = gst_vec_deque_peek_head_struct (statsman->sent_packets);
-  SentPacket *result;
 
   const gint idx = gst_rtp_buffer_compare_seqnum (first->seqnum, seqnum);
   if (idx < gst_vec_deque_get_length (statsman->sent_packets) && idx >= 0) {
     result = (SentPacket *)
         gst_vec_deque_peek_nth_struct (statsman->sent_packets, idx);
-  } else {
-    result = NULL;
   }
 
-  if (result && result->seqnum == seqnum) {
+FIND_SEND_PKT_RETURN:
+  SENT_PKT_UNLOCK (statsman);
+
+  if (result && result->seqnum == seqnum
+    && (!timestamp || result->timestamp == *timestamp)) {
     return result;
+  } else {
+    return NULL;
   }
-
-  return NULL;
 }
 
 /* Once we've got feedback on a packet, we need to account it in the internal
@@ -1446,6 +1458,7 @@ rtp_twcc_stats_sent_pkt (TWCCStatsManager * statsman,
   GstBuffer *buf = rtp->buffer;
   SentPacket packet;
   GArray *protect_seqnums_array = NULL;
+  GArray *protects_timestamps_array = NULL;
   guint32 protect_ssrc = 0;
   gint redundant_pkt_idx = -1;
   gint redundant_pkt_num = -1;
@@ -1461,6 +1474,7 @@ rtp_twcc_stats_sent_pkt (TWCCStatsManager * statsman,
   if ((repair_meta = gst_rtp_repair_meta_get (buf)) != NULL) {
     protect_ssrc = repair_meta->ssrc;
     protect_seqnums_array = g_array_ref (repair_meta->seqnums);
+    protects_timestamps_array = g_array_ref (repair_meta->timestamps);
     redundant_pkt_idx = repair_meta->idx_red_packets;
     redundant_pkt_num = repair_meta->num_red_packets;
 
@@ -1473,12 +1487,14 @@ rtp_twcc_stats_sent_pkt (TWCCStatsManager * statsman,
     for (guint i = 0; i < protect_seqnums_array->len; i++) {
       const guint16 rtp_seqnum =
           g_array_index (protect_seqnums_array, guint16, i);
+      const guint32 rtp_ts =
+        g_array_index (protects_timestamps_array, guint32, i);
       gint32 twcc_sn =
           _lookup_seqnum (statsman, protect_ssrc, rtp_seqnum);
-      if (twcc_sn != -1) {
-        const guint16 twcc_sn16 = (guint16) twcc_sn;
-        g_array_append_val (protect_twcc_seqnums_array, twcc_sn16);
-      } else {
+      const guint16 twcc_sn16 = (guint16) twcc_sn;
+      SentPacket * protected_pkt = NULL;
+      if (twcc_sn == -1
+          || !(protected_pkt = _find_sentpacket(statsman, twcc_sn16, &rtp_ts))) {
         /* RTX can start sending stuffing packets right after a data packet was pushed
          * through, so it's queue can have very few packets. If the data packet
          * and stuffing packets be reordered on their way downstream, TWCC
@@ -1486,22 +1502,26 @@ rtp_twcc_stats_sent_pkt (TWCCStatsManager * statsman,
          *
          * No reason to crash here, just act as if it was a data packet
          */
-        GST_WARNING_OBJECT (statsman->parent,
-            "Failed to convert RTP seqnum %u (ssrc: %u) to TWCC seqnum "
+        GST_DEBUG_OBJECT (statsman->parent,
+            "Failed to convert RTP seqnum %u (ssrc: %u, ts: %u) to TWCC seqnum "
             "for redundant packet #%u — protected data packet not registered",
-            rtp_seqnum, protect_ssrc, twcc_seqnum);
+            rtp_seqnum, protect_ssrc, rtp_ts, twcc_seqnum);
         g_array_unref (protect_seqnums_array);
         protect_seqnums_array = NULL;
+        g_array_unref (protects_timestamps_array);
+        protects_timestamps_array = NULL;
         g_array_unref (protect_twcc_seqnums_array);
         protect_twcc_seqnums_array = NULL;
         break;
       }
+      g_array_append_val (protect_twcc_seqnums_array, twcc_sn16);
     }
   }
 
   _sent_packet_init (&packet, twcc_seqnum, pinfo, rtp,
       redundant_pkt_idx, redundant_pkt_num,
-      protect_ssrc, protect_seqnums_array, protect_twcc_seqnums_array);
+      protect_ssrc, protect_seqnums_array, protects_timestamps_array,
+      protect_twcc_seqnums_array);
   /* Add packet to the sent_packets ring buffer and
      make sure that it is within max_size, if not shrink by 1 pkt */
   SentPacket *sent_pkt =
@@ -1537,12 +1557,10 @@ void
 rtp_twcc_stats_set_sock_ts (TWCCStatsManager * statsman,
     guint16 seqnum, GstClockTime sock_ts)
 {
-  SENT_PKT_LOCK (statsman);
-  SentPacket *pkt = _find_sentpacket (statsman, seqnum);
+  SentPacket *pkt = _find_sentpacket (statsman, seqnum, NULL);
   if (pkt) {
     pkt->socket_ts = sock_ts;
   }
-  SENT_PKT_UNLOCK (statsman);
   if (pkt) {
     GST_LOG_OBJECT (statsman->parent,
         "packet #%u, setting socket-ts %" GST_TIME_FORMAT, seqnum,
@@ -1567,8 +1585,7 @@ rtp_twcc_stats_pkt_feedback (TWCCStatsManager * statsman,
   SentPacket *found;
   gboolean updated = FALSE;
 
-  SENT_PKT_LOCK (statsman);
-  if (!!(found = _find_sentpacket (statsman, seqnum))) {
+  if (!!(found = _find_sentpacket (statsman, seqnum, NULL))) {
     /* Do not process feedback on packets we have got feedback previously */
     if (found->status < status) {
       found->remote_ts = remote_ts;
@@ -1576,7 +1593,6 @@ rtp_twcc_stats_pkt_feedback (TWCCStatsManager * statsman,
       updated = TRUE;
     }
   }
-  SENT_PKT_UNLOCK (statsman);
 
   if (found && updated) {
     gst_vec_deque_push_tail (statsman->sent_packets_feedbacks, found);
@@ -1728,15 +1744,13 @@ rtp_twcc_stats_check_for_lost_packets (TWCCStatsManager * statsman,
     SentPacket *found;
     gboolean updated = FALSE;
 
-    SENT_PKT_LOCK (statsman);
-    if (!!(found = _find_sentpacket (statsman, seqnum))) {
+    if (!!(found = _find_sentpacket (statsman, seqnum, NULL))) {
       /* Do not process feedback on packets we have got feedback previously */
       if (found->status == RTP_TWCC_FECBLOCK_PKT_UNKNOWN) {
         found->status = RTP_TWCC_FECBLOCK_PKT_LOST;
         updated = TRUE;
       }
     }
-    SENT_PKT_UNLOCK (statsman);
 
     if (found && updated) {
       gst_vec_deque_push_tail (statsman->sent_packets_feedbacks, found);
