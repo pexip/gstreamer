@@ -84,7 +84,8 @@ generate_test_buffer_full (GstClockTime ts,
     gboolean marker_bit, guint8 payload_type, guint8 twcc_ext_id,
     guint16 twcc_seqnum,
     gint idx, gint rpkts_num,
-    guint32 protects_ssrc, guint16 * protects_seqnums, guint8 protects_len)
+    guint32 protects_ssrc, guint16 * protects_seqnums,
+    guint32 * protects_timestamps, guint8 protects_len)
 {
   GstBuffer *buf;
   guint8 *payload;
@@ -115,7 +116,7 @@ generate_test_buffer_full (GstClockTime ts,
 
   gst_rtp_buffer_unmap (&rtp);
   gst_rtp_repair_meta_add (buf, idx, rpkts_num,
-      protects_ssrc, protects_seqnums, protects_len);
+      protects_ssrc, protects_seqnums, protects_timestamps, protects_len);
 
   return buf;
 }
@@ -125,7 +126,7 @@ generate_test_buffer (guint seqnum, guint ssrc)
 {
   return generate_test_buffer_full (seqnum * TEST_BUF_DURATION,
       seqnum, seqnum * TEST_RTP_TS_DURATION, ssrc, FALSE, TEST_BUF_PT, 0, 0,
-      -1, -1, 0, NULL, 0);
+      -1, -1, 0, NULL, NULL, 0);
 }
 
 static GstBuffer *
@@ -134,7 +135,7 @@ generate_twcc_recv_buffer (guint seqnum,
 {
   return generate_test_buffer_full (arrival_time, seqnum,
       seqnum * TEST_RTP_TS_DURATION, TEST_BUF_SSRC, marker_bit, TEST_BUF_PT,
-      TEST_TWCC_EXT_ID, seqnum, -1, -1, 0, NULL, 0);
+      TEST_TWCC_EXT_ID, seqnum, -1, -1, 0, NULL, NULL, 0);
 }
 
 static GstBuffer *
@@ -143,7 +144,7 @@ generate_twcc_send_buffer_full (guint seqnum, gboolean marker_bit,
 {
   return generate_test_buffer_full (seqnum * TEST_BUF_DURATION,
       seqnum, seqnum * TEST_RTP_TS_DURATION, ssrc, marker_bit,
-      payload_type, 0, 0, -1, -1, 0, NULL, 0);
+      payload_type, 0, 0, -1, -1, 0, NULL, NULL, 0);
 }
 
 static GstBuffer *
@@ -162,6 +163,7 @@ generate_rtx_buffer (guint rtx_seqnum, GstBuffer * buffer)
   GstBuffer *new_buffer = gst_buffer_new ();
   guint32 orig_ssrc;
   guint16 orig_seqnum;
+  guint32 orig_timestamp;
   GstMapInfo map;
 
   gst_rtp_buffer_map (buffer, GST_MAP_READ, &rtp);
@@ -191,6 +193,7 @@ generate_rtx_buffer (guint rtx_seqnum, GstBuffer * buffer)
   gst_buffer_append_memory (new_buffer, mem);
   orig_ssrc = gst_rtp_buffer_get_ssrc (&rtp);
   orig_seqnum = gst_rtp_buffer_get_seq (&rtp);
+  orig_timestamp = gst_rtp_buffer_get_timestamp (&rtp);
 
   /* everything needed is copied */
   gst_rtp_buffer_unmap (&rtp);
@@ -198,12 +201,12 @@ generate_rtx_buffer (guint rtx_seqnum, GstBuffer * buffer)
   gst_rtp_buffer_map (new_buffer, GST_MAP_WRITE, &new_rtp);
   gst_rtp_buffer_set_payload_type (&new_rtp, TEST_RTX_BUF_PT);
   gst_rtp_buffer_set_ssrc (&new_rtp, TEST_RTX_BUF_SSRC);
+  gst_rtp_buffer_set_timestamp (&new_rtp, orig_timestamp);
   gst_rtp_buffer_set_seq (&new_rtp, rtx_seqnum);
   gst_rtp_buffer_unmap (&new_rtp);
 
-  /* Copy over timestamps */
-  gst_buffer_copy_into (new_buffer, buffer, GST_BUFFER_COPY_TIMESTAMPS, 0, -1);
-  gst_rtp_repair_meta_add (new_buffer, 0, 1, orig_ssrc, &orig_seqnum, 1);
+  gst_rtp_repair_meta_add (new_buffer, 0, 1, orig_ssrc, &orig_seqnum,
+      &orig_timestamp, 1);
 
   /* mark this is a RETRANSMISSION buffer */
   GST_BUFFER_FLAG_SET (new_buffer, GST_RTP_BUFFER_FLAG_RETRANSMISSION);
@@ -242,7 +245,7 @@ generate_test_buffer_timed (GstClockTime ts, guint seqnum, guint32 rtp_ts)
 {
   return generate_test_buffer_full (ts,
       seqnum, rtp_ts, TEST_BUF_SSRC, FALSE, TEST_BUF_PT, 0, 0,
-      -1, -1, 0, NULL, 0);
+      -1, -1, 0, NULL, NULL, 0);
 }
 
 typedef struct
@@ -3263,7 +3266,7 @@ generate_stepped_ts_buffer (guint i, gboolean stepped)
               TEST_BUF_CLOCK_RATE)), i);
 
   buf = generate_test_buffer_full (i * GST_MSECOND, i, ts, 0xAAAA, FALSE,
-      TEST_BUF_PT, 0, 0, -1, -1, 0, NULL, 0);
+      TEST_BUF_PT, 0, 0, -1, -1, 0, NULL, NULL, 0);
   return buf;
 }
 
@@ -5838,6 +5841,7 @@ GST_START_TEST (test_twcc_stats_block_fec_recover)
   const gsize block_len = 7;
   const gsize block_fecs = 2;
   guint16 *protects_seqnums = g_malloc0 (sizeof (guint16) * block_len);
+  guint32 *protects_timestamps = g_malloc0 (sizeof (guint32) * block_len);
   gsize protects_seqnums_i = 0;
 
 
@@ -5874,6 +5878,7 @@ GST_START_TEST (test_twcc_stats_block_fec_recover)
     }
 
     protects_seqnums[protects_seqnums_i] = next_seqnum;
+    protects_timestamps[protects_seqnums_i] = next_seqnum * TEST_RTP_TS_DURATION;
     protects_seqnums_i += 1;
     if (protects_seqnums_i >= block_len) {
       protects_seqnums_i = 0;
@@ -5885,7 +5890,7 @@ GST_START_TEST (test_twcc_stats_block_fec_recover)
         buf = generate_test_buffer_full (fec_num * TEST_BUF_DURATION,
             fec_seqnum, fec_num * TEST_RTP_TS_DURATION, fec_ssrc, is_fec_last,
             fec_payload_type, 0, 0, i, block_fecs, TEST_BUF_SSRC,
-            protects_seqnums, block_len);
+            protects_seqnums, protects_timestamps, block_len);
         send_recv_buffer (h_send, h_recv, buf, TRUE);
 
         fec_num++;
@@ -5903,6 +5908,7 @@ GST_START_TEST (test_twcc_stats_block_fec_recover)
   session_harness_free (h_send);
   session_harness_free (h_recv);
   g_free (protects_seqnums);
+  g_free (protects_timestamps);
 }
 
 GST_END_TEST;
@@ -5934,7 +5940,7 @@ GST_START_TEST (test_twcc_stats_dod)
     buf =
         generate_test_buffer_full (seqnum * TEST_BUF_DURATION, seqnum,
         seqnum * TEST_RTP_TS_DURATION, TEST_BUF_SSRC, FALSE, TEST_BUF_PT, 0, 0,
-        -1, -1, 0, NULL, 0);
+        -1, -1, 0, NULL, NULL, 0);
 
 
     ret = session_harness_send_rtp (h_send, buf);
@@ -6206,7 +6212,7 @@ GST_START_TEST (test_twcc_overwrites_exthdr_seqnum_if_present)
      header extension  */
   buf =
       generate_test_buffer_full (0, 0, 0, 0xabc, FALSE, TEST_BUF_PT,
-      TEST_TWCC_EXT_ID, 255, -1, -1, 0, NULL, 0);
+      TEST_TWCC_EXT_ID, 255, -1, -1, 0, NULL, NULL, 0);
   fail_unless_equals_int64 (session_harness_send_rtp (h, buf), GST_FLOW_OK);
 
   buf = session_harness_pull_send_rtp (h);
@@ -6662,148 +6668,6 @@ GST_START_TEST (test_twcc_keep_queue_size)
   session_harness_free (h_send);
   session_harness_free (h_recv);
 
-}
-
-GST_END_TEST;
-
-/* Helper: send many packets through sender only (not delivered to receiver),
-   advancing the clock each time. This forces ring buffer eviction of old
-   packets without producing any TWCC feedback. */
-static void
-flood_sender_packets (SessionHarness * h_send, guint * next_seqnum, guint count)
-{
-  for (guint i = 0; i < count; i++) {
-    GstBuffer *buf = generate_twcc_send_buffer ((*next_seqnum)++, FALSE);
-    fail_unless_equals_int64 (session_harness_send_rtp (h_send, buf),
-        GST_FLOW_OK);
-    session_harness_advance_and_crank (h_send, TEST_BUF_DURATION);
-    GstBuffer *out_buf = session_harness_pull_send_rtp (h_send);
-    fail_unless (out_buf);
-    gst_buffer_unref (out_buf);
-  }
-}
-
-/* Checks that _lookup_seqnum  works correctly after RTP seqnum wrap (65536+
-   packets from the same SSRC). ssrc_to_seqmap[SSRC][rtp_seq] gets
-   overwritten when the same RTP seqnum is reused, causing RTX feedback
-   to create a RedBlock linking the wrong data packet to the retransmission.
-
-   1. Send data D (RTP=16, TWCC=65296, LOST) + RTX1 for D (RECEIVED)
-   2. Process feedback → D recovered correctly via RTX1
-   3. Send 2 dummy RTX to offset TWCC counter (avoid TWCC reuse after wrap)
-   4. Flood 65534 data packets → RTP seqnum wraps back to 16
-   5. Send P (RTP=16 from wrap, TWCC=65299, LOST) + RTX2 protecting
-      RTP=16 (RECEIVED)
-   6. Process feedback → _lookup_seqnum(SSRC, 16) returns 65299 (P's TWCC)
-      instead of 65296 (D's original TWCC) → block created as
-      seqs=[65299]=P, fec=[65300]=RTX2 → P falsely marked RECOVERED
-*/
-GST_START_TEST (test_twcc_rtx_rtp_seqnum_wrap_corruption)
-{
-  /* test sends ~65560 packets */
-  if (RUNNING_ON_VALGRIND)
-    return;
-
-  SessionHarness *h_send = session_harness_new ();
-  SessionHarness *h_recv = session_harness_new ();
-  guint next_seqnum;
-
-  session_harness_add_twcc_caps_for_pt (h_send, TEST_BUF_PT);
-  session_harness_add_twcc_caps_for_pt (h_send, TEST_RTX_BUF_PT);
-  session_harness_set_twcc_recv_ext_id (h_recv, TEST_TWCC_EXT_ID);
-
-  next_seqnum = construct_initial_state_for_rtx (h_send, h_recv);
-
-  /* Send data D: RTP=16, TWCC=65296. Not received → will be LOST.
-     Send RTX1 for D: TWCC=65297. Received.
-     ssrc_to_seqmap[TEST_BUF_SSRC][16] = 65296 */
-  GstBuffer *data_buf = generate_twcc_send_buffer (next_seqnum, FALSE);
-  GstBuffer *rtx1_buf = generate_rtx_buffer (0, data_buf);
-  next_seqnum++;
-  send_recv_buffer (h_send, h_recv, data_buf, FALSE);
-  send_recv_buffer (h_send, h_recv, rtx1_buf, TRUE);
-
-  /* Marker + TWCC feedback:
-     D(65296)=NOT_RECV, RTX1(65297)=RECV, marker(65298)=RECV.
-     Block: seqs=[65296], fec=[65297]. D recovered via RTX1. */
-  send_recv_buffer (h_send, h_recv,
-      generate_twcc_send_buffer (next_seqnum++, TRUE), TRUE);
-  fail_unless_equals_int64 (GST_FLOW_OK,
-      session_harness_recv_rtcp (h_send,
-          session_harness_produce_twcc (h_recv)));
-
-  /* Dummy RTX to offset TWCC counter
-     These consume TWCC 65299-65300 without advancing data SSRC's RTP counter.
-     After the flood+wrap, TWCC values 65299-65301 won't collide with phase 1's
-     already-reported TWCC 65296-65298 on the receiver side. */
-  for (guint i = 0; i < 2; i++) {
-    GstBuffer *ref = generate_twcc_send_buffer (16, FALSE);
-    GstBuffer *dummy_rtx = generate_rtx_buffer (i + 1, ref);
-    gst_buffer_unref (ref);
-    send_recv_buffer (h_send, h_recv, dummy_rtx, FALSE);
-  }
-  /* TWCC consumed=21, next TWCC=65301, next_seqnum=18 */
-
-  /*
-     65534 data packets: RTP 18..65551 → (guint16): 18..65535, 0..15.
-     RTP=16 is NOT in the flood (flood stops at 15).
-     After: next_seqnum=65552, (guint16)65552=16 → wraps to same as D
-     TWCC: 65301 + 65534 - 1 = 130834 → mod 65536 = 65298 (last flood pkt).
-     Next TWCC = 65299.
-     ssrc_to_seqmap[TEST_BUF_SSRC][16] = 65296 (unchanged — no flood pkt
-     has RTP=16). */
-  flood_sender_packets (h_send, &next_seqnum, 65534);
-
-  /* P: RTP=(guint16)65552=16 (wrapped), TWCC=65299. Not received.
-     _register_seqnum(SSRC, 16, 65299) OVERWRITES old mapping (65296→65299).
-     Now ssrc_to_seqmap[TEST_BUF_SSRC][16] = 65299 (P's TWCC, not D's). */
-  send_recv_buffer (h_send, h_recv,
-      generate_twcc_send_buffer (next_seqnum++, FALSE), FALSE);
-
-  /* RTX2: protects RTP=16 (same orig seqnum as D). TWCC=65300. Received. */
-  {
-    GstBuffer *ref = generate_twcc_send_buffer (16, FALSE);
-    GstBuffer *rtx2_buf = generate_rtx_buffer (3, ref);
-    gst_buffer_unref (ref);
-    send_recv_buffer (h_send, h_recv, rtx2_buf, TRUE);
-  }
-
-  /* Marker + TWCC feedback:
-     Receiver report covers TWCC 65299-65301 (P, RTX2, marker).
-     P(65299)=NOT_RECV → LOST. RTX2(65300)=RECV. marker(65301)=RECV.
-
-     During inline processing in rtp_session_process_twcc:
-     _process_pkt_feedback(RTX2):
-     - protects_seqnums=[16], _lookup_seqnum(TEST_BUF_SSRC, 16) returns 65299
-       (overwritten by P) instead of 65296 (original D's TWCC).
-     - Block created: seqs=[65299], fec=[65300].
-     - _redblock_reconsider: media=P(65299, LOST), RTX2(65300, RECEIVED)
-       → P.state = RECOVERED.. */
-  send_recv_buffer (h_send, h_recv,
-      generate_twcc_send_buffer (next_seqnum++, TRUE), TRUE);
-  fail_unless_equals_int64 (GST_FLOW_OK,
-      session_harness_recv_rtcp (h_send,
-          session_harness_produce_twcc (h_recv)));
-
-  /* Expected correct behavior: recovery_pct should be <= 0 because P should
-     NOT be recovered (RTX2 carries D's payload, an entirely different packet).
-     This assertion FAILS because the _lookup_seqnum corruption causes P to be
-     falsely linked to RTX2's RedBlock and marked RECOVERED. */
-  GstStructure *twcc_stats = session_harness_get_twcc_stats_full (h_send,
-      300 * GST_MSECOND, 0);
-  gdouble recovery_pct;
-  fail_unless (gst_structure_get (twcc_stats,
-          "recovery-pct", G_TYPE_DOUBLE, &recovery_pct, NULL));
-  fail_unless (recovery_pct <= 0.0,
-      "False recovery detected: P (RTP=16 after wrap) was incorrectly "
-      "RECOVERED by RTX2 which actually protects the original D. "
-      "_lookup_seqnum returned P's TWCC instead of D's due to "
-      "ssrc_to_seqmap overwrite on RTP seqnum wrap. recovery_pct=%f",
-      recovery_pct);
-  gst_structure_free (twcc_stats);
-
-  session_harness_free (h_send);
-  session_harness_free (h_recv);
 }
 
 GST_END_TEST;
@@ -7622,10 +7486,6 @@ rtpsession_suite (void)
   tcase_add_test (tc_chain, test_twcc_overwrites_exthdr_seqnum_if_present);
   tcase_add_test (tc_chain, test_twcc_sent_packets_wrap);
   tcase_add_test (tc_chain, test_twcc_keep_queue_size);
-  /* Test could be enabled if repair meta seqnums are adjusted to twcc seqnums
-     before transmission, but that would be a non-trivial change.
-  */
-  tcase_skip_broken_test (tc_chain, test_twcc_rtx_rtp_seqnum_wrap_corruption);
   tcase_add_test (tc_chain, test_twcc_seqnum_wrap_gap_detection);
   tcase_add_test (tc_chain, test_twcc_set_sock_ts_race);
 
