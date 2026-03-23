@@ -49,6 +49,7 @@ struct _GstRTPRepairMeta
   guint16 num_red_packets;
   guint32 ssrc;
   GArray *seqnums;
+  GArray *timestamps;
 };
 
 GST_RTP_API GType gst_rtp_repair_meta_api_get_type (void);
@@ -56,17 +57,18 @@ GST_RTP_API GType gst_rtp_repair_meta_api_get_type (void);
 GST_RTP_API
     GstRTPRepairMeta * gst_rtp_repair_meta_add (GstBuffer * buffer,
     const guint16 idx_red_packets, const guint16 num_red_packets,
-    const guint32 ssrc, const guint16 * seqnum, guint seqnum_count);
+    const guint32 ssrc, const guint16 * seqnum, const guint32 *timestamps,
+    guint pkt_count);
 
 GST_RTP_API GstRTPRepairMeta *gst_rtp_repair_meta_get (GstBuffer * buffer);
 
 GST_RTP_API
     gboolean gst_rtp_repair_meta_seqnum_chk (GstBuffer * buffer, guint16 seqnum,
-    guint32 ssrc);
+    guint32 ssrc, guint32 timestamp);
 
 GST_RTP_API
-    gboolean gst_rtp_repair_meta_get_seqnums (GstBuffer * buffer,
-    guint32 * ssrc, GArray ** seqnums);
+    gboolean gst_rtp_repair_meta_get_seqnums (GstBuffer * buffer, guint32 * ssrc,
+    GArray ** seqnums, GArray ** timestamps);
 
 GST_RTP_API gint gst_rtp_repair_meta_idx (GstBuffer * buffer);
 
