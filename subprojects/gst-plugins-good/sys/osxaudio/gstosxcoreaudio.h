@@ -42,7 +42,7 @@
   #endif
 #else
   #include <CoreAudio/CoreAudioTypes.h>
-  #define AudioDeviceID gint
+  #define AudioDeviceID guint32
   #define kAudioDeviceUnknown 0
 #endif
 #include <AudioUnit/AudioUnit.h>
