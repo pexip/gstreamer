@@ -5090,6 +5090,7 @@ rtp_session_on_timeout (RTPSession * sess, GstClockTime current_time,
   ReportOutput *output;
   gboolean all_empty = FALSE;
   gboolean twcc_only = FALSE;
+  gboolean is_rtcp = FALSE;
 
   g_return_val_if_fail (RTP_IS_SESSION (sess), GST_FLOW_ERROR);
 
@@ -5173,6 +5174,7 @@ rtp_session_on_timeout (RTPSession * sess, GstClockTime current_time,
   if (!is_rtcp_time (sess, current_time, &data))
     goto done;
 
+  is_rtcp = TRUE;
   /* Cannot get here if TWCC only */
   g_assert (!twcc_only);
 
@@ -5230,7 +5232,7 @@ done:
   RTP_SESSION_UNLOCK (sess);
 
   /* notify about updated statistics */
-  if (!twcc_only) {
+  if (is_rtcp) {
     if (!GST_CLOCK_TIME_IS_VALID (sess->last_stats_notify_time) ||
         (GST_CLOCK_DIFF (sess->last_stats_notify_time, current_time) >=
             sess->stats_notify_min_interval_ms * GST_MSECOND)) {

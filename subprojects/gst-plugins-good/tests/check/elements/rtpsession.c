@@ -7040,6 +7040,49 @@ GST_START_TEST (test_report_stats_only_on_regular_rtcp)
 
 GST_END_TEST;
 
+GST_START_TEST (test_stats_notify_min_interval_with_twcc)
+{
+  SessionHarness *h = session_harness_new ();
+  gint stats_callback_count = 0;
+  gint i;
+
+  g_object_set (h->internal_session, "probation", 1, "rtcp-reduced-size", TRUE,
+      "stats-notify-min-interval", 3000,
+      "twcc-feedback-interval", 50 * GST_MSECOND, NULL);
+  g_signal_connect (h->session, "notify::stats",
+      G_CALLBACK (count_report_stats), &stats_callback_count);
+
+  /* Not allowed to send empty packets, so need to add feedback */
+  g_signal_connect (h->internal_session, "on-sending-rtcp",
+      G_CALLBACK (on_sending_rtcp_add_new_if_empty), NULL);
+
+  fail_unless_equals_int (GST_FLOW_OK,
+      session_harness_recv_rtp (h, generate_test_buffer (0, 0x12345678)));
+
+  session_harness_produce_rtcp (h, 1);
+  gst_buffer_unref (session_harness_pull_rtcp (h));
+  fail_unless_equals_int (stats_callback_count, 1);
+
+  /* send 10 rtcp-packets that should *not* generate stats, since
+   * the stats-notify-min-interval of 3000 ms should throttle them.
+   * This verifies that when twcc-feedback-interval is set to a lower value
+   * (50 ms), it does not cause the stats signal to fire more often than the
+   * stats-notify-min-interval. */
+  for (i = 0; i < 10; i++) {
+    gboolean ret;
+    g_signal_emit_by_name (h->internal_session, "send-rtcp-full", 0, &ret);
+    session_harness_advance_and_crank (h, 10 * GST_MSECOND);
+  }
+
+  /* verify we have generated less than 3 stats for all these packets */
+  fail_unless (stats_callback_count < 3);
+
+  session_harness_free (h);
+}
+
+GST_END_TEST;
+
+
 static void
 copy_stats (GObject * object, G_GNUC_UNUSED GParamSpec * spec,
     GstStructure ** stats)
@@ -7492,6 +7535,7 @@ rtpsession_suite (void)
   tcase_add_test (tc_chain, test_send_rtcp_instantly);
   tcase_add_test (tc_chain, test_send_bye_signal);
   tcase_add_test (tc_chain, test_report_stats_only_on_regular_rtcp);
+  tcase_add_test (tc_chain, test_stats_notify_min_interval_with_twcc);
   tcase_add_test (tc_chain, test_stats_transmission_duration);
   tcase_add_test (tc_chain, test_stats_transmission_duration_reordering);
   tcase_add_test (tc_chain, test_sender_timeout);
