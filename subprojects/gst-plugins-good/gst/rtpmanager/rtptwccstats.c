@@ -1690,6 +1690,99 @@ rtp_twcc_stats_do_stats (TWCCStatsManager * statsman,
   return ret;
 }
 
+static const gchar *
+_pkt_status_str (TWCCPktState state)
+{
+  switch (state) {
+    case RTP_TWCC_FECBLOCK_PKT_UNKNOWN:
+      return "unknown";
+    case RTP_TWCC_FECBLOCK_PKT_LOST:
+      return "lost";
+    case RTP_TWCC_FECBLOCK_PKT_RECOVERED:
+      return "recovered";
+    case RTP_TWCC_FECBLOCK_PKT_RECEIVED:
+      return "received";
+    default:
+      return "invalid";
+  }
+}
+
+GstStructure *
+rtp_twcc_stats_get_packet_window (TWCCStatsManager * statsman,
+    GstClockTime stats_window_size, GstClockTime stats_window_delay)
+{
+  GValueArray *array;
+  GstClockTimeDiff start_time;
+  GstClockTimeDiff end_time;
+  guint start_idx = 0;
+  guint num_packets = 0;
+  guint i;
+
+  /* Drain pending feedbacks so statuses are up-to-date */
+  while (!gst_vec_deque_is_empty (statsman->sent_packets_feedbacks)) {
+    SentPacket *pkt = (SentPacket *)
+        gst_vec_deque_pop_head (statsman->sent_packets_feedbacks);
+    if (!pkt) {
+      continue;
+    }
+    _process_pkt_feedback (pkt, statsman);
+  }
+
+  GstClockTime last_ts = twcc_stats_ctx_get_last_local_ts (statsman->stats_ctx);
+  if (!GST_CLOCK_TIME_IS_VALID (last_ts)) {
+    array = g_value_array_new (0);
+    GstStructure *ret =
+        gst_structure_new_empty ("RTPTWCCPacketWindow");
+    _structure_take_value_array (ret, "packets", array);
+    return ret;
+  }
+
+  /* Prune old packets */
+  _sent_pkt_keep_length (statsman, statsman->sent_packets_size, NULL, last_ts,
+      PACKETS_HIST_DUR);
+
+  end_time = GST_CLOCK_DIFF (stats_window_delay, last_ts);
+  start_time = end_time - stats_window_size;
+
+  GST_DEBUG_OBJECT (statsman->parent,
+      "Getting packet window " GST_STIME_FORMAT " -> " GST_STIME_FORMAT,
+      GST_STIME_ARGS (start_time), GST_STIME_ARGS (end_time));
+
+  gboolean found = _get_stats_packets_window (
+      statsman->stats_ctx->pt_packets, start_time, end_time,
+      &start_idx, &num_packets);
+
+  array = g_value_array_new (found ? num_packets : 0);
+
+  if (found) {
+    for (i = 0; i < num_packets; i++) {
+      SentPacket *pkt =
+          _sent_pkt_get (statsman->stats_ctx->pt_packets,
+          i + start_idx)->sentpkt;
+      if (!pkt)
+        continue;
+
+      GstStructure *s = gst_structure_new ("RTPTWCCPacketInfo",
+          "seqnum", G_TYPE_UINT, (guint) pkt->seqnum,
+          "orig-seqnum", G_TYPE_UINT, (guint) pkt->orig_seqnum,
+          "pt", G_TYPE_UINT, (guint) pkt->pt,
+          "ssrc", G_TYPE_UINT, pkt->ssrc,
+          "size", G_TYPE_UINT, pkt->size,
+          "local-ts", G_TYPE_UINT64, (guint64) pkt->local_ts,
+          "remote-ts", G_TYPE_UINT64, (guint64) pkt->remote_ts,
+          "socket-ts", G_TYPE_UINT64, (guint64) pkt->socket_ts,
+          "status", G_TYPE_STRING, _pkt_status_str (pkt->status),
+          NULL);
+      _append_structure_to_value_array (array, s);
+    }
+  }
+
+  GstStructure *ret = gst_structure_new_empty ("RTPTWCCPacketWindow");
+  _structure_take_value_array (ret, "packets", array);
+
+  return ret;
+}
+
 /* If TWCC packets are coming in a row, but there is a gap in between
  * the regions of the packets they are covering, the packets in the gap
  * are lost.

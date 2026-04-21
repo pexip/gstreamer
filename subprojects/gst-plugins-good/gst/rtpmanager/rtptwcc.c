@@ -1320,6 +1320,14 @@ rtp_twcc_manager_get_windowed_stats (RTPTWCCManager * twcc,
       stats_window_delay);
 }
 
+GstStructure *
+rtp_twcc_manager_get_packet_window (RTPTWCCManager * twcc,
+    GstClockTime stats_window_size, GstClockTime stats_window_delay)
+{
+  return rtp_twcc_stats_get_packet_window (twcc->stats_manager,
+      stats_window_size, stats_window_delay);
+}
+
 void
 rtp_twcc_manager_set_callback (RTPTWCCManager * twcc, RTPTWCCManagerCaps cb,
     gpointer user_data)

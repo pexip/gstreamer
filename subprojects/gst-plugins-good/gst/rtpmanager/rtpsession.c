@@ -40,6 +40,7 @@ enum
 {
   SIGNAL_GET_SOURCE_BY_SSRC,
   SIGNAL_GET_TWCC_WINDOWED_STATS,
+  SIGNAL_GET_TWCC_PACKET_WINDOW,
   SIGNAL_ON_NEW_SSRC,
   SIGNAL_ON_SSRC_COLLISION,
   SIGNAL_ON_SSRC_VALIDATED,
@@ -144,6 +145,8 @@ static void rtp_session_get_property (GObject * object, guint prop_id,
 
 static GstStructure *rtp_session_get_twcc_windowed_stats (RTPSession * sess,
     GstClockTime stats_window_size, GstClockTime stats_window_delay);
+static GstStructure *rtp_session_get_twcc_packet_window (RTPSession * sess,
+    GstClockTime stats_window_size, GstClockTime stats_window_delay);
 
 static gboolean rtp_session_send_rtcp (RTPSession * sess,
     GstClockTime max_delay);
@@ -247,6 +250,22 @@ rtp_session_class_init (RTPSessionClass * klass)
       g_signal_new ("get-twcc-windowed-stats", G_TYPE_FROM_CLASS (klass),
       G_SIGNAL_RUN_LAST | G_SIGNAL_ACTION, G_STRUCT_OFFSET (RTPSessionClass,
           get_twcc_windowed_stats), NULL, NULL, NULL,
+      GST_TYPE_STRUCTURE, 2, GST_TYPE_CLOCK_TIME, GST_TYPE_CLOCK_TIME);
+
+  /**
+   * RTPSession::get-twcc-packet-window:
+   * @session: the object which received the signal
+   * @stats_window_size: The size (in nanoseconds) of the packet window
+   * @stats_window_delay: The delay (in nanoseconds) from the current time
+   *                      until the end of the packet window.
+   *
+   * Returns per-packet TWCC data for packets in the specified time window.
+   * Each packet includes seqnum, PT, SSRC, size, timestamps, and status.
+   */
+  rtp_session_signals[SIGNAL_GET_TWCC_PACKET_WINDOW] =
+      g_signal_new ("get-twcc-packet-window", G_TYPE_FROM_CLASS (klass),
+      G_SIGNAL_RUN_LAST | G_SIGNAL_ACTION, G_STRUCT_OFFSET (RTPSessionClass,
+          get_twcc_packet_window), NULL, NULL, NULL,
       GST_TYPE_STRUCTURE, 2, GST_TYPE_CLOCK_TIME, GST_TYPE_CLOCK_TIME);
 
   /**
@@ -2355,6 +2374,22 @@ rtp_session_get_twcc_windowed_stats (RTPSession * sess,
 
   RTP_SESSION_LOCK (sess);
   ret = rtp_twcc_manager_get_windowed_stats (sess->twcc,
+      stats_window_size, stats_window_delay);
+  RTP_SESSION_UNLOCK (sess);
+
+  return ret;
+}
+
+static GstStructure *
+rtp_session_get_twcc_packet_window (RTPSession * sess,
+    GstClockTime stats_window_size, GstClockTime stats_window_delay)
+{
+  GstStructure *ret;
+
+  g_return_val_if_fail (RTP_IS_SESSION (sess), NULL);
+
+  RTP_SESSION_LOCK (sess);
+  ret = rtp_twcc_manager_get_packet_window (sess->twcc,
       stats_window_size, stats_window_delay);
   RTP_SESSION_UNLOCK (sess);
 

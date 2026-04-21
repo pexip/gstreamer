@@ -53,6 +53,8 @@ void rtp_twcc_manager_tx_end_feedback (TWCCStatsManager * stats_manager);
 
 GstStructure *rtp_twcc_stats_do_stats (TWCCStatsManager * stats_manager,
     GstClockTime stats_window_size, GstClockTime stats_window_delay);
+GstStructure *rtp_twcc_stats_get_packet_window (TWCCStatsManager * stats_manager,
+    GstClockTime stats_window_size, GstClockTime stats_window_delay);
 void rtp_twcc_stats_check_for_lost_packets (TWCCStatsManager * statsman,
     guint16 base_seqnum, guint16 packet_count, guint8 fb_pkt_count);
 
