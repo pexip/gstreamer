@@ -44,7 +44,7 @@ typedef struct
   guint16 seqnum;
   guint16 orig_seqnum;
   guint32 ssrc;
-  guint32 timestamp;
+  guint32 rtp_timestamp;
   guint8 pt;
   guint size;
   gboolean lost;
@@ -260,7 +260,7 @@ _sent_packet_init (SentPacket * packet, guint16 seqnum, RTPPacketInfo * pinfo,
   packet->seqnum = seqnum;
   packet->orig_seqnum = gst_rtp_buffer_get_seq (rtp);
   packet->ssrc = gst_rtp_buffer_get_ssrc (rtp);
-  packet->timestamp = gst_rtp_buffer_get_timestamp (rtp);
+  packet->rtp_timestamp = gst_rtp_buffer_get_timestamp (rtp);
   packet->local_ts = pinfo->current_time;
   packet->size = pinfo->bytes + 12;     /* the reported wireshark size */
   packet->pt = gst_rtp_buffer_get_payload_type (rtp);
@@ -1229,7 +1229,7 @@ FIND_SEND_PKT_RETURN:
   SENT_PKT_UNLOCK (statsman);
 
   if (result && result->seqnum == seqnum
-    && (!timestamp || result->timestamp == *timestamp)) {
+    && (!timestamp || result->rtp_timestamp == *timestamp)) {
     return result;
   } else {
     return NULL;
