@@ -1772,6 +1772,8 @@ rtp_twcc_stats_get_packet_window (TWCCStatsManager * statsman,
           "remote-ts", G_TYPE_UINT64, (guint64) pkt->remote_ts,
           "socket-ts", G_TYPE_UINT64, (guint64) pkt->socket_ts,
           "status", G_TYPE_STRING, _pkt_status_str (pkt->status),
+          "redundant-num", G_TYPE_INT, pkt->redundant_num,
+          "redundant-idx", G_TYPE_INT, pkt->redundant_idx,
           NULL);
       _append_structure_to_value_array (array, s);
     }
