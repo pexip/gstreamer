@@ -840,6 +840,8 @@ rtp_session_class_init (RTPSessionClass * klass)
 
   klass->get_twcc_windowed_stats =
       GST_DEBUG_FUNCPTR (rtp_session_get_twcc_windowed_stats);
+  klass->get_twcc_packet_window =
+      GST_DEBUG_FUNCPTR (rtp_session_get_twcc_packet_window);
   klass->get_source_by_ssrc =
       GST_DEBUG_FUNCPTR (rtp_session_get_source_by_ssrc);
   klass->send_rtcp = GST_DEBUG_FUNCPTR (rtp_session_send_rtcp);
