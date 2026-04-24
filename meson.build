@@ -442,7 +442,9 @@ if building_full
                '-d', get_option('gst-full-device-providers'),
                '-T', get_option('gst-full-dynamic-types'),
                '--giomodules', ';'.join(giomodules),
-               ]
+               ],
+    install: true,
+    install_dir: get_option('datadir'),
   )
 
   gstfull_link_args = cc.get_supported_link_arguments(['-Wl,-Bsymbolic-functions'])
