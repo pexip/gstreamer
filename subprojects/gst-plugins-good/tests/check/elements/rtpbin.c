@@ -1182,7 +1182,7 @@ _push_twcc_pkts_event (gpointer data)
   for (guint i = 0; i < 10000; i++) {
     gst_harness_push_upstream_event (h,
         gst_event_new_custom (GST_EVENT_CUSTOM_UPSTREAM,
-            gst_structure_new_empty ("RTPTWCCPackets")));
+            gst_structure_new_static_str_empty ("RTPTWCCPackets")));
     g_thread_yield ();
   }
 
