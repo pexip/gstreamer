@@ -1010,6 +1010,21 @@ generate_rtcp_sr_buffer (guint ssrc)
   return buf;
 }
 
+static GstBuffer *
+generate_rtcp_sr_buffer_with_ntp (guint ssrc, guint32 rtp_ts, guint64 ntptime)
+{
+  GstBuffer *buf;
+  GstRTCPBuffer rtcp = GST_RTCP_BUFFER_INIT;
+  GstRTCPPacket packet;
+
+  buf = gst_rtcp_buffer_new (1000);
+  fail_unless (gst_rtcp_buffer_map (buf, GST_MAP_READWRITE, &rtcp));
+  fail_unless (gst_rtcp_buffer_add_packet (&rtcp, GST_RTCP_TYPE_SR, &packet));
+  gst_rtcp_packet_sr_set_sender_info (&packet, ssrc, ntptime, rtp_ts, 1, 1);
+  gst_rtcp_buffer_unmap (&rtcp);
+  return buf;
+}
+
 static void
 add_rtcp_sdes_packet (GstBuffer * gstbuf, guint32 ssrc, const char *cname)
 {
@@ -1242,6 +1257,258 @@ GST_START_TEST (test_autoremove_and_twcc_feedback)
 
 GST_END_TEST;
 
+/* Test for race condition: stream remains in client->streams after its
+ * jitterbuffer is destroyed in free_stream. When another stream's sync handler
+ * runs gst_rtp_bin_associate, it iterates client->streams and calls
+ * stream_set_ts_offset on the dying stream, hitting a finalized buffer.
+ *
+ * Setup: two sessions sharing a CNAME (so they're grouped in one client).
+ * Release session 0's pads to trigger free_session -> free_stream while pushing
+ * RTCP SR on session 1 to force gst_rtp_bin_associate to iterate
+ * client->streams.
+ *
+ * The race window: free_session releases BIN_LOCK before calling free_stream,
+ * and free_stream destroys stream->buffer before removing stream from
+ * client->streams (which requires BIN_LOCK). Meanwhile the sync handler
+ * acquires BIN_LOCK and iterates client->streams, hitting the dead buffer. */
+typedef struct
+{
+  GstHarness *h1_rtcp;
+  guint32 ssrc1;
+  gboolean running;
+} PushSyncCtx;
+
+static gpointer
+_push_sync_rtcp_thread (gpointer user_data)
+{
+  PushSyncCtx *ctx = user_data;
+  guint seq = 100;
+
+  while (g_atomic_int_get (&ctx->running)) {
+    /* Push RTCP SR+SDES to trigger handle-sync -> gst_rtp_bin_associate */
+    GstBuffer *buf =
+        generate_rtcp_sr_buffer_with_ntp (ctx->ssrc1, seq * 8000 / 50,
+        0xFFFFFFFF00000000ULL + seq * 1000);
+    add_rtcp_sdes_packet (buf, ctx->ssrc1, "shared-cname");
+    gst_harness_push (ctx->h1_rtcp, buf);
+    seq++;
+    g_thread_yield ();
+  }
+  return NULL;
+}
+
+static void
+run_test_autoremove_sync_race (void)
+{
+  GstElement *rtpbin;
+  GstHarness *h0_rtp, *h0_rtcp, *h1_rtp, *h1_rtcp;
+  GstPad *rtp_sink0, *rtcp_sink0;
+  GstBuffer *buf;
+  guint32 ssrc0 = 1111, ssrc1 = 2222;
+  PushSyncCtx sync_ctx;
+  GThread *sync_thread;
+
+  /* Create rtpbin with two sessions */
+  h0_rtp = gst_harness_new_with_padnames ("rtpbin", "recv_rtp_sink_0", NULL);
+  rtpbin = h0_rtp->element;
+
+  h0_rtcp = gst_harness_new_with_element (rtpbin, "recv_rtcp_sink_0", NULL);
+  h1_rtp = gst_harness_new_with_element (rtpbin, "recv_rtp_sink_1", NULL);
+  h1_rtcp = gst_harness_new_with_element (rtpbin, "recv_rtcp_sink_1", NULL);
+
+  gst_harness_set_src_caps (h0_rtp,
+      gst_caps_new_simple ("application/x-rtp",
+          "clock-rate", G_TYPE_INT, 8000, "payload", G_TYPE_INT, 100, NULL));
+  gst_harness_set_src_caps (h1_rtp,
+      gst_caps_new_simple ("application/x-rtp",
+          "clock-rate", G_TYPE_INT, 8000, "payload", G_TYPE_INT, 100, NULL));
+  gst_harness_set_src_caps_str (h0_rtcp, "application/x-rtcp");
+  gst_harness_set_src_caps_str (h1_rtcp, "application/x-rtcp");
+
+  /* Activate jitterbuffers by pushing RTP on both sessions */
+  gst_harness_push (h0_rtp, generate_rtp_buffer (GST_SECOND / 50 * 0, 0,
+          8000 / 50 * 0, 100, ssrc0));
+  gst_harness_push (h0_rtp, generate_rtp_buffer (GST_SECOND / 50 * 1, 1,
+          8000 / 50 * 1, 100, ssrc0));
+  gst_harness_push (h1_rtp, generate_rtp_buffer (GST_SECOND / 50 * 0, 0,
+          8000 / 50 * 0, 100, ssrc1));
+  gst_harness_push (h1_rtp, generate_rtp_buffer (GST_SECOND / 50 * 1, 1,
+          8000 / 50 * 1, 100, ssrc1));
+
+  /* Push RTCP SR+SDES with shared CNAME to create a GstRtpBinClient
+   * linking both streams together */
+  buf = generate_rtcp_sr_buffer_with_ntp (ssrc0, 0, 0xFFFFFFFF00000000ULL);
+  add_rtcp_sdes_packet (buf, ssrc0, "shared-cname");
+  gst_harness_push (h0_rtcp, buf);
+
+  buf = generate_rtcp_sr_buffer_with_ntp (ssrc1, 0, 0xFFFFFFFF00000000ULL);
+  add_rtcp_sdes_packet (buf, ssrc1, "shared-cname");
+  gst_harness_push (h1_rtcp, buf);
+
+  /* Start thread that continuously pushes RTCP SR on session 1,
+   * triggering gst_rtp_bin_handle_sync -> gst_rtp_bin_associate
+   * which iterates client->streams under BIN_LOCK */
+  sync_ctx.h1_rtcp = h1_rtcp;
+  sync_ctx.ssrc1 = ssrc1;
+  g_atomic_int_set (&sync_ctx.running, TRUE);
+  sync_thread = g_thread_new ("push-sync", _push_sync_rtcp_thread, &sync_ctx);
+
+  /* Release session 0's pads to trigger free_session -> free_stream.
+   * free_session releases BIN_LOCK before calling free_stream.
+   * free_stream then destroys stream->buffer BEFORE removing it from
+   * client->streams. The sync thread can acquire BIN_LOCK during this
+   * window and iterate client->streams, hitting the finalized buffer. */
+  rtp_sink0 = gst_element_get_static_pad (rtpbin, "recv_rtp_sink_0");
+  rtcp_sink0 = gst_element_get_static_pad (rtpbin, "recv_rtcp_sink_0");
+  gst_element_release_request_pad (rtpbin, rtp_sink0);
+  gst_element_release_request_pad (rtpbin, rtcp_sink0);
+  gst_object_unref (rtp_sink0);
+  gst_object_unref (rtcp_sink0);
+
+  g_atomic_int_set (&sync_ctx.running, FALSE);
+  g_thread_join (sync_thread);
+
+  gst_harness_teardown (h0_rtp);
+  gst_harness_teardown (h0_rtcp);
+  gst_harness_teardown (h1_rtp);
+  gst_harness_teardown (h1_rtcp);
+}
+
+GST_START_TEST (test_autoremove_sync_race)
+{
+  for (gint i = 0; i < 100; i++) {
+    run_test_autoremove_sync_race ();
+  }
+}
+
+GST_END_TEST;
+
+/* Test for missing buffer_handlesync_sig disconnect in free_stream.
+ *
+ * free_stream disconnects ptreq and ntpstop signals but never disconnects
+ * buffer_handlesync_sig. The handle-sync callback (gst_rtp_bin_handle_sync)
+ * uses the stream pointer as user_data.  After free_stream runs, that pointer
+ * is freed, so any subsequent emission of handle-sync on the (still-alive)
+ * jitterbuffer will dereference a dangling pointer.
+ *
+ * Approach (deterministic, no threading):
+ *  1. Create a session, push RTP + RTCP SR+SDES to create a stream with an
+ *     active handle-sync connection.
+ *  2. Grab an extra ref on the jitterbuffer via element-added so it survives
+ *     free_stream.
+ *  3. Release the session pads -> free_session -> free_stream.  The stream
+ *     struct is g_free'd but the jitterbuffer object stays alive (our ref).
+ *     buffer_handlesync_sig is still connected.
+ *  4. Emit "handle-sync" on the jitterbuffer.  The signal handler fires with
+ *     the dangling stream pointer -> crash (SIGSEGV / MALLOC_PERTURB_ poison).
+ *  5. Unref the jitterbuffer. */
+
+/* Captures the rtpjitterbuffer element from inside rtpbin */
+static void
+_capture_jitterbuffer (G_GNUC_UNUSED GstElement * rtpbin, GstElement * el,
+    GstElement ** out)
+{
+  GstElementFactory *factory = gst_element_get_factory (el);
+  if (factory &&
+      !g_strcmp0 ("rtpjitterbuffer",
+          gst_plugin_feature_get_name (GST_PLUGIN_FEATURE (factory)))) {
+    /* Take a ref so the jitterbuffer survives free_stream */
+    *out = gst_object_ref (el);
+  }
+}
+
+static void
+run_test_handle_sync_during_free_stream (void)
+{
+  GstElement *rtpbin;
+  GstHarness *h_rtp, *h_rtcp;
+  GstPad *rtp_sink, *rtcp_sink;
+  GstBuffer *buf;
+  GstElement *jitterbuffer = NULL;
+  GstStructure *sync_struct;
+  guint32 ssrc = 3333;
+
+  h_rtp = gst_harness_new_with_padnames ("rtpbin", "recv_rtp_sink_0", NULL);
+  rtpbin = h_rtp->element;
+
+  /* Capture the jitterbuffer before it is created */
+  g_signal_connect (rtpbin, "element-added",
+      G_CALLBACK (_capture_jitterbuffer), &jitterbuffer);
+
+  h_rtcp = gst_harness_new_with_element (rtpbin, "recv_rtcp_sink_0", NULL);
+
+  gst_harness_set_src_caps (h_rtp,
+      gst_caps_new_simple ("application/x-rtp",
+          "clock-rate", G_TYPE_INT, 8000, "payload", G_TYPE_INT, 100, NULL));
+  gst_harness_set_src_caps_str (h_rtcp, "application/x-rtcp");
+
+  /* Activate jitterbuffer -- this triggers element-added */
+  gst_harness_push (h_rtp, generate_rtp_buffer (GST_SECOND / 50 * 0, 0,
+          8000 / 50 * 0, 100, ssrc));
+  gst_harness_push (h_rtp, generate_rtp_buffer (GST_SECOND / 50 * 1, 1,
+          8000 / 50 * 1, 100, ssrc));
+
+  fail_unless (jitterbuffer != NULL, "jitterbuffer not captured");
+
+  /* Establish sync so handle-sync signal connection is exercised */
+  buf = generate_rtcp_sr_buffer_with_ntp (ssrc, 0, 0xFFFFFFFF00000000ULL);
+  add_rtcp_sdes_packet (buf, ssrc, "test-cname");
+  gst_harness_push (h_rtcp, buf);
+
+  /* Release session pads -> free_session -> free_stream.
+   * free_stream g_free's the stream struct but does NOT disconnect the
+   * handle-sync signal from the jitterbuffer.  Our extra ref keeps the
+   * jitterbuffer alive. */
+  rtp_sink = gst_element_get_static_pad (rtpbin, "recv_rtp_sink_0");
+  rtcp_sink = gst_element_get_static_pad (rtpbin, "recv_rtcp_sink_0");
+  gst_element_release_request_pad (rtpbin, rtp_sink);
+  gst_element_release_request_pad (rtpbin, rtcp_sink);
+  gst_object_unref (rtp_sink);
+  gst_object_unref (rtcp_sink);
+
+  /* Build a GstStructure that reaches the SR-ntpnstime code path in
+   * gst_rtp_bin_handle_sync.  The handler reads bin = stream->bin (freed
+   * memory) then calls GST_RTP_BIN_LOCK(bin) which dereferences the
+   * garbage bin pointer -> SIGSEGV.
+   *
+   * Fields needed to reach that path:
+   *   base-rtptime, base-time, clock-rate, clock-base  (pass initial guard)
+   *   sr-ext-rtptime, sr-buffer                         (enter SR branch)
+   *   sr-ntpnstime, cname                               (reach BIN_LOCK) */
+  {
+    GstBuffer *dummy_buf = gst_buffer_new ();
+    sync_struct = gst_structure_new ("application/x-rtp-sync",
+        "base-rtptime", G_TYPE_UINT64, (guint64) 0,
+        "base-time", G_TYPE_UINT64, (guint64) 0,
+        "clock-rate", G_TYPE_UINT, (guint) 8000,
+        "clock-base", G_TYPE_UINT64, (guint64) 0,
+        "sr-ext-rtptime", G_TYPE_UINT64, (guint64) 160,
+        "sr-ntpnstime", G_TYPE_UINT64, (guint64) 1000000000,
+        "cname", G_TYPE_STRING, "test-cname", NULL);
+    gst_structure_set (sync_struct, "sr-buffer", GST_TYPE_BUFFER, dummy_buf,
+        NULL);
+    gst_buffer_unref (dummy_buf);
+  }
+
+  /* Emit handle-sync on the jitterbuffer.  The signal handler
+   * gst_rtp_bin_handle_sync receives the dangling stream pointer as
+   * user_data.  It reads bin = stream->bin (garbage), then tries
+   * GST_RTP_BIN_LOCK(bin) -> SIGSEGV on the poisoned pointer. */
+  g_signal_emit_by_name (jitterbuffer, "handle-sync", sync_struct);
+
+  gst_structure_free (sync_struct);
+  gst_object_unref (jitterbuffer);
+
+  gst_harness_teardown (h_rtp);
+  gst_harness_teardown (h_rtcp);
+}
+
+GST_START_TEST (test_handle_sync_during_free_stream)
+{
+  run_test_handle_sync_during_free_stream ();
+}
+
+GST_END_TEST;
 
 static void
 rtpbin_pad_added (G_GNUC_UNUSED GstElement * rtpbin, GstPad * srcpad,
@@ -1359,6 +1626,8 @@ rtpbin_suite (void)
   tcase_add_test (tc_chain, test_recv_rtp_and_rtcp_simultaneously);
   tcase_add_test (tc_chain, test_autoremove_race);
   tcase_add_test (tc_chain, test_autoremove_and_twcc_feedback);
+  tcase_add_test (tc_chain, test_autoremove_sync_race);
+  tcase_add_test (tc_chain, test_handle_sync_during_free_stream);
   tcase_add_test (tc_chain, test_timeout_then_readd);
 
   return s;
