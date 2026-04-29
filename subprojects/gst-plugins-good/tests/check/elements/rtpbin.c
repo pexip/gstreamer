@@ -1525,7 +1525,7 @@ rtpbin_pad_removed (G_GNUC_UNUSED GstElement * rtpbin, GstPad * srcpad,
     gst_pad_unlink (GST_PAD_PEER (h->sinkpad), h->sinkpad);
 }
 
-void
+static void
 ptdemux_pad_removed_delay (G_GNUC_UNUSED GstElement * ptdemux,
     G_GNUC_UNUSED GstPad * srcpad, G_GNUC_UNUSED gpointer user_data)
 {
