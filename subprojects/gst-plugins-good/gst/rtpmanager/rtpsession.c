@@ -5294,8 +5294,17 @@ done:
   if (!twcc_only) {
     /* schedule remaining nacks */
     RTP_SESSION_LOCK (sess);
+    /* Make a local copy of the hashtable. We need to do this because
+     * schedule_remaining_nacks releases the session lock to perform an upcall,
+     * and another thread may insert new sources into sess->ssrcs during that
+     * window, which would invalidate the iteration of the live table. */
+    table_copy = g_hash_table_new_full (NULL, NULL, NULL,
+        (GDestroyNotify) g_object_unref);
     g_hash_table_foreach (sess->ssrcs[sess->mask_idx],
+        (GHFunc) clone_ssrcs_hashtable, table_copy);
+    g_hash_table_foreach (table_copy,
         (GHFunc) schedule_remaining_nacks, &data);
+    g_hash_table_destroy (table_copy);
     RTP_SESSION_UNLOCK (sess);
   }
 
