@@ -1338,6 +1338,89 @@ GST_START_TEST (test_timeout_then_readd)
 
 GST_END_TEST;
 
+/* Race between autoremoving a stream (which destroys the jitterbuffer) and
+ * an RTCP SR being processed by that same jitterbuffer's "handle-sync" signal
+ * handler (which calls into stream_set_ts_offset and dereferences
+ * stream->buffer). Specifically targets the UAF where stream->buffer can be
+ * finalized between releasing the BIN_LOCK in free_stream and
+ * gst_rtp_bin_handle_sync grabbing G_OBJECT_GET_CLASS(stream->buffer). */
+static void
+run_test_handle_sync_vs_free_stream (void)
+{
+  GstHarness *h_rtcp;
+  GstHarness *h_rtp;
+  GstBuffer *sr_buf;
+  GstTestClock *testclock;
+  guint32 ssrc_a = 1111;
+  guint32 ssrc_b = 2222;
+
+  testclock = GST_TEST_CLOCK_CAST (gst_test_clock_new ());
+  gst_system_clock_set_default (GST_CLOCK_CAST (testclock));
+
+  h_rtcp = gst_harness_new_with_padnames ("rtpbin", "recv_rtcp_sink_0", NULL);
+  h_rtp = gst_harness_new_with_element (h_rtcp->element,
+      "recv_rtp_sink_0", NULL);
+
+  g_object_set (h_rtcp->element, "autoremove", TRUE, NULL);
+
+  gst_harness_set_src_caps (h_rtp,
+      gst_caps_new_simple ("application/x-rtp",
+          "clock-rate", G_TYPE_INT, 8000, "payload", G_TYPE_INT, 100, NULL));
+  gst_harness_set_src_caps (h_rtcp,
+      gst_caps_new_empty_simple ("application/x-rtcp"));
+
+  /* Set up two streams with the same CNAME so that gst_rtp_bin_associate's
+   * iteration over client->streams contains both, then free one while the
+   * other is processing a sync. */
+  gst_harness_push (h_rtp, generate_rtp_buffer (GST_SECOND / 50 * 0, 0,
+          8000 / 50 * 0, 100, ssrc_a));
+  gst_harness_push (h_rtp, generate_rtp_buffer (GST_SECOND / 50 * 1, 1,
+          8000 / 50 * 1, 100, ssrc_a));
+  gst_harness_push (h_rtp, generate_rtp_buffer (GST_SECOND / 50 * 0, 0,
+          8000 / 50 * 0, 100, ssrc_b));
+  gst_harness_push (h_rtp, generate_rtp_buffer (GST_SECOND / 50 * 1, 1,
+          8000 / 50 * 1, 100, ssrc_b));
+  gst_harness_crank_single_clock_wait (h_rtp);
+
+  /* Associate both ssrcs to the same CNAME via SDES, so they share a
+   * GstRtpBinClient */
+  sr_buf = generate_rtcp_sr_buffer (ssrc_a);
+  add_rtcp_sdes_packet (sr_buf, ssrc_a, "shared-cname");
+  gst_harness_push (h_rtcp, sr_buf);
+
+  sr_buf = generate_rtcp_sr_buffer (ssrc_b);
+  add_rtcp_sdes_packet (sr_buf, ssrc_b, "shared-cname");
+  gst_harness_push (h_rtcp, sr_buf);
+
+  /* Advance test clock to trigger autoremoval of one of the streams while
+   * pushing another SR for the other stream — this drives a sync handler
+   * call concurrent with the teardown */
+  gst_test_clock_set_time (testclock, 25 * GST_SECOND);
+  gst_test_clock_crank (testclock);
+
+  /* Trigger handle_sync for stream B at the same time autoremove fires
+   * for both */
+  sr_buf = generate_rtcp_sr_buffer (ssrc_b);
+  add_rtcp_sdes_packet (sr_buf, ssrc_b, "shared-cname");
+  gst_test_clock_crank (testclock);
+  gst_harness_push (h_rtcp, sr_buf);
+
+  gst_harness_teardown (h_rtp);
+  gst_harness_teardown (h_rtcp);
+
+  gst_object_unref (testclock);
+  gst_system_clock_set_default (NULL);
+}
+
+GST_START_TEST (test_handle_sync_vs_free_stream)
+{
+  for (gint i = 0; i < 100; i++) {
+    run_test_handle_sync_vs_free_stream ();
+  }
+}
+
+GST_END_TEST;
+
 static Suite *
 rtpbin_suite (void)
 {
@@ -1360,6 +1443,7 @@ rtpbin_suite (void)
   tcase_add_test (tc_chain, test_autoremove_race);
   tcase_add_test (tc_chain, test_autoremove_and_twcc_feedback);
   tcase_add_test (tc_chain, test_timeout_then_readd);
+  tcase_add_test (tc_chain, test_handle_sync_vs_free_stream);
 
   return s;
 }

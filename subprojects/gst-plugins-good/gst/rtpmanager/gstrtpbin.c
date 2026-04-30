@@ -1435,6 +1435,18 @@ stream_set_ts_offset (GstRtpBin * bin, GstRtpBinStream * stream,
   gint64 prev_ts_offset;
   GObjectClass *jb_class;
 
+  /* stream->buffer is set to NULL under GST_RTP_BIN_LOCK in free_stream
+   * before the jitterbuffer is finalized.  This function is always called
+   * with GST_RTP_BIN_LOCK held (see gst_rtp_bin_associate), so checking it
+   * here protects against dereferencing a finalized jitterbuffer in a
+   * concurrent autoremove path. */
+  if (G_UNLIKELY (stream->buffer == NULL)) {
+    GST_DEBUG_OBJECT (bin,
+        "stream %p has no jitterbuffer (being torn down), ignoring ts-offset",
+        stream);
+    return;
+  }
+
   jb_class = G_OBJECT_GET_CLASS (G_OBJECT (stream->buffer));
 
   if (!g_object_class_find_property (jb_class, "ts-offset")) {
@@ -1520,6 +1532,16 @@ gst_rtp_bin_send_sync_event (GstRtpBinStream * stream)
   if (stream->bin->send_sync_event) {
     GstEvent *event;
     GstPad *srcpad;
+
+    /* Like stream_set_ts_offset, called with GST_RTP_BIN_LOCK held; protect
+     * against a concurrent free_stream that has already cleared the
+     * jitterbuffer pointer. */
+    if (G_UNLIKELY (stream->buffer == NULL)) {
+      GST_DEBUG_OBJECT (stream->bin,
+          "stream %p has no jitterbuffer (being torn down), "
+          "ignoring send-sync event", stream);
+      return;
+    }
 
     GST_DEBUG_OBJECT (stream->bin,
         "sending GstRTCPSRReceived event downstream");
@@ -2361,7 +2383,13 @@ free_stream (GstRtpBinStream * stream, GstRtpBin * bin)
   /* Remove the stream from its client before destroying the buffer.
    * Other threads (e.g. gst_rtp_bin_associate via the sync handler) iterate
    * client->streams under BIN_LOCK and dereference stream->buffer.  If we
-   * destroy the buffer first, those threads hit a finalized object. */
+   * destroy the buffer first, those threads hit a finalized object.
+   *
+   * Additionally clear stream->buffer here under the same BIN_LOCK so that
+   * any concurrent caller of stream_set_ts_offset / gst_rtp_bin_send_sync_event
+   * that has the stream pointer (e.g. via a not-yet-fully-disconnected
+   * "handle-sync" signal closure) will see a NULL jitterbuffer and bail out
+   * before calling G_OBJECT_GET_CLASS on a finalized GObject. */
   GST_RTP_BIN_LOCK (bin);
   for (clients = bin->clients; clients; clients = next_client) {
     GstRtpBinClient *client = (GstRtpBinClient *) clients->data;
@@ -2386,6 +2414,7 @@ free_stream (GstRtpBinStream * stream, GstRtpBin * bin)
       }
     }
   }
+  stream->buffer = NULL;
   GST_RTP_BIN_UNLOCK (bin);
 
   /* It is important to unlock before shutting down our stream elements,
