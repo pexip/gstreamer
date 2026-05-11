@@ -408,7 +408,9 @@ if building_full
   cdata.set_quoted('GST_PACKAGE_ORIGIN', get_option('package-origin'))
   cdata.set_quoted('GST_FULL_LICENSE', get_option('gstreamer-full-license'))
   cdata.set_quoted('GST_PLUGIN_FULL_FEATURES_NAME', 'fullstaticfeatures')
-  configure_file(output : 'config.h', configuration : cdata)
+  # pexip: install config.h into share/gstreamer-1.0 so it can be reused for our LGPL bundle
+  configure_file(output : 'config.h', configuration : cdata, install: true, install_dir: join_paths(get_option('datadir'), 'gstreamer-1.0'))
+
   configinc = include_directories('.')
   gst_c_args = ['-DHAVE_CONFIG_H']
 
@@ -444,7 +446,7 @@ if building_full
                '--giomodules', ';'.join(giomodules),
                ],
     install: true,
-    install_dir: get_option('datadir'),
+    install_dir: join_paths(get_option('datadir'), 'gstreamer-1.0'),
   )
 
   gstfull_link_args = cc.get_supported_link_arguments(['-Wl,-Bsymbolic-functions'])
