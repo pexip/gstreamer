@@ -7374,6 +7374,196 @@ GST_START_TEST (test_rtpsession_recv_rtcp_chain_list)
 
 GST_END_TEST;
 
+/*
+ * Verify that iterating sess->ssrcs to schedule NACK deadlines does not
+ * race with concurrent insertion of new sources.
+ *
+ * Multiple threads push RTP from previously-unseen SSRCs, forcing
+ * g_hash_table_insert() on sess->ssrcs, while the main thread floods
+ * NACK requests that wake the RTCP thread and cause it to iterate the
+ * same hash table inside rtp_session_on_timeout().
+ *
+ * The session must hold its lock for the entire iteration and only call
+ * rtp_session_send_rtcp_with_deadline() after releasing it; otherwise
+ * GLib detects the mid-iteration mutation and fires a version assertion.
+ */
+
+typedef struct
+{
+  GstElement *rtpsession;
+  GstPad *recv_rtp_sinkpad;
+  gint stop;
+  guint32 ssrc_base;
+} NackHashtableRaceCtx;
+
+static GstBuffer *
+_make_rtp_buffer (guint16 seqnum, guint32 ssrc)
+{
+  GstBuffer *buf;
+  GstRTPBuffer rtp = GST_RTP_BUFFER_INIT;
+
+  buf = gst_rtp_buffer_new_allocate (10, 0, 0);
+  GST_BUFFER_PTS (buf) = seqnum * 20 * GST_MSECOND;
+  GST_BUFFER_DTS (buf) = GST_BUFFER_PTS (buf);
+
+  gst_rtp_buffer_map (buf, GST_MAP_READWRITE, &rtp);
+  gst_rtp_buffer_set_payload_type (&rtp, 96);
+  gst_rtp_buffer_set_seq (&rtp, seqnum);
+  gst_rtp_buffer_set_timestamp (&rtp, seqnum * 160);
+  gst_rtp_buffer_set_ssrc (&rtp, ssrc);
+  gst_rtp_buffer_unmap (&rtp);
+
+  return buf;
+}
+
+static gpointer
+_nack_race_push_thread (gpointer data)
+{
+  NackHashtableRaceCtx *ctx = data;
+  guint32 ssrc = (guint32) g_atomic_int_add (&ctx->ssrc_base, 100000) + 0x10000;
+  guint i = 0;
+
+  while (!g_atomic_int_get (&ctx->stop)) {
+    GstBuffer *buf = _make_rtp_buffer (0, ssrc + i);
+    gst_pad_push (ctx->recv_rtp_sinkpad, buf);
+    i++;
+  }
+
+  return NULL;
+}
+
+static GstPadProbeReturn
+_drop_buffer_probe (GstPad * pad, GstPadProbeInfo * info, gpointer user_data)
+{
+  return GST_PAD_PROBE_DROP;
+}
+
+GST_START_TEST (test_schedule_nack_hashtable_race)
+{
+  GstElement *rtpsession;
+  GstPad *recv_rtp_sink, *recv_rtp_src, *send_rtcp_src;
+  GstPad *rtp_srcpad, *rtp_sinkpad, *rtcp_sinkpad;
+  GstCaps *caps;
+  NackHashtableRaceCtx ctx;
+  GThread *push_threads[4];
+  guint i, t;
+  const guint iterations = 5000;
+
+  /* Reset system clock to real clock (undo any previous test's override) */
+  gst_system_clock_set_default (NULL);
+
+  rtpsession = gst_element_factory_make ("rtpsession", NULL);
+  fail_unless (rtpsession != NULL);
+
+  /* Request pads */
+  recv_rtp_sink =
+      gst_element_request_pad_simple (rtpsession, "recv_rtp_sink");
+  fail_unless (recv_rtp_sink != NULL);
+  send_rtcp_src =
+      gst_element_request_pad_simple (rtpsession, "send_rtcp_src");
+  fail_unless (send_rtcp_src != NULL);
+
+  /* Get the recv_rtp_src pad (created when recv_rtp_sink was requested) */
+  recv_rtp_src = gst_element_get_static_pad (rtpsession, "recv_rtp_src");
+  fail_unless (recv_rtp_src != NULL);
+
+  /* Create a srcpad to push RTP into recv_rtp_sink */
+  rtp_srcpad = gst_pad_new ("rtp_src", GST_PAD_SRC);
+  gst_pad_set_active (rtp_srcpad, TRUE);
+  fail_unless (gst_pad_link (rtp_srcpad, recv_rtp_sink) == GST_PAD_LINK_OK);
+
+  /* Create a sinkpad linked to recv_rtp_src (drop buffers, send upstream events) */
+  rtp_sinkpad = gst_pad_new ("rtp_sink", GST_PAD_SINK);
+  gst_pad_add_probe (rtp_sinkpad, GST_PAD_PROBE_TYPE_BUFFER,
+      _drop_buffer_probe, NULL, NULL);
+  gst_pad_set_active (rtp_sinkpad, TRUE);
+  fail_unless (gst_pad_link (recv_rtp_src, rtp_sinkpad) == GST_PAD_LINK_OK);
+
+  /* Create a sinkpad linked to send_rtcp_src (drop RTCP output) */
+  rtcp_sinkpad = gst_pad_new ("rtcp_sink", GST_PAD_SINK);
+  gst_pad_add_probe (rtcp_sinkpad, GST_PAD_PROBE_TYPE_BUFFER,
+      _drop_buffer_probe, NULL, NULL);
+  gst_pad_set_active (rtcp_sinkpad, TRUE);
+  fail_unless (gst_pad_link (send_rtcp_src, rtcp_sinkpad) == GST_PAD_LINK_OK);
+
+  /* Start the element with the real system clock */
+  gst_element_set_state (rtpsession, GST_STATE_PLAYING);
+
+  /* Send negotiation events on the srcpad */
+  {
+    GstSegment segment;
+    gst_segment_init (&segment, GST_FORMAT_TIME);
+    gst_pad_push_event (rtp_srcpad,
+        gst_event_new_stream_start ("test-stream"));
+    caps = gst_caps_new_simple ("application/x-rtp",
+        "clock-rate", G_TYPE_INT, 8000,
+        "payload", G_TYPE_INT, 96, NULL);
+    gst_pad_push_event (rtp_srcpad, gst_event_new_caps (caps));
+    gst_caps_unref (caps);
+    gst_pad_push_event (rtp_srcpad, gst_event_new_segment (&segment));
+  }
+
+  /* Establish the NACK source: receive a few packets from 0xDEADBEEF */
+  for (i = 0; i < 3; i++) {
+    GstBuffer *buf = _make_rtp_buffer (i, 0xDEADBEEF);
+    gst_pad_push (rtp_srcpad, buf);
+  }
+
+  /* Set up the push thread context */
+  ctx.rtpsession = rtpsession;
+  ctx.recv_rtp_sinkpad = rtp_srcpad;
+  g_atomic_int_set (&ctx.stop, FALSE);
+  ctx.ssrc_base = 0x10000;
+
+  /* Start multiple push threads: continuously push packets from new SSRCs */
+  for (t = 0; t < G_N_ELEMENTS (push_threads); t++) {
+    gchar *name = g_strdup_printf ("nack-race-push-%u", t);
+    push_threads[t] =
+        g_thread_new (name, _nack_race_push_thread, &ctx);
+    g_free (name);
+  }
+
+  /* Flood NACK requests to wake the RTCP thread repeatedly; each wake
+   * triggers rtp_session_on_timeout() which iterates sess->ssrcs while
+   * the push threads are inserting new sources concurrently. */
+  for (i = 0; i < iterations; i++) {
+    GstStructure *s;
+    GstEvent *event;
+
+    s = gst_structure_new ("GstRTPRetransmissionRequest",
+        "running-time", GST_TYPE_CLOCK_TIME, GST_CLOCK_TIME_NONE,
+        "ssrc", G_TYPE_UINT, (guint) 0xDEADBEEF,
+        "seqnum", G_TYPE_UINT, (guint) (i % 3),
+        "delay", G_TYPE_UINT, (guint) 0,
+        "deadline", G_TYPE_UINT, (guint) 100,
+        "avg-rtt", G_TYPE_UINT, (guint) 0,
+        NULL);
+    event = gst_event_new_custom (GST_EVENT_CUSTOM_UPSTREAM, s);
+    /* Push upstream from the sinkpad connected to recv_rtp_src */
+    gst_pad_push_event (rtp_sinkpad, event);
+  }
+
+  /* Stop all push threads */
+  g_atomic_int_set (&ctx.stop, TRUE);
+  for (t = 0; t < G_N_ELEMENTS (push_threads); t++)
+    g_thread_join (push_threads[t]);
+
+  gst_element_set_state (rtpsession, GST_STATE_NULL);
+
+  gst_pad_set_active (rtp_srcpad, FALSE);
+  gst_pad_set_active (rtp_sinkpad, FALSE);
+  gst_pad_set_active (rtcp_sinkpad, FALSE);
+  gst_object_unref (rtp_srcpad);
+  gst_object_unref (rtp_sinkpad);
+  gst_object_unref (rtcp_sinkpad);
+  gst_object_unref (recv_rtp_sink);
+  gst_object_unref (recv_rtp_src);
+  gst_object_unref (send_rtcp_src);
+  gst_object_unref (rtpsession);
+}
+
+GST_END_TEST;
+
 static Suite *
 rtpsession_suite (void)
 {
@@ -7497,6 +7687,7 @@ rtpsession_suite (void)
   tcase_add_test (tc_chain, test_sender_timeout);
   tcase_add_test (tc_chain, test_recv_rtp_list_shared_buffer_list);
   tcase_add_test (tc_chain, test_rtpsession_recv_rtcp_chain_list);
+  tcase_add_test (tc_chain, test_schedule_nack_hashtable_race);
   return s;
 }
 

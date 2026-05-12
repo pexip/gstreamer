@@ -4996,10 +4996,9 @@ update_generation (const gchar * key, RTPSource * source, ReportData * data)
 }
 
 static void
-schedule_remaining_nacks (const gchar * key, RTPSource * source,
-    ReportData * data)
+collect_nack_deadlines (const gchar * key, RTPSource * source,
+    GArray * deadlines)
 {
-  RTPSession *sess = data->sess;
   GstClockTime *nack_deadlines;
   GstClockTime deadline;
   guint n_nacks;
@@ -5012,9 +5011,7 @@ schedule_remaining_nacks (const gchar * key, RTPSource * source,
    * RTCP. */
   nack_deadlines = rtp_source_get_nack_deadlines (source, &n_nacks);
   deadline = nack_deadlines[n_nacks - 1];
-  RTP_SESSION_UNLOCK (sess);
-  rtp_session_send_rtcp_with_deadline (sess, deadline);
-  RTP_SESSION_LOCK (sess);
+  g_array_append_val (deadlines, deadline);
 }
 
 static gboolean
@@ -5292,11 +5289,22 @@ done:
     GST_INFO ("generated empty RTCP messages for all the sources");
 
   if (!twcc_only) {
-    /* schedule remaining nacks */
+    /* schedule remaining nacks: collect deadlines under the lock, then
+     * send them all after releasing it to avoid mutating the hash table
+     * while iterating (the send path may trigger new source creation). */
+    GArray *nack_deadlines = g_array_new (FALSE, FALSE, sizeof (GstClockTime));
+    guint i;
+
     RTP_SESSION_LOCK (sess);
     g_hash_table_foreach (sess->ssrcs[sess->mask_idx],
-        (GHFunc) schedule_remaining_nacks, &data);
+        (GHFunc) collect_nack_deadlines, nack_deadlines);
     RTP_SESSION_UNLOCK (sess);
+
+    for (i = 0; i < nack_deadlines->len; i++)
+      rtp_session_send_rtcp_with_deadline (sess,
+          g_array_index (nack_deadlines, GstClockTime, i));
+
+    g_array_free (nack_deadlines, TRUE);
   }
 
   return result;
