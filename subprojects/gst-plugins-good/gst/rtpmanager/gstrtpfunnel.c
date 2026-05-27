@@ -232,6 +232,22 @@ done:
   return;
 }
 
+static gboolean
+gst_rtp_funnel_need_segment_update (GstEvent * new_event, GstPad * srcpad)
+{
+  const GstSegment *seg_new, *seg_cur;
+  gboolean res = TRUE;
+  GstEvent *current = gst_pad_get_sticky_event (srcpad, GST_EVENT_SEGMENT, 0);
+  if (current && new_event) {
+    gst_event_parse_segment (new_event, &seg_new);
+    gst_event_parse_segment (current, &seg_cur);
+    res = !gst_segment_is_equal (seg_new, seg_cur);
+  }
+  if (current)
+    gst_event_unref (current);
+  return res;
+}
+
 static void
 gst_rtp_funnel_forward_segment (GstRtpFunnel * funnel, GstPad * pad)
 {
@@ -243,9 +259,15 @@ gst_rtp_funnel_forward_segment (GstRtpFunnel * funnel, GstPad * pad)
   }
 
   event = gst_pad_get_sticky_event (pad, GST_EVENT_SEGMENT, 0);
-  if (event && !gst_pad_push_event (funnel->srcpad, event)) {
-    GST_ERROR_OBJECT (funnel, "Could not push segment");
-    goto done;
+  if (event) {
+    if (gst_rtp_funnel_need_segment_update (event, funnel->srcpad)) {
+      if (!gst_pad_push_event (funnel->srcpad, event)) {
+        GST_ERROR_OBJECT (funnel, "Could not push segment");
+        goto done;
+      }
+    } else {
+      gst_event_unref (event);
+    }
   }
 
   for (i = 0;; i++) {
@@ -426,6 +448,7 @@ gst_rtp_funnel_sink_event (GstPad * pad, GstObject * parent, GstEvent * event)
     case GST_EVENT_LATENCY_CHANGED:
     {
       gst_rtp_funnel_pad_query_latency (fpad, NULL, NULL);
+      forward = FALSE;
       break;
     }
     default:
