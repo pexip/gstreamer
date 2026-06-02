@@ -547,13 +547,41 @@ gst_rtp_ssrc_demux_init (GstRtpSsrcDemux * demux)
   g_rec_mutex_init (&demux->padlock);
 }
 
+/* Remove the pads from the element while the corresponding dpads entry is
+ * still present in demux->srcpads.
+ *
+ * gst_element_remove_pad() can synchronously trigger pad deactivation,
+ * unlinking and event forwarding. Event forwarding may call
+ * gst_pad_iterate_internal_links() on one of these src pads while it is still
+ * externally referenced and still parented to this element. During that window
+ * gst_rtp_ssrc_demux_iterate_internal_links_src() must still be able to find
+ * the pad in demux->srcpads.
+ *
+ * MUST NOT be called with GST_OBJECT_LOCK (demux) held.
+ */
+static void
+gst_rtp_ssrc_demux_pads_remove_from_element (GstRtpSsrcDemux * demux,
+    GstRtpSsrcDemuxPads * dpads)
+{
+  GstPad *rtp_pad;
+  GstPad *rtcp_pad;
+
+  GST_DEBUG_OBJECT (demux, "Removing pads for ssrc %u", dpads->ssrc);
+
+  rtp_pad = gst_object_ref (dpads->rtp_pad);
+  rtcp_pad = gst_object_ref (dpads->rtcp_pad);
+
+  gst_element_remove_pad (GST_ELEMENT_CAST (demux), rtp_pad);
+  gst_element_remove_pad (GST_ELEMENT_CAST (demux), rtcp_pad);
+
+  gst_object_unref (rtp_pad);
+  gst_object_unref (rtcp_pad);
+}
+
 static void
 gst_rtp_ssrc_demux_pads_free (GstRtpSsrcDemuxPads * dpads)
 {
-  GST_DEBUG ("Freeing pads for ssrc %u", dpads->ssrc);
-
-  gst_element_remove_pad (GST_PAD_PARENT (dpads->rtp_pad), dpads->rtp_pad);
-  gst_element_remove_pad (GST_PAD_PARENT (dpads->rtcp_pad), dpads->rtcp_pad);
+  GST_DEBUG ("Freeing pad bookkeeping for ssrc %u", dpads->ssrc);
 
   g_free (dpads);
 }
@@ -561,9 +589,26 @@ gst_rtp_ssrc_demux_pads_free (GstRtpSsrcDemuxPads * dpads)
 static void
 gst_rtp_ssrc_demux_reset (GstRtpSsrcDemux * demux)
 {
-  g_slist_free_full (demux->srcpads,
-      (GDestroyNotify) gst_rtp_ssrc_demux_pads_free);
+  GSList *walk, *srcpads;
+
+  INTERNAL_STREAM_LOCK (demux);
+
+  /*
+   * Keep demux->srcpads intact while removing pads from the element.
+   * Pad removal can synchronously forward events and traverse internal links
+   * through pads that are still alive/parented during teardown.
+   */
+  for (walk = demux->srcpads; walk; walk = walk->next)
+    gst_rtp_ssrc_demux_pads_remove_from_element (demux, walk->data);
+
+  GST_OBJECT_LOCK (demux);
+  srcpads = demux->srcpads;
   demux->srcpads = NULL;
+  GST_OBJECT_UNLOCK (demux);
+
+  g_slist_free_full (srcpads, (GDestroyNotify) gst_rtp_ssrc_demux_pads_free);
+
+  INTERNAL_STREAM_UNLOCK (demux);
 }
 
 static void
@@ -607,16 +652,30 @@ gst_rtp_ssrc_demux_clear_ssrc (GstRtpSsrcDemux * demux, guint32 ssrc)
 
   GST_DEBUG_OBJECT (demux, "clearing pad for SSRC %08x", ssrc);
 
-  demux->srcpads = g_slist_remove (demux->srcpads, dpads);
+  /*
+   * Keep dpads in demux->srcpads while removing the pads from the element.
+   *
+   * gst_element_remove_pad() may synchronously trigger pad deactivation,
+   * unlinking and event forwarding. Event forwarding can call
+   * gst_pad_iterate_internal_links() on a still-live src pad. While the pad is
+   * still parented to this element, gst_rtp_ssrc_demux_iterate_internal_links_src()
+   * must be able to find its GstRtpSsrcDemuxPads entry.
+   */
   rtp_pad = gst_object_ref (dpads->rtp_pad);
   GST_OBJECT_UNLOCK (demux);
 
-  gst_rtp_ssrc_demux_pads_free (dpads);
+  gst_rtp_ssrc_demux_pads_remove_from_element (demux, dpads);
+
+  GST_OBJECT_LOCK (demux);
+  demux->srcpads = g_slist_remove (demux->srcpads, dpads);
+  GST_OBJECT_UNLOCK (demux);
 
   INTERNAL_STREAM_UNLOCK (demux);
 
   g_signal_emit (G_OBJECT (demux),
       gst_rtp_ssrc_demux_signals[SIGNAL_REMOVED_SSRC_PAD], 0, ssrc, rtp_pad);
+
+  gst_rtp_ssrc_demux_pads_free (dpads);
   gst_object_unref (rtp_pad);
 
   return;
@@ -1097,6 +1156,8 @@ gst_rtp_ssrc_demux_src_event (GstPad * pad, GstObject * parent,
 static GstIterator *
 gst_rtp_ssrc_demux_iterate_internal_links_src (GstPad * pad, GstObject * parent)
 {
+  g_return_val_if_fail (parent != NULL, NULL);
+
   GstRtpSsrcDemux *demux;
   GstPad *otherpad = NULL;
   GstIterator *it = NULL;
