@@ -989,6 +989,82 @@ GST_START_TEST (test_rtp_chain_list_empty)
 
 GST_END_TEST;
 
+typedef struct
+{
+  guint n_src_pads_checked;
+} PadRemovedInternalLinksCtx;
+
+static void
+pad_removed_iterate_internal_links_cb (GstElement * element, GstPad * pad,
+    PadRemovedInternalLinksCtx * ctx)
+{
+  GstIterator *iter;
+  GstIteratorResult res;
+  GValue item = G_VALUE_INIT;
+  GstPad *internal_pad;
+  const gchar *expected_name = NULL;
+
+  if (!GST_PAD_IS_SRC (pad))
+    return;
+
+  if (g_str_has_prefix (GST_PAD_NAME (pad), "src_"))
+    expected_name = "sink";
+  else if (g_str_has_prefix (GST_PAD_NAME (pad), "rtcp_src_"))
+    expected_name = "rtcp_sink";
+  else
+    return;
+
+  /*
+   * During gst_element_remove_pad(), the pad has already been removed from the
+   * element's src pad list, but is still parented until after the pad-removed
+   * signal has been emitted. rtpssrcdemux must keep its own SSRC pad
+   * bookkeeping alive during this window so internal-link traversal remains
+   * valid.
+   */
+  iter = gst_pad_iterate_internal_links (pad);
+  fail_unless (iter != NULL,
+      "Expected internal links iterator for pad %s during pad removal",
+      GST_PAD_NAME (pad));
+
+  res = gst_iterator_next (iter, &item);
+  fail_unless_equals_int (res, GST_ITERATOR_OK);
+
+  internal_pad = g_value_get_object (&item);
+  fail_unless (GST_IS_PAD (internal_pad));
+  fail_unless (!g_strcmp0 (GST_PAD_NAME (internal_pad), expected_name),
+      "Expected internal link from %s to %s, got %s",
+      GST_PAD_NAME (pad), expected_name, GST_PAD_NAME (internal_pad));
+
+  g_value_unset (&item);
+  gst_iterator_free (iter);
+
+  ctx->n_src_pads_checked++;
+}
+
+GST_START_TEST (test_internal_links_during_clear_ssrc_pad_removed)
+{
+  GstHarness *h;
+  PadRemovedInternalLinksCtx ctx = { 0, };
+
+  h = gst_harness_new_with_padnames ("rtpssrcdemux", "sink", NULL);
+
+  gst_harness_set_src_caps (h, generate_caps ());
+
+  fail_unless_equals_int (GST_FLOW_OK,
+      gst_harness_push (h, create_buffer (0, TEST_BUF_SSRC)));
+
+  g_signal_connect (h->element, "pad-removed",
+      G_CALLBACK (pad_removed_iterate_internal_links_cb), &ctx);
+
+  g_signal_emit_by_name (h->element, "clear-ssrc", TEST_BUF_SSRC, NULL);
+
+  fail_unless_equals_int (ctx.n_src_pads_checked, 2);
+
+  gst_harness_teardown (h);
+}
+
+GST_END_TEST;
+
 static Suite *
 rtpssrcdemux_suite (void)
 {
@@ -1012,6 +1088,7 @@ rtpssrcdemux_suite (void)
   tcase_add_test (tc_chain, test_rtcp_chain_list_with_invalid_buffer);
   tcase_add_test (tc_chain, test_rtp_chain_list_max_streams);
   tcase_add_test (tc_chain, test_rtp_chain_list_empty);
+  tcase_add_test (tc_chain, test_internal_links_during_clear_ssrc_pad_removed);
 
   return s;
 }
