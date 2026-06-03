@@ -995,8 +995,8 @@ typedef struct
 } PadRemovedInternalLinksCtx;
 
 static void
-pad_removed_iterate_internal_links_cb (GstElement * element, GstPad * pad,
-    PadRemovedInternalLinksCtx * ctx)
+pad_removed_iterate_internal_links_cb (G_GNUC_UNUSED GstElement * element,
+    GstPad * pad, PadRemovedInternalLinksCtx * ctx)
 {
   GstIterator *iter;
   GstIteratorResult res;
