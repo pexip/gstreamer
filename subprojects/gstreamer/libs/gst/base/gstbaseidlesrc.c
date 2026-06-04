@@ -1375,14 +1375,16 @@ gst_base_idle_src_process_object (GstBaseIdleSrc * src, GstMiniObject * obj)
     GstEvent *event = GST_EVENT_CAST (obj);
     GST_DEBUG_OBJECT (src, "About to push Event %" GST_PTR_FORMAT, event);
     if (!gst_pad_push_event (pad, event)) {
-      GST_ELEMENT_ERROR (src, CORE, EVENT,
-          ("Failed to push event."),
-          ("failed to push event from queue during processing loop"));
+      /* Mirror GstBaseSrc behaviour for non-flow events: log and continue.
+      * We deliberately do NOT post a message on the bus here — event push
+      * failures are typically transient (e.g. peer not linked yet) and not
+      * a fatal element error. Flow errors are still surfaced below via
+      * GST_ELEMENT_FLOW_ERROR(). */
+      GST_WARNING_OBJECT (src, "Failed to push event %" GST_PTR_FORMAT, event);
     }
   } else {
     GST_ERROR_OBJECT (src, "Unknown object %" GST_PTR_FORMAT " type", obj);
   }
-
 check_ret_error:
   if (ret != GST_FLOW_OK && ret != GST_FLOW_FLUSHING) {
     GST_ELEMENT_FLOW_ERROR (src, ret);
