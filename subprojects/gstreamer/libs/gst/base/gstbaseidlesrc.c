@@ -1442,34 +1442,55 @@ static void
 gst_base_idle_src_start_task (GstBaseIdleSrc * src, gboolean wait)
 {
   GstBaseIdleSrcPrivate *priv = src->priv;
+  GstTaskPool *pool;
+  gpointer prev_handle, new_handle;
   GError *error = NULL;
 
-  GST_DEBUG_OBJECT (src, "Starting task");
+  GST_OBJECT_LOCK (src);
+  pool = priv->thread_pool ? gst_object_ref (priv->thread_pool) : NULL;
+  prev_handle = priv->thread_handle;
+  priv->thread_handle = NULL;
+  GST_OBJECT_UNLOCK (src);
 
-  /* If a previous task is still outstanding, join it first so that buffer
-   * ordering is preserved and we never have two workers draining the queue
-   * concurrently (this matters for shared pools with max_threads > 1). */
-  if (priv->thread_handle) {
-    gst_task_pool_join (priv->thread_pool, priv->thread_handle);
-    priv->thread_handle = NULL;
-  }
-
-  priv->thread_handle =
-      gst_task_pool_push (priv->thread_pool, gst_base_idle_src_func, src,
-      &error);
-
-  if (G_UNLIKELY (error != NULL)) {
-    GST_ERROR_OBJECT (src, "Failed to push task to pool: %s", error->message);
-    g_clear_error (&error);
-    /* nothing else we can do; the queued objects will be processed next time
-     * a task is successfully pushed, or drained in _stop(). */
+  if (G_UNLIKELY (pool == NULL)) {
+    GST_WARNING_OBJECT (src, "No thread pool configured");
     return;
   }
 
-  if (wait && priv->thread_handle) {
-    gst_task_pool_join (priv->thread_pool, priv->thread_handle);
-    priv->thread_handle = NULL;
+  /* Join the *previous* handle on the pool it was issued on. Because we
+   * cleared priv->thread_handle above, set_thread_pool() will not also try
+   * to join it from the other side. */
+  if (prev_handle)
+    gst_task_pool_join (pool, prev_handle);
+
+  new_handle = gst_task_pool_push (pool, gst_base_idle_src_func, src, &error);
+  if (G_UNLIKELY (error != NULL)) {
+    GST_ERROR_OBJECT (src, "Failed to push task to pool: %s", error->message);
+    g_clear_error (&error);
+    gst_object_unref (pool);
+    return;
   }
+
+  if (wait && new_handle) {
+    gst_task_pool_join (pool, new_handle);
+    new_handle = NULL;
+  }
+
+  GST_OBJECT_LOCK (src);
+  /* Only install our handle if no concurrent set_thread_pool() happened
+   * meanwhile — if it did, the pool we used is no longer the active one
+   * and the handle is meaningless against the new pool. */
+  if (priv->thread_pool == pool) {
+    priv->thread_handle = new_handle;
+    new_handle = NULL;
+  }
+  GST_OBJECT_UNLOCK (src);
+
+  /* If the pool was swapped under us, drain our handle now. */
+  if (new_handle)
+    gst_task_pool_join (pool, new_handle);
+
+  gst_object_unref (pool);
 }
 
 static void
