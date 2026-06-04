@@ -94,8 +94,10 @@ struct _GstBaseIdleSrc {
  * @stop: Stop processing. Subclasses should use this to close resources.
  * @query: Handle a requested query.
  * @event: Override this to implement custom event handling.
- * @alloc: Ask the subclass to allocate a buffer with for offset and size. The
- *   default implementation will create a new buffer from the negotiated allocator.
+ * @alloc: Ask the subclass to allocate an output buffer of @size bytes. The
+ *   default implementation will use the negotiated #GstBufferPool when set,
+ *   otherwise it falls back to gst_buffer_new_allocate() with the negotiated
+ *   allocator and parameters.
  *
  * Subclasses can override any of the available virtual methods or not, as
  * needed.
@@ -121,13 +123,19 @@ struct _GstBaseIdleSrcClass {
   gboolean      (*set_caps)     (GstBaseIdleSrc *src, GstCaps *caps);
 
   /**
-   * GstBaseIdleSrc::alloc:
-   * @buf: (out) (nullable):
+   * GstBaseIdleSrcClass::alloc:
+   * @src:  a #GstBaseIdleSrc
+   * @size: the requested size of the buffer in bytes
+   * @buf:  (out) (transfer full) (nullable): the resulting #GstBuffer
    *
-   * Ask the subclass to allocate an output buffer with @size, the default
-   * implementation will use the negotiated allocator.
+   * Ask the subclass to allocate an output buffer of @size bytes. The default
+   * implementation uses the negotiated #GstBufferPool or, when none is set,
+   * the negotiated #GstAllocator together with the configured
+   * #GstAllocationParams.
+   *
+   * Returns: a #GstFlowReturn
    */
-  GstFlowReturn (*alloc)        (GstBaseIdleSrc *src, guint size, GstBuffer **buf);
+  GstFlowReturn (*alloc) (GstBaseIdleSrc *src, guint size, GstBuffer **buf);
 
   /* setup allocation query */
   gboolean      (*decide_allocation)   (GstBaseIdleSrc *src, GstQuery *query);
