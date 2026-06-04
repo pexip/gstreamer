@@ -1252,7 +1252,7 @@ gst_base_idle_src_set_thread_pool (GstBaseIdleSrc * src,
   g_return_if_fail (GST_IS_BASE_IDLE_SRC (src));
   g_return_if_fail (GST_IS_TASK_POOL (thread_pool));
 
-  if (src->running) {
+  if (g_atomic_int_get (&src->running)) {
     GST_WARNING_OBJECT (src,
         "Refusing to swap thread pool while the element is running; "
         "call set_thread_pool() before the element transitions to PAUSED.");
@@ -1561,7 +1561,7 @@ gst_base_idle_src_start (GstBaseIdleSrc * src)
   gst_segment_init (&src->segment, src->segment.format);
   GST_OBJECT_UNLOCK (src);
 
-  src->running = TRUE;
+  g_atomic_int_set (&src->running, TRUE);
   src->priv->segment_pending = TRUE;
   src->priv->segment_seqnum = gst_util_seqnum_next ();
 
@@ -1594,21 +1594,54 @@ gst_base_idle_src_stop (GstBaseIdleSrc * src)
 {
   GstBaseIdleSrcClass *bclass;
   GstBaseIdleSrcPrivate *priv = src->priv;
+  GstTaskPool *pool = NULL;
+  gpointer handle = NULL;
+  GQueue drained = G_QUEUE_INIT;
   GstMiniObject *obj;
   gboolean result = TRUE;
 
   GST_DEBUG_OBJECT (src, "stopping source");
 
-  src->running = FALSE;
-  if (priv->thread_handle) {
-    gst_task_pool_join (priv->thread_pool, priv->thread_handle);
-    priv->thread_handle = NULL;
-  }
+  /* 1. Publish !running atomically so any producer that has not yet entered
+   *    queue_object() bails out in submit_buffer*(). */
+  g_atomic_int_set (&src->running, FALSE);
 
-  /* clean up any leftovers on the queue */
-  while ((obj = g_queue_pop_head (src->priv->obj_queue))) {
+  /* 2. Snapshot pool + handle under the lock, clear them, and steal the
+   *    queue contents in one shot so we can release the lock before joining
+   *    (the worker takes the same lock in process_object_queue()). */
+  GST_OBJECT_LOCK (src);
+  if (priv->thread_pool)
+    pool = gst_object_ref (priv->thread_pool);
+  handle = priv->thread_handle;
+  priv->thread_handle = NULL;
+
+  /* Steal the queue: move all queued objects into a local GQueue while we
+   * own the lock, so further queue_object() calls (which take the lock) are
+   * either ordered before us (and we'll drain them) or land in an empty
+   * queue we no longer care about. The producer check on !running prevents
+   * the latter in well-behaved callers; even if it loses the race, we leak
+   * at most that buffer, not the whole list. */
+  while ((obj = g_queue_pop_head (priv->obj_queue)))
+    g_queue_push_tail (&drained, obj);
+  GST_OBJECT_UNLOCK (src);
+
+  /* 3. Join outside the lock. */
+  if (handle && pool)
+    gst_task_pool_join (pool, handle);
+  g_clear_object (&pool);
+
+  /* 4. Drop drained objects (no lock needed; they're local now). */
+  while ((obj = g_queue_pop_head (&drained)))
     gst_mini_object_unref (obj);
-  }
+
+  /* 5. Any objects that the worker pushed back via queue_object during
+   *    join? Drain them too under the lock. */
+  GST_OBJECT_LOCK (src);
+  while ((obj = g_queue_pop_head (priv->obj_queue)))
+    g_queue_push_tail (&drained, obj);
+  GST_OBJECT_UNLOCK (src);
+  while ((obj = g_queue_pop_head (&drained)))
+    gst_mini_object_unref (obj);
 
   bclass = GST_BASE_IDLE_SRC_GET_CLASS (src);
   if (bclass->stop)
@@ -1689,7 +1722,7 @@ gst_base_idle_src_submit_buffer (GstBaseIdleSrc * src, GstBuffer * buffer)
   g_return_if_fail (GST_IS_BASE_IDLE_SRC (src));
   g_return_if_fail (GST_IS_BUFFER (buffer));
 
-  if (!src->running) {
+  if (!g_atomic_int_get (&src->running)) {
     GST_ERROR_OBJECT (src, "Sending buffer to stopped src is not valid");
     gst_buffer_unref (buffer);
     return;
@@ -1716,7 +1749,7 @@ gst_base_idle_src_submit_buffer_list (GstBaseIdleSrc * src,
   g_return_if_fail (GST_IS_BASE_IDLE_SRC (src));
   g_return_if_fail (GST_IS_BUFFER_LIST (buffer_list));
 
-  if (!src->running) {
+  if (!g_atomic_int_get (&src->running)) {
     GST_ERROR_OBJECT (src, "Sending bufferlist to stopped src is not valid");
     gst_buffer_list_unref (buffer_list);
     return;
