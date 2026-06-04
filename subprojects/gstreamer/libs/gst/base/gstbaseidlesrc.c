@@ -50,7 +50,8 @@
  *
  * - Push-only operation (no getrange/pull support)
  * - Optional live-source mode using gst_base_idle_src_set_live()
- * - Built-in buffer allocation via gst_base_idle_src_alloc()
+ * - Buffer allocation via the #GstBaseIdleSrcClass.alloc vfunc, which by
+ *   default uses the negotiated #GstBufferPool / #GstAllocator
  * - Negotiation helpers for caps and allocation queries
  * - Thread-pool support for external or shared producers
  * - Optional automatic timestamping
@@ -127,11 +128,19 @@
  * }
  *
  * static GstFlowReturn
- * my_idle_src_loop (GstBaseIdleSrc *src)
+ * my_idle_src_loop (GstMyIdleSrc *self)
  * {
- *   GstBuffer *buffer = NULL;
- *   gst_base_idle_src_alloc (src, FRAME_SIZE, &buffer);
- *   // Fill buffer data
+ *   GstBaseIdleSrc      *src    = GST_BASE_IDLE_SRC (self);
+ *   GstBaseIdleSrcClass *klass  = GST_BASE_IDLE_SRC_GET_CLASS (src);
+ *   GstBuffer           *buffer = NULL;
+ *   GstFlowReturn        ret;
+ *
+ *   ret = klass->alloc (src, FRAME_SIZE, &buffer);
+ *   if (ret != GST_FLOW_OK)
+ *     return ret;
+ *
+ *   // ... fill buffer ...
+ *
  *   gst_base_idle_src_submit_buffer (src, buffer);
  *   return GST_FLOW_OK;
  * }
