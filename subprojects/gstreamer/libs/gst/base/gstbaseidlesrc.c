@@ -1558,8 +1558,10 @@ gst_base_idle_src_stop (GstBaseIdleSrc * src)
   GST_DEBUG_OBJECT (src, "stopping source");
 
   src->running = FALSE;
-  gst_task_pool_join (priv->thread_pool, priv->thread_handle);
-  priv->thread_handle = NULL;
+  if (priv->thread_handle) {
+    gst_task_pool_join (priv->thread_pool, priv->thread_handle);
+    priv->thread_handle = NULL;
+  }
 
   /* clean up any leftovers on the queue */
   while ((obj = g_queue_pop_head (src->priv->obj_queue))) {
