@@ -1803,34 +1803,34 @@ gst_base_idle_src_init (GstBaseIdleSrc * src, gpointer g_class)
 
   GST_DEBUG_OBJECT (src, "creating src pad");
   pad = gst_pad_new_from_template (pad_template, "src");
-
-  GST_DEBUG_OBJECT (src, "setting functions on src pad");
   gst_pad_set_activatemode_function (pad, gst_base_idle_src_activate_mode);
   gst_pad_set_event_function (pad, gst_base_idle_src_event);
   gst_pad_set_query_function (pad, gst_base_idle_src_query);
 
-  /* hold pointer to pad */
   src->srcpad = pad;
-  GST_DEBUG_OBJECT (src, "adding src pad");
   gst_element_add_pad (GST_ELEMENT (src), pad);
 
-  /* we operate in BYTES by default */
   gst_base_idle_src_set_format (src, GST_FORMAT_BYTES);
   src->priv->do_timestamp = DEFAULT_DO_TIMESTAMP;
-
   GST_OBJECT_FLAG_SET (src, GST_ELEMENT_FLAG_SOURCE);
 
   src->priv->obj_queue = g_queue_new ();
 
-  /* Create a shared task pool as default thread pool for this base class
-   * with a default thread per pool of 1. This would be suboptimal for most
-   * cases but only be biased to very rare pushes */
-  GstTaskPool *thread_pool = gst_shared_task_pool_new ();
-  gst_shared_task_pool_set_max_threads (GST_SHARED_TASK_POOL (thread_pool), 1);
-  src->priv->thread_pool = thread_pool;
+  /* Default internal pool — capped at 1 worker. */
+  {
+    GstTaskPool *thread_pool = gst_shared_task_pool_new ();
+    GError *error = NULL;
 
-  GError *error = NULL;
-  gst_task_pool_prepare (src->priv->thread_pool, &error);
+    gst_shared_task_pool_set_max_threads (GST_SHARED_TASK_POOL (thread_pool),
+        1);
+    gst_task_pool_prepare (thread_pool, &error);
+    if (G_UNLIKELY (error != NULL)) {
+      GST_ERROR_OBJECT (src, "Failed to prepare default thread pool: %s",
+          error->message);
+      g_clear_error (&error);
+    }
+    src->priv->thread_pool = thread_pool;
+  }
 
   GST_DEBUG_OBJECT (src, "init done");
 }
