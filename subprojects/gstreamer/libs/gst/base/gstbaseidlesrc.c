@@ -1615,14 +1615,15 @@ gst_base_idle_src_stop (GstBaseIdleSrc * src)
   handle = priv->thread_handle;
   priv->thread_handle = NULL;
 
-  /* Steal the queue: move all queued objects into a local GQueue while we
-   * own the lock, so further queue_object() calls (which take the lock) are
-   * either ordered before us (and we'll drain them) or land in an empty
-   * queue we no longer care about. The producer check on !running prevents
-   * the latter in well-behaved callers; even if it loses the race, we drain it
-   * on the second pass below */
-  while ((obj = g_queue_pop_head (priv->obj_queue)))
-    g_queue_push_tail (&drained, obj);
+  /* Steal the queue in O(1): GQueue is a plain { head, tail, length } struct,
+   * so copying it out and re-initializing the source detaches the whole list
+   * without walking it or freeing/reallocating any GList nodes (which a
+   * pop_head + push_tail loop would do via the GList slice allocator). Any
+   * further queue_object() calls (which take OBJECT_LOCK) are either ordered
+   * before us — and we'll drain them here — or land in the now-empty queue
+   * and get caught by the second-pass drain below. */
+  drained = *priv->obj_queue;
+  g_queue_init (priv->obj_queue);
   GST_OBJECT_UNLOCK (src);
 
   /* 3. Join outside the lock. */
@@ -1635,10 +1636,11 @@ gst_base_idle_src_stop (GstBaseIdleSrc * src)
     gst_mini_object_unref (obj);
 
   /* 5. Any objects that the worker pushed back via queue_object during
-   *    join? Drain them too under the lock. */
+   *    join (or that a producer raced past the !running check)? Drain them
+   *    too — same O(1) steal pattern. */
   GST_OBJECT_LOCK (src);
-  while ((obj = g_queue_pop_head (priv->obj_queue)))
-    g_queue_push_tail (&drained, obj);
+  drained = *priv->obj_queue;
+  g_queue_init (priv->obj_queue);
   GST_OBJECT_UNLOCK (src);
   while ((obj = g_queue_pop_head (&drained)))
     gst_mini_object_unref (obj);
@@ -1905,6 +1907,10 @@ gst_base_idle_src_init (GstBaseIdleSrc * src, gpointer g_class)
   src->priv->do_timestamp = DEFAULT_DO_TIMESTAMP;
   GST_OBJECT_FLAG_SET (src, GST_ELEMENT_FLAG_SOURCE);
 
+  /* Plain g_queue_new(): stop() steals the queue contents via a struct copy,
+   * which assumes no GDestroyNotify is attached. If we ever need one, switch
+   * to g_queue_init() of an embedded GQueue and clear via g_queue_clear_full()
+   * after the steal. */
   src->priv->obj_queue = g_queue_new ();
 
   /* Default internal pool — capped at 1 worker. */
