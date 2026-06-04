@@ -262,7 +262,7 @@ _push_func (gpointer data)
     }
   }
 
-  /* yield to cause some hadvoc */
+  /* yield to cause some havoc */
   GST_LOG ("Yielding from source %s", gst_element_get_name (e));
   g_thread_yield ();
 
