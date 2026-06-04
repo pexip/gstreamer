@@ -191,32 +191,44 @@ GST_START_TEST (baseidlesrc_thread_pool_set_and_get)
 {
   GstElement *src;
   GstBaseIdleSrc *base_src;
-  GError *err;
+  GstTaskPool *thread_pool;
+  GstTaskPool *new_thread_pool;
+  GError *err = NULL;
 
   src = g_object_new (test_idle_src_get_type (), NULL);
   base_src = GST_BASE_IDLE_SRC (src);
 
-  GstTaskPool *thread_pool = gst_base_idle_src_get_thread_pool (base_src);
-  fail_unless (thread_pool);
+  /* The element must expose a default internal pool. */
+  thread_pool = gst_base_idle_src_get_thread_pool (base_src);
+  fail_unless (thread_pool != NULL);
   gst_object_unref (thread_pool);
 
-  GstTaskPool *new_thread_pool = gst_shared_task_pool_new ();
+  /* Build a replacement pool and prepare it, checking for failure. */
+  new_thread_pool = gst_shared_task_pool_new ();
   gst_shared_task_pool_set_max_threads (GST_SHARED_TASK_POOL (new_thread_pool),
       2);
   gst_task_pool_prepare (new_thread_pool, &err);
+  fail_unless (err == NULL, "task pool prepare failed: %s",
+      err ? err->message : "(no error)");
 
-  gst_base_idle_src_set_thread_pool (base_src, new_thread_pool);
+  /* set_thread_pool() takes ownership (transfer full), so we ref-up for our
+   * own use here. */
+  gst_base_idle_src_set_thread_pool (base_src,
+      gst_object_ref (new_thread_pool));
+
   thread_pool = gst_base_idle_src_get_thread_pool (base_src);
   fail_unless (thread_pool == new_thread_pool);
   fail_unless_equals_int (2,
       gst_shared_task_pool_get_max_threads (GST_SHARED_TASK_POOL
           (thread_pool)));
 
-  gst_task_pool_cleanup (new_thread_pool);
-  gst_object_unref (thread_pool);
-  g_object_unref (src);
-}
+  gst_object_unref (thread_pool);    /* drop the get_thread_pool() ref */
+  g_object_unref (src);              /* this releases the element's ref */
 
+  /* Now we own the last ref; we may safely cleanup + unref our local one. */
+  gst_task_pool_cleanup (new_thread_pool);
+  gst_object_unref (new_thread_pool);
+}
 GST_END_TEST;
 
 #define MAX_SRCS 16
@@ -276,19 +288,23 @@ GST_START_TEST (baseidlesrc_thread_pool_submit)
   GstElement *srcs[MAX_SRCS];
   GThread *threads[MAX_SRCS];
   GstBaseIdleSrc *base_src;
-  GError *err;
+  GError *err = NULL;
+  GstTaskPool *pool;
   guint i;
 
-  GstTaskPool *pool = gst_shared_task_pool_new ();
+  pool = gst_shared_task_pool_new ();
   gst_shared_task_pool_set_max_threads (GST_SHARED_TASK_POOL (pool),
       MAX_SRCS / 2);
   gst_task_pool_prepare (pool, &err);
+  fail_unless (err == NULL, "task pool prepare failed: %s",
+      err ? err->message : "(no error)");
 
   /* create all sources and harnesses in one go */
   for (i = 0; i < MAX_SRCS; i++) {
     srcs[i] = g_object_new (test_idle_src_get_type (), NULL);
     base_src = GST_BASE_IDLE_SRC (srcs[i]);
 
+    /* transfer-full — give each element its own ref */
     gst_base_idle_src_set_thread_pool (base_src, gst_object_ref (pool));
 
     hs[i] = gst_harness_new_with_element (GST_ELEMENT (srcs[i]), NULL, "src");
@@ -296,27 +312,25 @@ GST_START_TEST (baseidlesrc_thread_pool_submit)
     gst_harness_play (hs[i]);
   }
 
-  /* start pushing to from all sources */
   for (i = 0; i < MAX_SRCS; i++) {
     char *thread_name = g_strdup_printf ("pusher-%d", i);
     threads[i] = g_thread_new (thread_name, _push_func, hs[i]);
     g_free (thread_name);
   }
 
-  /* wait for all sources to finish pushing */
-  for (i = 0; i < MAX_SRCS; i++) {
+  for (i = 0; i < MAX_SRCS; i++)
     g_thread_join (threads[i]);
-  }
 
-  /* teardown */
   for (i = 0; i < MAX_SRCS; i++) {
     gst_harness_teardown (hs[i]);
     g_object_unref (srcs[i]);
   }
+
+  /* All elements have released their refs; we own the last one — safe to
+   * cleanup + unref. */
   gst_task_pool_cleanup (pool);
   gst_object_unref (pool);
 }
-
 GST_END_TEST;
 
 static Suite *
