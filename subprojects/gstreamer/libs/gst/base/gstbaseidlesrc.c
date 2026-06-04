@@ -231,7 +231,7 @@ struct _GstBaseIdleSrcPrivate
   GQueue *obj_queue;
   gpointer thread_handle;
   GstTaskPool *thread_pool;     /* OBJECT_LOCK */
-  gboolean owns_thread_pool;     /* OBJECT_LOCK - TRUE iff we created it at init() */
+  gboolean owns_thread_pool;    /* OBJECT_LOCK - TRUE iff we created it at init() */
 
   GstAllocationParams params;   /* OBJECT_LOCK */
 };
@@ -1406,10 +1406,10 @@ gst_base_idle_src_process_object (GstBaseIdleSrc * src, GstMiniObject * obj)
     GST_DEBUG_OBJECT (src, "About to push Event %" GST_PTR_FORMAT, event);
     if (!gst_pad_push_event (pad, event)) {
       /* Mirror GstBaseSrc behaviour for non-flow events: log and continue.
-      * We deliberately do NOT post a message on the bus here — event push
-      * failures are typically transient (e.g. peer not linked yet) and not
-      * a fatal element error. Flow errors are still surfaced below via
-      * GST_ELEMENT_FLOW_ERROR(). */
+       * We deliberately do NOT post a message on the bus here — event push
+       * failures are typically transient (e.g. peer not linked yet) and not
+       * a fatal element error. Flow errors are still surfaced below via
+       * GST_ELEMENT_FLOW_ERROR(). */
       GST_WARNING_OBJECT (src, "Failed to push event %" GST_PTR_FORMAT, event);
     }
   } else {
