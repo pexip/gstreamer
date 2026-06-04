@@ -1407,22 +1407,34 @@ gst_base_idle_src_func (gpointer user_data)
 }
 
 static void
-gst_base_idle_src_start_task (GstBaseIdleSrc * src, G_GNUC_UNUSED gboolean wait)
+gst_base_idle_src_start_task (GstBaseIdleSrc * src, gboolean wait)
 {
   GstBaseIdleSrcPrivate *priv = src->priv;
+  GError *error = NULL;
 
   GST_DEBUG_OBJECT (src, "Starting task");
 
-  /* we don't care of previous result (if any) so simply unref the handler */
-  gst_task_pool_dispose_handle (priv->thread_pool, priv->thread_handle);
-  priv->thread_handle = NULL;
+  /* If a previous task is still outstanding, join it first so that buffer
+   * ordering is preserved and we never have two workers draining the queue
+   * concurrently (this matters for shared pools with max_threads > 1). */
+  if (priv->thread_handle) {
+    gst_task_pool_join (priv->thread_pool, priv->thread_handle);
+    priv->thread_handle = NULL;
+  }
 
-  GError *error = NULL;
   priv->thread_handle =
       gst_task_pool_push (priv->thread_pool, gst_base_idle_src_func, src,
       &error);
 
-  if (wait) {
+  if (G_UNLIKELY (error != NULL)) {
+    GST_ERROR_OBJECT (src, "Failed to push task to pool: %s", error->message);
+    g_clear_error (&error);
+    /* nothing else we can do; the queued objects will be processed next time
+     * a task is successfully pushed, or drained in _stop(). */
+    return;
+  }
+
+  if (wait && priv->thread_handle) {
     gst_task_pool_join (priv->thread_pool, priv->thread_handle);
     priv->thread_handle = NULL;
   }
