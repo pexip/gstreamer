@@ -1233,6 +1233,11 @@ gst_base_idle_src_get_buffer_pool (GstBaseIdleSrc * src)
  * This may be used to share a single pool between several slow-paced sources.
  * The element will not call gst_task_pool_cleanup() on an externally provided
  * pool — cleanup is the responsibility of the code that created it.
+ *
+ * This function must only be called when the element is not yet running
+ * (i.e. before transitioning to %GST_STATE_PAUSED). Swapping pools mid-flow
+ * is not supported because already-queued buffers would be orphaned on the
+ * previous pool.
  */
 void
 gst_base_idle_src_set_thread_pool (GstBaseIdleSrc * src,
@@ -1244,6 +1249,14 @@ gst_base_idle_src_set_thread_pool (GstBaseIdleSrc * src,
 
   g_return_if_fail (GST_IS_BASE_IDLE_SRC (src));
   g_return_if_fail (GST_IS_TASK_POOL (thread_pool));
+
+  if (src->running) {
+    GST_WARNING_OBJECT (src,
+        "Refusing to swap thread pool while the element is running; "
+        "call set_thread_pool() before the element transitions to PAUSED.");
+    gst_object_unref (thread_pool);
+    return;
+  }
 
   priv = src->priv;
 
