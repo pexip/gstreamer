@@ -231,6 +231,7 @@ struct _GstBaseIdleSrcPrivate
   GQueue *obj_queue;
   gpointer thread_handle;
   GstTaskPool *thread_pool;     /* OBJECT_LOCK */
+  gboolean owns_thread_pool;     /* OBJECT_LOCK - TRUE iff we created it at init() */
 
   GstAllocationParams params;   /* OBJECT_LOCK */
 };
@@ -1246,6 +1247,7 @@ gst_base_idle_src_set_thread_pool (GstBaseIdleSrc * src,
   GstBaseIdleSrcPrivate *priv;
   GstTaskPool *old_pool = NULL;
   gpointer old_handle = NULL;
+  gboolean old_owned = FALSE;
 
   g_return_if_fail (GST_IS_BASE_IDLE_SRC (src));
   g_return_if_fail (GST_IS_TASK_POOL (thread_pool));
@@ -1263,8 +1265,10 @@ gst_base_idle_src_set_thread_pool (GstBaseIdleSrc * src,
   GST_OBJECT_LOCK (src);
   old_pool = priv->thread_pool;
   old_handle = priv->thread_handle;
-  priv->thread_pool = thread_pool;     /* transfer full */
+  old_owned = priv->owns_thread_pool;
+  priv->thread_pool = thread_pool;    /* transfer full */
   priv->thread_handle = NULL;
+  priv->owns_thread_pool = FALSE;     /* externally provided, now */
   GST_OBJECT_UNLOCK (src);
 
   /* Drain any pending work on the *previous* pool — the handle is only valid
@@ -1274,6 +1278,10 @@ gst_base_idle_src_set_thread_pool (GstBaseIdleSrc * src,
   if (old_pool) {
     if (old_handle) {
       gst_task_pool_join (old_pool, old_handle);
+    }
+    /* Only cleanup if WE created the previous pool at init() */
+    if (old_owned) {
+      gst_task_pool_cleanup (old_pool);
     }
     gst_object_unref (old_pool);
   }
@@ -1784,6 +1792,12 @@ gst_base_idle_src_finalize (GObject * object)
     priv->thread_handle = NULL;
   }
 
+  /* Only cleanup the pool if WE created it. An externally-provided pool
+   * may be shared with other elements; its owner is responsible for
+   * gst_task_pool_cleanup(). */
+  if (priv->thread_pool && priv->owns_thread_pool)
+    gst_task_pool_cleanup (priv->thread_pool);
+
   /* Just unref the pool. Never call gst_task_pool_cleanup() here: the pool
    * may have been set by the user and shared with other elements. The pool's
    * own finalize takes care of stopping its workers when the last ref drops. */
@@ -1877,6 +1891,7 @@ gst_base_idle_src_init (GstBaseIdleSrc * src, gpointer g_class)
       g_clear_error (&error);
     }
     src->priv->thread_pool = thread_pool;
+    src->priv->owns_thread_pool = TRUE;
   }
 
   GST_DEBUG_OBJECT (src, "init done");

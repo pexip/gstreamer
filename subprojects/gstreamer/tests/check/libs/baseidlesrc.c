@@ -551,6 +551,25 @@ GST_START_TEST (baseidlesrc_submit_after_stop_is_safe)
 }
 GST_END_TEST;
 
+GST_START_TEST (baseidlesrc_default_pool_is_cleaned_up_on_swap)
+{
+  TestIdleSrc *src = g_object_new (test_idle_src_get_type (), NULL);
+  GError *err = NULL;
+  GstTaskPool *replacement = gst_shared_task_pool_new ();
+
+  gst_shared_task_pool_set_max_threads (GST_SHARED_TASK_POOL (replacement), 1);
+  gst_task_pool_prepare (replacement, &err);
+  fail_unless (err == NULL);
+
+  /* Swap out the default pool — the previous (default) one is owned by us
+   * and must be cleaned up + unreffed inside set_thread_pool(). Valgrind
+   * will catch the leak if cleanup() is skipped. */
+  gst_base_idle_src_set_thread_pool (GST_BASE_IDLE_SRC (src), replacement);
+
+  g_object_unref (src);
+}
+GST_END_TEST;
+
 static Suite *
 baseidlesrc_suite (void)
 {
@@ -572,6 +591,7 @@ baseidlesrc_suite (void)
   tcase_add_test (tc, baseidlesrc_set_format_rejects_invalid);
   tcase_add_test (tc, baseidlesrc_submit_pull_loop_no_deadlock);
   tcase_add_test (tc, baseidlesrc_submit_after_stop_is_safe);
+  tcase_add_test (tc, baseidlesrc_default_pool_is_cleaned_up_on_swap);
 
   return s;
 }
