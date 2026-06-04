@@ -1217,25 +1217,46 @@ gst_base_idle_src_get_buffer_pool (GstBaseIdleSrc * src)
  * @src: a #GstBaseIdleSrc
  * @thread_pool: (transfer full): a #GstTaskPool
  *
- * Sets the thread pool to be used internally
+ * Sets the thread pool to be used internally for scheduling buffer/event
+ * pushes. The @thread_pool is expected to already have been prepared via
+ * gst_task_pool_prepare(). Ownership of @thread_pool is transferred to @src.
+ *
+ * This may be used to share a single pool between several slow-paced sources.
+ * The element will not call gst_task_pool_cleanup() on an externally provided
+ * pool — cleanup is the responsibility of the code that created it.
  */
 void
 gst_base_idle_src_set_thread_pool (GstBaseIdleSrc * src,
     GstTaskPool * thread_pool)
 {
+  GstBaseIdleSrcPrivate *priv;
+  GstTaskPool *old_pool = NULL;
+  gpointer old_handle = NULL;
+
   g_return_if_fail (GST_IS_BASE_IDLE_SRC (src));
   g_return_if_fail (GST_IS_TASK_POOL (thread_pool));
 
+  priv = src->priv;
+
   GST_OBJECT_LOCK (src);
-  if (src->priv->thread_pool) {
-    GST_DEBUG_OBJECT (src, "Cleaning up old thread pool");
-    gst_task_pool_cleanup (src->priv->thread_pool);
-    gst_object_unref (src->priv->thread_pool);
+  old_pool = priv->thread_pool;
+  old_handle = priv->thread_handle;
+  priv->thread_pool = thread_pool;     /* transfer full */
+  priv->thread_handle = NULL;
+  GST_OBJECT_UNLOCK (src);
+
+  /* Drain any pending work on the *previous* pool — the handle is only valid
+   * against the pool that produced it. Then drop our reference. Note we do
+   * NOT call gst_task_pool_cleanup() here: the old pool may be shared with
+   * other elements. */
+  if (old_pool) {
+    if (old_handle) {
+      gst_task_pool_join (old_pool, old_handle);
+    }
+    gst_object_unref (old_pool);
   }
 
-  GST_DEBUG_OBJECT (src, "Setting external thread pool %p", thread_pool);
-  src->priv->thread_pool = thread_pool;
-  GST_OBJECT_UNLOCK (src);
+  GST_DEBUG_OBJECT (src, "Configured thread pool %p", thread_pool);
 }
 
 /**
