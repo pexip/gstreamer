@@ -1681,7 +1681,7 @@ static GstFlowReturn
 gst_base_idle_src_default_alloc (GstBaseIdleSrc * src,
     guint size, GstBuffer ** buffer)
 {
-  GstFlowReturn ret;
+  GstFlowReturn ret = GST_FLOW_OK;
   GstBaseIdleSrcPrivate *priv = src->priv;
   GstBufferPool *buf_pool = NULL;
   GstAllocator *allocator = NULL;
@@ -1698,16 +1698,10 @@ gst_base_idle_src_default_alloc (GstBaseIdleSrc * src,
 
   if (buf_pool) {
     ret = gst_buffer_pool_acquire_buffer (buf_pool, buffer, NULL);
-  } else if (size != -1) {
+  } else {
     *buffer = gst_buffer_new_allocate (allocator, size, &params);
     if (G_UNLIKELY (*buffer == NULL))
       goto alloc_failed;
-
-    ret = GST_FLOW_OK;
-  } else {
-    GST_WARNING_OBJECT (src, "Not trying to alloc %u bytes. Blocksize not set?",
-        size);
-    goto alloc_failed;
   }
 
 done:
@@ -1718,13 +1712,10 @@ done:
 
   return ret;
 
-  /* ERRORS */
 alloc_failed:
-  {
-    GST_ERROR_OBJECT (src, "Failed to allocate %u bytes", size);
-    ret = GST_FLOW_ERROR;
-    goto done;
-  }
+  GST_ERROR_OBJECT (src, "Failed to allocate %u bytes", size);
+  ret = GST_FLOW_ERROR;
+  goto done;
 }
 
 static void
