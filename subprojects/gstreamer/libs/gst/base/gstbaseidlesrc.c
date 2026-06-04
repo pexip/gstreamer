@@ -1728,28 +1728,28 @@ alloc_failed:
 }
 
 static void
-gst_base_idle_src_dispose (GObject * object)
-{
-  GstBaseIdleSrc *src;
-  src = GST_BASE_IDLE_SRC (object);
-  (void) src;
-
-  G_OBJECT_CLASS (parent_class)->dispose (object);
-}
-
-static void
 gst_base_idle_src_finalize (GObject * object)
 {
-  GstBaseIdleSrc *src;
-  src = GST_BASE_IDLE_SRC (object);
+  GstBaseIdleSrc *src = GST_BASE_IDLE_SRC (object);
+  GstBaseIdleSrcPrivate *priv = src->priv;
+  GstMiniObject *obj;
 
-  g_queue_free (src->priv->obj_queue);
+  /* Drain anything that might still be queued. */
+  while ((obj = g_queue_pop_head (priv->obj_queue)))
+    gst_mini_object_unref (obj);
+  g_queue_free (priv->obj_queue);
+  priv->obj_queue = NULL;
 
-  if (src->priv->thread_pool) {
-    gst_task_pool_cleanup (src->priv->thread_pool);
-    gst_object_unref (src->priv->thread_pool);
-    src->priv->thread_pool = NULL;
+  /* If we still hold a handle, drop it on the originating pool. */
+  if (priv->thread_handle && priv->thread_pool) {
+    gst_task_pool_join (priv->thread_pool, priv->thread_handle);
+    priv->thread_handle = NULL;
   }
+
+  /* Just unref the pool. Never call gst_task_pool_cleanup() here: the pool
+   * may have been set by the user and shared with other elements. The pool's
+   * own finalize takes care of stopping its workers when the last ref drops. */
+  g_clear_object (&priv->thread_pool);
 
   G_OBJECT_CLASS (parent_class)->finalize (object);
 }
@@ -1771,7 +1771,6 @@ gst_base_idle_src_class_init (GstBaseIdleSrcClass * klass)
 
   parent_class = g_type_class_peek_parent (klass);
 
-  gobject_class->dispose = gst_base_idle_src_dispose;
   gobject_class->finalize = gst_base_idle_src_finalize;
   gobject_class->set_property = gst_base_idle_src_set_property;
   gobject_class->get_property = gst_base_idle_src_get_property;
