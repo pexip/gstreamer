@@ -1619,8 +1619,8 @@ gst_base_idle_src_stop (GstBaseIdleSrc * src)
    * own the lock, so further queue_object() calls (which take the lock) are
    * either ordered before us (and we'll drain them) or land in an empty
    * queue we no longer care about. The producer check on !running prevents
-   * the latter in well-behaved callers; even if it loses the race, we leak
-   * at most that buffer, not the whole list. */
+   * the latter in well-behaved callers; even if it loses the race, we drain it
+   * on the second pass below */
   while ((obj = g_queue_pop_head (priv->obj_queue)))
     g_queue_push_tail (&drained, obj);
   GST_OBJECT_UNLOCK (src);
@@ -1831,9 +1831,6 @@ gst_base_idle_src_finalize (GObject * object)
   if (priv->thread_pool && priv->owns_thread_pool)
     gst_task_pool_cleanup (priv->thread_pool);
 
-  /* Just unref the pool. Never call gst_task_pool_cleanup() here: the pool
-   * may have been set by the user and shared with other elements. The pool's
-   * own finalize takes care of stopping its workers when the last ref drops. */
   g_clear_object (&priv->thread_pool);
 
   G_OBJECT_CLASS (parent_class)->finalize (object);
