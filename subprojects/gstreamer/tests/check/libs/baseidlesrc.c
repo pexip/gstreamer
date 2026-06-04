@@ -333,6 +333,224 @@ GST_START_TEST (baseidlesrc_thread_pool_submit)
 }
 GST_END_TEST;
 
+GST_START_TEST (baseidlesrc_default_thread_pool_is_prepared)
+{
+  TestIdleSrc *src = g_object_new (test_idle_src_get_type (), NULL);
+  GstBaseIdleSrc *base_src = GST_BASE_IDLE_SRC (src);
+  GstTaskPool *pool = gst_base_idle_src_get_thread_pool (base_src);
+  GError *err = NULL;
+  gpointer handle;
+
+  fail_unless (pool != NULL);
+  fail_unless (GST_IS_SHARED_TASK_POOL (pool));
+  fail_unless_equals_int (1,
+      gst_shared_task_pool_get_max_threads (GST_SHARED_TASK_POOL (pool)));
+
+  /* Already prepared → push must succeed without prepare(). */
+  handle = gst_task_pool_push (pool, (GstTaskPoolFunction) g_thread_yield,
+      NULL, &err);
+  fail_unless (err == NULL, "default pool push failed: %s",
+      err ? err->message : "");
+  if (handle)
+    gst_task_pool_join (pool, handle);
+
+  gst_object_unref (pool);
+  g_object_unref (src);
+}
+GST_END_TEST;
+
+GST_START_TEST (baseidlesrc_replace_thread_pool_preserves_shared_pool)
+{
+  TestIdleSrc *src = g_object_new (test_idle_src_get_type (), NULL);
+  GstBaseIdleSrc *base_src = GST_BASE_IDLE_SRC (src);
+  GError *err = NULL;
+  GstTaskPool *shared, *other;
+  gpointer h;
+
+  shared = gst_shared_task_pool_new ();
+  gst_shared_task_pool_set_max_threads (GST_SHARED_TASK_POOL (shared), 2);
+  gst_task_pool_prepare (shared, &err);
+  fail_unless (err == NULL);
+
+  gst_base_idle_src_set_thread_pool (base_src, gst_object_ref (shared));
+
+  other = gst_shared_task_pool_new ();
+  gst_shared_task_pool_set_max_threads (GST_SHARED_TASK_POOL (other), 1);
+  gst_task_pool_prepare (other, &err);
+  fail_unless (err == NULL);
+  gst_base_idle_src_set_thread_pool (base_src, other);   /* transfer full */
+
+  /* Would fail/UAF if shared had been cleaned up. */
+  h = gst_task_pool_push (shared, (GstTaskPoolFunction) g_thread_yield, NULL,
+      &err);
+  fail_unless (err == NULL);
+  if (h)
+    gst_task_pool_join (shared, h);
+
+  g_object_unref (src);
+  gst_task_pool_cleanup (shared);
+  gst_object_unref (shared);
+}
+GST_END_TEST;
+
+GST_START_TEST (baseidlesrc_finalize_one_keeps_shared_pool_alive)
+{
+  GError *err = NULL;
+  GstTaskPool *pool = gst_shared_task_pool_new ();
+  TestIdleSrc *a, *b;
+  GstHarness *hb;
+  GstBuffer *buf;
+
+  gst_shared_task_pool_set_max_threads (GST_SHARED_TASK_POOL (pool), 2);
+  gst_task_pool_prepare (pool, &err);
+  fail_unless (err == NULL);
+
+  a = g_object_new (test_idle_src_get_type (), NULL);
+  b = g_object_new (test_idle_src_get_type (), NULL);
+  gst_base_idle_src_set_thread_pool (GST_BASE_IDLE_SRC (a),
+      gst_object_ref (pool));
+  gst_base_idle_src_set_thread_pool (GST_BASE_IDLE_SRC (b),
+      gst_object_ref (pool));
+
+  hb = gst_harness_new_with_element (GST_ELEMENT (b), NULL, "src");
+  gst_harness_set_sink_caps_str (hb, "foo/bar");
+  gst_harness_play (hb);
+
+  g_object_unref (a);   /* must not break b */
+
+  fail_unless_equals_int (GST_FLOW_OK, test_idle_src_alloc (b, &buf));
+  gst_base_idle_src_submit_buffer (GST_BASE_IDLE_SRC (b), buf);
+  gst_buffer_unref (gst_harness_pull (hb));
+
+  gst_harness_teardown (hb);
+  g_object_unref (b);
+
+  gst_task_pool_cleanup (pool);
+  gst_object_unref (pool);
+}
+GST_END_TEST;
+
+GST_START_TEST (baseidlesrc_submission_order_is_preserved)
+{
+  TestIdleSrc *src = g_object_new (test_idle_src_get_type (), NULL);
+  GstBaseIdleSrc *base_src = GST_BASE_IDLE_SRC (src);
+  GstHarness *h = gst_harness_new_with_element (GST_ELEMENT (src), NULL, "src");
+  const guint N = 200;
+  guint i;
+
+  gst_harness_set_sink_caps_str (h, "foo/bar");
+  gst_harness_play (h);
+
+  for (i = 0; i < N; i++) {
+    GstBuffer *buf;
+    fail_unless_equals_int (GST_FLOW_OK, test_idle_src_alloc (src, &buf));
+    GST_BUFFER_OFFSET (buf) = i;
+    gst_base_idle_src_submit_buffer (base_src, buf);
+  }
+  for (i = 0; i < N; i++) {
+    GstBuffer *buf = gst_harness_pull (h);
+    fail_unless_equals_uint64 (GST_BUFFER_OFFSET (buf), i);
+    gst_buffer_unref (buf);
+  }
+
+  gst_harness_teardown (h);
+  g_object_unref (src);
+}
+GST_END_TEST;
+
+GST_START_TEST (baseidlesrc_do_timestamp_on_buffer_list)
+{
+  TestIdleSrc *src = g_object_new (test_idle_src_get_type (), NULL);
+  GstBaseIdleSrc *base_src = GST_BASE_IDLE_SRC (src);
+  GstHarness *h;
+  GstBufferList *list;
+  guint i;
+
+  gst_base_idle_src_set_do_timestamp (base_src, TRUE);
+  h = gst_harness_new_with_element (GST_ELEMENT (src), NULL, "src");
+  gst_harness_set_sink_caps_str (h, "foo/bar");
+  gst_harness_play (h);
+
+  list = gst_buffer_list_new_sized (4);
+  for (i = 0; i < 4; i++) {
+    GstBuffer *buf;
+    fail_unless_equals_int (GST_FLOW_OK, test_idle_src_alloc (src, &buf));
+    gst_buffer_list_insert (list, -1, buf);
+  }
+  gst_base_idle_src_submit_buffer_list (base_src, list);
+
+  for (i = 0; i < 4; i++) {
+    GstBuffer *buf = gst_harness_pull (h);
+    fail_unless (buf != NULL);
+    fail_unless (GST_BUFFER_PTS_IS_VALID (buf));
+    gst_buffer_unref (buf);
+  }
+
+  gst_harness_teardown (h);
+  g_object_unref (src);
+}
+GST_END_TEST;
+
+GST_START_TEST (baseidlesrc_set_format_rejects_invalid)
+{
+  TestIdleSrc *src = g_object_new (test_idle_src_get_type (), NULL);
+  GstBaseIdleSrc *base_src = GST_BASE_IDLE_SRC (src);
+
+  ASSERT_CRITICAL (gst_base_idle_src_set_format (base_src, GST_FORMAT_PERCENT));
+  ASSERT_CRITICAL (gst_base_idle_src_set_format (base_src, GST_FORMAT_DEFAULT));
+
+  gst_base_idle_src_set_format (base_src, GST_FORMAT_BYTES);
+  gst_base_idle_src_set_format (base_src, GST_FORMAT_TIME);
+  gst_base_idle_src_set_format (base_src, GST_FORMAT_BUFFERS);
+
+  g_object_unref (src);
+}
+GST_END_TEST;
+
+GST_START_TEST (baseidlesrc_submit_pull_loop_no_deadlock)
+{
+  TestIdleSrc *src = g_object_new (test_idle_src_get_type (), NULL);
+  GstBaseIdleSrc *base_src = GST_BASE_IDLE_SRC (src);
+  GstHarness *h = gst_harness_new_with_element (GST_ELEMENT (src), NULL, "src");
+  gint64 deadline;
+  guint i;
+
+  gst_harness_set_sink_caps_str (h, "foo/bar");
+  gst_harness_play (h);
+  deadline = g_get_monotonic_time () + 5 * G_TIME_SPAN_SECOND;
+
+  for (i = 0; i < 100; i++) {
+    GstBuffer *buf;
+    fail_unless_equals_int (GST_FLOW_OK, test_idle_src_alloc (src, &buf));
+    gst_base_idle_src_submit_buffer (base_src, buf);
+    gst_buffer_unref (gst_harness_pull (h));
+    fail_unless (g_get_monotonic_time () < deadline,
+        "submit/pull loop deadlocked or stalled");
+  }
+
+  gst_harness_teardown (h);
+  g_object_unref (src);
+}
+GST_END_TEST;
+
+GST_START_TEST (baseidlesrc_submit_after_stop_is_safe)
+{
+  TestIdleSrc *src = g_object_new (test_idle_src_get_type (), NULL);
+  GstBaseIdleSrc *base_src = GST_BASE_IDLE_SRC (src);
+  GstHarness *h = gst_harness_new_with_element (GST_ELEMENT (src), NULL, "src");
+  GstBuffer *buf;
+
+  gst_harness_set_sink_caps_str (h, "foo/bar");
+  gst_harness_play (h);
+  gst_harness_teardown (h);
+
+  fail_unless_equals_int (GST_FLOW_OK, test_idle_src_alloc (src, &buf));
+  gst_base_idle_src_submit_buffer (base_src, buf);   /* must drop, not crash */
+
+  g_object_unref (src);
+}
+GST_END_TEST;
+
 static Suite *
 baseidlesrc_suite (void)
 {
@@ -346,6 +564,14 @@ baseidlesrc_suite (void)
   tcase_add_test (tc, baseidlesrc_handle_events);
   tcase_add_test (tc, baseidlesrc_thread_pool_set_and_get);
   tcase_add_test (tc, baseidlesrc_thread_pool_submit);
+  tcase_add_test (tc, baseidlesrc_default_thread_pool_is_prepared);
+  tcase_add_test (tc, baseidlesrc_replace_thread_pool_preserves_shared_pool);
+  tcase_add_test (tc, baseidlesrc_finalize_one_keeps_shared_pool_alive);
+  tcase_add_test (tc, baseidlesrc_submission_order_is_preserved);
+  tcase_add_test (tc, baseidlesrc_do_timestamp_on_buffer_list);
+  tcase_add_test (tc, baseidlesrc_set_format_rejects_invalid);
+  tcase_add_test (tc, baseidlesrc_submit_pull_loop_no_deadlock);
+  tcase_add_test (tc, baseidlesrc_submit_after_stop_is_safe);
 
   return s;
 }
