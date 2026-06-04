@@ -333,6 +333,12 @@ GST_START_TEST (baseidlesrc_thread_pool_submit)
 }
 GST_END_TEST;
 
+ static void
+ _yield_task (G_GNUC_UNUSED void *user_data)
+ {
+   g_thread_yield ();
+ }
+
 GST_START_TEST (baseidlesrc_default_thread_pool_is_prepared)
 {
   TestIdleSrc *src = g_object_new (test_idle_src_get_type (), NULL);
@@ -347,8 +353,7 @@ GST_START_TEST (baseidlesrc_default_thread_pool_is_prepared)
       gst_shared_task_pool_get_max_threads (GST_SHARED_TASK_POOL (pool)));
 
   /* Already prepared → push must succeed without prepare(). */
-  handle = gst_task_pool_push (pool, (GstTaskPoolFunction) g_thread_yield,
-      NULL, &err);
+  handle = gst_task_pool_push (pool, _yield_task, NULL, &err);
   fail_unless (err == NULL, "default pool push failed: %s",
       err ? err->message : "");
   if (handle)
@@ -381,8 +386,7 @@ GST_START_TEST (baseidlesrc_replace_thread_pool_preserves_shared_pool)
   gst_base_idle_src_set_thread_pool (base_src, other);   /* transfer full */
 
   /* Would fail/UAF if shared had been cleaned up. */
-  h = gst_task_pool_push (shared, (GstTaskPoolFunction) g_thread_yield, NULL,
-      &err);
+  h = gst_task_pool_push (shared, _yield_task, NULL, &err);
   fail_unless (err == NULL);
   if (h)
     gst_task_pool_join (shared, h);
