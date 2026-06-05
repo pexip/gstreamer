@@ -1266,9 +1266,9 @@ gst_base_idle_src_set_thread_pool (GstBaseIdleSrc * src,
   old_pool = priv->thread_pool;
   old_handle = priv->thread_handle;
   old_owned = priv->owns_thread_pool;
-  priv->thread_pool = thread_pool;    /* transfer full */
+  priv->thread_pool = thread_pool;      /* transfer full */
   priv->thread_handle = NULL;
-  priv->owns_thread_pool = FALSE;     /* externally provided, now */
+  priv->owns_thread_pool = FALSE;       /* externally provided, now */
   GST_OBJECT_UNLOCK (src);
 
   /* Drain any pending work on the *previous* pool — the handle is only valid

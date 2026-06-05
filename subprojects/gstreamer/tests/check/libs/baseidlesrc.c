@@ -222,13 +222,14 @@ GST_START_TEST (baseidlesrc_thread_pool_set_and_get)
       gst_shared_task_pool_get_max_threads (GST_SHARED_TASK_POOL
           (thread_pool)));
 
-  gst_object_unref (thread_pool);    /* drop the get_thread_pool() ref */
-  g_object_unref (src);              /* this releases the element's ref */
+  gst_object_unref (thread_pool);       /* drop the get_thread_pool() ref */
+  g_object_unref (src);         /* this releases the element's ref */
 
   /* Now we own the last ref; we may safely cleanup + unref our local one. */
   gst_task_pool_cleanup (new_thread_pool);
   gst_object_unref (new_thread_pool);
 }
+
 GST_END_TEST;
 
 #define MAX_SRCS 16
@@ -331,13 +332,14 @@ GST_START_TEST (baseidlesrc_thread_pool_submit)
   gst_task_pool_cleanup (pool);
   gst_object_unref (pool);
 }
+
 GST_END_TEST;
 
- static void
- _yield_task (G_GNUC_UNUSED void *user_data)
- {
-   g_thread_yield ();
- }
+static void
+_yield_task (G_GNUC_UNUSED void *user_data)
+{
+  g_thread_yield ();
+}
 
 GST_START_TEST (baseidlesrc_default_thread_pool_is_prepared)
 {
@@ -362,6 +364,7 @@ GST_START_TEST (baseidlesrc_default_thread_pool_is_prepared)
   gst_object_unref (pool);
   g_object_unref (src);
 }
+
 GST_END_TEST;
 
 GST_START_TEST (baseidlesrc_replace_thread_pool_preserves_shared_pool)
@@ -399,6 +402,7 @@ GST_START_TEST (baseidlesrc_replace_thread_pool_preserves_shared_pool)
   gst_task_pool_cleanup (shared);
   gst_object_unref (shared);
 }
+
 GST_END_TEST;
 
 GST_START_TEST (baseidlesrc_finalize_one_keeps_shared_pool_alive)
@@ -424,7 +428,7 @@ GST_START_TEST (baseidlesrc_finalize_one_keeps_shared_pool_alive)
   gst_harness_set_sink_caps_str (hb, "foo/bar");
   gst_harness_play (hb);
 
-  g_object_unref (a);   /* must not break b */
+  g_object_unref (a);           /* must not break b */
 
   fail_unless_equals_int (GST_FLOW_OK, test_idle_src_alloc (b, &buf));
   gst_base_idle_src_submit_buffer (GST_BASE_IDLE_SRC (b), buf);
@@ -436,6 +440,7 @@ GST_START_TEST (baseidlesrc_finalize_one_keeps_shared_pool_alive)
   gst_task_pool_cleanup (pool);
   gst_object_unref (pool);
 }
+
 GST_END_TEST;
 
 GST_START_TEST (baseidlesrc_submission_order_is_preserved)
@@ -464,6 +469,7 @@ GST_START_TEST (baseidlesrc_submission_order_is_preserved)
   gst_harness_teardown (h);
   g_object_unref (src);
 }
+
 GST_END_TEST;
 
 GST_START_TEST (baseidlesrc_do_timestamp_on_buffer_list)
@@ -497,6 +503,7 @@ GST_START_TEST (baseidlesrc_do_timestamp_on_buffer_list)
   gst_harness_teardown (h);
   g_object_unref (src);
 }
+
 GST_END_TEST;
 
 GST_START_TEST (baseidlesrc_set_format_rejects_invalid)
@@ -513,6 +520,7 @@ GST_START_TEST (baseidlesrc_set_format_rejects_invalid)
 
   g_object_unref (src);
 }
+
 GST_END_TEST;
 
 GST_START_TEST (baseidlesrc_submit_pull_loop_no_deadlock)
@@ -539,6 +547,7 @@ GST_START_TEST (baseidlesrc_submit_pull_loop_no_deadlock)
   gst_harness_teardown (h);
   g_object_unref (src);
 }
+
 GST_END_TEST;
 
 GST_START_TEST (baseidlesrc_submit_after_stop_is_safe)
@@ -553,10 +562,11 @@ GST_START_TEST (baseidlesrc_submit_after_stop_is_safe)
   gst_harness_teardown (h);
 
   fail_unless_equals_int (GST_FLOW_OK, test_idle_src_alloc (src, &buf));
-  gst_base_idle_src_submit_buffer (base_src, buf);   /* must drop, not crash */
+  gst_base_idle_src_submit_buffer (base_src, buf);      /* must drop, not crash */
 
   g_object_unref (src);
 }
+
 GST_END_TEST;
 
 GST_START_TEST (baseidlesrc_default_pool_is_cleaned_up_on_swap)
@@ -580,36 +590,46 @@ GST_START_TEST (baseidlesrc_default_pool_is_cleaned_up_on_swap)
 
   g_object_unref (src);
 }
+
 GST_END_TEST;
+
+typedef struct
+{
+  GstBaseIdleSrc *src;
+  gint stop;                    /* atomic */
+} StopRaceCtx;
+
+static gpointer
+_stop_race_producer (gpointer data)
+{
+  StopRaceCtx *c = data;
+  while (!g_atomic_int_get (&c->stop)) {
+    GstBuffer *buf = gst_buffer_new_allocate (NULL, 64, NULL);
+    gst_base_idle_src_submit_buffer (c->src, buf);
+  }
+  return NULL;
+}
 
 GST_START_TEST (baseidlesrc_stop_races_with_submit)
 {
   TestIdleSrc *src = g_object_new (test_idle_src_get_type (), NULL);
   GstBaseIdleSrc *base_src = GST_BASE_IDLE_SRC (src);
   GstHarness *h = gst_harness_new_with_element (GST_ELEMENT (src), NULL, "src");
+  StopRaceCtx ctx = { base_src, 0 };
   GThread *producer;
-  struct { GstBaseIdleSrc *src; gint stop; } ctx = { base_src, 0 };
-
-  gpointer producer_fn (gpointer data) {
-    typeof (ctx) *c = data;
-    while (!g_atomic_int_get (&c->stop)) {
-      GstBuffer *buf = gst_buffer_new_allocate (NULL, 64, NULL);
-      gst_base_idle_src_submit_buffer (c->src, buf);
-    }
-    return NULL;
-  }
 
   gst_harness_set_sink_caps_str (h, "foo/bar");
   gst_harness_play (h);
 
-  producer = g_thread_new ("producer", producer_fn, &ctx);
-  g_usleep (50 * 1000);                          /* let it churn */
-  gst_harness_teardown (h);                      /* triggers stop() */
+  producer = g_thread_new ("producer", _stop_race_producer, &ctx);
+  g_usleep (50 * 1000);         /* let it churn */
+  gst_harness_teardown (h);     /* triggers stop() */
   g_atomic_int_set (&ctx.stop, 1);
   g_thread_join (producer);
 
   g_object_unref (src);
 }
+
 GST_END_TEST;
 
 static Suite *
