@@ -189,10 +189,10 @@ GST_BASE_API
 GstBufferPool * gst_base_idle_src_get_buffer_pool  (GstBaseIdleSrc *src);
 
 GST_BASE_API
-void gst_base_idle_src_set_thread_pool (GstBaseIdleSrc *src, GstTaskPool * thread_pool);
+void            gst_base_idle_src_set_thread_pool  (GstBaseIdleSrc *src, GstTaskPool *thread_pool);
 
 GST_BASE_API
-GstTaskPool * gst_base_idle_src_get_thread_pool  (GstBaseIdleSrc *src);
+GstTaskPool *   gst_base_idle_src_get_thread_pool  (GstBaseIdleSrc *src);
 
 GST_BASE_API
 void            gst_base_idle_src_get_allocator    (GstBaseIdleSrc *src,
