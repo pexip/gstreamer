@@ -1941,9 +1941,11 @@ gst_base_idle_src_init (GstBaseIdleSrc * src, gpointer g_class)
       GST_ERROR_OBJECT (src, "Failed to prepare default thread pool: %s",
           error->message);
       g_clear_error (&error);
+      gst_object_unref (thread_pool);
+      thread_pool = NULL;
     }
     src->priv->thread_pool = thread_pool;
-    src->priv->owns_thread_pool = TRUE;
+    src->priv->owns_thread_pool = (thread_pool != NULL);
   }
 
   GST_DEBUG_OBJECT (src, "init done");
