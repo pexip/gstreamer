@@ -364,11 +364,18 @@ gst_base_idle_src_get_do_timestamp (GstBaseIdleSrc * src)
 }
 
 static void
-gst_base_idle_src_queue_object (GstBaseIdleSrc * src, GstMiniObject * obj)
+gst_base_idle_src_queue_object_unlocked (GstBaseIdleSrc * src,
+    GstMiniObject * obj)
 {
   GST_LOG_OBJECT (src, "Queuing: %" GST_PTR_FORMAT, obj);
-  GST_OBJECT_LOCK (src);
   g_queue_push_tail (src->priv->obj_queue, obj);
+}
+
+static void
+gst_base_idle_src_queue_object (GstBaseIdleSrc * src, GstMiniObject * obj)
+{
+  GST_OBJECT_LOCK (src);
+  gst_base_idle_src_queue_object_unlocked (src, obj);
   GST_OBJECT_UNLOCK (src);
 }
 
@@ -1246,16 +1253,31 @@ gst_base_idle_src_set_thread_pool (GstBaseIdleSrc * src,
 {
   GstBaseIdleSrcPrivate *priv;
   GstTaskPool *old_pool = NULL;
+  GstState state = GST_STATE_VOID_PENDING;
   gpointer old_handle = NULL;
   gboolean old_owned = FALSE;
 
   g_return_if_fail (GST_IS_BASE_IDLE_SRC (src));
   g_return_if_fail (GST_IS_TASK_POOL (thread_pool));
 
-  if (g_atomic_int_get (&src->running)) {
+  /* Thread pool may only be swapped while the
+   * element is in NULL or READY.
+   *
+   * A `running`-only check is insufficient: during teardown stop() clears
+   * `running` while the element is still in PAUSED and may still be
+   * joining/draining inside drain_and_join(). A concurrent set_thread_pool()
+   * in that window would swap pools while the worker still references
+   * the old one. */
+  state = GST_STATE (src);
+  if (state > GST_STATE_READY || GST_STATE_PENDING (src) > GST_STATE_READY
+      || g_atomic_int_get (&src->running)) {
     GST_WARNING_OBJECT (src,
-        "Refusing to swap thread pool while the element is running; "
-        "call set_thread_pool() before the element transitions to PAUSED.");
+        "Refusing to swap thread pool: element must be in NULL or READY "
+        "(state=%s, pending=%s, running=%d). Call set_thread_pool() "
+        "before transitioning to PAUSED.",
+        gst_element_state_get_name (state),
+        gst_element_state_get_name (GST_STATE_PENDING (src)),
+        g_atomic_int_get (&src->running));
     gst_object_unref (thread_pool);
     return;
   }
@@ -1533,18 +1555,27 @@ gst_base_idle_src_start_task (GstBaseIdleSrc * src, gboolean wait)
 static void
 gst_base_idle_src_check_pending_segment (GstBaseIdleSrc * src)
 {
-  GST_DEBUG_OBJECT (src, "Checking pending segment");
-  /* push events to close/start our segment before we push the buffer. */
+  /* Build the SEGMENT event under OBJECT_LOCK so the check-and-clear of
+   * segment_pending, the seqnum update, and the queue insert all happen
+   * atomically. Without this, two concurrent producers can both observe
+   * segment_pending=TRUE, both enqueue a SEGMENT event, and both increment
+   * segment_seqnum — yielding duplicate segments and a torn seqnum.
+   *
+   * gst_event_new_segment / gst_event_set_seqnum / gst_util_seqnum_next
+   * do not call back into the element, so it is safe to hold the lock
+   * across them. */
+  GST_OBJECT_LOCK (src);
   if (G_UNLIKELY (src->priv->segment_pending)) {
     GstEvent *seg_event = gst_event_new_segment (&src->segment);
 
     gst_event_set_seqnum (seg_event, src->priv->segment_seqnum);
     src->priv->segment_seqnum = gst_util_seqnum_next ();
-    gst_base_idle_src_queue_object (src, (GstMiniObject *) seg_event);
-    GST_DEBUG_OBJECT (src, "Queing segment event %" GST_PTR_FORMAT, seg_event);
-
     src->priv->segment_pending = FALSE;
+
+    GST_DEBUG_OBJECT (src, "Queuing segment event %" GST_PTR_FORMAT, seg_event);
+    gst_base_idle_src_queue_object_unlocked (src, (GstMiniObject *) seg_event);
   }
+  GST_OBJECT_UNLOCK (src);
 }
 
 static void
@@ -1562,6 +1593,54 @@ gst_base_idle_src_add_stream_start (GstBaseIdleSrc * src)
 
   gst_base_idle_src_queue_object (src, (GstMiniObject *) event);
   g_free (stream_id);
+}
+
+/* Atomically detach any installed task handle and steal the queued objects,
+ * then join the worker outside the lock and unref the drained miniobjects.
+ *
+ * Shared between gst_base_idle_src_stop() and the failure path in
+ * gst_base_idle_src_start(): both must tear down any background activity
+ * that a concurrent producer may have started during the brief running=TRUE
+ * window, without leaking the buffers it queued.
+ *
+ * Callers must have already published running=FALSE atomically so no *new*
+ * producers can pile in after this function returns. */
+static void
+gst_base_idle_src_drain_and_join (GstBaseIdleSrc * src)
+{
+  GstBaseIdleSrcPrivate *priv = src->priv;
+  GstTaskPool *pool = NULL;
+  gpointer handle = NULL;
+  GQueue drained = G_QUEUE_INIT;
+  GstMiniObject *obj;
+
+  /* Snapshot pool + handle and steal the queue under the lock. */
+  GST_OBJECT_LOCK (src);
+  if (priv->thread_pool)
+    pool = gst_object_ref (priv->thread_pool);
+  handle = priv->thread_handle;
+  priv->thread_handle = NULL;
+  /* O(1) steal — see commentary at the original use site in stop(). */
+  drained = *priv->obj_queue;
+  g_queue_init (priv->obj_queue);
+  GST_OBJECT_UNLOCK (src);
+
+  /* Join outside the lock (worker takes the same lock itself). */
+  if (handle && pool)
+    gst_task_pool_join (pool, handle);
+  g_clear_object (&pool);
+
+  while ((obj = g_queue_pop_head (&drained)))
+    gst_mini_object_unref (obj);
+
+  /* Second pass: catch anything the worker pushed back via queue_object()
+   * during the join, or that a producer raced past the !running check. */
+  GST_OBJECT_LOCK (src);
+  drained = *priv->obj_queue;
+  g_queue_init (priv->obj_queue);
+  GST_OBJECT_UNLOCK (src);
+  while ((obj = g_queue_pop_head (&drained)))
+    gst_mini_object_unref (obj);
 }
 
 static gboolean
@@ -1603,11 +1682,20 @@ gst_base_idle_src_start (GstBaseIdleSrc * src)
 
 could_not_start:
   {
-    /* Subclass refused to start — roll back the running flag so any
-     * in-flight submit_buffer*() (and any future ones until the next start)
-     * bails out, rather than queueing buffers into a source whose
-     * activation failed. */
+    /* Subclass refused to start. Roll back the running flag and tear down
+     * any work a producer may have queued (and any task it may have pushed)
+     * during the brief running=TRUE window before the subclass returned.
+     * Without this, late producers would leak miniobjects into priv->obj_queue
+     * and a subsequent successful start() would push those stale objects
+     * downstream as if they had just been submitted. */
     g_atomic_int_set (&src->running, FALSE);
+
+    GST_OBJECT_LOCK (src);
+    src->priv->segment_pending = FALSE;
+    GST_OBJECT_UNLOCK (src);
+
+    gst_base_idle_src_drain_and_join (src);
+
     GST_DEBUG_OBJECT (src, "could not start");
     /* subclass is supposed to post a message but we post one as a fallback
      * just in case. We don't have to call _stop. */
@@ -1620,57 +1708,15 @@ static gboolean
 gst_base_idle_src_stop (GstBaseIdleSrc * src)
 {
   GstBaseIdleSrcClass *bclass;
-  GstBaseIdleSrcPrivate *priv = src->priv;
-  GstTaskPool *pool = NULL;
-  gpointer handle = NULL;
-  GQueue drained = G_QUEUE_INIT;
-  GstMiniObject *obj;
   gboolean result = TRUE;
 
   GST_DEBUG_OBJECT (src, "stopping source");
 
-  /* 1. Publish !running atomically so any producer that has not yet entered
-   *    queue_object() bails out in submit_buffer*(). */
+  /* Publish !running atomically so any producer that has not yet entered
+   * queue_object() bails out in submit_buffer*(). */
   g_atomic_int_set (&src->running, FALSE);
 
-  /* 2. Snapshot pool + handle under the lock, clear them, and steal the
-   *    queue contents in one shot so we can release the lock before joining
-   *    (the worker takes the same lock in process_object_queue()). */
-  GST_OBJECT_LOCK (src);
-  if (priv->thread_pool)
-    pool = gst_object_ref (priv->thread_pool);
-  handle = priv->thread_handle;
-  priv->thread_handle = NULL;
-
-  /* Steal the queue in O(1): GQueue is a plain { head, tail, length } struct,
-   * so copying it out and re-initializing the source detaches the whole list
-   * without walking it or freeing/reallocating any GList nodes (which a
-   * pop_head + push_tail loop would do via the GList slice allocator). Any
-   * further queue_object() calls (which take OBJECT_LOCK) are either ordered
-   * before us — and we'll drain them here — or land in the now-empty queue
-   * and get caught by the second-pass drain below. */
-  drained = *priv->obj_queue;
-  g_queue_init (priv->obj_queue);
-  GST_OBJECT_UNLOCK (src);
-
-  /* 3. Join outside the lock. */
-  if (handle && pool)
-    gst_task_pool_join (pool, handle);
-  g_clear_object (&pool);
-
-  /* 4. Drop drained objects (no lock needed; they're local now). */
-  while ((obj = g_queue_pop_head (&drained)))
-    gst_mini_object_unref (obj);
-
-  /* 5. Any objects that the worker pushed back via queue_object during
-   *    join (or that a producer raced past the !running check)? Drain them
-   *    too — same O(1) steal pattern. */
-  GST_OBJECT_LOCK (src);
-  drained = *priv->obj_queue;
-  g_queue_init (priv->obj_queue);
-  GST_OBJECT_UNLOCK (src);
-  while ((obj = g_queue_pop_head (&drained)))
-    gst_mini_object_unref (obj);
+  gst_base_idle_src_drain_and_join (src);
 
   bclass = GST_BASE_IDLE_SRC_GET_CLASS (src);
   if (bclass->stop)
