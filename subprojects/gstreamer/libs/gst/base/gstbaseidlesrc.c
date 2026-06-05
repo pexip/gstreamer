@@ -1414,6 +1414,7 @@ gst_base_idle_src_process_object (GstBaseIdleSrc * src, GstMiniObject * obj)
     }
   } else {
     GST_ERROR_OBJECT (src, "Unknown object %" GST_PTR_FORMAT " type", obj);
+    gst_mini_object_unref (obj);
   }
 check_ret_error:
   if (ret != GST_FLOW_OK && ret != GST_FLOW_FLUSHING) {
