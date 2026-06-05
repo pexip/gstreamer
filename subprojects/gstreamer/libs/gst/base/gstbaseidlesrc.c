@@ -1479,11 +1479,27 @@ gst_base_idle_src_start_task (GstBaseIdleSrc * src, gboolean wait)
     return;
   }
 
-  /* Join the *previous* handle on the pool it was issued on. Because we
-   * cleared priv->thread_handle above, set_thread_pool() will not also try
-   * to join it from the other side. */
+  /* Join the *previous* handle on the pool it was issued on, regardless of
+   * whether we go on to push a new one. Because we cleared
+   * priv->thread_handle above, set_thread_pool() will not also try to join
+   * it from the other side. */
   if (prev_handle)
     gst_task_pool_join (pool, prev_handle);
+
+  /* Re-check running after the snapshot: a concurrent stop() may have
+   * cleared it after our caller's submit_*() check. If so, do not push a
+   * new task — the queue is being drained by stop() and any new task would
+   * race against teardown and potentially push on a deactivated pad.
+   *
+   * A residual race remains (running may flip to FALSE between this check
+   * and the push), but it is benign: stop() snapshots thread_handle under
+   * OBJECT_LOCK, so it will either see and join our newly installed handle
+   * below, or finalize will. */
+  if (!g_atomic_int_get (&src->running)) {
+    GST_DEBUG_OBJECT (src, "Not running, skipping task push");
+    gst_object_unref (pool);
+    return;
+  }
 
   new_handle = gst_task_pool_push (pool, gst_base_idle_src_func, src, &error);
   if (G_UNLIKELY (error != NULL)) {
@@ -1500,8 +1516,7 @@ gst_base_idle_src_start_task (GstBaseIdleSrc * src, gboolean wait)
 
   GST_OBJECT_LOCK (src);
   /* Only install our handle if no concurrent set_thread_pool() happened
-   * meanwhile — if it did, the pool we used is no longer the active one
-   * and the handle is meaningless against the new pool. */
+   * meanwhile (defensive: set_thread_pool() rejects mid-flow swaps). */
   if (priv->thread_pool == pool) {
     priv->thread_handle = new_handle;
     new_handle = NULL;
