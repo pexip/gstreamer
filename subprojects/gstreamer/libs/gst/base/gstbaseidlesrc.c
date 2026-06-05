@@ -1888,17 +1888,30 @@ gst_base_idle_src_finalize (GObject * object)
   GstBaseIdleSrcPrivate *priv = src->priv;
   GstMiniObject *obj;
 
-  /* Drain anything that might still be queued. */
+  /* Defensively tear down any work still in flight. In a well-behaved
+   * pipeline stop() will already have done this, but finalize is the
+   * unconditional fallback: nothing prevents a subclass from dropping
+   * the last ref while `running` is still TRUE (e.g. if the element
+   * was never activated, or if a wrapper holds extra refs past stop()) */
+  g_atomic_int_set (&src->running, FALSE);
+  gst_base_idle_src_drain_and_join (src);
+
+  /* The queue is now guaranteed empty (drain_and_join() emptied it in
+   * its second pass under the lock, and no producer can have added to
+   * it since: the last ref to `src` is being dropped here, so by
+   * definition no other thread holds a pointer to call submit_*() with).
+   * Free the GQueue itself.
+   *
+   * Note: we still pop-and-unref in a loop as a belt-and-braces guard
+   * in case a subclass override somehow re-queued something synchronously
+   * from its own dispose chain. */
   while ((obj = g_queue_pop_head (priv->obj_queue)))
     gst_mini_object_unref (obj);
   g_queue_free (priv->obj_queue);
   priv->obj_queue = NULL;
 
-  /* If we still hold a handle, drop it on the originating pool. */
-  if (priv->thread_handle && priv->thread_pool) {
-    gst_task_pool_join (priv->thread_pool, priv->thread_handle);
-    priv->thread_handle = NULL;
-  }
+  /* drain_and_join() already cleared priv->thread_handle. */
+  g_assert (priv->thread_handle == NULL);
 
   /* Only cleanup the pool if WE created it. An externally-provided pool
    * may be shared with other elements; its owner is responsible for
