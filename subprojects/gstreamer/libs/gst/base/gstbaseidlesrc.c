@@ -1597,6 +1597,11 @@ gst_base_idle_src_start (GstBaseIdleSrc * src)
 
 could_not_start:
   {
+    /* Subclass refused to start — roll back the running flag so any
+     * in-flight submit_buffer*() (and any future ones until the next start)
+     * bails out, rather than queueing buffers into a source whose
+     * activation failed. */
+    g_atomic_int_set (&src->running, FALSE);
     GST_DEBUG_OBJECT (src, "could not start");
     /* subclass is supposed to post a message but we post one as a fallback
      * just in case. We don't have to call _stop. */

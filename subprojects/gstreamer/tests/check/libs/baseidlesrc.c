@@ -632,6 +632,72 @@ GST_START_TEST (baseidlesrc_stop_races_with_submit)
 
 GST_END_TEST;
 
+/* A subclass whose start() vfunc deliberately fails. Used to verify that
+ * the base class clears `running` when subclass activation fails, so that
+ * subsequent submit_buffer*() calls correctly drop buffers rather than
+ * queueing them into a source that never started.
+ *
+ * Regression test for:
+ * https://github.com/pexip/gstreamer/pull/45#discussion_r3361051394
+ */
+typedef GstBaseIdleSrc FailingStartIdleSrc;
+typedef GstBaseIdleSrcClass FailingStartIdleSrcClass;
+
+static GType failing_start_idle_src_get_type (void);
+G_DEFINE_TYPE (FailingStartIdleSrc, failing_start_idle_src,
+    GST_TYPE_BASE_IDLE_SRC);
+
+static gboolean
+failing_start_idle_src_start (G_GNUC_UNUSED GstBaseIdleSrc * src)
+{
+  return FALSE;
+}
+
+static void
+failing_start_idle_src_init (G_GNUC_UNUSED FailingStartIdleSrc * src)
+{
+}
+
+static void
+failing_start_idle_src_class_init (FailingStartIdleSrcClass * klass)
+{
+  GstBaseIdleSrcClass *bclass = GST_BASE_IDLE_SRC_CLASS (klass);
+
+  gst_element_class_add_static_pad_template (GST_ELEMENT_CLASS (klass),
+      &src_template);
+  bclass->start = failing_start_idle_src_start;
+}
+
+GST_START_TEST (baseidlesrc_failed_start_clears_running)
+{
+  GstBaseIdleSrc *src = g_object_new (failing_start_idle_src_get_type (), NULL);
+  GstBuffer *buf;
+
+  /* Activating the pad invokes start(), which our subclass forces to
+   * return FALSE. The base class must roll back `running` so the element
+   * is not left in a half-started state. */
+  fail_if (gst_pad_set_active (GST_BASE_IDLE_SRC_PAD (src), TRUE),
+      "pad activation must fail when subclass start() returns FALSE");
+
+  /* Invariant: running was rolled back. */
+  fail_unless (!g_atomic_int_get (&src->running),
+      "running must be cleared after start() failure");
+
+  /* Behaviour: submit_buffer drops the (transfer-full) ref rather than
+   * queueing. We take an extra ref so we can observe what happened:
+   *   - dropped (running == FALSE, correct): refcount goes from 2 to 1.
+   *   - queued  (running == TRUE,  wrong):   refcount stays at 2. */
+  buf = gst_buffer_new_allocate (NULL, 64, NULL);
+  gst_buffer_ref (buf);
+  gst_base_idle_src_submit_buffer (src, buf);
+  fail_unless_equals_int (1, GST_MINI_OBJECT_REFCOUNT_VALUE (buf));
+  gst_buffer_unref (buf);
+
+  g_object_unref (src);
+}
+
+GST_END_TEST;
+
 static Suite *
 baseidlesrc_suite (void)
 {
@@ -655,6 +721,7 @@ baseidlesrc_suite (void)
   tcase_add_test (tc, baseidlesrc_submit_after_stop_is_safe);
   tcase_add_test (tc, baseidlesrc_default_pool_is_cleaned_up_on_swap);
   tcase_add_test (tc, baseidlesrc_stop_races_with_submit);
+  tcase_add_test (tc, baseidlesrc_failed_start_clears_running);
 
   return s;
 }
