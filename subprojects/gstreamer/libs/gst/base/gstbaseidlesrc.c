@@ -1572,14 +1572,20 @@ gst_base_idle_src_start (GstBaseIdleSrc * src)
 
   GST_DEBUG_OBJECT (src, "Starting");
 
+  /* Initialize segment + pending state under OBJECT_LOCK *before* publishing
+   * running=TRUE. A producer thread that observes running=TRUE and enters
+   * submit_buffer*() must see a consistent segment_pending/segment_seqnum,
+   * not a torn or stale snapshot. */
   GST_OBJECT_LOCK (src);
-
   gst_segment_init (&src->segment, src->segment.format);
-  GST_OBJECT_UNLOCK (src);
-
-  g_atomic_int_set (&src->running, TRUE);
   src->priv->segment_pending = TRUE;
   src->priv->segment_seqnum = gst_util_seqnum_next ();
+  GST_OBJECT_UNLOCK (src);
+
+  /* Publish running=TRUE with release semantics — producers' atomic load
+   * acts as the matching acquire and is guaranteed to observe the segment
+   * state written above. */
+  g_atomic_int_set (&src->running, TRUE);
 
   bclass = GST_BASE_IDLE_SRC_GET_CLASS (src);
   if (bclass->start)
