@@ -698,6 +698,136 @@ GST_START_TEST (baseidlesrc_failed_start_clears_running)
 
 GST_END_TEST;
 
+ /* The documented contract is that set_thread_pool() must be called before
+  * the element transitions to PAUSED. Verify that a swap attempted while
+  * the element is playing is rejected and that the original pool is
+  * preserved (i.e. the rejected one was not silently adopted). */
+GST_START_TEST (baseidlesrc_set_thread_pool_rejected_when_playing)
+{
+  TestIdleSrc *src = g_object_new (test_idle_src_get_type (), NULL);
+  GstBaseIdleSrc *base_src = GST_BASE_IDLE_SRC (src);
+  GstHarness *h = gst_harness_new_with_element (GST_ELEMENT (src), NULL, "src");
+  GstTaskPool *original;
+  GstTaskPool *rejected;
+  GstTaskPool *current;
+  GError *err = NULL;
+
+  /* Capture the default pool the element installed at init. */
+  original = gst_base_idle_src_get_thread_pool (base_src);
+  fail_unless (original != NULL);
+
+  gst_harness_set_sink_caps_str (h, "foo/bar");
+  gst_harness_play (h);         /* element now in PAUSED (or beyond) */
+
+  rejected = gst_shared_task_pool_new ();
+  gst_task_pool_prepare (rejected, &err);
+  fail_unless (err == NULL);
+
+  /* Should be refused — the contract requires NULL/READY. */
+  gst_base_idle_src_set_thread_pool (base_src, gst_object_ref (rejected));
+
+  /* Pool must be unchanged. */
+  current = gst_base_idle_src_get_thread_pool (base_src);
+  fail_unless (current == original, "set_thread_pool() must not adopt the "
+      "new pool while element is past READY");
+  gst_object_unref (current);
+
+  gst_harness_teardown (h);
+  g_object_unref (src);
+
+  /* We still own our refs to both pools. */
+  gst_object_unref (original);
+  gst_task_pool_cleanup (rejected);
+  gst_object_unref (rejected);
+}
+
+GST_END_TEST;
+
+typedef struct
+{
+  GstBaseIdleSrc *src;
+  GAsyncQueue *start_gate;
+} SegmentRaceCtx;
+
+static gpointer
+_segment_race_producer (gpointer data)
+{
+  SegmentRaceCtx *c = data;
+  GstBuffer *buf;
+
+  /* Block until the test thread releases the gate to maximize concurrency. */
+  g_async_queue_pop (c->start_gate);
+
+  buf = gst_buffer_new_allocate (NULL, 64, NULL);
+  gst_base_idle_src_submit_buffer (c->src, buf);
+  return NULL;
+}
+
+ /* Concurrent producers must observe a single SEGMENT event downstream,
+  * not one per producer that won the segment_pending check-and-clear race.
+  * Pre-fix, the unlocked check_pending_segment() could enqueue N duplicate
+  * SEGMENT events and tear the segment_seqnum.
+  *
+  * The test is necessarily probabilistic: with the bug it triggers most of
+  * the time on multi-core hardware (and always under TSan); with the fix it
+  * always passes. */
+GST_START_TEST (baseidlesrc_concurrent_submit_emits_one_segment)
+{
+#define N_PRODUCERS 16
+  TestIdleSrc *src = g_object_new (test_idle_src_get_type (), NULL);
+  GstBaseIdleSrc *base_src = GST_BASE_IDLE_SRC (src);
+  GstHarness *h = gst_harness_new_with_element (GST_ELEMENT (src), NULL, "src");
+  GAsyncQueue *gate;
+  GThread *threads[N_PRODUCERS];
+  SegmentRaceCtx ctx;
+  GstEvent *event;
+  guint i, segment_count = 0;
+
+  gst_harness_set_sink_caps_str (h, "foo/bar");
+  gst_harness_play (h);
+
+  gate = g_async_queue_new ();
+  ctx.src = base_src;
+  ctx.start_gate = gate;
+
+  for (i = 0; i < N_PRODUCERS; i++) {
+    gchar *name = g_strdup_printf ("producer-%u", i);
+    threads[i] = g_thread_new (name, _segment_race_producer, &ctx);
+    g_free (name);
+  }
+
+  /* Release all producers at once. */
+  for (i = 0; i < N_PRODUCERS; i++)
+    g_async_queue_push (gate, GINT_TO_POINTER (1));
+
+  for (i = 0; i < N_PRODUCERS; i++)
+    g_thread_join (threads[i]);
+
+  /* Drain all buffers — this also flushes any pending events ahead of them
+   * through the worker, so by the time the loop exits every event the
+   * element ever queued has been delivered to the harness. */
+  for (i = 0; i < N_PRODUCERS; i++) {
+    GstBuffer *buf = gst_harness_pull (h);
+    fail_unless (buf != NULL);
+    gst_buffer_unref (buf);
+  }
+
+  /* Now count SEGMENT events. Must be exactly one. */
+  while ((event = gst_harness_try_pull_event (h)) != NULL) {
+    if (GST_EVENT_TYPE (event) == GST_EVENT_SEGMENT)
+      segment_count++;
+    gst_event_unref (event);
+  }
+  fail_unless_equals_int (1, segment_count);
+
+  g_async_queue_unref (gate);
+  gst_harness_teardown (h);
+  g_object_unref (src);
+#undef N_PRODUCERS
+}
+
+GST_END_TEST;
+
 static Suite *
 baseidlesrc_suite (void)
 {
@@ -722,6 +852,8 @@ baseidlesrc_suite (void)
   tcase_add_test (tc, baseidlesrc_default_pool_is_cleaned_up_on_swap);
   tcase_add_test (tc, baseidlesrc_stop_races_with_submit);
   tcase_add_test (tc, baseidlesrc_failed_start_clears_running);
+  tcase_add_test (tc, baseidlesrc_set_thread_pool_rejected_when_playing);
+  tcase_add_test (tc, baseidlesrc_concurrent_submit_emits_one_segment);
 
   return s;
 }
