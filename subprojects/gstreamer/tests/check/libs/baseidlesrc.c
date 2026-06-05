@@ -383,16 +383,19 @@ GST_START_TEST (baseidlesrc_replace_thread_pool_preserves_shared_pool)
   gst_shared_task_pool_set_max_threads (GST_SHARED_TASK_POOL (other), 1);
   gst_task_pool_prepare (other, &err);
   fail_unless (err == NULL);
-  gst_base_idle_src_set_thread_pool (base_src, other);   /* transfer full */
+  gst_base_idle_src_set_thread_pool (base_src, gst_object_ref (other));
 
   /* Would fail/UAF if shared had been cleaned up. */
-  h = gst_task_pool_push (shared, _yield_task, NULL,
-      &err);
+  h = gst_task_pool_push (shared, _yield_task, NULL, &err);
   fail_unless (err == NULL);
   if (h)
     gst_task_pool_join (shared, h);
 
   g_object_unref (src);
+
+  gst_task_pool_cleanup (other);
+  gst_object_unref (other);
+
   gst_task_pool_cleanup (shared);
   gst_object_unref (shared);
 }
@@ -569,7 +572,11 @@ GST_START_TEST (baseidlesrc_default_pool_is_cleaned_up_on_swap)
   /* Swap out the default pool — the previous (default) one is owned by us
    * and must be cleaned up + unreffed inside set_thread_pool(). Valgrind
    * will catch the leak if cleanup() is skipped. */
-  gst_base_idle_src_set_thread_pool (GST_BASE_IDLE_SRC (src), replacement);
+  gst_base_idle_src_set_thread_pool (GST_BASE_IDLE_SRC (src),
+      gst_object_ref (replacement));
+
+  gst_task_pool_cleanup (replacement);
+  gst_object_unref (replacement);
 
   g_object_unref (src);
 }
