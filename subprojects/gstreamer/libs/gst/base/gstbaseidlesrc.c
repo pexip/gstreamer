@@ -92,7 +92,7 @@
  * #GstBaseIdleSrc uses an internal #GstTaskPool to schedule buffer submission
  * and auxiliary tasks. This mechanism helps to avoid the overhead of creating
  * and destroying threads too frequently when data is submitted in rapid
- * successions.
+ * succession.
  *
  * By default, the internal pool is configured with a maximum of one thread,
  * which provides a simple but efficient way to handle continuous or bursty
