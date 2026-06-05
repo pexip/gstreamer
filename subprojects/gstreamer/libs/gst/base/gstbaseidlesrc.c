@@ -1425,7 +1425,15 @@ gst_base_idle_src_process_object (GstBaseIdleSrc * src, GstMiniObject * obj)
     goto check_ret_error;
   } else if (GST_IS_EVENT (obj)) {
     GstEvent *event = GST_EVENT_CAST (obj);
+
     GST_DEBUG_OBJECT (src, "About to push Event %" GST_PTR_FORMAT, event);
+    /* Hold a ref across the push so the event remains valid for the
+     * failure log below: gst_pad_push_event() consumes our queue's ref
+     * unconditionally (success and failure). The extra ref-pair is a
+     * cold-path price — pushing an event is already expensive and the
+     * warning only fires on failure — and it lets us log the full
+     * GST_PTR_FORMAT */
+    gst_event_ref (event);
     if (!gst_pad_push_event (pad, event)) {
       /* Mirror GstBaseSrc behaviour for non-flow events: log and continue.
        * We deliberately do NOT post a message on the bus here — event push
@@ -1434,6 +1442,7 @@ gst_base_idle_src_process_object (GstBaseIdleSrc * src, GstMiniObject * obj)
        * GST_ELEMENT_FLOW_ERROR(). */
       GST_WARNING_OBJECT (src, "Failed to push event %" GST_PTR_FORMAT, event);
     }
+    gst_event_unref (event);
   } else {
     GST_ERROR_OBJECT (src, "Unknown object %" GST_PTR_FORMAT " type", obj);
     gst_mini_object_unref (obj);
