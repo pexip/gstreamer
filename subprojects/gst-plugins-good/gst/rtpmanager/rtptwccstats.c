@@ -36,6 +36,20 @@
 GST_DEBUG_CATEGORY_EXTERN (rtp_twcc_debug);
 #define GST_CAT_DEFAULT rtp_twcc_debug
 
+/* Maximum number of distinct means of repair that can be credited with
+ * recovering a single packet. Two is enough for the current RTX + FEC setup;
+ * bump this if a third means of repair (e.g. a second FEC layer) is added. */
+#define TWCC_MAX_REPAIR 2
+
+/* Identity of a single means of repair (e.g. RTX, a FEC layer, a second FEC
+ * layer). A means of repair is identified by the SSRC and payload type of its
+ * redundant stream. */
+typedef struct
+{
+  guint32 ssrc;
+  guint8 pt;
+} TWCCRepairId;
+
 typedef struct
 {
   GstClockTime local_ts;
@@ -65,13 +79,44 @@ typedef struct
   GArray *protects_twcc_seqnums;
   gboolean stats_processed;
 
+  /* Directly-observed reception state only: UNKNOWN / LOST / RECEIVED.
+     RECOVERED is never stored here anymore -- it is derived from
+     (status == LOST && recovered_by_count > 0). */
   TWCCPktState status;
+
+  /* For data packets: the means of repair (TWCCRepairId) that were able to
+     recover this packet had it been lost. A packet recoverable by both RTX and
+     FEC lists both, which is how repair overlap is accounted for. Stored inline
+     (no allocation) to keep SentPacket cache-friendly on the sending path. */
+  TWCCRepairId recovered_by[TWCC_MAX_REPAIR];
+  guint8 recovered_by_count;
 } SentPacket;
 
 typedef struct
 {
   SentPacket *sentpkt;
 } StatsPktPtr;
+
+/* Recovery accounting for a single means of repair within a window. */
+typedef struct
+{
+  guint32 ssrc;
+  guint8 pt;
+  guint recovered_count;
+  gdouble recovery_pct;
+} TWCCRepairStats;
+
+/* Recovery accounting for the overlap of a pair of means of repair within a
+   window: lost packets recoverable by both repair a and repair b. */
+typedef struct
+{
+  guint32 ssrc_a;
+  guint8 pt_a;
+  guint32 ssrc_b;
+  guint8 pt_b;
+  guint count;
+  gdouble pct;
+} TWCCOverlapStats;
 
 typedef struct
 {
@@ -90,6 +135,11 @@ typedef struct
   gint64 avg_delta_of_delta;
   gdouble delta_of_delta_growth;
   gdouble queueing_slope;
+
+  /* Per-repair recovery (TWCCRepairStats) and pairwise repair overlap
+     (TWCCOverlapStats), recomputed every window. */
+  GArray *recovery_by_repair;
+  GArray *recovery_overlap;
 } TWCCStatsCtx;
 
 struct _TWCCStatsManager
@@ -139,7 +189,17 @@ static SentPacket *_find_sentpacket (TWCCStatsManager * statsman,
 #define SENT_PKT_UNLOCK(statsman)  g_mutex_unlock (&(statsman)->sent_packets_lock)
 
 /******************************************************************************/
-typedef GArray *RedBlockKey;
+/* A redundancy block is keyed by the set of protected data TWCC seqnums
+   together with the identity (SSRC + payload type) of the redundant stream
+   protecting them. Including the full repair identity keeps distinct means of
+   repair (e.g. two FEC layers, or RTX and FEC) protecting the same data set as
+   separate blocks instead of collapsing them into one. */
+typedef struct
+{
+  GArray *seqs;
+  TWCCRepairId redund;
+} RedBlockKeyStruct;
+typedef RedBlockKeyStruct *RedBlockKey;
 
 typedef struct
 {
@@ -150,12 +210,16 @@ typedef struct
   GArray *fec_states;
 
   gsize num_redundant_packets;
+
+  /* Identity of the means of repair this block represents. */
+  TWCCRepairId redund;
 } RedBlock;
 
 static RedBlock *_redblock_new (GArray * seq, guint16 fec_seq,
-    guint16 idx_redundant_packets, guint16 num_redundant_packets);
+    guint16 idx_redundant_packets, guint16 num_redundant_packets,
+    TWCCRepairId redund);
 static void _redblock_free (RedBlock * block);
-static RedBlockKey _redblock_key_new (GArray * seqs);
+static RedBlockKey _redblock_key_new (GArray * seqs, TWCCRepairId redund);
 static void _redblock_key_free (RedBlockKey key);
 static guint redblock_2_key (GArray * seq);
 static guint _redund_hash (gconstpointer key);
@@ -203,6 +267,49 @@ _pkt_status_s (TWCCPktState state)
     default:
       return "INVALID";
   }
+}
+
+/* A packet counts as recovered for statistics purposes if it was observed lost
+   but at least one means of repair was able to recover it. The ground truth
+   reception state (pkt->status) is kept separate from this derived notion so
+   that overlapping means of repair can be attributed independently. */
+static gboolean
+_pkt_is_recovered (const SentPacket * pkt)
+{
+  return pkt->status == RTP_TWCC_FECBLOCK_PKT_LOST
+      && pkt->recovered_by_count > 0;
+}
+
+/* Effective state used by windowed stats: RECOVERED is derived from the
+   recovered_by attribution rather than stored on the packet. */
+static TWCCPktState
+_pkt_effective_state (const SentPacket * pkt)
+{
+  if (_pkt_is_recovered (pkt)) {
+    return RTP_TWCC_FECBLOCK_PKT_RECOVERED;
+  }
+  return pkt->status;
+}
+
+/* Credit means of repair @r with recovering data packet @pkt. The CALLER must
+   have already verified that @r actually repaired the packet (the RTX packet
+   was received, or the FEC block had enough received redundancy) -- this only
+   records the attribution. De-duplicated and bounded by TWCC_MAX_REPAIR. */
+static void
+_pkt_add_recovered_by (SentPacket * pkt, TWCCRepairId r)
+{
+  for (guint8 i = 0; i < pkt->recovered_by_count; i++) {
+    if (pkt->recovered_by[i].ssrc == r.ssrc
+        && pkt->recovered_by[i].pt == r.pt) {
+      return;
+    }
+  }
+  if (pkt->recovered_by_count >= TWCC_MAX_REPAIR) {
+    /* More means of repair recovered this packet than we track inline; the
+       pairwise overlap stays correct for the means we did record. */
+    return;
+  }
+  pkt->recovered_by[pkt->recovered_by_count++] = r;
 }
 
 static StatsPktPtr *
@@ -275,6 +382,7 @@ _sent_packet_init (SentPacket * packet, guint16 seqnum, RTPPacketInfo * pinfo,
   packet->protects_timestamps = protects_timestamps;
   packet->protects_twcc_seqnums = protect_twcc_seqnums_array;
   packet->stats_processed = FALSE;
+  packet->recovered_by_count = 0;
 }
 
 static void
@@ -465,6 +573,11 @@ twcc_stats_ctx_new (void)
       MAX_STATS_PACKETS);
   ctx->last_pkt_fb = NULL;
 
+  ctx->recovery_by_repair = g_array_new (FALSE, FALSE,
+      sizeof (TWCCRepairStats));
+  ctx->recovery_overlap = g_array_new (FALSE, FALSE,
+      sizeof (TWCCOverlapStats));
+
   return ctx;
 }
 
@@ -472,6 +585,8 @@ static void
 twcc_stats_ctx_free (TWCCStatsCtx * ctx)
 {
   gst_vec_deque_free (ctx->pt_packets);
+  g_array_free (ctx->recovery_by_repair, TRUE);
+  g_array_free (ctx->recovery_overlap, TRUE);
   g_free (ctx);
 }
 
@@ -609,6 +724,80 @@ _linear_compute (LinearRegression * l, gdouble * slope, gdouble * intercept)
   }
 }
 
+/* Find (or append) the per-repair recovery accumulator for (ssrc, pt). */
+static TWCCRepairStats *
+_repair_stats_get (GArray * arr, guint32 ssrc, guint8 pt)
+{
+  for (guint i = 0; i < arr->len; i++) {
+    TWCCRepairStats *m = &g_array_index (arr, TWCCRepairStats, i);
+    if (m->ssrc == ssrc && m->pt == pt) {
+      return m;
+    }
+  }
+  {
+    TWCCRepairStats nm = { ssrc, pt, 0, 0.0 };
+    g_array_append_val (arr, nm);
+  }
+  return &g_array_index (arr, TWCCRepairStats, arr->len - 1);
+}
+
+/* Order two means of repair canonically so an unordered pair maps to one cell. */
+static gboolean
+_repair_less (TWCCRepairId a, TWCCRepairId b)
+{
+  if (a.ssrc != b.ssrc) {
+    return a.ssrc < b.ssrc;
+  }
+  return a.pt < b.pt;
+}
+
+/* Find (or append) the overlap accumulator for the unordered pair {a, b}. */
+static TWCCOverlapStats *
+_overlap_stats_get (GArray * arr, TWCCRepairId a, TWCCRepairId b)
+{
+  if (!_repair_less (a, b)) {
+    TWCCRepairId tmp = a;
+    a = b;
+    b = tmp;
+  }
+  for (guint i = 0; i < arr->len; i++) {
+    TWCCOverlapStats *o = &g_array_index (arr, TWCCOverlapStats, i);
+    if (o->ssrc_a == a.ssrc && o->pt_a == a.pt
+        && o->ssrc_b == b.ssrc && o->pt_b == b.pt) {
+      return o;
+    }
+  }
+  {
+    TWCCOverlapStats no = { a.ssrc, a.pt, b.ssrc, b.pt, 0, 0.0 };
+    g_array_append_val (arr, no);
+  }
+  return &g_array_index (arr, TWCCOverlapStats, arr->len - 1);
+}
+
+/* Credit the means of repair that recovered @pkt into the per-repair and
+   pairwise-overlap accumulators. Only media (data) packets are accounted: a
+   means of repair recovers lost media, not the redundant packets it sends, so
+   recovered RTX/FEC packets must not inflate the repair stats. The attribution
+   itself was verified when it was recorded (see _redblock_reconsider). */
+static void
+_accumulate_recovery (TWCCStatsCtx * ctx, const SentPacket * pkt)
+{
+  if (pkt->protects_twcc_seqnums && pkt->protects_twcc_seqnums->len > 0) {
+    /* This packet protects others (i.e. it is itself an RTX/FEC packet), so it
+       is not recovered media -- don't let it inflate the repair stats. */
+    return;
+  }
+  for (guint8 a = 0; a < pkt->recovered_by_count; a++) {
+    TWCCRepairId ra = pkt->recovered_by[a];
+    _repair_stats_get (ctx->recovery_by_repair, ra.ssrc, ra.pt)->
+        recovered_count++;
+    for (guint8 b = a + 1; b < pkt->recovered_by_count; b++) {
+      TWCCRepairId rb = pkt->recovered_by[b];
+      _overlap_stats_get (ctx->recovery_overlap, ra, rb)->count++;
+    }
+  }
+}
+
 static gboolean
 twcc_stats_ctx_calculate_windowed_stats (TWCCStatsCtx * ctx,
     GstClockTimeDiff start_time, GstClockTimeDiff end_time, gint pt)
@@ -658,6 +847,9 @@ twcc_stats_ctx_calculate_windowed_stats (TWCCStatsCtx * ctx,
   ctx->recovery_pct = -1.0;
   ctx->queueing_slope = 0.;
 
+  g_array_set_size (ctx->recovery_by_repair, 0);
+  g_array_set_size (ctx->recovery_overlap, 0);
+
   gboolean ret =
       _get_stats_packets_window (packets, start_time, end_time, &start_idx,
       &packets_overall);
@@ -684,7 +876,7 @@ twcc_stats_ctx_calculate_windowed_stats (TWCCStatsCtx * ctx,
     GST_LOG ("STATS WINDOW: %u/%u: pkt #%u, pt: %u, size: %u, status: %s, "
         "local-ts: %" GST_TIME_FORMAT ", remote-ts %" GST_TIME_FORMAT,
         i + 1, packets_overall, pkt->seqnum, pkt->pt, pkt->size * 8,
-        _pkt_status_s (pkt->status),
+        _pkt_status_s (_pkt_effective_state (pkt)),
         GST_TIME_ARGS (_pkt_stats_ts (pkt)), GST_TIME_ARGS (pkt->remote_ts));
 
     if (GST_CLOCK_TIME_IS_VALID (_pkt_stats_ts (pkt))
@@ -714,11 +906,12 @@ twcc_stats_ctx_calculate_windowed_stats (TWCCStatsCtx * ctx,
       last_remote_pkt = pkt;
       packets_sent++;
       packets_recv++;
-    } else if (pkt->status == RTP_TWCC_FECBLOCK_PKT_RECOVERED) {
+    } else if (_pkt_is_recovered (pkt)) {
       GST_LOG ("Packet #%u is lost and recovered", pkt->seqnum);
       packets_sent++;
       packets_lost++;
       packets_recovered++;
+      _accumulate_recovery (ctx, pkt);
     } else if (pkt->status == RTP_TWCC_FECBLOCK_PKT_LOST) {
       GST_LOG ("Packet #%u is lost", pkt->seqnum);
       packets_sent++;
@@ -792,6 +985,20 @@ twcc_stats_ctx_calculate_windowed_stats (TWCCStatsCtx * ctx,
   if (packets_lost) {
     ctx->recovery_pct = (packets_recovered * 100) / (gfloat) packets_lost;
     ctx->recovery_pct = MIN (ctx->recovery_pct, 100);
+
+    /* Per-repair and overlap percentages are expressed relative to the
+       total number of lost packets in the window. */
+    for (i = 0; i < ctx->recovery_by_repair->len; i++) {
+      TWCCRepairStats *m =
+          &g_array_index (ctx->recovery_by_repair, TWCCRepairStats, i);
+      m->recovery_pct =
+          MIN ((m->recovered_count * 100) / (gdouble) packets_lost, 100.0);
+    }
+    for (i = 0; i < ctx->recovery_overlap->len; i++) {
+      TWCCOverlapStats *o =
+          &g_array_index (ctx->recovery_overlap, TWCCOverlapStats, i);
+      o->pct = MIN ((o->count * 100) / (gdouble) packets_lost, 100.0);
+    }
   }
 
   if (delta_delta_count) {
@@ -843,7 +1050,7 @@ twcc_stats_ctx_calculate_windowed_stats (TWCCStatsCtx * ctx,
 static GstStructure *
 twcc_stats_ctx_get_structure (TWCCStatsCtx * ctx)
 {
-  return gst_structure_new ("RTPTWCCStats",
+  GstStructure *s = gst_structure_new ("RTPTWCCStats",
       "packets-sent", G_TYPE_UINT, ctx->packets_sent,
       "packets-recv", G_TYPE_UINT, ctx->packets_recv,
       "bitrate-sent", G_TYPE_UINT, ctx->bitrate_sent,
@@ -855,6 +1062,43 @@ twcc_stats_ctx_get_structure (TWCCStatsCtx * ctx)
       "avg-delta-of-delta", G_TYPE_INT64, ctx->avg_delta_of_delta,
       "delta-of-delta-growth", G_TYPE_DOUBLE, ctx->delta_of_delta_growth,
       "queueing-slope", G_TYPE_DOUBLE, ctx->queueing_slope, NULL);
+
+  /* Per-repair recovery: one structure per means of repair (identified by the
+     redundant stream's SSRC, labelled with its payload type). */
+  {
+    GValueArray *repairs = g_value_array_new (ctx->recovery_by_repair->len);
+    for (guint i = 0; i < ctx->recovery_by_repair->len; i++) {
+      TWCCRepairStats *m =
+          &g_array_index (ctx->recovery_by_repair, TWCCRepairStats, i);
+      GstStructure *ms = gst_structure_new ("RTPTWCCRepairStats",
+          "ssrc", G_TYPE_UINT, m->ssrc,
+          "pt", G_TYPE_UINT, (guint) m->pt,
+          "recovered-count", G_TYPE_UINT, m->recovered_count,
+          "recovery-pct", G_TYPE_DOUBLE, m->recovery_pct, NULL);
+      _append_structure_to_value_array (repairs, ms);
+    }
+    _structure_take_value_array (s, "recovery-by-repair", repairs);
+  }
+
+  /* Pairwise overlap: lost packets recoverable by both means of repair a and b. */
+  {
+    GValueArray *overlaps = g_value_array_new (ctx->recovery_overlap->len);
+    for (guint i = 0; i < ctx->recovery_overlap->len; i++) {
+      TWCCOverlapStats *o =
+          &g_array_index (ctx->recovery_overlap, TWCCOverlapStats, i);
+      GstStructure *os = gst_structure_new ("RTPTWCCRecoveryOverlap",
+          "ssrc-a", G_TYPE_UINT, o->ssrc_a,
+          "pt-a", G_TYPE_UINT, (guint) o->pt_a,
+          "ssrc-b", G_TYPE_UINT, o->ssrc_b,
+          "pt-b", G_TYPE_UINT, (guint) o->pt_b,
+          "count", G_TYPE_UINT, o->count,
+          "pct", G_TYPE_DOUBLE, o->pct, NULL);
+      _append_structure_to_value_array (overlaps, os);
+    }
+    _structure_take_value_array (s, "recovery-overlap", overlaps);
+  }
+
+  return s;
 }
 
 static gint
@@ -914,10 +1158,12 @@ twcc_stats_ctx_add_packet (TWCCStatsManager * statsman, SentPacket * pkt)
 
 static RedBlock *
 _redblock_new (GArray * seq, guint16 fec_seq,
-    guint16 idx_redundant_packets, guint16 num_redundant_packets)
+    guint16 idx_redundant_packets, guint16 num_redundant_packets,
+    TWCCRepairId redund)
 {
   RedBlock *block = g_malloc0 (sizeof (RedBlock));
   block->seqs = g_array_ref (seq);
+  block->redund = redund;
   block->states = g_array_new (FALSE, FALSE, sizeof (TWCCPktState));
   g_array_set_size (block->states, seq->len);
   for (gsize i = 0; i < seq->len; i++) {
@@ -957,15 +1203,19 @@ _redblock_free (RedBlock * block)
 }
 
 static RedBlockKey
-_redblock_key_new (GArray * seqs)
+_redblock_key_new (GArray * seqs, TWCCRepairId redund)
 {
-  return g_array_ref (seqs);
+  RedBlockKey key = g_new (RedBlockKeyStruct, 1);
+  key->seqs = g_array_ref (seqs);
+  key->redund = redund;
+  return key;
 }
 
 static void
 _redblock_key_free (RedBlockKey key)
 {
-  g_array_unref (key);
+  g_array_unref (key->seqs);
+  g_free (key);
 }
 
 static guint
@@ -988,7 +1238,7 @@ static guint
 _redund_hash (gconstpointer key)
 {
   RedBlockKey bk = (RedBlockKey) key;
-  return redblock_2_key (bk);
+  return redblock_2_key (bk->seqs) ^ bk->redund.ssrc ^ bk->redund.pt;
 }
 
 static gboolean
@@ -996,16 +1246,27 @@ _redund_equal (gconstpointer a, gconstpointer b)
 {
   RedBlockKey bk1 = (RedBlockKey) a;
   RedBlockKey bk2 = (RedBlockKey) b;
-  return bk1->len == bk2->len &&
-      memcmp (bk1->data, bk2->data, bk1->len * sizeof (guint16))
+  return bk1->redund.ssrc == bk2->redund.ssrc
+      && bk1->redund.pt == bk2->redund.pt && bk1->seqs->len == bk2->seqs->len
+      && memcmp (bk1->seqs->data, bk2->seqs->data,
+      bk1->seqs->len * sizeof (guint16))
       == 0;
 }
 
-/* Check if the block could be recovered:
-    * all packets have known states
-    * number of lost packets is less than redundant packets were originally sent
+/* Check whether the block can recover its lost data packets:
+    * a data/fec packet is "missing" if not directly RECEIVED (LOST or UNKNOWN)
+    * the block can recover iff total missing <= number of redundant packets
+      (MDS / Reed-Solomon property); note total-missing <= total-fec is
+      algebraically equivalent to data-lost <= fec-received, i.e. it already
+      verifies that enough redundancy was actually received.
 
-  Returns the number of recoverd packets
+  Recovery is recorded by attributing this block's means of repair to each
+  recovered data packet's recovered_by list, WITHOUT mutating the packet's
+  ground-truth status. This keeps overlapping means of repair independent: a
+  packet recoverable by both RTX and FEC is attributed to both, since each block
+  evaluates the same ground truth on its own.
+
+  Returns the number of newly-attributed recovered packets.
 */
 static gsize
 _redblock_reconsider (TWCCStatsManager * statsman, RedBlock * block)
@@ -1013,6 +1274,8 @@ _redblock_reconsider (TWCCStatsManager * statsman, RedBlock * block)
   gsize nreceived = 0;
   gsize nrecovered = 0;
   gsize lost = 0;
+
+  const TWCCRepairId repair = block->redund;
 
   gchar states_media[48];
   gchar states_fec[16];
@@ -1039,8 +1302,14 @@ _redblock_reconsider (TWCCStatsManager * statsman, RedBlock * block)
           break;
         }
       }
-      if (nrecovered == 1) {
-        media_pkt->status = RTP_TWCC_FECBLOCK_PKT_RECOVERED;
+      /* Only attribute a recovery to a packet we have confirmed lost. A media
+         packet still in UNKNOWN state may yet arrive, so we must not declare
+         it recovered (see test_twcc_stats_rtx_recover_not_lost_stuff). */
+      if (nrecovered == 1
+          && media_pkt->status == RTP_TWCC_FECBLOCK_PKT_LOST) {
+        _pkt_add_recovered_by (media_pkt, repair);
+      } else {
+        nrecovered = 0;
       }
     }
 
@@ -1060,14 +1329,10 @@ _redblock_reconsider (TWCCStatsManager * statsman, RedBlock * block)
       nreceived++;
       if (i < G_N_ELEMENTS (states_media))
         states_media[i] = '+';
-    } else if (pkt->status == RTP_TWCC_FECBLOCK_PKT_RECOVERED) {
-      nrecovered++;
-      if (i < G_N_ELEMENTS (states_media))
-        states_media[i] = 'R';
-    } else if (pkt->status == RTP_TWCC_FECBLOCK_PKT_LOST) {
+    } else {                    /* LOST (possibly already recovered by another block) */
       lost++;
       if (i < G_N_ELEMENTS (states_media))
-        states_media[i] = '-';
+        states_media[i] = _pkt_is_recovered (pkt) ? 'R' : '-';
     }
   }
   states_media[block->seqs->len] = '\0';
@@ -1089,21 +1354,17 @@ _redblock_reconsider (TWCCStatsManager * statsman, RedBlock * block)
       nreceived++;
       if (i < G_N_ELEMENTS (states_fec))
         states_fec[i] = '+';
-    } else if (pkt->status == RTP_TWCC_FECBLOCK_PKT_RECOVERED) {
-      nrecovered++;
-      if (i < G_N_ELEMENTS (states_fec))
-        states_fec[i] = 'R';
-    } else if (pkt->status == RTP_TWCC_FECBLOCK_PKT_LOST) {
+    } else {                    /* LOST */
       lost++;
       if (i < G_N_ELEMENTS (states_fec))
-        states_fec[i] = '-';
+        states_fec[i] = _pkt_is_recovered (pkt) ? 'R' : '-';
     }
   }
   states_fec[block->fec_seqs->len] = '\0';
 
-  if ((lost + nreceived + nrecovered > block->seqs->len + block->fec_seqs->len)) {
-    GST_TRACE_OBJECT ("Media: %s; FEC: %s; recovered: %lu", states_media,
-        states_fec, nrecovered);
+  if ((lost + nreceived > block->seqs->len + block->fec_seqs->len)) {
+    GST_TRACE_OBJECT (statsman->parent, "Media: %s; FEC: %s", states_media,
+        states_fec);
     GST_ERROR
         ("The FEC block is partly recovered, abort: %lu lost, %lu/%lu received",
         lost, nreceived, block->seqs->len + block->fec_seqs->len);
@@ -1111,7 +1372,8 @@ _redblock_reconsider (TWCCStatsManager * statsman, RedBlock * block)
   }
 
   if (lost > 0 && lost <= block->fec_seqs->len) {
-    /* We have enough packets to recover the block */
+    /* We have enough packets to recover the block: attribute this means of
+       repair to every confirmed-lost data packet it covers. */
     for (gsize i = 0; i < block->seqs->len; ++i) {
       const guint16 seqnum = g_array_index (block->seqs, guint16, i);
       SentPacket *pkt = _find_stats_sentpacket (statsman, seqnum);
@@ -1119,8 +1381,10 @@ _redblock_reconsider (TWCCStatsManager * statsman, RedBlock * block)
         GST_WARNING_OBJECT (statsman->parent, "Packet #%u not found in stats",
             seqnum);
       } else if (pkt->status == RTP_TWCC_FECBLOCK_PKT_LOST) {
-        pkt->status = RTP_TWCC_FECBLOCK_PKT_RECOVERED;
-        nrecovered++;
+        if (!_pkt_is_recovered (pkt)) {
+          nrecovered++;
+        }
+        _pkt_add_recovered_by (pkt, repair);
       }
     }
     for (gsize i = 0; i < block->fec_seqs->len; ++i) {
@@ -1133,8 +1397,10 @@ _redblock_reconsider (TWCCStatsManager * statsman, RedBlock * block)
       SentPacket *pkt = _find_stats_sentpacket (statsman,
           seqnum);
       if (pkt && pkt->status == RTP_TWCC_FECBLOCK_PKT_LOST) {
-        pkt->status = RTP_TWCC_FECBLOCK_PKT_RECOVERED;
-        nrecovered++;
+        if (!_pkt_is_recovered (pkt)) {
+          nrecovered++;
+        }
+        _pkt_add_recovered_by (pkt, repair);
       }
     }
   }
@@ -1159,32 +1425,99 @@ _get_ctx_for_pt (TWCCStatsManager * statsman, guint pt)
   return ctx;
 }
 
-static void
-_rm_redundancy_links_pkt (TWCCStatsManager * ctx, SentPacket * pkt)
+static GPtrArray *
+_seqnum_blocks_get (TWCCStatsManager * statsman, guint16 seqnum)
 {
-  /* If this packet maps to a block in hash tables -- remove every links
-     leading to this block as well as this packet: as we will remove this packet
-     from the context, we will not be able to use this block anyways. */
-  RedBlock *block = NULL;
-  if (pkt && g_hash_table_lookup_extended (ctx->seqnum_2_redblocks,
-          GUINT_TO_POINTER (pkt->seqnum), NULL, (gpointer *) & block)) {
-    RedBlockKey key = _redblock_key_new (block->seqs);
+  return g_hash_table_lookup (statsman->seqnum_2_redblocks,
+      GUINT_TO_POINTER (seqnum));
+}
+
+/* Associate @block with @seqnum (a seqnum may participate in several blocks
+   when multiple means of repair protect it). De-duplicated. */
+static void
+_seqnum_blocks_add (TWCCStatsManager * statsman, guint16 seqnum,
+    RedBlock * block)
+{
+  GPtrArray *blocks = _seqnum_blocks_get (statsman, seqnum);
+  if (!blocks) {
+    blocks = g_ptr_array_new ();
+    g_hash_table_insert (statsman->seqnum_2_redblocks,
+        GUINT_TO_POINTER (seqnum), blocks);
+  }
+  for (guint i = 0; i < blocks->len; i++) {
+    if (g_ptr_array_index (blocks, i) == block) {
+      return;
+    }
+  }
+  g_ptr_array_add (blocks, block);
+}
+
+/* Remove @block from @seqnum's block list, dropping the hash entry entirely if
+   it becomes empty. Does not free the block itself. */
+static void
+_seqnum_blocks_remove_block (TWCCStatsManager * statsman, guint16 seqnum,
+    RedBlock * block)
+{
+  GPtrArray *blocks = _seqnum_blocks_get (statsman, seqnum);
+  if (!blocks) {
+    return;
+  }
+  g_ptr_array_remove_fast (blocks, block);
+  if (blocks->len == 0) {
+    g_hash_table_remove (statsman->seqnum_2_redblocks,
+        GUINT_TO_POINTER (seqnum));
+  }
+}
+
+static void
+_rm_redundancy_links_pkt (TWCCStatsManager * statsman, SentPacket * pkt)
+{
+  /* When this packet is evicted, every block it participates in becomes
+     unusable (one of its constituents is gone), so we destroy each such block
+     entirely: unlink it from all of its data and fec seqnums and drop it from
+     the redundancy hash tables. */
+  GPtrArray *blocks;
+  GPtrArray *to_destroy;
+
+  if (!pkt) {
+    return;
+  }
+  blocks = _seqnum_blocks_get (statsman, pkt->seqnum);
+  if (!blocks || blocks->len == 0) {
+    return;
+  }
+
+  /* Destroying a block mutates the per-seqnum lists (including this one), so
+     iterate over a private copy of the block pointers. */
+  to_destroy = g_ptr_array_new ();
+  for (guint i = 0; i < blocks->len; i++) {
+    g_ptr_array_add (to_destroy, g_ptr_array_index (blocks, i));
+  }
+
+  for (guint b = 0; b < to_destroy->len; b++) {
+    RedBlock *block = g_ptr_array_index (to_destroy, b);
+
     for (gsize i = 0; i < block->seqs->len; i++) {
-      g_hash_table_remove (ctx->seqnum_2_redblocks,
-          GUINT_TO_POINTER (g_array_index (block->seqs, guint16, i)));
+      _seqnum_blocks_remove_block (statsman,
+          g_array_index (block->seqs, guint16, i), block);
     }
     for (gsize i = 0; i < block->fec_seqs->len; i++) {
       if (g_array_index (block->fec_states, TWCCPktState, i)
           == RTP_TWCC_FECBLOCK_PKT_UNKNOWN) {
-        /* This redundant packet hasn't been not processed yet */
+        /* This redundant packet hasn't been processed yet */
         continue;
       }
-      g_hash_table_remove (ctx->seqnum_2_redblocks,
-          GUINT_TO_POINTER (g_array_index (block->fec_seqs, guint16, i)));
+      _seqnum_blocks_remove_block (statsman,
+          g_array_index (block->fec_seqs, guint16, i), block);
     }
-    g_hash_table_remove (ctx->redund_2_redblocks, key);
+
+    /* Frees the block via the redund_2_redblocks value destroy func. */
+    RedBlockKey key = _redblock_key_new (block->seqs, block->redund);
+    g_hash_table_remove (statsman->redund_2_redblocks, key);
     _redblock_key_free (key);
   }
+
+  g_ptr_array_free (to_destroy, TRUE);
 }
 
 static gint32
@@ -1246,16 +1579,18 @@ _process_pkt_feedback (SentPacket * pkt, TWCCStatsManager * statsman)
       _pkt_status_s (pkt->status));
   if (pkt->stats_processed) {
     /* This packet was already added to stats structures, but we've got
-       one more feedback for it
+       one more feedback for it. Re-evaluate every block it participates in.
      */
-    RedBlock *block;
-    if (g_hash_table_lookup_extended (statsman->seqnum_2_redblocks,
-            GUINT_TO_POINTER (pkt->seqnum), NULL, (gpointer *) & block)) {
-      const gsize packets_recovered = _redblock_reconsider (statsman, block);
-      if (packets_recovered > 0) {
-        GST_LOG_OBJECT (statsman->parent,
-            "Reconsider block because of packet #%u, " "recovered %lu pckt",
-            pkt->seqnum, packets_recovered);
+    GPtrArray *blocks = _seqnum_blocks_get (statsman, pkt->seqnum);
+    if (blocks) {
+      for (guint bi = 0; bi < blocks->len; bi++) {
+        RedBlock *block = g_ptr_array_index (blocks, bi);
+        const gsize packets_recovered = _redblock_reconsider (statsman, block);
+        if (packets_recovered > 0) {
+          GST_LOG_OBJECT (statsman->parent,
+              "Reconsider block because of packet #%u, " "recovered %lu pckt",
+              pkt->seqnum, packets_recovered);
+        }
       }
     }
     return;
@@ -1288,8 +1623,12 @@ _process_pkt_feedback (SentPacket * pkt, TWCCStatsManager * statsman)
       g_assert_not_reached ();
     }
 
-    /* Check if this packet covers the same block that was already added. */
-    RedBlockKey key = _redblock_key_new (pkt->protects_twcc_seqnums);
+    /* Check if this packet covers a block that already exists. The block key
+       includes the redundant stream's identity (SSRC + payload type), so
+       distinct means of repair protecting the same data set map to distinct
+       blocks (and may overlap). */
+    const TWCCRepairId repair = { pkt->ssrc, pkt->pt };
+    RedBlockKey key = _redblock_key_new (pkt->protects_twcc_seqnums, repair);
     RedBlock *block = NULL;
     if (g_hash_table_lookup_extended (statsman->redund_2_redblocks, key, NULL,
             (gpointer *) & block)) {
@@ -1324,27 +1663,15 @@ _process_pkt_feedback (SentPacket * pkt, TWCCStatsManager * statsman)
 
       /* Link this seqnum to the block in order to be able to
          release the block once this packet leave its lifetime */
-      g_hash_table_insert (statsman->seqnum_2_redblocks,
-          GUINT_TO_POINTER (pkt->seqnum), block);
+      _seqnum_blocks_add (statsman, pkt->seqnum, block);
       /* There is no such block, add a new one */
     } else {
-      /* Verify all the packets this redundant packet is protecting
-       * are not covered by any other existing block, because if
-       * they do it means some weird state of the data structures.
-      */
-      for (gsize i = 0; i < pkt->protects_twcc_seqnums->len; ++i) {
-        const guint16 data_key = g_array_index (pkt->protects_twcc_seqnums,
-            guint16, i);
-        RedBlock *data_block = NULL;
-        if (g_hash_table_lookup_extended (statsman->seqnum_2_redblocks,
-                GUINT_TO_POINTER (data_key), NULL, (gpointer *) & data_block)) {
-          _redblock_key_free (key);
-          return;
-        }
-      }
-      /* Add every data packet into seqnum_2_redblocks  */
+      /* Create a new block. Overlap with other means of repair's blocks is
+         expected and supported: a data packet may be covered by several blocks
+         (e.g. both RTX and FEC), which is exactly how repair overlap is
+         tracked. */
       block = _redblock_new (pkt->protects_twcc_seqnums, pkt->seqnum,
-          pkt->redundant_idx, pkt->redundant_num);
+          pkt->redundant_idx, pkt->redundant_num, repair);
       g_array_index (block->fec_seqs, guint16, (gsize) pkt->redundant_idx)
           = pkt->seqnum;
       g_array_index (block->fec_states, TWCCPktState,
@@ -1352,24 +1679,11 @@ _process_pkt_feedback (SentPacket * pkt, TWCCStatsManager * statsman)
       g_hash_table_insert (statsman->redund_2_redblocks, key, block);
       /* Link this seqnum to the block in order to be able to
          release the block once this packet outlives its lifetime */
-      g_hash_table_insert (statsman->seqnum_2_redblocks,
-          GUINT_TO_POINTER (pkt->seqnum), block);
+      _seqnum_blocks_add (statsman, pkt->seqnum, block);
       for (gsize i = 0; i < pkt->protects_twcc_seqnums->len; ++i) {
         const guint16 data_key = g_array_index (pkt->protects_twcc_seqnums,
             guint16, i);
-        RedBlock *data_block = NULL;
-        if (!g_hash_table_lookup_extended (statsman->seqnum_2_redblocks,
-                GUINT_TO_POINTER (data_key), NULL, (gpointer *) & data_block)) {
-
-          g_hash_table_insert (statsman->seqnum_2_redblocks,
-              GUINT_TO_POINTER (data_key), block);
-        } else if (block != data_block) {
-          /* Overlapped blocks are not supported yet */
-          GST_WARNING_OBJECT (statsman->parent,
-              "Data packet %ld covered by two blocks", data_key);
-          g_hash_table_replace (statsman->seqnum_2_redblocks,
-              GUINT_TO_POINTER (data_key), block);
-        }
+        _seqnum_blocks_add (statsman, data_key, block);
       }
     }
     const gsize packets_recovered = _redblock_reconsider (statsman, block);
@@ -1378,22 +1692,23 @@ _process_pkt_feedback (SentPacket * pkt, TWCCStatsManager * statsman)
         pkt->seqnum, packets_recovered);
     /* Neither RTX nor FEC  */
   } else {
-    RedBlock *block;
-    if (g_hash_table_lookup_extended (statsman->seqnum_2_redblocks,
-            GUINT_TO_POINTER (pkt->seqnum), NULL, (gpointer *) & block)) {
-
-      for (gsize i = 0; i < block->seqs->len; ++i) {
-        if (g_array_index (block->seqs, guint16, i) == pkt->seqnum) {
-          g_array_index (block->states, TWCCPktState, i) =
-              _better_pkt_state (g_array_index (block->states, TWCCPktState, i),
-              pkt->status);
-          break;
+    GPtrArray *blocks = _seqnum_blocks_get (statsman, pkt->seqnum);
+    if (blocks) {
+      for (guint bi = 0; bi < blocks->len; bi++) {
+        RedBlock *block = g_ptr_array_index (blocks, bi);
+        for (gsize i = 0; i < block->seqs->len; ++i) {
+          if (g_array_index (block->seqs, guint16, i) == pkt->seqnum) {
+            g_array_index (block->states, TWCCPktState, i) =
+                _better_pkt_state (g_array_index (block->states, TWCCPktState,
+                    i), pkt->status);
+            break;
+          }
         }
+        const gsize packets_recovered = _redblock_reconsider (statsman, block);
+        GST_LOG_OBJECT (statsman->parent,
+            "Reconsider block because of packet #%u, " "recovered %lu pckt",
+            pkt->seqnum, packets_recovered);
       }
-      const gsize packets_recovered = _redblock_reconsider (statsman, block);
-      GST_LOG_OBJECT (statsman->parent,
-          "Reconsider block because of packet #%u, " "recovered %lu pckt",
-          pkt->seqnum, packets_recovered);
     }
   }
 }
@@ -1426,7 +1741,7 @@ rtp_twcc_stats_manager_new (GObject * parent)
       _redund_equal, (GDestroyNotify) _redblock_key_free,
       (GDestroyNotify) _redblock_free);
   statsman->seqnum_2_redblocks = g_hash_table_new_full (g_direct_hash,
-      g_direct_equal, NULL, NULL);
+      g_direct_equal, NULL, (GDestroyNotify) g_ptr_array_unref);
 
   statsman->first_fci_parse = TRUE;
   statsman->expected_parsed_seqnum = 0;
