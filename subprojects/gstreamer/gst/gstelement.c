@@ -3507,7 +3507,6 @@ static void
 gst_element_dispose (GObject * object)
 {
   GstElement *element = GST_ELEMENT_CAST (object);
-  GstElementPrivate *priv = element->priv;
   GstClock **clock_p;
   GstBus **bus_p;
   GstElementClass *oclass;
@@ -3562,22 +3561,6 @@ gst_element_dispose (GObject * object)
   element->contexts = NULL;
   GST_OBJECT_UNLOCK (element);
 
-  g_hash_table_destroy (priv->pads_hash);
-  priv->pads_hash = NULL;
-
-  if (priv->pads_links != NULL) {
-    g_hash_table_destroy (priv->pads_links);
-    priv->pads_links = NULL;
-  }
-  if (priv->srcpads_links != NULL) {
-    g_hash_table_destroy (priv->srcpads_links);
-    priv->srcpads_links = NULL;
-  }
-  if (priv->sinkpads_links != NULL) {
-    g_hash_table_destroy (priv->sinkpads_links);
-    priv->sinkpads_links = NULL;
-  }
-
   GST_CAT_INFO_OBJECT (GST_CAT_REFCOUNTING, element, "%p parent class dispose",
       element);
 
@@ -3608,8 +3591,14 @@ static void
 gst_element_finalize (GObject * object)
 {
   GstElement *element = GST_ELEMENT_CAST (object);
+  GstElementPrivate *priv = element->priv;
 
   GST_CAT_INFO_OBJECT (GST_CAT_REFCOUNTING, element, "%p finalize", element);
+
+  g_clear_pointer (&priv->pads_hash, g_hash_table_destroy);
+  g_clear_pointer (&priv->pads_links, g_hash_table_destroy);
+  g_clear_pointer (&priv->srcpads_links, g_hash_table_destroy);
+  g_clear_pointer (&priv->sinkpads_links, g_hash_table_destroy);
 
   g_cond_clear (&element->state_cond);
   g_rec_mutex_clear (&element->state_lock);

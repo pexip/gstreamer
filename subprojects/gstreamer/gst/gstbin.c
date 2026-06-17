@@ -190,6 +190,7 @@ typedef struct
 } BinContinueData;
 
 static void gst_bin_dispose (GObject * object);
+static void gst_bin_finalize (GObject * object);
 
 static void gst_bin_set_property (GObject * object, guint prop_id,
     const GValue * value, GParamSpec * pspec);
@@ -455,6 +456,7 @@ gst_bin_class_init (GstBinClass * klass)
           DEFAULT_MESSAGE_FORWARD, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 
   gobject_class->dispose = gst_bin_dispose;
+  gobject_class->finalize = gst_bin_finalize;
 
   gst_element_class_set_static_metadata (gstelement_class, "Generic bin",
       "Generic/Bin",
@@ -546,20 +548,26 @@ gst_bin_dispose (GObject * object)
     gst_bin_remove (bin, element);
   }
 
-  GST_OBJECT_LOCK (object);
-  g_hash_table_destroy (bin->priv->children_hash);
-  GST_OBJECT_UNLOCK (object);
-  bin->priv->children_hash = NULL;
-
   if (G_UNLIKELY (bin->children != NULL)) {
     g_critical ("could not remove elements from bin '%s'",
         GST_STR_NULL (GST_OBJECT_NAME (object)));
   }
 
-  g_hash_table_destroy (bin->priv->no_preroll_elements);
-  g_hash_table_destroy (bin->priv->children_links);
-
   G_OBJECT_CLASS (parent_class)->dispose (object);
+}
+
+static void
+gst_bin_finalize (GObject * object)
+{
+  GstBin *bin = GST_BIN_CAST (object);
+
+  GST_CAT_DEBUG_OBJECT (GST_CAT_REFCOUNTING, object, "%p finalize", object);
+
+  g_clear_pointer (&bin->priv->children_hash, g_hash_table_destroy);
+  g_clear_pointer (&bin->priv->no_preroll_elements, g_hash_table_destroy);
+  g_clear_pointer (&bin->priv->children_links, g_hash_table_destroy);
+
+  G_OBJECT_CLASS (parent_class)->finalize (object);
 }
 
 /**
