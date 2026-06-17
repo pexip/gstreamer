@@ -104,6 +104,10 @@ typedef struct
   guint8 pt;
   guint recovered_count;
   gdouble recovery_pct;
+  /* Raw bits this means of repair sent in the window (accumulated during the
+     pass), converted to @bitrate_sent once the window duration is known. */
+  guint bits_sent;
+  guint bitrate_sent;
 } TWCCRepairStats;
 
 /* Recovery accounting for the overlap of a pair of means of repair within a
@@ -735,7 +739,7 @@ _repair_stats_get (GArray * arr, guint32 ssrc, guint8 pt)
     }
   }
   {
-    TWCCRepairStats nm = { ssrc, pt, 0, 0.0 };
+    TWCCRepairStats nm = { ssrc, pt, 0, 0.0, 0, 0 };
     g_array_append_val (arr, nm);
   }
   return &g_array_index (arr, TWCCRepairStats, arr->len - 1);
@@ -888,6 +892,11 @@ twcc_stats_ctx_calculate_windowed_stats (TWCCStatsCtx * ctx,
         bits_sent += pkt->size * 8;
         if (pkt->redundant_num <= 0) {
           bits_sent_non_recovery += pkt->size * 8;
+        } else {
+          /* Redundant (RTX/FEC) packet: credit its bits to its own means of
+             repair, keyed by the redundant stream's SSRC and payload type. */
+          _repair_stats_get (ctx->recovery_by_repair, pkt->ssrc,
+              pkt->pt)->bits_sent += pkt->size * 8;
         }
       }
       last_local_pkt = pkt;
@@ -1021,6 +1030,15 @@ twcc_stats_ctx_calculate_windowed_stats (TWCCStatsCtx * ctx,
         gst_util_uint64_scale (bits_sent, GST_SECOND, local_duration);
     ctx->bitrate_sent_non_recovery =
         gst_util_uint64_scale (bits_sent_non_recovery, GST_SECOND, local_duration);
+
+    /* Convert each means of repair's raw bits into a windowed bitrate using
+       the same local-clock duration as the aggregate sent bitrate. */
+    for (i = 0; i < ctx->recovery_by_repair->len; i++) {
+      TWCCRepairStats *m =
+          &g_array_index (ctx->recovery_by_repair, TWCCRepairStats, i);
+      m->bitrate_sent =
+          gst_util_uint64_scale (m->bits_sent, GST_SECOND, local_duration);
+    }
   }
   if (remote_duration > 0) {
     ctx->bitrate_recv =
@@ -1074,7 +1092,8 @@ twcc_stats_ctx_get_structure (TWCCStatsCtx * ctx)
           "ssrc", G_TYPE_UINT, m->ssrc,
           "pt", G_TYPE_UINT, (guint) m->pt,
           "recovered-count", G_TYPE_UINT, m->recovered_count,
-          "recovery-pct", G_TYPE_DOUBLE, m->recovery_pct, NULL);
+          "recovery-pct", G_TYPE_DOUBLE, m->recovery_pct,
+          "bitrate-sent", G_TYPE_UINT, m->bitrate_sent, NULL);
       _append_structure_to_value_array (repairs, ms);
     }
     _structure_take_value_array (s, "recovery-by-repair", repairs);

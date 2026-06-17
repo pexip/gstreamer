@@ -5404,6 +5404,38 @@ fail_unless_twcc_stats_recovery (SessionHarness * h, gdouble recovery_pct)
   fail_unless_equals_float (recovery_pct, get_recovery_pct (h));
 }
 
+/* Sum the per-repair "bitrate-sent" emitted in the "recovery-by-repair" array
+   for the given payload type. Returns 0 if no entry for @pt is present. */
+static guint
+get_repair_bitrate_sent (SessionHarness * h, guint pt)
+{
+  GstStructure *twcc_stats;
+  GValueArray *repairs = NULL;
+  guint total = 0;
+
+  twcc_stats = session_harness_get_twcc_stats_full (h,
+      300 * GST_MSECOND, 100 * GST_MSECOND);
+
+  gst_structure_get (twcc_stats, "recovery-by-repair", G_TYPE_VALUE_ARRAY,
+      &repairs, NULL);
+  if (repairs) {
+    for (guint i = 0; i < repairs->n_values; i++) {
+      const GstStructure *rs =
+          gst_value_get_structure (g_value_array_get_nth (repairs, i));
+      guint entry_pt = 0;
+      guint bitrate_sent = 0;
+      gst_structure_get (rs, "pt", G_TYPE_UINT, &entry_pt,
+          "bitrate-sent", G_TYPE_UINT, &bitrate_sent, NULL);
+      if (entry_pt == pt)
+        total += bitrate_sent;
+    }
+    g_value_array_free (repairs);
+  }
+
+  gst_structure_free (twcc_stats);
+  return total;
+}
+
 static void
 send_recv_buffer (SessionHarness * h_send, SessionHarness * h_recv,
     GstBuffer * buf, gboolean recv_buf)
@@ -5469,6 +5501,51 @@ test_twcc_stats_rtx_recovery (gboolean rtx_arrive, gdouble recovery_pct)
 GST_START_TEST (test_twcc_stats_rtx_recover_lost)
 {
   test_twcc_stats_rtx_recovery (TRUE, 100.0);
+}
+
+GST_END_TEST;
+
+/* When RTX packets are sent, the "recovery-by-repair" array must report a
+   non-zero per-repair "bitrate-sent" for the RTX payload type, and none for
+   the media payload type. */
+GST_START_TEST (test_twcc_stats_rtx_repair_bitrate)
+{
+  SessionHarness *h_send = session_harness_new ();
+  SessionHarness *h_recv = session_harness_new ();
+  guint i, next_seqnum;
+
+  session_harness_add_twcc_caps_for_pt (h_send, TEST_BUF_PT);
+  session_harness_add_twcc_caps_for_pt (h_send, TEST_RTX_BUF_PT);
+  session_harness_set_twcc_recv_ext_id (h_recv, TEST_TWCC_EXT_ID);
+
+  next_seqnum = construct_initial_state_for_rtx (h_send, h_recv);
+
+  for (i = 0; i < 3; i++) {
+    GstBuffer *buf;
+    GstBuffer *rtx_buf;
+
+    buf = generate_twcc_send_buffer (next_seqnum++, FALSE);
+    rtx_buf = generate_rtx_buffer (i, buf);
+
+    /* the original is lost, the RTX retransmission arrives */
+    send_recv_buffer (h_send, h_recv, buf, FALSE);
+    send_recv_buffer (h_send, h_recv, rtx_buf, TRUE);
+  }
+
+  send_recv_buffer (h_send, h_recv,
+      generate_twcc_send_buffer (next_seqnum++, TRUE), TRUE);
+
+  fail_unless_equals_int64 (GST_FLOW_OK,
+      session_harness_recv_rtcp (h_send,
+          session_harness_produce_twcc (h_recv)));
+
+  /* The RTX payload type must carry redundant bitrate; the media PT must not
+     appear as a means of repair. */
+  fail_unless (get_repair_bitrate_sent (h_send, TEST_RTX_BUF_PT) > 0);
+  fail_unless_equals_int (get_repair_bitrate_sent (h_send, TEST_BUF_PT), 0);
+
+  session_harness_free (h_send);
+  session_harness_free (h_recv);
 }
 
 GST_END_TEST;
@@ -7662,6 +7739,7 @@ rtpsession_suite (void)
   tcase_add_test (tc_chain, test_twcc_reference_time_wrap);
   tcase_add_test (tc_chain, test_twcc_reference_time_wrap_start_negative);
   tcase_add_test (tc_chain, test_twcc_stats_rtx_recover_lost);
+  tcase_add_test (tc_chain, test_twcc_stats_rtx_repair_bitrate);
   tcase_add_test (tc_chain, test_twcc_parse_fci_robustness);
   tcase_add_test (tc_chain, test_twcc_stats_no_rtx_no_recover);
   tcase_add_test (tc_chain, test_twcc_stats_long_rtx_recover);
