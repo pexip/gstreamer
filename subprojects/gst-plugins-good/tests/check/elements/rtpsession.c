@@ -201,10 +201,11 @@ generate_rtx_buffer (guint rtx_seqnum, GstBuffer * buffer)
   gst_rtp_buffer_map (new_buffer, GST_MAP_WRITE, &new_rtp);
   gst_rtp_buffer_set_payload_type (&new_rtp, TEST_RTX_BUF_PT);
   gst_rtp_buffer_set_ssrc (&new_rtp, TEST_RTX_BUF_SSRC);
-  gst_rtp_buffer_set_timestamp (&new_rtp, orig_timestamp);
   gst_rtp_buffer_set_seq (&new_rtp, rtx_seqnum);
   gst_rtp_buffer_unmap (&new_rtp);
 
+  /* Copy over timestamps */
+  gst_buffer_copy_into (new_buffer, buffer, GST_BUFFER_COPY_TIMESTAMPS, 0, -1);
   gst_rtp_repair_meta_add (new_buffer, 0, 1, orig_ssrc, &orig_seqnum,
       &orig_timestamp, 1);
 

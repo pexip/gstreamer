@@ -295,6 +295,19 @@ _pkt_effective_state (const SentPacket * pkt)
   return pkt->status;
 }
 
+/* A packet is a redundant (RTX/FEC) packet if it actually protects other
+   packets. This is the authoritative discriminator: the redundant_num meta
+   field is not reliable on its own (it can carry a non-zero value for plain
+   data packets), and a redundant packet whose protected-seqnum conversion
+   failed -- e.g. due to reordering -- is deliberately treated as a plain data
+   packet (see rtp_twcc_stats_sent_pkt). Keep this consistent with
+   _accumulate_recovery. */
+static gboolean
+_pkt_is_redundant (const SentPacket * pkt)
+{
+  return pkt->protects_twcc_seqnums && pkt->protects_twcc_seqnums->len > 0;
+}
+
 /* Credit means of repair @r with recovering data packet @pkt. The CALLER must
    have already verified that @r actually repaired the packet (the RTX packet
    was received, or the FEC block had enough received redundancy) -- this only
@@ -786,7 +799,7 @@ _overlap_stats_get (GArray * arr, TWCCRepairId a, TWCCRepairId b)
 static void
 _accumulate_recovery (TWCCStatsCtx * ctx, const SentPacket * pkt)
 {
-  if (pkt->protects_twcc_seqnums && pkt->protects_twcc_seqnums->len > 0) {
+  if (_pkt_is_redundant (pkt)) {
     /* This packet protects others (i.e. it is itself an RTX/FEC packet), so it
        is not recovered media -- don't let it inflate the repair stats. */
     return;
@@ -890,7 +903,7 @@ twcc_stats_ctx_calculate_windowed_stats (TWCCStatsCtx * ctx,
         first_local_pkt = pkt;
       } else {
         bits_sent += pkt->size * 8;
-        if (pkt->redundant_num <= 0) {
+        if (!_pkt_is_redundant (pkt)) {
           bits_sent_non_recovery += pkt->size * 8;
         } else {
           /* Redundant (RTX/FEC) packet: credit its bits to its own means of
@@ -908,7 +921,7 @@ twcc_stats_ctx_calculate_windowed_stats (TWCCStatsCtx * ctx,
         first_remote_pkt = pkt;
       } else {
         bits_recv += pkt->size * 8;
-        if (pkt->redundant_num <= 0) {
+        if (!_pkt_is_redundant (pkt)) {
           bits_recv_non_recovery += pkt->size * 8;
         }
       }
