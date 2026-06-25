@@ -467,6 +467,39 @@ GST_START_TEST (test_funnel_custom_sticky)
 
 GST_END_TEST;
 
+/* Number of upstream events pushed by the performance test below. */
+#define N_UPSTREAM_EVENTS (1000000)
+
+GST_START_TEST (test_funnel_send_upstream_event_performance)
+{
+  GstHarness *h = gst_harness_new_with_padnames ("funnel", NULL, "src");
+  GstHarness *h0 = gst_harness_new_with_element (h->element, "sink_0", NULL);
+  guint i;
+
+  gst_harness_set_src_caps_str (h0, "mycaps");
+
+  /* Push a large number of upstream events through the funnel. Each event is
+   * forwarded to the sink sub-harness, where it is queued on the upstream
+   * event queue. We drain that queue on every iteration so it does not grow
+   * unbounded: leaving it to accumulate makes teardown free a huge list in one
+   * go, which under CI load can exceed the test watchdog timeout. */
+  for (i = 0; i < N_UPSTREAM_EVENTS; i++) {
+    GstEvent *event;
+
+    fail_unless (gst_harness_push_upstream_event (h,
+            gst_event_new_custom (GST_EVENT_CUSTOM_UPSTREAM,
+                gst_structure_new_empty ("test"))));
+
+    while ((event = gst_harness_try_pull_upstream_event (h0)))
+      gst_event_unref (event);
+  }
+
+  gst_harness_teardown (h);
+  gst_harness_teardown (h0);
+}
+
+GST_END_TEST;
+
 
 static Suite *
 funnel_suite (void)
@@ -480,6 +513,7 @@ funnel_suite (void)
   tcase_add_test (tc_chain, test_funnel_stress);
   tcase_add_test (tc_chain, test_funnel_event_handling);
   tcase_add_test (tc_chain, test_funnel_custom_sticky);
+  tcase_add_test (tc_chain, test_funnel_send_upstream_event_performance);
   suite_add_tcase (s, tc_chain);
 
   return s;
