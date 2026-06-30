@@ -19305,7 +19305,8 @@ qtdemux_audio_caps (GstQTDemux * qtdemux, QtDemuxStream * stream,
       data = stsd_entry->data;
       len = QT_UINT32 (data);
 
-      if (stsd_version == 0 && version == 0x00020000 && len >= 16 + 56) {
+      if (stsd_version == 0 && version == 0x00020000 && len >= 16 + 56
+          && entry->n_channels > 0) {
         /* sample description entry (16) + sound sample description v0 (20) */
         depth = QT_UINT32 (data + 36 + 20);
         flags = QT_UINT32 (data + 36 + 24);
