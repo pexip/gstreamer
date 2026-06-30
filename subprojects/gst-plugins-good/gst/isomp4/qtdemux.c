@@ -16129,20 +16129,20 @@ qtdemux_parse_trak (GstQTDemux * qtdemux, GNode * trak, guint32 * mvhd_matrix)
           /* Sometimes these are set to 0 in the sound sample descriptions so
            * let's try to infer useful values from the other information we
            * have available */
-          if (entry->bytes_per_sample == 0)
+          if (entry->bytes_per_sample == 0 && entry->n_channels > 0)
             entry->bytes_per_sample =
                 entry->bytes_per_frame / entry->n_channels;
           if (entry->bytes_per_sample == 0)
             entry->bytes_per_sample = samplesize / 8;
 
-          if (entry->bytes_per_frame == 0)
+          if (entry->bytes_per_frame == 0 && entry->n_channels > 0)
             entry->bytes_per_frame =
                 entry->bytes_per_sample * entry->n_channels;
 
           if (entry->bytes_per_packet == 0)
             entry->bytes_per_packet = entry->bytes_per_sample;
 
-          if (entry->samples_per_frame == 0)
+          if (entry->samples_per_frame == 0 && entry->n_channels > 0)
             entry->samples_per_frame = entry->n_channels;
 
           if (entry->samples_per_packet == 0)
