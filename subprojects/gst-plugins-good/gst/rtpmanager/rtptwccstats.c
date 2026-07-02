@@ -1543,14 +1543,17 @@ rtp_twcc_stats_sent_pkt (TWCCStatsManager * statsman,
 
   GST_DEBUG_OBJECT
       (statsman->parent,
-      "Send: twcc-seqnum: %u, seqnum: %u, pt: %u, marker: %d, "
+      "Send: twcc-seqnum: %u, seqnum: %u, rtptime: %u, pt: %u, marker: %d, "
       "redundant_idx: %d, redundant_num: %d, protected_seqnums(rtp): %u, "
       "protected_seqnums(twcc): %u, "
-      "size: %u, ts: %" GST_TIME_FORMAT, packet.seqnum, pinfo->seqnum,
-      packet.pt, pinfo->marker, packet.redundant_idx, packet.redundant_num,
+      "size: %u, ts: %" GST_TIME_FORMAT ", pts: %" GST_TIME_FORMAT,
+      packet.seqnum, pinfo->seqnum,
+      packet.timestamp, packet.pt, pinfo->marker, packet.redundant_idx,
+      packet.redundant_num,
       packet.protects_seqnums ? packet.protects_seqnums->len : 0,
       packet.protects_twcc_seqnums ? packet.protects_twcc_seqnums->len : 0,
-      packet.size, GST_TIME_ARGS (pinfo->current_time));
+      packet.size, GST_TIME_ARGS (pinfo->current_time),
+      GST_TIME_ARGS (pinfo->running_time));
 }
 
 void

@@ -975,9 +975,9 @@ rtp_twcc_manager_recv_packet (RTPTWCCManager * twcc, RTPPacketInfo * pinfo)
   if (reordered_packet)
     g_array_sort (twcc->recv_packets, _twcc_seqnum_sort);
 
-  GST_LOG ("Receive: twcc-seqnum: #%u, pt: %u, marker: %d, ts: %"
-      GST_TIME_FORMAT, seqnum, pinfo->pt, pinfo->marker,
-      GST_TIME_ARGS (packet.ts));
+  GST_LOG ("Receive: twcc-seqnum: #%u, seqnum: %u, rtptime: %u, pt: %u, "
+      "marker: %d, ts: %" GST_TIME_FORMAT, seqnum, pinfo->seqnum,
+      pinfo->rtptime, pinfo->pt, pinfo->marker, GST_TIME_ARGS (packet.ts));
 
   if (!pinfo->marker)
     twcc->packet_count_no_marker++;
