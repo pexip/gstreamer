@@ -4,6 +4,10 @@ option('gst_parse', type : 'boolean', value : true,
        description: 'Enable pipeline string parser')
 option('registry', type : 'boolean', value : true)
 option('tracer_hooks', type : 'boolean', value : true, description: 'Enable tracer usage')
+option('tracer_hooks_disabled', type : 'array',
+  choices : ['scheduling', 'messages', 'queries', 'events', 'topology', 'refcount', 'lifecycle', 'memory'],
+  value : [],
+  description : 'Compile out these tracer hook categories: their call sites (e.g. gst_object_ref/unref for refcount) become no-ops, removing the dispatch clock read + hashtable lookups even when a tracer is active')
 option('ptp-helper', type: 'feature', description: 'Build gst-ptp-helper')
 option('ptp-helper-setuid-user', type : 'string',
        description : 'User to switch to when installing gst-ptp-helper setuid root')
