@@ -258,6 +258,13 @@ if not tracer_hooks
   libgst_c_args += ['-DGST_DISABLE_GST_TRACER_HOOKS']
 endif
 
+# Compile out individual tracer hook categories (see gsttracerutils.h).  Each
+# disabled category turns its hook call sites into no-ops, so hot paths such as
+# gst_object_ref/unref (refcount) no longer run the tracer dispatch at all.
+foreach _cat : get_option('tracer_hooks_disabled')
+  libgst_c_args += ['-DGST_TRACER_HOOKS_DISABLE_' + _cat.to_upper()]
+endforeach
+
 if get_option('gstreamer-static-full')
   libgst_static_c_args = ['-DGST_FULL_STATIC_COMPILATION']
 else

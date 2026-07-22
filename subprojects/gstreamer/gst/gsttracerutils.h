@@ -157,21 +157,94 @@ extern GHashTable *_priv_tracers;
 #define GST_TRACER_ARGS h->tracer, ts
 #define GST_TRACER_DISPATCH(key,type,args) G_STMT_START{ \
   if (GST_TRACER_IS_ENABLED) {                                         \
-    GstClockTime ts = GST_TRACER_TS;                                   \
-    GList *__l, *__n;                                                  \
+    GList *__l, *__nl, *__n;                                           \
     GstTracerHook *h;                                                  \
     __l = g_hash_table_lookup (_priv_tracers, GINT_TO_POINTER (key));  \
-    for (__n = __l; __n; __n = g_list_next (__n)) {                    \
-      h = (GstTracerHook *) __n->data;                                 \
-      ((type)(h->func)) args;                                          \
-    }                                                                  \
-    __l = g_hash_table_lookup (_priv_tracers, NULL);                   \
-    for (__n = __l; __n; __n = g_list_next (__n)) {                    \
-      h = (GstTracerHook *) __n->data;                                 \
-      ((type)(h->func)) args;                                          \
+    __nl = g_hash_table_lookup (_priv_tracers, NULL);                  \
+    if (__l || __nl) {                                                 \
+      GstClockTime ts = GST_TRACER_TS;                                 \
+      for (__n = __l; __n; __n = g_list_next (__n)) {                  \
+        h = (GstTracerHook *) __n->data;                               \
+        ((type)(h->func)) args;                                        \
+      }                                                                \
+      for (__n = __nl; __n; __n = g_list_next (__n)) {                 \
+        h = (GstTracerHook *) __n->data;                               \
+        ((type)(h->func)) args;                                        \
+      }                                                                \
     }                                                                  \
   }                                                                    \
 }G_STMT_END
+
+/* Compile-time tracer hook categories.
+ *
+ * Every hook point is gated by GST_TRACER_IS_ENABLED at runtime, but even the
+ * dispatch itself (two hashtable lookups, plus a clock read when a hook is
+ * listened to) is measurable when any tracer is active, because the hottest
+ * hooks run per buffer or per object handoff.  Each dispatch site therefore
+ * belongs to a named category, and a build that never traces a given category
+ * can compile its hook points out entirely by defining the matching
+ * GST_TRACER_HOOKS_DISABLE_<CATEGORY> macro: the hook then expands to nothing,
+ * so the dispatch AND its arguments are never evaluated at those sites.
+ *
+ * The categories are:
+ *   SCHEDULING - pad push/pull/chain buffer data flow, buffer-pool queue/dequeue
+ *   MESSAGES   - element post-message
+ *   QUERIES    - pad and element queries
+ *   EVENTS     - pad push/send events
+ *   TOPOLOGY   - element/bin/pad construction, linking and state changes
+ *   REFCOUNT   - (mini)object ref/unref
+ *   LIFECYCLE  - (mini)object create/destroy
+ *   MEMORY     - GstMemory init/free
+ *
+ * All categories are enabled by default -- behaviour is unchanged unless a
+ * category is explicitly disabled by the build. */
+#ifdef GST_TRACER_HOOKS_DISABLE_REFCOUNT
+#define GST_TRACER_DISPATCH_REFCOUNT(key,type,args) G_STMT_START{ }G_STMT_END
+#else
+#define GST_TRACER_DISPATCH_REFCOUNT(key,type,args) GST_TRACER_DISPATCH(key,type,args)
+#endif
+
+#ifdef GST_TRACER_HOOKS_DISABLE_LIFECYCLE
+#define GST_TRACER_DISPATCH_LIFECYCLE(key,type,args) G_STMT_START{ }G_STMT_END
+#else
+#define GST_TRACER_DISPATCH_LIFECYCLE(key,type,args) GST_TRACER_DISPATCH(key,type,args)
+#endif
+
+#ifdef GST_TRACER_HOOKS_DISABLE_MEMORY
+#define GST_TRACER_DISPATCH_MEMORY(key,type,args) G_STMT_START{ }G_STMT_END
+#else
+#define GST_TRACER_DISPATCH_MEMORY(key,type,args) GST_TRACER_DISPATCH(key,type,args)
+#endif
+
+#ifdef GST_TRACER_HOOKS_DISABLE_SCHEDULING
+#define GST_TRACER_DISPATCH_SCHEDULING(key,type,args) G_STMT_START{ }G_STMT_END
+#else
+#define GST_TRACER_DISPATCH_SCHEDULING(key,type,args) GST_TRACER_DISPATCH(key,type,args)
+#endif
+
+#ifdef GST_TRACER_HOOKS_DISABLE_MESSAGES
+#define GST_TRACER_DISPATCH_MESSAGES(key,type,args) G_STMT_START{ }G_STMT_END
+#else
+#define GST_TRACER_DISPATCH_MESSAGES(key,type,args) GST_TRACER_DISPATCH(key,type,args)
+#endif
+
+#ifdef GST_TRACER_HOOKS_DISABLE_QUERIES
+#define GST_TRACER_DISPATCH_QUERIES(key,type,args) G_STMT_START{ }G_STMT_END
+#else
+#define GST_TRACER_DISPATCH_QUERIES(key,type,args) GST_TRACER_DISPATCH(key,type,args)
+#endif
+
+#ifdef GST_TRACER_HOOKS_DISABLE_EVENTS
+#define GST_TRACER_DISPATCH_EVENTS(key,type,args) G_STMT_START{ }G_STMT_END
+#else
+#define GST_TRACER_DISPATCH_EVENTS(key,type,args) GST_TRACER_DISPATCH(key,type,args)
+#endif
+
+#ifdef GST_TRACER_HOOKS_DISABLE_TOPOLOGY
+#define GST_TRACER_DISPATCH_TOPOLOGY(key,type,args) G_STMT_START{ }G_STMT_END
+#else
+#define GST_TRACER_DISPATCH_TOPOLOGY(key,type,args) GST_TRACER_DISPATCH(key,type,args)
+#endif
 
 /**
  * GstTracerHookPadPushPre:
@@ -185,7 +258,7 @@ extern GHashTable *_priv_tracers;
 typedef void (*GstTracerHookPadPushPre) (GObject *self, GstClockTime ts,
     GstPad *pad, GstBuffer *buffer);
 #define GST_TRACER_PAD_PUSH_PRE(pad, buffer) G_STMT_START{ \
-  GST_TRACER_DISPATCH(GST_TRACER_QUARK(HOOK_PAD_PUSH_PRE), \
+  GST_TRACER_DISPATCH_SCHEDULING(GST_TRACER_QUARK(HOOK_PAD_PUSH_PRE), \
     GstTracerHookPadPushPre, (GST_TRACER_ARGS, pad, buffer)); \
 }G_STMT_END
 
@@ -201,7 +274,7 @@ typedef void (*GstTracerHookPadPushPre) (GObject *self, GstClockTime ts,
 typedef void (*GstTracerHookPadPushPost) (GObject * self, GstClockTime ts,
     GstPad *pad, GstFlowReturn res);
 #define GST_TRACER_PAD_PUSH_POST(pad, res) G_STMT_START{ \
-  GST_TRACER_DISPATCH(GST_TRACER_QUARK(HOOK_PAD_PUSH_POST), \
+  GST_TRACER_DISPATCH_SCHEDULING(GST_TRACER_QUARK(HOOK_PAD_PUSH_POST), \
     GstTracerHookPadPushPost, (GST_TRACER_ARGS, pad, res)); \
 }G_STMT_END
 
@@ -217,7 +290,7 @@ typedef void (*GstTracerHookPadPushPost) (GObject * self, GstClockTime ts,
 typedef void (*GstTracerHookPadPushListPre) (GObject *self, GstClockTime ts,
     GstPad *pad, GstBufferList *list);
 #define GST_TRACER_PAD_PUSH_LIST_PRE(pad, list) G_STMT_START{ \
-  GST_TRACER_DISPATCH(GST_TRACER_QUARK(HOOK_PAD_PUSH_LIST_PRE), \
+  GST_TRACER_DISPATCH_SCHEDULING(GST_TRACER_QUARK(HOOK_PAD_PUSH_LIST_PRE), \
     GstTracerHookPadPushListPre, (GST_TRACER_ARGS, pad, list)); \
 }G_STMT_END
 
@@ -234,7 +307,7 @@ typedef void (*GstTracerHookPadPushListPost) (GObject *self, GstClockTime ts,
     GstPad *pad,
     GstFlowReturn res);
 #define GST_TRACER_PAD_PUSH_LIST_POST(pad, res) G_STMT_START{ \
-  GST_TRACER_DISPATCH(GST_TRACER_QUARK(HOOK_PAD_PUSH_LIST_POST), \
+  GST_TRACER_DISPATCH_SCHEDULING(GST_TRACER_QUARK(HOOK_PAD_PUSH_LIST_POST), \
     GstTracerHookPadPushListPost, (GST_TRACER_ARGS, pad, res)); \
 }G_STMT_END
 
@@ -251,7 +324,7 @@ typedef void (*GstTracerHookPadPushListPost) (GObject *self, GstClockTime ts,
 typedef void (*GstTracerHookPadPullRangePre) (GObject *self, GstClockTime ts,
     GstPad *pad, guint64 offset, guint size);
 #define GST_TRACER_PAD_PULL_RANGE_PRE(pad, offset, size) G_STMT_START{ \
-  GST_TRACER_DISPATCH(GST_TRACER_QUARK(HOOK_PAD_PULL_RANGE_PRE), \
+  GST_TRACER_DISPATCH_SCHEDULING(GST_TRACER_QUARK(HOOK_PAD_PULL_RANGE_PRE), \
     GstTracerHookPadPullRangePre, (GST_TRACER_ARGS, pad, offset, size)); \
 }G_STMT_END
 
@@ -268,7 +341,7 @@ typedef void (*GstTracerHookPadPullRangePre) (GObject *self, GstClockTime ts,
 typedef void (*GstTracerHookPadPullRangePost) (GObject *self, GstClockTime ts,
     GstPad *pad, GstBuffer *buffer, GstFlowReturn res);
 #define GST_TRACER_PAD_PULL_RANGE_POST(pad, buffer, res) G_STMT_START{ \
-  GST_TRACER_DISPATCH(GST_TRACER_QUARK(HOOK_PAD_PULL_RANGE_POST), \
+  GST_TRACER_DISPATCH_SCHEDULING(GST_TRACER_QUARK(HOOK_PAD_PULL_RANGE_POST), \
     GstTracerHookPadPullRangePost, (GST_TRACER_ARGS, pad, buffer, res)); \
 }G_STMT_END
 
@@ -289,7 +362,7 @@ typedef void (*GstTracerHookPadPullRangePost) (GObject *self, GstClockTime ts,
 typedef void (*GstTracerHookPadPushEventPre) (GObject *self, GstClockTime ts,
     GstPad *pad, GstEvent *event);
 #define GST_TRACER_PAD_PUSH_EVENT_PRE(pad, event) G_STMT_START{ \
-  GST_TRACER_DISPATCH(GST_TRACER_QUARK(HOOK_PAD_PUSH_EVENT_PRE), \
+  GST_TRACER_DISPATCH_EVENTS(GST_TRACER_QUARK(HOOK_PAD_PUSH_EVENT_PRE), \
     GstTracerHookPadPushEventPre, (GST_TRACER_ARGS, pad, event)); \
 }G_STMT_END
 
@@ -310,7 +383,7 @@ typedef void (*GstTracerHookPadPushEventPre) (GObject *self, GstClockTime ts,
 typedef void (*GstTracerHookPadPushEventPost) (GObject *self, GstClockTime ts,
     GstPad *pad, gboolean res);
 #define GST_TRACER_PAD_PUSH_EVENT_POST(pad, res) G_STMT_START{ \
-  GST_TRACER_DISPATCH(GST_TRACER_QUARK(HOOK_PAD_PUSH_EVENT_POST), \
+  GST_TRACER_DISPATCH_EVENTS(GST_TRACER_QUARK(HOOK_PAD_PUSH_EVENT_POST), \
     GstTracerHookPadPushEventPost, (GST_TRACER_ARGS, pad, res)); \
 }G_STMT_END
 
@@ -326,7 +399,7 @@ typedef void (*GstTracerHookPadPushEventPost) (GObject *self, GstClockTime ts,
 typedef void (*GstTracerHookPadSendEventPre) (GObject *self, GstClockTime ts,
     GstPad *pad, GstEvent *event);
 #define GST_TRACER_PAD_SEND_EVENT_PRE(pad, event) G_STMT_START{ \
-  GST_TRACER_DISPATCH(GST_TRACER_QUARK(HOOK_PAD_SEND_EVENT_PRE), \
+  GST_TRACER_DISPATCH_EVENTS(GST_TRACER_QUARK(HOOK_PAD_SEND_EVENT_PRE), \
     GstTracerHookPadSendEventPre, (GST_TRACER_ARGS, pad, event)); \
 }G_STMT_END
 
@@ -342,7 +415,7 @@ typedef void (*GstTracerHookPadSendEventPre) (GObject *self, GstClockTime ts,
 typedef void (*GstTracerHookPadSendEventPost) (GObject *self, GstClockTime ts,
     GstPad *pad, GstFlowReturn res);
 #define GST_TRACER_PAD_SEND_EVENT_POST(pad, res) G_STMT_START{ \
-  GST_TRACER_DISPATCH(GST_TRACER_QUARK(HOOK_PAD_SEND_EVENT_POST), \
+  GST_TRACER_DISPATCH_EVENTS(GST_TRACER_QUARK(HOOK_PAD_SEND_EVENT_POST), \
     GstTracerHookPadSendEventPost, (GST_TRACER_ARGS, pad, res)); \
 }G_STMT_END
 
@@ -358,7 +431,7 @@ typedef void (*GstTracerHookPadSendEventPost) (GObject *self, GstClockTime ts,
 typedef void (*GstTracerHookPadQueryPre) (GObject *self, GstClockTime ts,
     GstPad *pad, GstQuery *query);
 #define GST_TRACER_PAD_QUERY_PRE(pad, query) G_STMT_START{ \
-  GST_TRACER_DISPATCH(GST_TRACER_QUARK(HOOK_PAD_QUERY_PRE), \
+  GST_TRACER_DISPATCH_QUERIES(GST_TRACER_QUARK(HOOK_PAD_QUERY_PRE), \
     GstTracerHookPadQueryPre, (GST_TRACER_ARGS, pad, query)); \
 }G_STMT_END
 
@@ -375,7 +448,7 @@ typedef void (*GstTracerHookPadQueryPre) (GObject *self, GstClockTime ts,
 typedef void (*GstTracerHookPadQueryPost) (GObject *self, GstClockTime ts,
     GstPad *pad, GstQuery *query, gboolean res);
 #define GST_TRACER_PAD_QUERY_POST(pad, query, res) G_STMT_START{ \
-  GST_TRACER_DISPATCH(GST_TRACER_QUARK(HOOK_PAD_QUERY_POST), \
+  GST_TRACER_DISPATCH_QUERIES(GST_TRACER_QUARK(HOOK_PAD_QUERY_POST), \
     GstTracerHookPadQueryPost, (GST_TRACER_ARGS, pad, query, res)); \
 }G_STMT_END
 
@@ -391,7 +464,7 @@ typedef void (*GstTracerHookPadQueryPost) (GObject *self, GstClockTime ts,
 typedef void (*GstTracerHookElementPostMessagePre) (GObject *self,
     GstClockTime ts, GstElement *element, GstMessage *message);
 #define GST_TRACER_ELEMENT_POST_MESSAGE_PRE(element, message) G_STMT_START{ \
-  GST_TRACER_DISPATCH(GST_TRACER_QUARK(HOOK_ELEMENT_POST_MESSAGE_PRE), \
+  GST_TRACER_DISPATCH_MESSAGES(GST_TRACER_QUARK(HOOK_ELEMENT_POST_MESSAGE_PRE), \
     GstTracerHookElementPostMessagePre, (GST_TRACER_ARGS, element, message)); \
 }G_STMT_END
 
@@ -407,7 +480,7 @@ typedef void (*GstTracerHookElementPostMessagePre) (GObject *self,
 typedef void (*GstTracerHookElementPostMessagePost) (GObject *self,
     GstClockTime ts, GstElement *element, gboolean res);
 #define GST_TRACER_ELEMENT_POST_MESSAGE_POST(element, res) G_STMT_START{ \
-  GST_TRACER_DISPATCH(GST_TRACER_QUARK(HOOK_ELEMENT_POST_MESSAGE_POST), \
+  GST_TRACER_DISPATCH_MESSAGES(GST_TRACER_QUARK(HOOK_ELEMENT_POST_MESSAGE_POST), \
     GstTracerHookElementPostMessagePost, (GST_TRACER_ARGS, element, res)); \
 }G_STMT_END
 
@@ -423,7 +496,7 @@ typedef void (*GstTracerHookElementPostMessagePost) (GObject *self,
 typedef void (*GstTracerHookElementQueryPre) (GObject *self, GstClockTime ts,
     GstElement *element, GstQuery *query);
 #define GST_TRACER_ELEMENT_QUERY_PRE(element, query) G_STMT_START{ \
-  GST_TRACER_DISPATCH(GST_TRACER_QUARK(HOOK_ELEMENT_QUERY_PRE), \
+  GST_TRACER_DISPATCH_QUERIES(GST_TRACER_QUARK(HOOK_ELEMENT_QUERY_PRE), \
     GstTracerHookElementQueryPre, (GST_TRACER_ARGS, element, query)); \
 }G_STMT_END
 
@@ -440,7 +513,7 @@ typedef void (*GstTracerHookElementQueryPre) (GObject *self, GstClockTime ts,
 typedef void (*GstTracerHookElementQueryPost) (GObject *self, GstClockTime ts,
     GstElement *element, GstQuery *query, gboolean res);
 #define GST_TRACER_ELEMENT_QUERY_POST(element, query, res) G_STMT_START{ \
-  GST_TRACER_DISPATCH(GST_TRACER_QUARK(HOOK_ELEMENT_QUERY_POST), \
+  GST_TRACER_DISPATCH_QUERIES(GST_TRACER_QUARK(HOOK_ELEMENT_QUERY_POST), \
     GstTracerHookElementQueryPost, (GST_TRACER_ARGS, element, query, res)); \
 }G_STMT_END
 
@@ -455,7 +528,7 @@ typedef void (*GstTracerHookElementQueryPost) (GObject *self, GstClockTime ts,
 typedef void (*GstTracerHookElementNew) (GObject *self, GstClockTime ts,
     GstElement *element);
 #define GST_TRACER_ELEMENT_NEW(element) G_STMT_START{ \
-  GST_TRACER_DISPATCH(GST_TRACER_QUARK(HOOK_ELEMENT_NEW), \
+  GST_TRACER_DISPATCH_TOPOLOGY(GST_TRACER_QUARK(HOOK_ELEMENT_NEW), \
     GstTracerHookElementNew, (GST_TRACER_ARGS, element)); \
 }G_STMT_END
 
@@ -471,7 +544,7 @@ typedef void (*GstTracerHookElementNew) (GObject *self, GstClockTime ts,
 typedef void (*GstTracerHookElementAddPad) (GObject *self, GstClockTime ts,
     GstElement *element, GstPad *pad);
 #define GST_TRACER_ELEMENT_ADD_PAD(element, pad) G_STMT_START{ \
-  GST_TRACER_DISPATCH(GST_TRACER_QUARK(HOOK_ELEMENT_ADD_PAD), \
+  GST_TRACER_DISPATCH_TOPOLOGY(GST_TRACER_QUARK(HOOK_ELEMENT_ADD_PAD), \
     GstTracerHookElementAddPad, (GST_TRACER_ARGS, element, pad)); \
 }G_STMT_END
 
@@ -487,7 +560,7 @@ typedef void (*GstTracerHookElementAddPad) (GObject *self, GstClockTime ts,
 typedef void (*GstTracerHookElementRemovePad) (GObject *self, GstClockTime ts,
     GstElement *element, GstPad *pad);
 #define GST_TRACER_ELEMENT_REMOVE_PAD(element, pad) G_STMT_START{ \
-  GST_TRACER_DISPATCH(GST_TRACER_QUARK(HOOK_ELEMENT_REMOVE_PAD), \
+  GST_TRACER_DISPATCH_TOPOLOGY(GST_TRACER_QUARK(HOOK_ELEMENT_REMOVE_PAD), \
     GstTracerHookElementRemovePad, (GST_TRACER_ARGS, element, pad)); \
 }G_STMT_END
 
@@ -503,7 +576,7 @@ typedef void (*GstTracerHookElementRemovePad) (GObject *self, GstClockTime ts,
 typedef void (*GstTracerHookElementChangeStatePre) (GObject *self,
     GstClockTime ts, GstElement *element, GstStateChange transition);
 #define GST_TRACER_ELEMENT_CHANGE_STATE_PRE(element, transition) G_STMT_START{ \
-  GST_TRACER_DISPATCH(GST_TRACER_QUARK(HOOK_ELEMENT_CHANGE_STATE_PRE), \
+  GST_TRACER_DISPATCH_TOPOLOGY(GST_TRACER_QUARK(HOOK_ELEMENT_CHANGE_STATE_PRE), \
     GstTracerHookElementChangeStatePre, (GST_TRACER_ARGS, element, transition)); \
 }G_STMT_END
 
@@ -521,7 +594,7 @@ typedef void (*GstTracerHookElementChangeStatePost) (GObject *self,
     GstClockTime ts, GstElement *element, GstStateChange transition,
     GstStateChangeReturn result);
 #define GST_TRACER_ELEMENT_CHANGE_STATE_POST(element, transition, result) G_STMT_START{ \
-  GST_TRACER_DISPATCH(GST_TRACER_QUARK(HOOK_ELEMENT_CHANGE_STATE_POST), \
+  GST_TRACER_DISPATCH_TOPOLOGY(GST_TRACER_QUARK(HOOK_ELEMENT_CHANGE_STATE_POST), \
     GstTracerHookElementChangeStatePost, (GST_TRACER_ARGS, element, transition, result)); \
 }G_STMT_END
 
@@ -537,7 +610,7 @@ typedef void (*GstTracerHookElementChangeStatePost) (GObject *self,
 typedef void (*GstTracerHookBinAddPre) (GObject *self, GstClockTime ts,
     GstBin *bin, GstElement *element);
 #define GST_TRACER_BIN_ADD_PRE(bin, element) G_STMT_START{ \
-  GST_TRACER_DISPATCH(GST_TRACER_QUARK(HOOK_BIN_ADD_PRE), \
+  GST_TRACER_DISPATCH_TOPOLOGY(GST_TRACER_QUARK(HOOK_BIN_ADD_PRE), \
     GstTracerHookBinAddPre, (GST_TRACER_ARGS, bin, element)); \
 }G_STMT_END
 
@@ -554,7 +627,7 @@ typedef void (*GstTracerHookBinAddPre) (GObject *self, GstClockTime ts,
 typedef void (*GstTracerHookBinAddPost) (GObject *self, GstClockTime ts,
     GstBin *bin, GstElement *element, gboolean result);
 #define GST_TRACER_BIN_ADD_POST(bin, element, result) G_STMT_START{ \
-  GST_TRACER_DISPATCH(GST_TRACER_QUARK(HOOK_BIN_ADD_POST), \
+  GST_TRACER_DISPATCH_TOPOLOGY(GST_TRACER_QUARK(HOOK_BIN_ADD_POST), \
     GstTracerHookBinAddPost, (GST_TRACER_ARGS, bin, element, result)); \
 }G_STMT_END
 
@@ -570,7 +643,7 @@ typedef void (*GstTracerHookBinAddPost) (GObject *self, GstClockTime ts,
 typedef void (*GstTracerHookBinRemovePre) (GObject *self, GstClockTime ts,
     GstBin *bin, GstElement *element);
 #define GST_TRACER_BIN_REMOVE_PRE(bin, element) G_STMT_START{ \
-  GST_TRACER_DISPATCH(GST_TRACER_QUARK(HOOK_BIN_REMOVE_PRE), \
+  GST_TRACER_DISPATCH_TOPOLOGY(GST_TRACER_QUARK(HOOK_BIN_REMOVE_PRE), \
     GstTracerHookBinRemovePre, (GST_TRACER_ARGS, bin, element)); \
 }G_STMT_END
 
@@ -586,7 +659,7 @@ typedef void (*GstTracerHookBinRemovePre) (GObject *self, GstClockTime ts,
 typedef void (*GstTracerHookBinRemovePost) (GObject *self, GstClockTime ts,
     GstBin *bin, gboolean result);
 #define GST_TRACER_BIN_REMOVE_POST(bin, result) G_STMT_START{ \
-  GST_TRACER_DISPATCH(GST_TRACER_QUARK(HOOK_BIN_REMOVE_POST), \
+  GST_TRACER_DISPATCH_TOPOLOGY(GST_TRACER_QUARK(HOOK_BIN_REMOVE_POST), \
     GstTracerHookBinRemovePost, (GST_TRACER_ARGS, bin, result)); \
 }G_STMT_END
 
@@ -602,7 +675,7 @@ typedef void (*GstTracerHookBinRemovePost) (GObject *self, GstClockTime ts,
 typedef void (*GstTracerHookPadLinkPre) (GObject *self, GstClockTime ts,
     GstPad *srcpad, GstPad *sinkpad);
 #define GST_TRACER_PAD_LINK_PRE(srcpad, sinkpad) G_STMT_START{ \
-  GST_TRACER_DISPATCH(GST_TRACER_QUARK(HOOK_PAD_LINK_PRE), \
+  GST_TRACER_DISPATCH_TOPOLOGY(GST_TRACER_QUARK(HOOK_PAD_LINK_PRE), \
     GstTracerHookPadLinkPre, (GST_TRACER_ARGS, srcpad, sinkpad)); \
 }G_STMT_END
 
@@ -619,7 +692,7 @@ typedef void (*GstTracerHookPadLinkPre) (GObject *self, GstClockTime ts,
 typedef void (*GstTracerHookPadLinkPost) (GObject *self, GstClockTime ts,
     GstPad *srcpad, GstPad *sinkpad, GstPadLinkReturn result);
 #define GST_TRACER_PAD_LINK_POST(srcpad, sinkpad, result) G_STMT_START{ \
-  GST_TRACER_DISPATCH(GST_TRACER_QUARK(HOOK_PAD_LINK_POST), \
+  GST_TRACER_DISPATCH_TOPOLOGY(GST_TRACER_QUARK(HOOK_PAD_LINK_POST), \
     GstTracerHookPadLinkPost, (GST_TRACER_ARGS, srcpad, sinkpad, result)); \
 }G_STMT_END
 
@@ -635,7 +708,7 @@ typedef void (*GstTracerHookPadLinkPost) (GObject *self, GstClockTime ts,
 typedef void (*GstTracerHookPadUnlinkPre) (GObject *self, GstClockTime ts,
     GstPad *srcpad, GstPad *sinkpad);
 #define GST_TRACER_PAD_UNLINK_PRE(srcpad, sinkpad) G_STMT_START{ \
-  GST_TRACER_DISPATCH(GST_TRACER_QUARK(HOOK_PAD_UNLINK_PRE), \
+  GST_TRACER_DISPATCH_TOPOLOGY(GST_TRACER_QUARK(HOOK_PAD_UNLINK_PRE), \
     GstTracerHookPadUnlinkPre, (GST_TRACER_ARGS, srcpad, sinkpad)); \
 }G_STMT_END
 
@@ -652,7 +725,7 @@ typedef void (*GstTracerHookPadUnlinkPre) (GObject *self, GstClockTime ts,
 typedef void (*GstTracerHookPadUnlinkPost) (GObject *self, GstClockTime ts,
     GstPad *srcpad, GstPad *sinkpad, gboolean result);
 #define GST_TRACER_PAD_UNLINK_POST(srcpad, sinkpad, result) G_STMT_START{ \
-  GST_TRACER_DISPATCH(GST_TRACER_QUARK(HOOK_PAD_UNLINK_POST), \
+  GST_TRACER_DISPATCH_TOPOLOGY(GST_TRACER_QUARK(HOOK_PAD_UNLINK_POST), \
     GstTracerHookPadUnlinkPost, (GST_TRACER_ARGS, srcpad, sinkpad, result)); \
 }G_STMT_END
 
@@ -667,7 +740,7 @@ typedef void (*GstTracerHookPadUnlinkPost) (GObject *self, GstClockTime ts,
 typedef void (*GstTracerHookMiniObjectCreated) (GObject *self, GstClockTime ts,
     GstMiniObject *object);
 #define GST_TRACER_MINI_OBJECT_CREATED(object) G_STMT_START{ \
-  GST_TRACER_DISPATCH(GST_TRACER_QUARK(HOOK_MINI_OBJECT_CREATED), \
+  GST_TRACER_DISPATCH_LIFECYCLE(GST_TRACER_QUARK(HOOK_MINI_OBJECT_CREATED), \
     GstTracerHookMiniObjectCreated, (GST_TRACER_ARGS, object)); \
 }G_STMT_END
 
@@ -683,7 +756,7 @@ typedef void (*GstTracerHookMiniObjectCreated) (GObject *self, GstClockTime ts,
 typedef void (*GstTracerHookMiniObjectDestroyed) (GObject *self, GstClockTime ts,
     GstMiniObject *object);
 #define GST_TRACER_MINI_OBJECT_DESTROYED(object) G_STMT_START{ \
-  GST_TRACER_DISPATCH(GST_TRACER_QUARK(HOOK_MINI_OBJECT_DESTROYED), \
+  GST_TRACER_DISPATCH_LIFECYCLE(GST_TRACER_QUARK(HOOK_MINI_OBJECT_DESTROYED), \
     GstTracerHookMiniObjectDestroyed, (GST_TRACER_ARGS, object)); \
 }G_STMT_END
 
@@ -700,7 +773,7 @@ typedef void (*GstTracerHookMiniObjectDestroyed) (GObject *self, GstClockTime ts
 typedef void (*GstTracerHookObjectUnreffed) (GObject *self, GstClockTime ts,
     GstObject *object, gint new_refcount);
 #define GST_TRACER_OBJECT_UNREFFED(object, new_refcount) G_STMT_START{ \
-  GST_TRACER_DISPATCH(GST_TRACER_QUARK(HOOK_OBJECT_UNREFFED), \
+  GST_TRACER_DISPATCH_REFCOUNT(GST_TRACER_QUARK(HOOK_OBJECT_UNREFFED), \
     GstTracerHookObjectUnreffed, (GST_TRACER_ARGS, object, new_refcount)); \
 }G_STMT_END
 
@@ -717,7 +790,7 @@ typedef void (*GstTracerHookObjectUnreffed) (GObject *self, GstClockTime ts,
 typedef void (*GstTracerHookObjectReffed) (GObject *self, GstClockTime ts,
     GstObject *object, gint new_refcount);
 #define GST_TRACER_OBJECT_REFFED(object, new_refcount) G_STMT_START{ \
-  GST_TRACER_DISPATCH(GST_TRACER_QUARK(HOOK_OBJECT_REFFED), \
+  GST_TRACER_DISPATCH_REFCOUNT(GST_TRACER_QUARK(HOOK_OBJECT_REFFED), \
     GstTracerHookObjectReffed, (GST_TRACER_ARGS, object, new_refcount)); \
 }G_STMT_END
 
@@ -734,7 +807,7 @@ typedef void (*GstTracerHookObjectReffed) (GObject *self, GstClockTime ts,
 typedef void (*GstTracerHookMiniObjectUnreffed) (GObject *self, GstClockTime ts,
     GstMiniObject *object, gint new_refcount);
 #define GST_TRACER_MINI_OBJECT_UNREFFED(object, new_refcount) G_STMT_START{ \
-  GST_TRACER_DISPATCH(GST_TRACER_QUARK(HOOK_MINI_OBJECT_UNREFFED), \
+  GST_TRACER_DISPATCH_REFCOUNT(GST_TRACER_QUARK(HOOK_MINI_OBJECT_UNREFFED), \
     GstTracerHookMiniObjectUnreffed, (GST_TRACER_ARGS, object, new_refcount)); \
 }G_STMT_END
 
@@ -751,7 +824,7 @@ typedef void (*GstTracerHookMiniObjectUnreffed) (GObject *self, GstClockTime ts,
 typedef void (*GstTracerHookMiniObjectReffed) (GObject *self, GstClockTime ts,
     GstMiniObject *object, gint new_refcount);
 #define GST_TRACER_MINI_OBJECT_REFFED(object, new_refcount) G_STMT_START{ \
-  GST_TRACER_DISPATCH(GST_TRACER_QUARK(HOOK_MINI_OBJECT_REFFED), \
+  GST_TRACER_DISPATCH_REFCOUNT(GST_TRACER_QUARK(HOOK_MINI_OBJECT_REFFED), \
     GstTracerHookMiniObjectReffed, (GST_TRACER_ARGS, object, new_refcount)); \
 }G_STMT_END
 
@@ -766,7 +839,7 @@ typedef void (*GstTracerHookMiniObjectReffed) (GObject *self, GstClockTime ts,
 typedef void (*GstTracerHookObjectCreated) (GObject *self, GstClockTime ts,
     GstObject *object);
 #define GST_TRACER_OBJECT_CREATED(object) G_STMT_START{ \
-  GST_TRACER_DISPATCH(GST_TRACER_QUARK(HOOK_OBJECT_CREATED), \
+  GST_TRACER_DISPATCH_LIFECYCLE(GST_TRACER_QUARK(HOOK_OBJECT_CREATED), \
     GstTracerHookObjectCreated, (GST_TRACER_ARGS, object)); \
 }G_STMT_END
 
@@ -783,7 +856,7 @@ typedef void (*GstTracerHookObjectDestroyed) (GObject *self, GstClockTime ts,
     GstObject *object);
 
 #define GST_TRACER_OBJECT_DESTROYED(object) G_STMT_START{ \
-  GST_TRACER_DISPATCH(GST_TRACER_QUARK(HOOK_OBJECT_DESTROYED), \
+  GST_TRACER_DISPATCH_LIFECYCLE(GST_TRACER_QUARK(HOOK_OBJECT_DESTROYED), \
     GstTracerHookObjectDestroyed, (GST_TRACER_ARGS, object)); \
 }G_STMT_END
 
@@ -809,7 +882,7 @@ typedef void (*GstTracerHookPluginFeatureLoaded) (GObject *self, GstClockTime ts
  * Since: 1.20
  */
 #define GST_TRACER_PLUGIN_FEATURE_LOADED(feature) G_STMT_START{ \
-  GST_TRACER_DISPATCH(GST_TRACER_QUARK(HOOK_PLUGIN_FEATURE_LOADED), \
+  GST_TRACER_DISPATCH_TOPOLOGY(GST_TRACER_QUARK(HOOK_PLUGIN_FEATURE_LOADED), \
     GstTracerHookPluginFeatureLoaded, (GST_TRACER_ARGS, feature)); \
 }G_STMT_END
 
@@ -837,7 +910,7 @@ typedef void (*GstTracerHookPadChainPre) (GObject *self, GstClockTime ts,
  * Since: 1.22
  */
 #define GST_TRACER_PAD_CHAIN_PRE(pad, buffer) G_STMT_START{ \
-  GST_TRACER_DISPATCH(GST_TRACER_QUARK(HOOK_PAD_CHAIN_PRE), \
+  GST_TRACER_DISPATCH_SCHEDULING(GST_TRACER_QUARK(HOOK_PAD_CHAIN_PRE), \
     GstTracerHookPadChainPre, (GST_TRACER_ARGS, pad, buffer)); \
 }G_STMT_END
 
@@ -865,7 +938,7 @@ typedef void (*GstTracerHookPadChainPost) (GObject * self, GstClockTime ts,
  * Since: 1.22
  */
 #define GST_TRACER_PAD_CHAIN_POST(pad, res) G_STMT_START{ \
-  GST_TRACER_DISPATCH(GST_TRACER_QUARK(HOOK_PAD_CHAIN_POST), \
+  GST_TRACER_DISPATCH_SCHEDULING(GST_TRACER_QUARK(HOOK_PAD_CHAIN_POST), \
     GstTracerHookPadChainPost, (GST_TRACER_ARGS, pad, res)); \
 }G_STMT_END
 
@@ -893,7 +966,7 @@ typedef void (*GstTracerHookPadChainListPre) (GObject *self, GstClockTime ts,
  * Since: 1.22
  */
 #define GST_TRACER_PAD_CHAIN_LIST_PRE(pad, list) G_STMT_START{ \
-  GST_TRACER_DISPATCH(GST_TRACER_QUARK(HOOK_PAD_CHAIN_LIST_PRE), \
+  GST_TRACER_DISPATCH_SCHEDULING(GST_TRACER_QUARK(HOOK_PAD_CHAIN_LIST_PRE), \
     GstTracerHookPadChainListPre, (GST_TRACER_ARGS, pad, list)); \
 }G_STMT_END
 
@@ -922,7 +995,7 @@ typedef void (*GstTracerHookPadChainListPost) (GObject *self, GstClockTime ts,
  * Since: 1.22
  */
 #define GST_TRACER_PAD_CHAIN_LIST_POST(pad, res) G_STMT_START{ \
-  GST_TRACER_DISPATCH(GST_TRACER_QUARK(HOOK_PAD_CHAIN_LIST_POST), \
+  GST_TRACER_DISPATCH_SCHEDULING(GST_TRACER_QUARK(HOOK_PAD_CHAIN_LIST_POST), \
     GstTracerHookPadChainListPost, (GST_TRACER_ARGS, pad, res)); \
 }G_STMT_END
 
@@ -947,7 +1020,7 @@ typedef void (*GstTracerHookMemoryInit) (GObject *self, GstClockTime ts,
  * Since: 1.26
  */
 #define GST_TRACER_MEMORY_INIT(mem) G_STMT_START{ \
-  GST_TRACER_DISPATCH(GST_TRACER_QUARK(HOOK_MEMORY_INIT), \
+  GST_TRACER_DISPATCH_MEMORY(GST_TRACER_QUARK(HOOK_MEMORY_INIT), \
     GstTracerHookMemoryInit, (GST_TRACER_ARGS, mem)); \
 }G_STMT_END
 
@@ -971,7 +1044,7 @@ typedef void (*GstTracerHookMemoryFreePre) (GObject *self, GstClockTime ts, GstM
  * Since: 1.26
  */
 #define GST_TRACER_MEMORY_FREE_PRE(mem) G_STMT_START{ \
-  GST_TRACER_DISPATCH(GST_TRACER_QUARK(HOOK_MEMORY_FREE_PRE), \
+  GST_TRACER_DISPATCH_MEMORY(GST_TRACER_QUARK(HOOK_MEMORY_FREE_PRE), \
     GstTracerHookMemoryFreePre, (GST_TRACER_ARGS, mem)); \
 }G_STMT_END
 
@@ -995,7 +1068,7 @@ typedef void (*GstTracerHookMemoryFreePost) (GObject *self, GstClockTime ts, Gst
  * Since: 1.26
  */
 #define GST_TRACER_MEMORY_FREE_POST(mem) G_STMT_START{ \
-  GST_TRACER_DISPATCH(GST_TRACER_QUARK(HOOK_MEMORY_FREE_POST), \
+  GST_TRACER_DISPATCH_MEMORY(GST_TRACER_QUARK(HOOK_MEMORY_FREE_POST), \
     GstTracerHookMemoryFreePost, (GST_TRACER_ARGS, mem)); \
 }G_STMT_END
 
@@ -1022,7 +1095,7 @@ typedef void (*GstTracerHookPoolBufferQueued) (GObject *self, GstClockTime ts, G
  * Since: 1.28
  */
 #define GST_TRACER_POOL_BUFFER_QUEUED(pool, buf) G_STMT_START{ \
-  GST_TRACER_DISPATCH(GST_TRACER_QUARK(HOOK_POOL_BUFFER_QUEUED), \
+  GST_TRACER_DISPATCH_SCHEDULING(GST_TRACER_QUARK(HOOK_POOL_BUFFER_QUEUED), \
     GstTracerHookPoolBufferQueued, (GST_TRACER_ARGS, pool, buf)); \
 }G_STMT_END
 
@@ -1048,7 +1121,7 @@ typedef void (*GstTracerHookPoolBufferDequeued) (GObject *self, GstClockTime ts,
  * Since: 1.28
  */
 #define GST_TRACER_POOL_BUFFER_DEQUEUED(pool, buffer) G_STMT_START{ \
-  GST_TRACER_DISPATCH(GST_TRACER_QUARK(HOOK_POOL_BUFFER_DEQUEUED), \
+  GST_TRACER_DISPATCH_SCHEDULING(GST_TRACER_QUARK(HOOK_POOL_BUFFER_DEQUEUED), \
     GstTracerHookPoolBufferDequeued, (GST_TRACER_ARGS, pool, buffer)); \
 }G_STMT_END
 
