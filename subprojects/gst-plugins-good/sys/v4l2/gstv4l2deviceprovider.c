@@ -296,6 +296,10 @@ gst_v4l2_device_provider_device_from_udev (GstV4l2DeviceProvider * provider,
   if ((str = g_udev_device_get_property (udev_device, "ID_SERIAL")) && *str)
     gst_structure_set (props, "device.serial", G_TYPE_STRING, str, NULL);
 
+  if ((str = g_udev_device_get_property (udev_device, "ID_SERIAL_SHORT"))
+      && *str)
+    gst_structure_set (props, "device.serial_short", G_TYPE_STRING, str, NULL);
+
   if ((str = g_udev_device_get_property (udev_device, "ID_V4L_CAPABILITIES"))
       && *str)
     gst_structure_set (props, "device.capabilities", G_TYPE_STRING, str, NULL);
