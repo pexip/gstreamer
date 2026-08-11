@@ -2926,11 +2926,20 @@ gst_harness_add_sink_harness (GstHarness * h, GstHarness * sink_harness)
   if (fwdpad)
     gst_object_ref (fwdpad);
 
-  if (priv->forwarding && h->sinkpad && fwdpad) {
-    HARNESS_UNLOCK (h);
-    gst_pad_sticky_events_foreach (h->sinkpad, forward_sticky_events, fwdpad);
-    HARNESS_LOCK (h);
-  }
+   /* Forward the currently-stored sticky events and install the forward pad
+    * atomically, i.e. without dropping the harness lock in between, to close a
+    * race with gst_harness_sink_event() on the streaming thread:
+    *   - setting the forward pad *after* an unlocked sweep loses an event that
+    *     arrives in the gap (queued with sink_forward_pad == NULL, never
+    *     forwarded) -> the sink-harness misses caps -> NOT_NEGOTIATED;
+    *   - setting it *before* the sweep forwards a late event ahead of the ones
+    *     still being swept -> "sticky event misordering, got segment before caps".
+    * Holding the lock across both serialises them with gst_harness_sink_event():
+    * a concurrent event is either already visible to the sweep, or forwarded
+    * strictly after the sweep completes and the forward pad is set.
+    * Re-forwarding an already-swept sticky is idempotent. */
+   if (priv->forwarding && h->sinkpad && fwdpad)
+     gst_pad_sticky_events_foreach (h->sinkpad, forward_sticky_events, fwdpad);
 
   gst_harness_set_forward_pad (h, fwdpad);
   if (fwdpad)
