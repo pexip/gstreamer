@@ -391,6 +391,73 @@ GST_START_TEST (test_src_harness_buflist)
 
 GST_END_TEST;
 
+typedef struct
+{
+  GstHarness *h;
+  GMutex lock;
+  GCond cond;
+  gboolean go;
+} CapsRaceCtx;
+
+static gpointer
+push_caps_once_thread (gpointer data)
+{
+  CapsRaceCtx *ctx = data;
+  GstCaps *caps;
+
+  g_mutex_lock (&ctx->lock);
+  while (!ctx->go)
+    g_cond_wait (&ctx->cond, &ctx->lock);
+  g_mutex_unlock (&ctx->lock);
+
+  gst_harness_push_event (ctx->h, gst_event_new_stream_start ("999"));
+  caps = gst_caps_new_empty_simple ("mycaps");
+  gst_harness_push_event (ctx->h, gst_event_new_caps (caps));
+  gst_caps_unref (caps);
+  return NULL;
+}
+
+GST_START_TEST (test_forward_sticky_events_to_sink_harness_race)
+{
+  gint i;
+
+  for (i = 0; i < 1000; i++) {
+    GstHarness *h = gst_harness_new ("identity");
+    CapsRaceCtx ctx = { h, };
+    GThread *thread;
+    GstElement *sink;
+    GstPad *sinkpad;
+
+    g_mutex_init (&ctx.lock);
+    g_cond_init (&ctx.cond);
+    ctx.go = FALSE;
+    thread = g_thread_new ("push-caps", push_caps_once_thread, &ctx);
+
+    /* release the pusher and race it against add_sink */
+    g_mutex_lock (&ctx.lock);
+    ctx.go = TRUE;
+    g_cond_signal (&ctx.cond);
+    g_mutex_unlock (&ctx.lock);
+
+    gst_harness_add_sink (h, "fakesink");
+    g_thread_join (thread);
+
+    /* whenever the caps was pushed, it must have reached the sink element:
+     * before add -> forwarded by the sticky-event sweep; after add ->
+     * forwarded via the forward pad; during the sweep window -> the case this
+     * fix addresses. On unfixed code the last case intermittently drops it. */
+    sink = gst_harness_find_element (h->sink_harness, "fakesink");
+    sinkpad = gst_element_get_static_pad (sink, "sink");
+    fail_unless (gst_pad_has_current_caps (sinkpad));
+    gst_object_unref (sinkpad);
+    gst_object_unref (sink);
+
+    g_cond_clear (&ctx.cond);
+    g_mutex_clear (&ctx.lock);
+    gst_harness_teardown (h);
+  }
+}
+GST_END_TEST;
 
 static Suite *
 gst_harness_suite (void)
@@ -411,6 +478,8 @@ gst_harness_suite (void)
       test_forward_event_and_query_to_sink_harness_while_teardown);
   tcase_add_test (tc_chain,
       test_forward_sticky_events_to_sink_harness_while_teardown);
+  
+  tcase_add_test (tc_chain, test_forward_sticky_events_to_sink_harness_race);
 
   tcase_add_test (tc_chain, test_get_all_data);
 
