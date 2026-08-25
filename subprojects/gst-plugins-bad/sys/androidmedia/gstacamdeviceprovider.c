@@ -265,6 +265,13 @@ gst_acam_device_provider_on_camera_available (void *context,
 
   camera_index =
       gst_acam_device_provider_find_camera_index (provider, camera_id);
+  if (camera_index < 0) {
+    GST_DEBUG_OBJECT (provider,
+        "Ignoring camera (%s) because it is not in the camera ID list",
+        camera_id);
+    return;
+  }
+
   device =
       gst_acam_device_provider_create_device (provider, camera_id,
       camera_index);
