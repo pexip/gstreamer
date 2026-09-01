@@ -4503,11 +4503,15 @@ gst_pad_chain_data_unchecked (GstPad * pad, GstPadProbeType type, void *data)
     pad->priv->last_cookie = pad->priv->events_cookie;
   }
 #endif
-
-  PROBE_HANDLE (pad, type | GST_PAD_PROBE_TYPE_BLOCK, data, probe_stopped,
+  /* When buffer list is being pushed and the pad has a default chainlistfunc,
+   * we don't need to call the probes, as default chainlistfunc will
+   * call eventualy probes for each buffer in the list. */
+  if ((!(type & GST_PAD_PROBE_TYPE_BUFFER_LIST))
+      || (GST_PAD_CHAINLISTFUNC (pad) != gst_pad_chain_list_default)) {
+    PROBE_HANDLE (pad, type | GST_PAD_PROBE_TYPE_BLOCK, data, probe_stopped,
       probe_handled);
-
-  PROBE_HANDLE (pad, type, data, probe_stopped, probe_handled);
+    PROBE_HANDLE (pad, type, data, probe_stopped, probe_handled);
+  }
 
   ACQUIRE_PARENT (pad, parent, no_parent);
   GST_OBJECT_UNLOCK (pad);
