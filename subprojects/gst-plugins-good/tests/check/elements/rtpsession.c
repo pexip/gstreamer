@@ -201,10 +201,12 @@ generate_rtx_buffer (guint rtx_seqnum, GstBuffer * buffer)
   gst_rtp_buffer_map (new_buffer, GST_MAP_WRITE, &new_rtp);
   gst_rtp_buffer_set_payload_type (&new_rtp, TEST_RTX_BUF_PT);
   gst_rtp_buffer_set_ssrc (&new_rtp, TEST_RTX_BUF_SSRC);
-  gst_rtp_buffer_set_timestamp (&new_rtp, orig_timestamp);
   gst_rtp_buffer_set_seq (&new_rtp, rtx_seqnum);
+  gst_rtp_buffer_set_timestamp (&new_rtp, orig_timestamp);
   gst_rtp_buffer_unmap (&new_rtp);
 
+  /* Copy over timestamps */
+  gst_buffer_copy_into (new_buffer, buffer, GST_BUFFER_COPY_TIMESTAMPS, 0, -1);
   gst_rtp_repair_meta_add (new_buffer, 0, 1, orig_ssrc, &orig_seqnum,
       &orig_timestamp, 1);
 
@@ -5383,25 +5385,137 @@ construct_initial_state_for_rtx (SessionHarness * h_send,
 }
 
 static gdouble
-get_recovery_pct (SessionHarness * h)
+twcc_stats_get_recovery_pct (GstStructure * stats)
 {
   gdouble stats_recovery_pct;
-  GstStructure *twcc_stats;
-
-  twcc_stats = session_harness_get_twcc_stats_full (h,
-      300 * GST_MSECOND, 100 * GST_MSECOND);
-
-  fail_unless (gst_structure_get (twcc_stats,
+  fail_unless (gst_structure_get (stats,
           "recovery-pct", G_TYPE_DOUBLE, &stats_recovery_pct, NULL));
-
-  gst_structure_free (twcc_stats);
   return stats_recovery_pct;
 }
 
-static void
-fail_unless_twcc_stats_recovery (SessionHarness * h, gdouble recovery_pct)
+/* Look up a single means of repair (by redundant ssrc + pt) in the
+ * "recovery-by-repair" value array of a TWCC stats structure. */
+static gboolean
+twcc_stats_get_recovery_by_repair (GstStructure * stats, guint32 ssrc, guint pt,
+    guint * recovered_count, gdouble * recovery_pct)
 {
-  fail_unless_equals_float (recovery_pct, get_recovery_pct (h));
+  GValueArray *arr = NULL;
+  gboolean found = FALSE;
+  guint i;
+
+  fail_unless (gst_structure_get (stats, "recovery-by-repair",
+          G_TYPE_VALUE_ARRAY, &arr, NULL));
+  if (!arr)
+    return FALSE;
+
+  for (i = 0; i < arr->n_values; i++) {
+    GstStructure *m = g_value_get_boxed (g_value_array_get_nth (arr, i));
+    guint m_ssrc = 0, m_pt = 0;
+    gst_structure_get (m, "ssrc", G_TYPE_UINT, &m_ssrc,
+        "pt", G_TYPE_UINT, &m_pt, NULL);
+    if (m_ssrc == ssrc && m_pt == pt) {
+      if (recovered_count)
+        gst_structure_get (m, "recovered-count", G_TYPE_UINT, recovered_count,
+            NULL);
+      if (recovery_pct)
+        gst_structure_get (m, "recovery-pct", G_TYPE_DOUBLE, recovery_pct,
+            NULL);
+      found = TRUE;
+      break;
+    }
+  }
+  g_value_array_free (arr);
+  return found;
+}
+
+/* Look up the overlap cell for the unordered means-of-repair pair {a, b} in the
+ * "recovery-overlap" value array of a TWCC stats structure. */
+static gboolean
+twcc_stats_get_overlap (GstStructure * stats,
+    guint32 ssrc_a, guint pt_a, guint32 ssrc_b, guint pt_b,
+    guint * count, gdouble * pct)
+{
+  GValueArray *arr = NULL;
+  gboolean found = FALSE;
+  guint i;
+
+  fail_unless (gst_structure_get (stats, "recovery-overlap",
+          G_TYPE_VALUE_ARRAY, &arr, NULL));
+  if (!arr)
+    return FALSE;
+
+  for (i = 0; i < arr->n_values; i++) {
+    GstStructure *o = g_value_get_boxed (g_value_array_get_nth (arr, i));
+    guint o_sa = 0, o_pa = 0, o_sb = 0, o_pb = 0;
+    gst_structure_get (o, "ssrc-a", G_TYPE_UINT, &o_sa, "pt-a", G_TYPE_UINT,
+        &o_pa, "ssrc-b", G_TYPE_UINT, &o_sb, "pt-b", G_TYPE_UINT, &o_pb, NULL);
+    if ((o_sa == ssrc_a && o_pa == pt_a && o_sb == ssrc_b && o_pb == pt_b)
+        || (o_sa == ssrc_b && o_pa == pt_b && o_sb == ssrc_a && o_pb == pt_a)) {
+      if (count)
+        gst_structure_get (o, "count", G_TYPE_UINT, count, NULL);
+      if (pct)
+        gst_structure_get (o, "pct", G_TYPE_DOUBLE, pct, NULL);
+      found = TRUE;
+      break;
+    }
+  }
+  g_value_array_free (arr);
+  return found;
+}
+
+static guint
+twcc_stats_num_repairs (GstStructure * stats)
+{
+  GValueArray *arr = NULL;
+  guint n = 0;
+  gst_structure_get (stats, "recovery-by-repair", G_TYPE_VALUE_ARRAY, &arr,
+      NULL);
+  if (arr) {
+    n = arr->n_values;
+    g_value_array_free (arr);
+  }
+  return n;
+}
+
+static guint
+twcc_stats_num_overlaps (GstStructure * stats)
+{
+  GValueArray *arr = NULL;
+  guint n = 0;
+  gst_structure_get (stats, "recovery-overlap", G_TYPE_VALUE_ARRAY, &arr, NULL);
+  if (arr) {
+    n = arr->n_values;
+    g_value_array_free (arr);
+  }
+  return n;
+}
+
+
+/* Sum the per-repair "bitrate-sent" emitted in the "recovery-by-repair" array
+   for the given payload type. Returns 0 if no entry for @pt is present. */
+static guint
+twcc_stats_get_repair_bitrate_sent (GstStructure * stats, guint pt)
+{
+  GValueArray *repairs = NULL;
+  guint total = 0;
+
+  gst_structure_get (stats, "recovery-by-repair", G_TYPE_VALUE_ARRAY,
+      &repairs, NULL);
+  if (repairs) {
+    for (guint i = 0; i < repairs->n_values; i++) {
+      const GstStructure *rs =
+          gst_value_get_structure (g_value_array_get_nth (repairs, i));
+      guint entry_pt = 0;
+      guint bitrate_sent = 0;
+      gst_structure_get (rs, "pt", G_TYPE_UINT, &entry_pt,
+          "bitrate-sent", G_TYPE_UINT, &bitrate_sent, NULL);
+      if (entry_pt == pt)
+        total += bitrate_sent;
+    }
+    g_value_array_free (repairs);
+  }
+
+  return total;
 }
 
 static void
@@ -5433,6 +5547,7 @@ test_twcc_stats_rtx_recovery (gboolean rtx_arrive, gdouble recovery_pct)
   SessionHarness *h_send = session_harness_new ();
   SessionHarness *h_recv = session_harness_new ();
   guint i, next_seqnum;
+  GstStructure *twcc_stats;
 
   session_harness_add_twcc_caps_for_pt (h_send, TEST_BUF_PT);
   session_harness_add_twcc_caps_for_pt (h_send, TEST_RTX_BUF_PT);
@@ -5460,8 +5575,13 @@ test_twcc_stats_rtx_recovery (gboolean rtx_arrive, gdouble recovery_pct)
       session_harness_recv_rtcp (h_send,
           session_harness_produce_twcc (h_recv)));
 
-  fail_unless_twcc_stats_recovery (h_send, recovery_pct);
+  twcc_stats = session_harness_get_twcc_stats_full (h_send,
+      300 * GST_MSECOND, 100 * GST_MSECOND);
 
+  fail_unless_equals_float (recovery_pct,
+      twcc_stats_get_recovery_pct (twcc_stats));
+
+  gst_structure_free (twcc_stats);
   session_harness_free (h_send);
   session_harness_free (h_recv);
 }
@@ -5469,6 +5589,57 @@ test_twcc_stats_rtx_recovery (gboolean rtx_arrive, gdouble recovery_pct)
 GST_START_TEST (test_twcc_stats_rtx_recover_lost)
 {
   test_twcc_stats_rtx_recovery (TRUE, 100.0);
+}
+
+GST_END_TEST;
+
+/* When RTX packets are sent, the "recovery-by-repair" array must report a
+   non-zero per-repair "bitrate-sent" for the RTX payload type, and none for
+   the media payload type. */
+GST_START_TEST (test_twcc_stats_rtx_repair_bitrate)
+{
+  SessionHarness *h_send = session_harness_new ();
+  SessionHarness *h_recv = session_harness_new ();
+  guint i, next_seqnum;
+  GstStructure *twcc_stats;
+
+  session_harness_add_twcc_caps_for_pt (h_send, TEST_BUF_PT);
+  session_harness_add_twcc_caps_for_pt (h_send, TEST_RTX_BUF_PT);
+  session_harness_set_twcc_recv_ext_id (h_recv, TEST_TWCC_EXT_ID);
+
+  next_seqnum = construct_initial_state_for_rtx (h_send, h_recv);
+
+  for (i = 0; i < 3; i++) {
+    GstBuffer *buf;
+    GstBuffer *rtx_buf;
+
+    buf = generate_twcc_send_buffer (next_seqnum++, FALSE);
+    rtx_buf = generate_rtx_buffer (i, buf);
+
+    /* the original is lost, the RTX retransmission arrives */
+    send_recv_buffer (h_send, h_recv, buf, FALSE);
+    send_recv_buffer (h_send, h_recv, rtx_buf, TRUE);
+  }
+
+  send_recv_buffer (h_send, h_recv,
+      generate_twcc_send_buffer (next_seqnum++, TRUE), TRUE);
+
+  fail_unless_equals_int64 (GST_FLOW_OK,
+      session_harness_recv_rtcp (h_send,
+          session_harness_produce_twcc (h_recv)));
+
+  /* The RTX payload type must carry redundant bitrate; the media PT must not
+     appear as a means of repair. */
+  twcc_stats = session_harness_get_twcc_stats_full (h_send,
+      300 * GST_MSECOND, 100 * GST_MSECOND);
+  fail_unless (twcc_stats_get_repair_bitrate_sent (twcc_stats,
+          TEST_RTX_BUF_PT) > 0);
+  fail_unless_equals_int (twcc_stats_get_repair_bitrate_sent (twcc_stats,
+          TEST_BUF_PT), 0);
+
+  gst_structure_free (twcc_stats);
+  session_harness_free (h_send);
+  session_harness_free (h_recv);
 }
 
 GST_END_TEST;
@@ -5700,6 +5871,7 @@ GST_START_TEST (test_twcc_stats_long_rtx_recover)
   guint nframes = 100;
   guint nframes_to_skip = 10;
   guint pkt_in_frame = 10;
+  GstStructure *twcc_stats;
 
   GRand *rnd = g_rand_new_with_seed (101);
 
@@ -5740,13 +5912,17 @@ GST_START_TEST (test_twcc_stats_long_rtx_recover)
         session_harness_recv_rtcp (h_send,
             session_harness_produce_twcc (h_recv)));
 
+    twcc_stats = session_harness_get_twcc_stats_full (h_send,
+        300 * GST_MSECOND, 100 * GST_MSECOND);
     if (nframe > nframes_to_skip) {
-      const gdouble recovery_stats = get_recovery_pct (h_send);
+      const gdouble recovery_stats = twcc_stats_get_recovery_pct (twcc_stats);
       fail_if (recovery_stats != 100. && recovery_stats != -1.);
     } else {
-      const gdouble recovery_stats = get_recovery_pct (h_send);
+      const gdouble recovery_stats = twcc_stats_get_recovery_pct (twcc_stats);
       GST_ERROR ("Frame %d: recovery stats: %f", nframe, recovery_stats);
     }
+    gst_structure_free (twcc_stats);
+
   }
 
   g_rand_free (rnd);
@@ -5833,6 +6009,7 @@ GST_START_TEST (test_twcc_stats_block_fec_recover)
   guint i, next_seqnum;
   const guint window_size_ms = 400;
   const guint num_buffers = window_size_ms / TEST_BUF_MS + 1;
+  GstStructure *twcc_stats;
 
   guint16 fec_seqnum = 6666;
   gsize fec_num = 0;
@@ -5878,7 +6055,8 @@ GST_START_TEST (test_twcc_stats_block_fec_recover)
     }
 
     protects_seqnums[protects_seqnums_i] = next_seqnum;
-    protects_timestamps[protects_seqnums_i] = next_seqnum * TEST_RTP_TS_DURATION;
+    protects_timestamps[protects_seqnums_i] =
+        next_seqnum * TEST_RTP_TS_DURATION;
     protects_seqnums_i += 1;
     if (protects_seqnums_i >= block_len) {
       protects_seqnums_i = 0;
@@ -5903,7 +6081,258 @@ GST_START_TEST (test_twcc_stats_block_fec_recover)
   /* produce a twcc feedback to process those packets */
   session_harness_recv_rtcp (h_send, session_harness_produce_twcc (h_recv));
 
-  fail_unless_twcc_stats_recovery (h_send, 100.);
+  twcc_stats = session_harness_get_twcc_stats_full (h_send,
+      300 * GST_MSECOND, 100 * GST_MSECOND);
+
+  fail_unless_equals_float (100., twcc_stats_get_recovery_pct (twcc_stats));
+
+  gst_structure_free (twcc_stats);
+  session_harness_free (h_send);
+  session_harness_free (h_recv);
+  g_free (protects_seqnums);
+  g_free (protects_timestamps);
+}
+
+GST_END_TEST;
+
+
+/* A lost data packet that is retransmitted (RTX) AND protected by a FEC block,
+ * both of which are received, must be attributed to BOTH mechanisms and appear
+ * in the RTX-x-FEC overlap cell. */
+GST_START_TEST (test_twcc_stats_rtx_and_fec_overlap)
+{
+  SessionHarness *h_send = session_harness_new ();
+  SessionHarness *h_recv = session_harness_new ();
+  guint i;
+  guint next_seqnum;
+  GstStructure *twcc_stats;
+
+  const guint32 fec_ssrc = 0x12345678;
+  const guint8 fec_pt = 127;
+  const gsize nblocks = 6;
+  const gsize block_len = 4;
+  guint16 fec_seqnum = 5000;
+  guint fec_num = 0;
+
+  guint rtx_count = 0, fec_count = 0, overlap_count = 0;
+  gdouble rtx_pct = 0, fec_pct = 0, overlap_pct = 0;
+
+  guint16 *protects_seqnums = g_malloc0 (sizeof (guint16) * block_len);
+  guint32 *protects_timestamps = g_malloc0 (sizeof (guint32) * block_len);
+
+  session_harness_add_twcc_caps_for_pt (h_send, TEST_BUF_PT);
+  session_harness_add_twcc_caps_for_pt (h_send, TEST_RTX_BUF_PT);
+  session_harness_add_twcc_caps_for_pt (h_send, fec_pt);
+  session_harness_set_twcc_recv_ext_id (h_recv, TEST_TWCC_EXT_ID);
+
+  next_seqnum = construct_initial_state_for_rtx (h_send, h_recv);
+
+  for (gsize blk = 0; blk < nblocks; blk++) {
+    GstBuffer *fec_buf;
+
+    for (i = 0; i < block_len; i++) {
+      const guint seqnum = next_seqnum++;
+      GstBuffer *buf = generate_twcc_send_buffer (seqnum, FALSE);
+
+      protects_seqnums[i] = seqnum;
+      protects_timestamps[i] = (guint32) seqnum *(guint32) TEST_RTP_TS_DURATION;
+
+      if (i == 0) {
+        /* Build the RTX for the lost packet first (does not consume buf),
+           then lose the data packet and deliver the RTX. */
+        GstBuffer *rtx_buf = generate_rtx_buffer (fec_num, buf);
+        send_recv_buffer (h_send, h_recv, buf, FALSE);
+        send_recv_buffer (h_send, h_recv, rtx_buf, TRUE);
+      } else {
+        send_recv_buffer (h_send, h_recv, buf, TRUE);
+      }
+    }
+
+    /* One FEC packet protecting the whole block (capacity 1 == lost 1). */
+    fec_buf = generate_test_buffer_full (fec_num * TEST_BUF_DURATION,
+        fec_seqnum, fec_num * TEST_RTP_TS_DURATION, fec_ssrc,
+        blk == nblocks - 1, fec_pt, 0, 0, 0, 1, TEST_BUF_SSRC,
+        protects_seqnums, protects_timestamps, block_len);
+    send_recv_buffer (h_send, h_recv, fec_buf, TRUE);
+    fec_num++;
+    fec_seqnum++;
+  }
+
+  fail_unless_equals_int64 (GST_FLOW_OK,
+      session_harness_recv_rtcp (h_send,
+          session_harness_produce_twcc (h_recv)));
+
+  twcc_stats = session_harness_get_twcc_stats_full (h_send,
+      (nblocks * (block_len + 1) + 2) * TEST_BUF_DURATION, TEST_BUF_DURATION);
+
+  /* Both means of repair recovered every lost packet, so both should report
+     100% recovery, and the overlap cell between them should be present. */
+  fail_unless (twcc_stats_get_recovery_by_repair (twcc_stats, TEST_RTX_BUF_SSRC,
+          TEST_RTX_BUF_PT, &rtx_count, &rtx_pct));
+  fail_unless (twcc_stats_get_recovery_by_repair (twcc_stats, fec_ssrc, fec_pt,
+          &fec_count, &fec_pct));
+  fail_unless (twcc_stats_get_overlap (twcc_stats, TEST_RTX_BUF_SSRC,
+          TEST_RTX_BUF_PT, fec_ssrc, fec_pt, &overlap_count, &overlap_pct));
+
+  fail_unless (rtx_count > 0);
+  fail_unless (fec_count > 0);
+  fail_unless (overlap_count > 0);
+  fail_unless_equals_float (rtx_pct, 100.0);
+  fail_unless_equals_float (fec_pct, 100.0);
+  fail_unless_equals_float (overlap_pct, 100.0);
+
+  gst_structure_free (twcc_stats);
+
+  session_harness_free (h_send);
+  session_harness_free (h_recv);
+  g_free (protects_seqnums);
+  g_free (protects_timestamps);
+}
+
+GST_END_TEST;
+
+/* When only RTX recovers losses (no FEC in play), the per-repair map must
+ * list exactly the RTX repair and there must be no overlap cell. */
+GST_START_TEST (test_twcc_stats_rtx_repair_no_overlap)
+{
+  SessionHarness *h_send = session_harness_new ();
+  SessionHarness *h_recv = session_harness_new ();
+  guint i, next_seqnum;
+  GstStructure *twcc_stats;
+  guint rtx_count = 0;
+  gdouble rtx_pct = 0;
+
+  session_harness_add_twcc_caps_for_pt (h_send, TEST_BUF_PT);
+  session_harness_add_twcc_caps_for_pt (h_send, TEST_RTX_BUF_PT);
+  session_harness_set_twcc_recv_ext_id (h_recv, TEST_TWCC_EXT_ID);
+
+  next_seqnum = construct_initial_state_for_rtx (h_send, h_recv);
+
+  for (i = 0; i < 3; i++) {
+    GstBuffer *buf = generate_twcc_send_buffer (next_seqnum++, FALSE);
+    GstBuffer *rtx_buf = generate_rtx_buffer (i, buf);
+    send_recv_buffer (h_send, h_recv, buf, FALSE);      /* lost */
+    send_recv_buffer (h_send, h_recv, rtx_buf, TRUE);   /* recovered */
+  }
+
+  send_recv_buffer (h_send, h_recv,
+      generate_twcc_send_buffer (next_seqnum++, TRUE), TRUE);
+
+  fail_unless_equals_int64 (GST_FLOW_OK,
+      session_harness_recv_rtcp (h_send,
+          session_harness_produce_twcc (h_recv)));
+
+  twcc_stats = session_harness_get_twcc_stats_full (h_send,
+      300 * GST_MSECOND, 100 * GST_MSECOND);
+
+  fail_unless (twcc_stats_get_recovery_by_repair (twcc_stats, TEST_RTX_BUF_SSRC,
+          TEST_RTX_BUF_PT, &rtx_count, &rtx_pct));
+  fail_unless (rtx_count > 0);
+  fail_unless_equals_float (rtx_pct, 100.0);
+  /* exactly one means of repair, and no overlap with anything */
+  fail_unless_equals_int (1, twcc_stats_num_repairs (twcc_stats));
+  fail_unless_equals_int (0, twcc_stats_num_overlaps (twcc_stats));
+
+  gst_structure_free (twcc_stats);
+
+  session_harness_free (h_send);
+  session_harness_free (h_recv);
+}
+
+GST_END_TEST;
+
+/* A FEC block that is over capacity (more losses than redundant packets) cannot
+ * recover anything, but RTX of the same lost packets can. The lost packets must
+ * be credited to RTX only -- FEC must NOT appear in the per-repair map and there
+ * must be no overlap cell. */
+GST_START_TEST (test_twcc_stats_rtx_recovers_fec_insufficient)
+{
+  SessionHarness *h_send = session_harness_new ();
+  SessionHarness *h_recv = session_harness_new ();
+  guint i;
+  guint next_seqnum;
+  GstStructure *twcc_stats;
+
+  const guint32 fec_ssrc = 0x12345678;
+  const guint8 fec_pt = 127;
+  const gsize nblocks = 6;
+  const gsize block_len = 4;
+  const gsize losses_per_block = 2;     /* > 1 FEC packet => FEC cannot recover */
+  guint16 fec_seqnum = 5000;
+  guint fec_num = 0;
+  guint rtx_seqnum = 0;
+
+  guint rtx_count = 0, fec_count = 0, overlap_count = 0;
+  gdouble rtx_pct = 0, fec_pct = 0, overlap_pct = 0;
+
+  guint16 *protects_seqnums = g_malloc0 (sizeof (guint16) * block_len);
+  guint32 *protects_timestamps = g_malloc0 (sizeof (guint32) * block_len);
+
+  session_harness_add_twcc_caps_for_pt (h_send, TEST_BUF_PT);
+  session_harness_add_twcc_caps_for_pt (h_send, TEST_RTX_BUF_PT);
+  session_harness_add_twcc_caps_for_pt (h_send, fec_pt);
+  session_harness_set_twcc_recv_ext_id (h_recv, TEST_TWCC_EXT_ID);
+
+  next_seqnum = construct_initial_state_for_rtx (h_send, h_recv);
+
+  for (gsize blk = 0; blk < nblocks; blk++) {
+    GstBuffer *fec_buf;
+
+    for (i = 0; i < block_len; i++) {
+      const guint seqnum = next_seqnum++;
+      GstBuffer *buf = generate_twcc_send_buffer (seqnum, FALSE);
+
+      protects_seqnums[i] = seqnum;
+      protects_timestamps[i] = (guint32) seqnum *(guint32) TEST_RTP_TS_DURATION;
+
+      if (i < losses_per_block) {
+        /* Lose the data packet, but deliver an RTX for it. */
+        GstBuffer *rtx_buf = generate_rtx_buffer (rtx_seqnum++, buf);
+        send_recv_buffer (h_send, h_recv, buf, FALSE);
+        send_recv_buffer (h_send, h_recv, rtx_buf, TRUE);
+      } else {
+        send_recv_buffer (h_send, h_recv, buf, TRUE);
+      }
+    }
+
+    /* A single FEC packet (capacity 1) for a block with 2 losses: the FEC
+       block is over capacity and recovers nothing. */
+    fec_buf = generate_test_buffer_full (fec_num * TEST_BUF_DURATION,
+        fec_seqnum, fec_num * TEST_RTP_TS_DURATION, fec_ssrc,
+        blk == nblocks - 1, fec_pt, 0, 0, 0, 1, TEST_BUF_SSRC,
+        protects_seqnums, protects_timestamps, block_len);
+    send_recv_buffer (h_send, h_recv, fec_buf, TRUE);
+    fec_num++;
+    fec_seqnum++;
+  }
+
+  fail_unless_equals_int64 (GST_FLOW_OK,
+      session_harness_recv_rtcp (h_send,
+          session_harness_produce_twcc (h_recv)));
+
+  twcc_stats = session_harness_get_twcc_stats_full (h_send,
+      (nblocks * (block_len + 1) + 2) * TEST_BUF_DURATION, TEST_BUF_DURATION);
+
+  /* RTX recovered every lost packet; FEC recovered none. */
+  fail_unless (twcc_stats_get_recovery_by_repair (twcc_stats, TEST_RTX_BUF_SSRC,
+          TEST_RTX_BUF_PT, &rtx_count, &rtx_pct));
+  fail_unless (rtx_count > 0);
+  fail_unless_equals_float (rtx_pct, 100.0);
+
+  /* FEC is present in the per-repair map (its sent bitrate is accounted for),
+     but it recovered nothing: zero recovered count and zero recovery pct. */
+  fail_unless (twcc_stats_get_recovery_by_repair (twcc_stats, fec_ssrc, fec_pt,
+          &fec_count, &fec_pct));
+  fail_unless_equals_int (0, fec_count);
+  fail_unless_equals_float (fec_pct, 0.0);
+  /* The bits FEC spent must still show up in the statistics. */
+  fail_unless (twcc_stats_get_repair_bitrate_sent (twcc_stats, fec_pt) > 0);
+  /* No lost packet was recoverable by both means of repair, so no overlap. */
+  fail_if (twcc_stats_get_overlap (twcc_stats, TEST_RTX_BUF_SSRC,
+          TEST_RTX_BUF_PT, fec_ssrc, fec_pt, &overlap_count, &overlap_pct));
+  fail_unless_equals_int (0, twcc_stats_num_overlaps (twcc_stats));
+
+  gst_structure_free (twcc_stats);
 
   session_harness_free (h_send);
   session_harness_free (h_recv);
@@ -6649,11 +7078,11 @@ GST_START_TEST (test_twcc_keep_queue_size)
           session_harness_produce_twcc (h_recv)));
 
   /* expected_parsed_seqnum = BASE_SEQNUM + 16 + 11 = 65307
-       recovery base_seqnum  = (65307 + 70000) mod 65536 + 11 = 4235
-       gap = (gint16)(4235 - 65307) = 4464 packets marked LOST.
+     recovery base_seqnum  = (65307 + 70000) mod 65536 + 11 = 4235
+     gap = (gint16)(4235 - 65307) = 4464 packets marked LOST.
      Within the 500ms stats window (25 intervals at 20ms = 26 packets
      from TWCC 4220 to 4245):
-       15 LOST flood packets  (TWCC 4220-4234)
+     15 LOST flood packets  (TWCC 4220-4234)
      + 11 RECEIVED recovery   (TWCC 4235-4245)
      = 26 total sent */
   const guint gap_pkts_in_window = 15;
@@ -6699,7 +7128,7 @@ GST_START_TEST (test_twcc_seqnum_wrap_gap_detection)
     0x00, 0x00, 0x00,           /* reference time: 0 */
     0x00,                       /* fb_pkt_count: 0 */
     0x20, 0x0A,                 /* run-length: received small_delta, count=10 */
-    0, 0, 0, 0, 0, 0, 0, 0, 0, 0  /* 10 recv-deltas, all 0 */
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0        /* 10 recv-deltas, all 0 */
   };
 
   guint8 fci2[] = {
@@ -6708,14 +7137,14 @@ GST_START_TEST (test_twcc_seqnum_wrap_gap_detection)
     0x00, 0x00, 0x00,           /* reference time: 0 */
     0x01,                       /* fb_pkt_count: 1 */
     0x20, 0x0A,                 /* run-length: received small_delta, count=10 */
-    0, 0, 0, 0, 0, 0, 0, 0, 0, 0  /* 10 recv-deltas, all 0 */
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0        /* 10 recv-deltas, all 0 */
   };
 
   session_harness_add_twcc_caps_for_pt (h, TEST_BUF_PT);
 
   for (i = 0; i < n_packets; i++) {
     fail_unless_equals_int64 (GST_FLOW_OK,
-                              session_harness_send_rtp (h, generate_twcc_send_buffer (i, FALSE)));
+        session_harness_send_rtp (h, generate_twcc_send_buffer (i, FALSE)));
     session_harness_advance_and_crank (h, TEST_BUF_DURATION);
   }
 
@@ -6727,7 +7156,7 @@ GST_START_TEST (test_twcc_seqnum_wrap_gap_detection)
   /* Stats window 500ms/0delay covers:
      - Packet 240 (TWCC 65520, t=4800ms) through 265 (TWCC 9, t=5300ms)
      - 10 RECEIVED (65520-65529 from FCI #1) + 6 UNKNOWN (65530-65535 gap)
-       + 10 RECEIVED (0-9 from FCI #2)
+     + 10 RECEIVED (0-9 from FCI #2)
      - If gap detection worked: 6 LOST → loss_pct = 6/26 ≈ 23%
      - Bug: 6 UNKNOWN (not counted) → loss_pct = 0/20 = 0
 
@@ -6790,8 +7219,7 @@ _twcc_set_sock_ts_race_feedback_thread (gpointer data)
 {
   TwccSetSockTsRaceCtx *ctx = data;
   while (TRUE) {
-    GstBuffer *buf =
-        g_async_queue_timeout_pop (ctx->sent_bufs, 100 * 1000);
+    GstBuffer *buf = g_async_queue_timeout_pop (ctx->sent_bufs, 100 * 1000);
     if (buf) {
       GstTxFeedbackMeta *meta = gst_buffer_get_tx_feedback_meta (buf);
       if (meta)
@@ -7435,6 +7863,9 @@ _nack_race_push_thread (gpointer data)
 static GstPadProbeReturn
 _drop_buffer_probe (GstPad * pad, GstPadProbeInfo * info, gpointer user_data)
 {
+  (void) pad;
+  (void) info;
+  (void) user_data;
   return GST_PAD_PROBE_DROP;
 }
 
@@ -7456,11 +7887,9 @@ GST_START_TEST (test_schedule_nack_hashtable_race)
   fail_unless (rtpsession != NULL);
 
   /* Request pads */
-  recv_rtp_sink =
-      gst_element_request_pad_simple (rtpsession, "recv_rtp_sink");
+  recv_rtp_sink = gst_element_request_pad_simple (rtpsession, "recv_rtp_sink");
   fail_unless (recv_rtp_sink != NULL);
-  send_rtcp_src =
-      gst_element_request_pad_simple (rtpsession, "send_rtcp_src");
+  send_rtcp_src = gst_element_request_pad_simple (rtpsession, "send_rtcp_src");
   fail_unless (send_rtcp_src != NULL);
 
   /* Get the recv_rtp_src pad (created when recv_rtp_sink was requested) */
@@ -7493,20 +7922,20 @@ GST_START_TEST (test_schedule_nack_hashtable_race)
   {
     GstSegment segment;
     gst_segment_init (&segment, GST_FORMAT_TIME);
-    gst_pad_push_event (rtp_srcpad,
-        gst_event_new_stream_start ("test-stream"));
+    fail_unless (gst_pad_push_event (rtp_srcpad,
+            gst_event_new_stream_start ("test-stream")));
     caps = gst_caps_new_simple ("application/x-rtp",
-        "clock-rate", G_TYPE_INT, 8000,
-        "payload", G_TYPE_INT, 96, NULL);
-    gst_pad_push_event (rtp_srcpad, gst_event_new_caps (caps));
+        "clock-rate", G_TYPE_INT, 8000, "payload", G_TYPE_INT, 96, NULL);
+    fail_unless (gst_pad_push_event (rtp_srcpad, gst_event_new_caps (caps)));
     gst_caps_unref (caps);
-    gst_pad_push_event (rtp_srcpad, gst_event_new_segment (&segment));
+    fail_unless (gst_pad_push_event (rtp_srcpad,
+            gst_event_new_segment (&segment)));
   }
 
   /* Establish the NACK source: receive a few packets from 0xDEADBEEF */
   for (i = 0; i < 3; i++) {
     GstBuffer *buf = _make_rtp_buffer (i, 0xDEADBEEF);
-    gst_pad_push (rtp_srcpad, buf);
+    fail_unless_equals_int (gst_pad_push (rtp_srcpad, buf), GST_FLOW_OK);
   }
 
   /* Set up the push thread context */
@@ -7518,8 +7947,7 @@ GST_START_TEST (test_schedule_nack_hashtable_race)
   /* Start multiple push threads: continuously push packets from new SSRCs */
   for (t = 0; t < G_N_ELEMENTS (push_threads); t++) {
     gchar *name = g_strdup_printf ("nack-race-push-%u", t);
-    push_threads[t] =
-        g_thread_new (name, _nack_race_push_thread, &ctx);
+    push_threads[t] = g_thread_new (name, _nack_race_push_thread, &ctx);
     g_free (name);
   }
 
@@ -7536,8 +7964,7 @@ GST_START_TEST (test_schedule_nack_hashtable_race)
         "seqnum", G_TYPE_UINT, (guint) (i % 3),
         "delay", G_TYPE_UINT, (guint) 0,
         "deadline", G_TYPE_UINT, (guint) 100,
-        "avg-rtt", G_TYPE_UINT, (guint) 0,
-        NULL);
+        "avg-rtt", G_TYPE_UINT, (guint) 0, NULL);
     event = gst_event_new_custom (GST_EVENT_CUSTOM_UPSTREAM, s);
     /* Push upstream from the sinkpad connected to recv_rtp_src */
     gst_pad_push_event (rtp_sinkpad, event);
@@ -7662,11 +8089,15 @@ rtpsession_suite (void)
   tcase_add_test (tc_chain, test_twcc_reference_time_wrap);
   tcase_add_test (tc_chain, test_twcc_reference_time_wrap_start_negative);
   tcase_add_test (tc_chain, test_twcc_stats_rtx_recover_lost);
+  tcase_add_test (tc_chain, test_twcc_stats_rtx_repair_bitrate);
   tcase_add_test (tc_chain, test_twcc_parse_fci_robustness);
   tcase_add_test (tc_chain, test_twcc_stats_no_rtx_no_recover);
   tcase_add_test (tc_chain, test_twcc_stats_long_rtx_recover);
   tcase_add_test (tc_chain, test_twcc_stats_rtx_recover_not_lost_stuff);
   tcase_add_test (tc_chain, test_twcc_stats_block_fec_recover);
+  tcase_add_test (tc_chain, test_twcc_stats_rtx_and_fec_overlap);
+  tcase_add_test (tc_chain, test_twcc_stats_rtx_repair_no_overlap);
+  tcase_add_test (tc_chain, test_twcc_stats_rtx_recovers_fec_insufficient);
   tcase_add_test (tc_chain, test_twcc_stats_dod);
   tcase_add_test (tc_chain, test_twcc_feedback_max_sent_packets);
   tcase_add_test (tc_chain, test_twcc_feedback_wraparound);
