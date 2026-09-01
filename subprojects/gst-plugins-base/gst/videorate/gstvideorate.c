@@ -88,9 +88,12 @@ GST_DEBUG_CATEGORY_STATIC (video_rate_debug);
 /* GstVideoRate signals and args */
 enum
 {
-  /* FILL ME */
+  /* PEXHACK: Pexip-local action signal, see class_init. Not upstream. */
+  SIGNAL_RESET,
   LAST_SIGNAL
 };
+
+static guint gst_video_rate_signals[LAST_SIGNAL] = { 0 };
 
 #define DEFAULT_SILENT          TRUE
 #define DEFAULT_NEW_PREF        1.0
@@ -161,6 +164,7 @@ static gboolean gst_video_rate_propose_allocation (GstBaseTransform * trans,
 static gboolean gst_video_rate_start (GstBaseTransform * trans);
 static gboolean gst_video_rate_stop (GstBaseTransform * trans);
 
+static void gst_video_rate_reset (GstVideoRate * videorate);
 
 static void gst_video_rate_set_property (GObject * object,
     guint prop_id, const GValue * value, GParamSpec * pspec);
@@ -294,6 +298,17 @@ gst_video_rate_class_init (GstVideoRateClass * klass)
           "(in ns) (0 = disabled)",
           0, G_MAXUINT64, DEFAULT_MAX_DUPLICATION_TIME,
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+
+  /* PEXHACK: Pexip-local "reset" action signal (not upstream). Emitting it
+   * drops all internal state -- prevbuf, next_ts, stats and segment -- via
+   * gst_video_rate_reset(). Used to resync a videorate whose branch was idled
+   * and then reactivated without a caps/state change, which would otherwise
+   * leave next_ts frozen in the past and duplicate a frame across the whole
+   * idle gap in a single push (mcu#50792). See pexsimulcastsrcpad.c. */
+  gst_video_rate_signals[SIGNAL_RESET] =
+      g_signal_new_class_handler ("reset", G_TYPE_FROM_CLASS (klass),
+      G_SIGNAL_RUN_LAST | G_SIGNAL_ACTION, G_CALLBACK (gst_video_rate_reset),
+      NULL, NULL, NULL, G_TYPE_NONE, 0);
 
   gst_element_class_set_static_metadata (element_class,
       "Video rate adjuster", "Filter/Effect/Video",
