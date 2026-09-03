@@ -1306,7 +1306,11 @@ static const struct
       AVCLevel41, "4.1"}, {
       AVCLevel42, "4.2"}, {
       AVCLevel5, "5"}, {
-      AVCLevel51, "5.1"}
+      AVCLevel51, "5.1"}, {
+      AVCLevel52, "5.2"}, {
+      AVCLevel6, "6"}, {
+      AVCLevel61, "6.1"}, {
+      AVCLevel62, "6.2"}
 };
 
 const gchar *
