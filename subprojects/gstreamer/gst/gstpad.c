@@ -254,7 +254,7 @@ gst_pad_warn_if_unlinked (GstPad * pad, GstFlowReturn res)
       GST_WARNING_OBJECT (pad, "%p:%p returning not-linked",
           GST_PAD_PARENT (pad), pad);
     }
-  } else {
+  } else if (G_UNLIKELY (pad->priv->warned_unlinked)) {
     pad->priv->warned_unlinked = FALSE;
   }
 }
