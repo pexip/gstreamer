@@ -3199,7 +3199,7 @@ struct _GstHarnessThread
 {
   GstHarness *h;
   GThread *thread;
-  gboolean running;
+  gint running;
 
   gulong sleep;
 
@@ -3339,12 +3339,12 @@ gst_harness_requestpad_thread_free (GstHarnessReqPadThread * t)
 }
 
 #define GST_HARNESS_THREAD_START(ID, t)                                        \
-  (((GstHarnessThread *)t)->running = TRUE,                                    \
+  (g_atomic_int_set (&((GstHarnessThread *)t)->running, TRUE),                 \
   ((GstHarnessThread *)t)->thread = g_thread_new (                             \
       "gst-harness-stress-"G_STRINGIFY(ID),                                    \
       (GThreadFunc)gst_harness_stress_##ID##_func, t))
 #define GST_HARNESS_THREAD_END(t)                                              \
-   (t->running = FALSE,                                                        \
+   (g_atomic_int_set (&t->running, FALSE),                                     \
    GPOINTER_TO_UINT (g_thread_join (t->thread)))
 
 static void
