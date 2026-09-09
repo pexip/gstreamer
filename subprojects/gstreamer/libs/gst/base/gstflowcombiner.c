@@ -84,6 +84,11 @@ G_DEFINE_BOXED_TYPE_WITH_CODE (GstFlowCombiner, gst_flow_combiner,
     GST_DEBUG_CATEGORY_INIT (flowcombiner_dbg, "flowcombiner", 0,
         "Flow Combiner"));
 
+#define FLOW_COMBINER_GET_LAST_FLOW(pad) \
+  ((GstFlowReturn) g_atomic_int_get ((gint *) &GST_PAD_LAST_FLOW_RETURN (pad)))
+#define FLOW_COMBINER_SET_LAST_FLOW(pad, ret) \
+  g_atomic_int_set ((gint *) &GST_PAD_LAST_FLOW_RETURN (pad), (gint) (ret))
+
 /**
  * gst_flow_combiner_new:
  *
@@ -205,7 +210,7 @@ gst_flow_combiner_reset (GstFlowCombiner * combiner)
   GST_DEBUG ("%p reset flow returns", combiner);
 
   for (iter = combiner->pads.head; iter; iter = iter->next) {
-    GST_PAD_LAST_FLOW_RETURN (iter->data) = GST_FLOW_OK;
+    FLOW_COMBINER_SET_LAST_FLOW (iter->data, GST_FLOW_OK);
   }
 
   combiner->last_ret = GST_FLOW_OK;
@@ -222,7 +227,7 @@ gst_flow_combiner_get_flow (GstFlowCombiner * combiner)
   GST_DEBUG ("%p Combining flow returns", combiner);
 
   for (iter = combiner->pads.head; iter; iter = iter->next) {
-    GstFlowReturn fret = GST_PAD_LAST_FLOW_RETURN (iter->data);
+    GstFlowReturn fret = FLOW_COMBINER_GET_LAST_FLOW (iter->data);
 
     GST_TRACE ("%p pad %" GST_PTR_FORMAT " has flow return of %s (%d)",
         combiner, iter->data, gst_flow_get_name (fret), fret);
@@ -312,7 +317,7 @@ gst_flow_combiner_update_pad_flow (GstFlowCombiner * combiner, GstPad * pad,
 {
   g_return_val_if_fail (pad != NULL, GST_FLOW_ERROR);
 
-  GST_PAD_LAST_FLOW_RETURN (pad) = fret;
+  FLOW_COMBINER_SET_LAST_FLOW (pad, fret);
 
   return gst_flow_combiner_update_flow (combiner, fret);
 }
