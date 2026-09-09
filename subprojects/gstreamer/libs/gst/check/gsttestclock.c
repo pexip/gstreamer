@@ -435,6 +435,7 @@ gst_test_clock_wait (GstClock * clock,
 {
   GstTestClock *test_clock = GST_TEST_CLOCK (clock);
   GstTestClockPrivate *priv = GST_TEST_CLOCK_GET_PRIVATE (test_clock);
+  GstClockReturn ret;
 
   GST_OBJECT_LOCK (test_clock);
 
@@ -453,9 +454,10 @@ gst_test_clock_wait (GstClock * clock,
   while (GST_CLOCK_ENTRY_STATUS (entry) == GST_CLOCK_BUSY)
     g_cond_wait (&priv->entry_processed_cond, GST_OBJECT_GET_LOCK (test_clock));
 
+  ret = GST_CLOCK_ENTRY_STATUS (entry);
   GST_OBJECT_UNLOCK (test_clock);
 
-  return GST_CLOCK_ENTRY_STATUS (entry);
+  return ret;
 
   /* ERRORS */
 was_unscheduled:
