@@ -247,9 +247,20 @@ gst_rtp_rtx_send_set_flushing (GstRtpRtxSend * rtx, gboolean flush)
 static gboolean
 gst_rtp_rtx_send_set_task_state (GstRtpRtxSend * rtx, RtxTaskState task_state)
 {
-  GstTask *task = GST_PAD_TASK (rtx->srcpad);
-  GstPadMode mode = GST_PAD_MODE (rtx->srcpad);
+  GstPad *srcpad = rtx->srcpad;
+  GstTask *task;
+  GstPadMode mode;
   gboolean ret = TRUE;
+
+  /* Take our own reference to the task under the pad's object lock: another
+   * thread may concurrently gst_pad_stop_task() this pad, which NULLs the
+   * pad's task pointer and drops the pad's reference to it. */
+  GST_OBJECT_LOCK (srcpad);
+  task = GST_PAD_TASK (srcpad);
+  if (task != NULL)
+    gst_object_ref (task);
+  mode = GST_PAD_MODE (srcpad);
+  GST_OBJECT_UNLOCK (srcpad);
 
   switch (task_state) {
     case RTX_TASK_START:
@@ -278,6 +289,9 @@ gst_rtp_rtx_send_set_task_state (GstRtpRtxSend * rtx, RtxTaskState task_state)
       }
       break;
   }
+
+  if (task != NULL)
+    gst_object_unref (task);
 
   return ret;
 }
