@@ -3347,6 +3347,8 @@ gst_harness_requestpad_thread_free (GstHarnessReqPadThread * t)
    (g_atomic_int_set (&t->running, FALSE),                                     \
    GPOINTER_TO_UINT (g_thread_join (t->thread)))
 
+#define GST_HARNESS_THREAD_RUNNING(t) g_atomic_int_get (&(t)->running)
+
 static void
 gst_harness_stress_free (GstHarnessThread * t)
 {
@@ -3363,7 +3365,7 @@ gst_harness_stress_custom_func (GstHarnessThread * t)
   if (ct->init != NULL)
     ct->init (ct, ct->data);
 
-  while (t->running) {
+  while (GST_HARNESS_THREAD_RUNNING (t)) {
     ct->callback (ct, ct->data);
 
     count++;
@@ -3378,7 +3380,7 @@ gst_harness_stress_statechange_func (GstHarnessThread * t)
 {
   guint count = 0;
 
-  while (t->running) {
+  while (GST_HARNESS_THREAD_RUNNING (t)) {
     GstClock *clock = gst_element_get_clock (t->h->element);
     GstIterator *it;
     gboolean done = FALSE;
@@ -3449,7 +3451,7 @@ gst_harness_stress_buffer_func (GstHarnessThread * t)
       gst_event_new_segment (&pt->segment));
   g_assert (handled);
 
-  while (t->running) {
+  while (GST_HARNESS_THREAD_RUNNING (t)) {
     gst_harness_push (t->h, pt->func (t->h, pt->data));
 
     count++;
@@ -3464,7 +3466,7 @@ gst_harness_stress_event_func (GstHarnessThread * t)
   GstHarnessPushEventThread *pet = (GstHarnessPushEventThread *) t;
   guint count = 0;
 
-  while (t->running) {
+  while (GST_HARNESS_THREAD_RUNNING (t)) {
     gst_harness_push_event (t->h, pet->func (t->h, pet->data));
 
     count++;
@@ -3479,7 +3481,7 @@ gst_harness_stress_upstream_event_func (GstHarnessThread * t)
   GstHarnessPushEventThread *pet = (GstHarnessPushEventThread *) t;
   guint count = 0;
 
-  while (t->running) {
+  while (GST_HARNESS_THREAD_RUNNING (t)) {
     gst_harness_push_upstream_event (t->h, pet->func (t->h, pet->data));
 
     count++;
@@ -3494,7 +3496,7 @@ gst_harness_stress_property_func (GstHarnessThread * t)
   GstHarnessPropThread *pt = (GstHarnessPropThread *) t;
   guint count = 0;
 
-  while (t->running) {
+  while (GST_HARNESS_THREAD_RUNNING (t)) {
     GValue value = G_VALUE_INIT;
 
     g_object_set_property (G_OBJECT (t->h->element), pt->name, &pt->value);
@@ -3515,7 +3517,7 @@ gst_harness_stress_requestpad_func (GstHarnessThread * t)
   GstHarnessReqPadThread *rpt = (GstHarnessReqPadThread *) t;
   guint count = 0;
 
-  while (t->running) {
+  while (GST_HARNESS_THREAD_RUNNING (t)) {
     GstPad *reqpad;
 
     if (rpt->release)
