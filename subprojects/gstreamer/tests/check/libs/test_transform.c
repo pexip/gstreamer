@@ -187,7 +187,7 @@ gst_test_trans_element_new (void)
 
 
 static TestTransData *
-gst_test_trans_new (void)
+gst_test_trans_new_full (GstPadGetRangeFunction getrange)
 {
   TestTransData *res;
   GstPad *tmp;
@@ -221,13 +221,24 @@ gst_test_trans_new (void)
   gst_pad_link (tmp, res->sinkpad);
   gst_object_unref (tmp);
 
-  gst_pad_set_active (res->sinkpad, TRUE);
-  gst_element_set_state (res->trans, GST_STATE_PAUSED);
-  gst_pad_set_active (res->srcpad, TRUE);
+  if (getrange) {
+    gst_pad_set_getrange_function (res->srcpad, getrange);
+    fail_unless (gst_pad_activate_mode (res->sinkpad, GST_PAD_MODE_PULL, TRUE));
+  } else {
+    gst_pad_set_active (res->sinkpad, TRUE);
+    gst_element_set_state (res->trans, GST_STATE_PAUSED);
+    gst_pad_set_active (res->srcpad, TRUE);
+  }
 
   gst_pad_push_event (res->srcpad, gst_event_new_stream_start ("test"));
 
   return res;
+}
+
+static TestTransData *
+gst_test_trans_new (void)
+{
+  return gst_test_trans_new_full (NULL);
 }
 
 static void
