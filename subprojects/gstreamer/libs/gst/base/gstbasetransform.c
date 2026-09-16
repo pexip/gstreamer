@@ -2306,6 +2306,7 @@ gst_base_transform_getrange (GstPad * pad, GstObject * parent, guint64 offset,
     offset += gst_buffer_get_size (inbuf);
 
     ret = klass->submit_input_buffer (trans, priv->discont, inbuf);
+    inbuf = NULL;
     if (ret != GST_FLOW_OK) {
       if (ret == GST_BASE_TRANSFORM_FLOW_DROPPED)
         ret = GST_FLOW_OK;
@@ -2313,7 +2314,6 @@ gst_base_transform_getrange (GstPad * pad, GstObject * parent, guint64 offset,
     }
   } while (ret == GST_FLOW_OK && outbuf == NULL);
 
-  *buffer = outbuf;
   if (outbuf) {
     /* apply DISCONT flag if the buffer is not yet marked as such */
     if (priv->discont) {
@@ -2327,6 +2327,7 @@ gst_base_transform_getrange (GstPad * pad, GstObject * parent, guint64 offset,
     }
     priv->processed++;
   }
+  *buffer = outbuf;
 done:
   return ret;
 
