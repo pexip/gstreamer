@@ -22,6 +22,8 @@
 #include <gst/check/gstharness.h>
 #include <gst/video/video.h>
 
+#include "vpxdec.h"
+
 static GstStaticPadTemplate sinktemplate = GST_STATIC_PAD_TEMPLATE ("sink",
     GST_PAD_SINK,
     GST_PAD_ALWAYS,
@@ -294,6 +296,8 @@ vp8dec_suite (void)
   tcase_add_test (tc_chain, test_decode_simple);
   tcase_add_test (tc_chain, test_decode_caps_change);
   tcase_add_test (tc_chain, test_decode_invalid_resolution);
+
+  vpx_dec_add_vp8_tests (tc_chain);
 
   return s;
 }
