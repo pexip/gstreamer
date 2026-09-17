@@ -4,6 +4,11 @@
  * queue of GstVideoDecoder when gst_vpx_dec_handle_frame() takes one of its
  * terminal error exits.
  *
+ * This file has no suite and no main() of its own. It is compiled into the
+ * vp8dec and the vp9dec test binaries, which register the cases they can run
+ * through vpx_dec_add_vp8_tests() and vpx_dec_add_vp9_tests(), so a build
+ * with only one of the two codecs still gets the coverage for that codec.
+ *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Library General Public
  * License as published by the Free Software Foundation; either
@@ -27,6 +32,8 @@
 #include <gst/check/gstcheck.h>
 #include <gst/check/gstharness.h>
 #include <gst/video/video.h>
+
+#include "vpxdec.h"
 
 /* The two vfunc-injection tests below derive a throw-away subclass of the
  * already registered decoder element so that the open_codec and the
@@ -55,6 +62,41 @@ typedef struct
 
 static const VpxCodec vp8_codec = { "vp8enc", "vp8dec", "video/x-vp8" };
 static const VpxCodec vp9_codec = { "vp9enc", "vp9dec", "video/x-vp9" };
+
+/* The fixtures are encoded at run time, so a codec is only usable here when
+ * both its encoder and its decoder are registered. */
+static gboolean
+codec_available (const VpxCodec * codec)
+{
+  GstElementFactory *enc = gst_element_factory_find (codec->enc_name);
+  GstElementFactory *dec = gst_element_factory_find (codec->dec_name);
+  gboolean available = (enc != NULL && dec != NULL);
+
+  if (enc != NULL)
+    gst_object_unref (enc);
+  if (dec != NULL)
+    gst_object_unref (dec);
+
+  if (!available)
+    GST_INFO ("skipping the shared %s decoder tests, %s or %s is missing",
+        codec->caps_str, codec->enc_name, codec->dec_name);
+
+  return available;
+}
+
+static void
+check_required_elements_available (const VpxCodec * codec)
+{
+  const gchar *names[] = { codec->enc_name, codec->dec_name };
+  guint i;
+
+  for (i = 0; i < G_N_ELEMENTS (names); i++) {
+    GstElement *e = gst_element_factory_make (names[i], NULL);
+
+    fail_unless (e != NULL, "%s is not available", names[i]);
+    gst_object_unref (e);
+  }
+}
 
 /* ------------------------------------------------------------------------ */
 /* helpers                                                                    */
@@ -1384,37 +1426,35 @@ GST_START_TEST (test_vp9_teardown_after_corruption)
 GST_END_TEST;
 
 /* ------------------------------------------------------------------------ */
+/* registration                                                               */
+/* ------------------------------------------------------------------------ */
 
-/* Guards against a build that silently reports an empty suite: the meson
- * entry is what gates this binary on the encoders and decoders being
- * available, so if that gating is ever wrong this test says so. */
-GST_START_TEST (test_required_elements_available)
+/* Guards against a binary that silently reports an empty set of shared
+ * cases: if the codec is announced as available then every element the
+ * fixtures need has to be there. */
+GST_START_TEST (test_vp8_required_elements_available)
 {
-  const gchar *names[] = { "vp8enc", "vp8dec", "vp9enc", "vp9dec" };
-  guint i;
-
-  for (i = 0; i < G_N_ELEMENTS (names); i++) {
-    GstElement *e = gst_element_factory_make (names[i], NULL);
-
-    fail_unless (e != NULL, "%s is not available", names[i]);
-    gst_object_unref (e);
-  }
+  check_required_elements_available (&vp8_codec);
 }
 
 GST_END_TEST;
 
-static Suite *
-vpxdec_suite (void)
+GST_START_TEST (test_vp9_required_elements_available)
 {
-  Suite *s = suite_create ("vpxdec");
-  TCase *tc = tcase_create ("general");
+  check_required_elements_available (&vp9_codec);
+}
 
-  suite_add_tcase (s, tc);
+GST_END_TEST;
+
+void
+vpx_dec_add_vp8_tests (TCase * tc)
+{
+  if (!codec_available (&vp8_codec))
+    return;
+
   tcase_set_timeout (tc, 120);
 
-  tcase_add_test (tc, test_required_elements_available);
-
-  /* VP8 cases */
+  tcase_add_test (tc, test_vp8_required_elements_available);
   tcase_add_test (tc, test_vp8_corrupt_frames_released);
   tcase_add_test (tc, test_vp8_corrupt_frames_released_direct_rendering);
   tcase_add_test (tc, test_vp8_input_buffers_released);
@@ -1433,8 +1473,17 @@ vpxdec_suite (void)
   tcase_add_test (tc, test_vp8_flush_after_rejected_frame);
   tcase_add_test (tc, test_vp8_eos_without_recovery);
   tcase_add_test (tc, test_vp8_teardown_after_corruption);
+}
 
-  /* VP9 cases */
+void
+vpx_dec_add_vp9_tests (TCase * tc)
+{
+  if (!codec_available (&vp9_codec))
+    return;
+
+  tcase_set_timeout (tc, 120);
+
+  tcase_add_test (tc, test_vp9_required_elements_available);
   tcase_add_test (tc, test_vp9_corrupt_frames_released);
   tcase_add_test (tc, test_vp9_corrupt_frames_released_direct_rendering);
   tcase_add_test (tc, test_vp9_input_buffers_released);
@@ -1454,8 +1503,4 @@ vpxdec_suite (void)
   tcase_add_test (tc, test_vp9_flush_after_rejected_frame);
   tcase_add_test (tc, test_vp9_eos_without_recovery);
   tcase_add_test (tc, test_vp9_teardown_after_corruption);
-
-  return s;
 }
-
-GST_CHECK_MAIN (vpxdec);
