@@ -145,8 +145,8 @@ static GstStaticPadTemplate videosink_templ =
         "video/x-vp9, "
         COMMON_VIDEO_CAPS "; "
         "video/x-raw, "
-        "format = (string) { YUY2, I420, YV12, UYVY, AYUV, GRAY8, GRAY10_LE32,"
-        " GRAY16_LE, BGR, RGB, RGBA64_LE, BGRA64_LE }, "
+        "format = (string) { YUY2, I420, YV12, UYVY, AYUV, NV12, A420, GRAY8,"
+        " GRAY10_LE32, GRAY16_LE, BGR, RGB, RGBA64_LE, BGRA64_LE }, "
         COMMON_VIDEO_CAPS "; "
         "video/x-prores, "
         COMMON_VIDEO_CAPS "; "
@@ -3995,6 +3995,7 @@ gst_matroska_mux_write_data (GstMatroskaMux * mux, GstMatroskaMuxPad * mux_pad,
   gboolean is_video_keyframe = FALSE;
   gboolean is_video_invisible = FALSE;
   gboolean is_audio_only = FALSE, is_audio = FALSE;
+  gboolean is_subtitle = FALSE;
   gboolean is_min_duration_reached = FALSE;
   gboolean is_max_duration_exceeded = FALSE;
   gint flags = 0;
@@ -4083,6 +4084,7 @@ gst_matroska_mux_write_data (GstMatroskaMux * mux, GstMatroskaMuxPad * mux_pad,
   GST_OBJECT_UNLOCK (mux);
 
   is_audio = mux_pad->track->type == GST_MATROSKA_TRACK_TYPE_AUDIO;
+  is_subtitle = mux_pad->track->type == GST_MATROSKA_TRACK_TYPE_SUBTITLE;
 
   is_min_duration_reached = (mux->min_cluster_duration == 0
       || (buffer_timestamp > mux->cluster_time
@@ -4245,7 +4247,8 @@ gst_matroska_mux_write_data (GstMatroskaMux * mux, GstMatroskaMuxPad * mux_pad,
     flags |= 0x08;
 
   if (mux->doctype_version > 1 && !write_duration && !cmeta) {
-    if (is_video_keyframe || is_audio)
+    /* every subtitle frame is a keyframe */
+    if (is_video_keyframe || is_audio || is_subtitle)
       flags |= 0x80;
 
     hdr =
