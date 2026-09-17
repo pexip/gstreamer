@@ -6791,6 +6791,13 @@ gst_matroska_demux_video_caps (GstMatroskaTrackVideoContext *
       case GST_MAKE_FOURCC ('A', 'Y', 'U', 'V'):
         format = GST_VIDEO_FORMAT_AYUV;
         break;
+      case GST_MAKE_FOURCC ('N', 'V', '1', '2'):
+        format = GST_VIDEO_FORMAT_NV12;
+        break;
+        /* A420 has no registered FourCC, this mapping is GStreamer's own */
+      case GST_MAKE_FOURCC ('A', '4', '2', '0'):
+        format = GST_VIDEO_FORMAT_A420;
+        break;
       case GST_MAKE_FOURCC ('Y', '8', '0', '0'):
       case GST_MAKE_FOURCC ('Y', '8', ' ', ' '):
         format = GST_VIDEO_FORMAT_GRAY8;
