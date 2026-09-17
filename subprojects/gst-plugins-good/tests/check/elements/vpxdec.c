@@ -1,0 +1,1358 @@
+/* GStreamer
+ *
+ * Shared VP8/VP9 decoder tests, focused on what happens to the pending frame
+ * queue of GstVideoDecoder when gst_vpx_dec_handle_frame() takes one of its
+ * terminal error exits.
+ *
+ * This library is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Library General Public
+ * License as published by the Free Software Foundation; either
+ * version 2 of the License, or (at your option) any later version.
+ *
+ * This library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * Library General Public License for more details.
+ *
+ * You should have received a copy of the GNU Library General Public
+ * License along with this library; if not, write to the
+ * Free Software Foundation, Inc., 51 Franklin St, Fifth Floor,
+ * Boston, MA 02110-1301, USA.
+ */
+
+#ifdef HAVE_CONFIG_H
+#include "config.h"
+#endif
+
+#include <gst/check/gstcheck.h>
+#include <gst/check/gstharness.h>
+#include <gst/video/video.h>
+
+/* The two vfunc-injection tests below derive a throw-away subclass of the
+ * already registered decoder element so that the open_codec and the
+ * unsupported-format exits can be reached deterministically. That needs the
+ * layout of GstVPXDecClass. Nothing from the plugin is linked, only the
+ * class struct definition is reused. */
+#define HAVE_VP8_DECODER
+#define HAVE_VP9_DECODER
+#include "../../../ext/vpx/gstvpxdec.h"
+
+#define WIDTH 64
+#define HEIGHT 64
+#define FRAMERATE_N 25
+#define RAW_SIZE (WIDTH * HEIGHT * 3 / 2)
+
+/* Amount of bytes each corrupt frame is truncated to. Enough to keep libvpx
+ * looking at it as a keyframe header and then failing. */
+#define TRUNCATED_SIZE 16
+
+typedef struct
+{
+  const gchar *enc_name;
+  const gchar *dec_name;
+  const gchar *caps_str;
+} VpxCodec;
+
+static const VpxCodec vp8_codec = { "vp8enc", "vp8dec", "video/x-vp8" };
+static const VpxCodec vp9_codec = { "vp9enc", "vp9dec", "video/x-vp9" };
+
+/* ------------------------------------------------------------------------ */
+/* helpers                                                                    */
+/* ------------------------------------------------------------------------ */
+
+static GstBuffer *
+make_raw_frame (guint i)
+{
+  GstBuffer *buf = gst_buffer_new_and_alloc (RAW_SIZE);
+  GstMapInfo map;
+
+  /* A moving pattern, so a decoded frame can be told apart from a
+   * zero-filled one and from its neighbours. */
+  fail_unless (gst_buffer_map (buf, &map, GST_MAP_WRITE));
+  memset (map.data, 16 + (i * 8) % 200, WIDTH * HEIGHT);
+  memset (map.data + WIDTH * HEIGHT, 128, WIDTH * HEIGHT / 2);
+  gst_buffer_unmap (buf, &map);
+
+  GST_BUFFER_PTS (buf) = gst_util_uint64_scale (i, GST_SECOND, FRAMERATE_N);
+  GST_BUFFER_DTS (buf) = GST_BUFFER_PTS (buf);
+  GST_BUFFER_DURATION (buf) = gst_util_uint64_scale (1, GST_SECOND,
+      FRAMERATE_N);
+
+  return buf;
+}
+
+/* Encode @n_frames real frames with the real encoder. When @all_keyframes is
+ * TRUE every output buffer is a sync point, otherwise only the first one is. */
+static GPtrArray *
+encode_frames (const VpxCodec * codec, guint n_frames, gboolean all_keyframes)
+{
+  GstHarness *h;
+  GPtrArray *frames = g_ptr_array_new_with_free_func (
+      (GDestroyNotify) gst_buffer_unref);
+  GstBuffer *buf;
+  guint i;
+
+  h = gst_harness_new (codec->enc_name);
+  g_object_set (h->element, "deadline", G_GINT64_CONSTANT (1),
+      "lag-in-frames", 0, "threads", 1, NULL);
+  if (all_keyframes)
+    g_object_set (h->element, "keyframe-max-dist", 1, NULL);
+
+  gst_harness_set_src_caps_str (h, "video/x-raw, format=(string)I420, "
+      "width=(int)" G_STRINGIFY (WIDTH) ", "
+      "height=(int)" G_STRINGIFY (HEIGHT) ", "
+      "framerate=(fraction)" G_STRINGIFY (FRAMERATE_N) "/1");
+
+  for (i = 0; i < n_frames; i++)
+    fail_unless_equals_int (GST_FLOW_OK, gst_harness_push (h,
+            make_raw_frame (i)));
+
+  gst_harness_push_event (h, gst_event_new_eos ());
+
+  while ((buf = gst_harness_try_pull (h)) != NULL) {
+    /* VP9 in particular also emits invisible and delta frames; when the
+     * caller asked for keyframes only, keep only real sync points so that
+     * every kept buffer is independently decodable. */
+    if (all_keyframes && GST_BUFFER_FLAG_IS_SET (buf,
+            GST_BUFFER_FLAG_DELTA_UNIT)) {
+      gst_buffer_unref (buf);
+      continue;
+    }
+    g_ptr_array_add (frames, buf);
+  }
+
+  gst_harness_teardown (h);
+
+  fail_unless (frames->len >= n_frames, "encoder produced %u usable of %u "
+      "frames", frames->len, n_frames);
+
+  return frames;
+}
+
+/* A corrupt frame: a real keyframe cut short. libvpx rejects it, which is
+ * exactly the vpx_codec_decode() failure exit we care about. */
+static GstBuffer *
+make_corrupt_frame (GstBuffer * keyframe, GstClockTime pts)
+{
+  GstBuffer *buf = gst_buffer_copy_region (keyframe, GST_BUFFER_COPY_MEMORY, 0,
+      MIN (TRUNCATED_SIZE, gst_buffer_get_size (keyframe)));
+
+  GST_BUFFER_PTS (buf) = pts;
+  GST_BUFFER_DTS (buf) = pts;
+  GST_BUFFER_DURATION (buf) = gst_util_uint64_scale (1, GST_SECOND,
+      FRAMERATE_N);
+  GST_BUFFER_FLAG_UNSET (buf, GST_BUFFER_FLAG_DELTA_UNIT);
+
+  return buf;
+}
+
+static GstBuffer *
+copy_encoded (GstBuffer * src, GstClockTime pts)
+{
+  GstBuffer *buf = gst_buffer_copy (src);
+
+  GST_BUFFER_PTS (buf) = pts;
+  GST_BUFFER_DTS (buf) = pts;
+  GST_BUFFER_DURATION (buf) = gst_util_uint64_scale (1, GST_SECOND,
+      FRAMERATE_N);
+
+  return buf;
+}
+
+/* The assertion that actually distinguishes the broken decoder from the fixed
+ * one: how many frames GstVideoDecoder still considers in flight. */
+static guint
+pending_frames (GstHarness * h)
+{
+  GList *l = gst_video_decoder_get_frames (GST_VIDEO_DECODER (h->element));
+  guint n = g_list_length (l);
+
+  g_list_free_full (l, (GDestroyNotify) gst_video_codec_frame_unref);
+  return n;
+}
+
+static GstHarness *
+new_decoder (const VpxCodec * codec, gboolean direct_rendering,
+    gboolean video_meta)
+{
+  GstHarness *h = gst_harness_new (codec->dec_name);
+
+  g_object_set (h->element, "direct-rendering", direct_rendering, NULL);
+  if (video_meta)
+    gst_harness_add_propose_allocation_meta (h, GST_VIDEO_META_API_TYPE, NULL);
+
+  gst_harness_set_src_caps_str (h, codec->caps_str);
+
+  return h;
+}
+
+static guint
+drop_all_output (GstHarness * h)
+{
+  GstBuffer *buf;
+  guint n = 0;
+
+  while ((buf = gst_harness_try_pull (h)) != NULL) {
+    gst_buffer_unref (buf);
+    n++;
+  }
+  return n;
+}
+
+static guint
+count_force_key_unit_events (GstHarness * h)
+{
+  GstEvent *event;
+  guint n = 0;
+
+  while ((event = gst_harness_try_pull_upstream_event (h)) != NULL) {
+    if (GST_EVENT_TYPE (event) == GST_EVENT_CUSTOM_UPSTREAM
+        && gst_video_event_is_force_key_unit (event))
+      n++;
+    gst_event_unref (event);
+  }
+  return n;
+}
+
+/* ------------------------------------------------------------------------ */
+/* non-mappable memory, to reach the gst_buffer_map() failure exit            */
+/* ------------------------------------------------------------------------ */
+
+typedef struct
+{
+  GstAllocator parent;
+} GstUnmappableAllocator;
+
+typedef struct
+{
+  GstAllocatorClass parent;
+} GstUnmappableAllocatorClass;
+
+static GType gst_unmappable_allocator_get_type (void);
+G_DEFINE_TYPE (GstUnmappableAllocator, gst_unmappable_allocator,
+    GST_TYPE_ALLOCATOR);
+
+static gpointer
+unmappable_mem_map (GstMemory * mem, gsize maxsize, GstMapFlags flags)
+{
+  return NULL;
+}
+
+static void
+unmappable_mem_unmap (GstMemory * mem)
+{
+}
+
+static GstMemory *
+unmappable_mem_share (GstMemory * mem, gssize offset, gssize size)
+{
+  return NULL;
+}
+
+static GstMemory *
+unmappable_alloc (GstAllocator * allocator, gsize size,
+    GstAllocationParams * params)
+{
+  GstMemory *mem = g_new0 (GstMemory, 1);
+
+  gst_memory_init (mem, 0, allocator, NULL, size, 0, 0, size);
+  return mem;
+}
+
+static void
+unmappable_free (GstAllocator * allocator, GstMemory * mem)
+{
+  g_free (mem);
+}
+
+static void
+gst_unmappable_allocator_class_init (GstUnmappableAllocatorClass * klass)
+{
+  GstAllocatorClass *ac = GST_ALLOCATOR_CLASS (klass);
+
+  ac->alloc = unmappable_alloc;
+  ac->free = unmappable_free;
+}
+
+static void
+gst_unmappable_allocator_init (GstUnmappableAllocator * self)
+{
+  GstAllocator *alloc = GST_ALLOCATOR_CAST (self);
+
+  alloc->mem_type = "unmappable";
+  alloc->mem_map = unmappable_mem_map;
+  alloc->mem_unmap = unmappable_mem_unmap;
+  alloc->mem_share = unmappable_mem_share;
+  GST_OBJECT_FLAG_SET (alloc, GST_ALLOCATOR_FLAG_CUSTOM_ALLOC);
+}
+
+static GstBuffer *
+make_unmappable_buffer (GstClockTime pts)
+{
+  GstAllocator *alloc = g_object_new (gst_unmappable_allocator_get_type (),
+      NULL);
+  GstBuffer *buf = gst_buffer_new ();
+
+  gst_buffer_append_memory (buf, gst_allocator_alloc (alloc, 32, NULL));
+  gst_object_unref (alloc);
+
+  GST_BUFFER_PTS (buf) = pts;
+  GST_BUFFER_DTS (buf) = pts;
+  GST_BUFFER_FLAG_UNSET (buf, GST_BUFFER_FLAG_DELTA_UNIT);
+
+  return buf;
+}
+
+/* ------------------------------------------------------------------------ */
+/* narrow subclass injection for the open_codec and unsupported-format exits  */
+/* ------------------------------------------------------------------------ */
+
+typedef enum
+{
+  INJECT_OPEN_CODEC_ERROR,
+  INJECT_UNSUPPORTED_FORMAT,
+} InjectionKind;
+
+static GstFlowReturn
+failing_open_codec (GstVPXDec * dec, GstVideoCodecFrame * frame)
+{
+  return GST_FLOW_ERROR;
+}
+
+static gboolean
+failing_get_frame_format (GstVPXDec * dec, vpx_image_t * img,
+    GstVideoFormat * fmt)
+{
+  return FALSE;
+}
+
+static void
+injecting_class_init (gpointer klass, gpointer user_data)
+{
+  GstVPXDecClass *vpxclass = (GstVPXDecClass *) klass;
+
+  if (GPOINTER_TO_INT (user_data) == INJECT_OPEN_CODEC_ERROR)
+    vpxclass->open_codec = failing_open_codec;
+  else
+    vpxclass->get_frame_format = failing_get_frame_format;
+}
+
+/* Registers "<dec_name>-<suffix>" as a subclass of the real decoder with a
+ * single vfunc replaced, and returns the element name to instantiate. */
+static const gchar *
+register_injecting_decoder (const VpxCodec * codec, InjectionKind kind,
+    const gchar * suffix)
+{
+  static GHashTable *registered = NULL;
+  GstElement *probe;
+  GType parent_type, type;
+  GTypeQuery query;
+  GTypeInfo info = { 0, };
+  gchar *type_name, *element_name;
+
+  if (registered == NULL)
+    registered = g_hash_table_new (g_str_hash, g_str_equal);
+
+  element_name = g_strdup_printf ("%s-%s", codec->dec_name, suffix);
+  if (g_hash_table_contains (registered, element_name)) {
+    gchar *cached = g_strdup (element_name);
+    g_free (element_name);
+    /* leaked on purpose, lives for the duration of the test binary */
+    return cached;
+  }
+
+  probe = gst_element_factory_make (codec->dec_name, NULL);
+  fail_unless (probe != NULL);
+  parent_type = G_OBJECT_TYPE (probe);
+  gst_object_unref (probe);
+
+  g_type_query (parent_type, &query);
+  info.class_size = query.class_size;
+  info.instance_size = query.instance_size;
+  info.class_init = injecting_class_init;
+  info.class_data = GINT_TO_POINTER (kind);
+
+  type_name = g_strdup_printf ("GstTest%s%s", codec->dec_name, suffix);
+  type = g_type_register_static (parent_type, type_name, &info, 0);
+  g_free (type_name);
+
+  fail_unless (gst_element_register (NULL, element_name, GST_RANK_NONE, type));
+  g_hash_table_add (registered, g_strdup (element_name));
+
+  return element_name;
+}
+
+/* ------------------------------------------------------------------------ */
+/* the core regression: pending frames after a rejected frame                 */
+/* ------------------------------------------------------------------------ */
+
+static void
+check_corrupt_frames_released (const VpxCodec * codec,
+    gboolean direct_rendering, gboolean video_meta)
+{
+  GstHarness *h = new_decoder (codec, direct_rendering, video_meta);
+  GPtrArray *encoded = encode_frames (codec, 6, TRUE);
+  GstBuffer *keyframe = g_ptr_array_index (encoded, 0);
+  guint i;
+
+  /* a valid frame first, so the codec is up and a reference frame exists */
+  fail_unless_equals_int (GST_FLOW_OK, gst_harness_push (h,
+          copy_encoded (keyframe, 0)));
+  fail_unless_equals_int (1, drop_all_output (h));
+  fail_unless_equals_int (0, pending_frames (h));
+
+  for (i = 1; i <= 4; i++) {
+    fail_unless_equals_int (GST_FLOW_OK, gst_harness_push (h,
+            make_corrupt_frame (keyframe,
+                gst_util_uint64_scale (i, GST_SECOND, FRAMERATE_N))));
+    fail_unless_equals_int (0, drop_all_output (h));
+    fail_unless_equals_int (0, pending_frames (h));
+  }
+
+  /* and recovery on the next valid keyframe */
+  fail_unless_equals_int (GST_FLOW_OK, gst_harness_push (h,
+          copy_encoded (g_ptr_array_index (encoded, 1),
+              gst_util_uint64_scale (5, GST_SECOND, FRAMERATE_N))));
+  fail_unless_equals_int (1, drop_all_output (h));
+  fail_unless_equals_int (0, pending_frames (h));
+
+  g_ptr_array_unref (encoded);
+  gst_harness_teardown (h);
+}
+
+GST_START_TEST (test_vp8_corrupt_frames_released)
+{
+  check_corrupt_frames_released (&vp8_codec, FALSE, FALSE);
+}
+
+GST_END_TEST;
+
+GST_START_TEST (test_vp9_corrupt_frames_released)
+{
+  check_corrupt_frames_released (&vp9_codec, FALSE, FALSE);
+}
+
+GST_END_TEST;
+
+GST_START_TEST (test_vp8_corrupt_frames_released_direct_rendering)
+{
+  check_corrupt_frames_released (&vp8_codec, TRUE, TRUE);
+}
+
+GST_END_TEST;
+
+GST_START_TEST (test_vp9_corrupt_frames_released_direct_rendering)
+{
+  check_corrupt_frames_released (&vp9_codec, TRUE, TRUE);
+}
+
+GST_END_TEST;
+
+/* The retained frame owns the input buffer, which is where the reported
+ * 60MB went. Prove the input buffer is actually finalized. */
+static void
+buffer_finalized_cb (gpointer data, GstMiniObject * obj)
+{
+  guint *count = data;
+  (*count)++;
+}
+
+static void
+check_input_buffers_released (const VpxCodec * codec)
+{
+  GstHarness *h = new_decoder (codec, FALSE, FALSE);
+  GPtrArray *encoded = encode_frames (codec, 2, TRUE);
+  GstBuffer *keyframe = g_ptr_array_index (encoded, 0);
+  guint finalized = 0;
+  guint i;
+
+  fail_unless_equals_int (GST_FLOW_OK, gst_harness_push (h,
+          copy_encoded (keyframe, 0)));
+  drop_all_output (h);
+
+  for (i = 1; i <= 4; i++) {
+    GstBuffer *corrupt = make_corrupt_frame (keyframe,
+        gst_util_uint64_scale (i, GST_SECOND, FRAMERATE_N));
+
+    gst_mini_object_weak_ref (GST_MINI_OBJECT_CAST (corrupt),
+        buffer_finalized_cb, &finalized);
+    fail_unless_equals_int (GST_FLOW_OK, gst_harness_push (h, corrupt));
+    fail_unless_equals_int (0, drop_all_output (h));
+
+    /* no recovery frame has been pushed, nothing else may hold it */
+    fail_unless_equals_int (i, finalized);
+  }
+
+  fail_unless_equals_int (0, pending_frames (h));
+
+  g_ptr_array_unref (encoded);
+  gst_harness_teardown (h);
+}
+
+GST_START_TEST (test_vp8_input_buffers_released)
+{
+  check_input_buffers_released (&vp8_codec);
+}
+
+GST_END_TEST;
+
+GST_START_TEST (test_vp9_input_buffers_released)
+{
+  check_input_buffers_released (&vp9_codec);
+}
+
+GST_END_TEST;
+
+/* A long corrupt run must not grow the pending queue at all. In the broken
+ * decoder this is where GstVideoDecoder starts warning about more than 10
+ * pending frames and where memory grows without bound. */
+static void
+check_sustained_corruption_is_bounded (const VpxCodec * codec)
+{
+  GstHarness *h = new_decoder (codec, FALSE, FALSE);
+  GPtrArray *encoded = encode_frames (codec, 2, TRUE);
+  GstBuffer *keyframe = g_ptr_array_index (encoded, 0);
+  guint i;
+
+  fail_unless_equals_int (GST_FLOW_OK, gst_harness_push (h,
+          copy_encoded (keyframe, 0)));
+  drop_all_output (h);
+
+  /* max-errors off, so the run is not cut short by a fatal error */
+  g_object_set (h->element, "max-errors", -1, NULL);
+
+  for (i = 1; i <= 200; i++) {
+    fail_unless_equals_int (GST_FLOW_OK, gst_harness_push (h,
+            make_corrupt_frame (keyframe,
+                gst_util_uint64_scale (i, GST_SECOND, FRAMERATE_N))));
+    fail_unless_equals_int (0, pending_frames (h));
+  }
+
+  drop_all_output (h);
+  g_ptr_array_unref (encoded);
+  gst_harness_teardown (h);
+}
+
+GST_START_TEST (test_vp8_sustained_corruption_is_bounded)
+{
+  check_sustained_corruption_is_bounded (&vp8_codec);
+}
+
+GST_END_TEST;
+
+GST_START_TEST (test_vp9_sustained_corruption_is_bounded)
+{
+  check_sustained_corruption_is_bounded (&vp9_codec);
+}
+
+GST_END_TEST;
+
+/* ------------------------------------------------------------------------ */
+/* the release must stay a release, not become a drop                         */
+/* ------------------------------------------------------------------------ */
+
+static void
+check_no_qos_messages (const VpxCodec * codec)
+{
+  GstHarness *h = new_decoder (codec, FALSE, FALSE);
+  GPtrArray *encoded = encode_frames (codec, 2, TRUE);
+  GstBuffer *keyframe = g_ptr_array_index (encoded, 0);
+  GstBus *bus = gst_bus_new ();
+  GstMessage *msg;
+  guint i;
+
+  gst_element_set_bus (h->element, bus);
+
+  fail_unless_equals_int (GST_FLOW_OK, gst_harness_push (h,
+          copy_encoded (keyframe, 0)));
+  drop_all_output (h);
+
+  for (i = 1; i <= 4; i++)
+    fail_unless_equals_int (GST_FLOW_OK, gst_harness_push (h,
+            make_corrupt_frame (keyframe,
+                gst_util_uint64_scale (i, GST_SECOND, FRAMERATE_N))));
+
+  while ((msg = gst_bus_pop (bus)) != NULL) {
+    fail_if (GST_MESSAGE_TYPE (msg) == GST_MESSAGE_QOS,
+        "rejected frames must be released, not dropped, so no QoS message");
+    gst_message_unref (msg);
+  }
+
+  gst_element_set_bus (h->element, NULL);
+  gst_object_unref (bus);
+  g_ptr_array_unref (encoded);
+  gst_harness_teardown (h);
+}
+
+GST_START_TEST (test_vp8_no_qos_messages_on_error)
+{
+  check_no_qos_messages (&vp8_codec);
+}
+
+GST_END_TEST;
+
+GST_START_TEST (test_vp9_no_qos_messages_on_error)
+{
+  check_no_qos_messages (&vp9_codec);
+}
+
+GST_END_TEST;
+
+/* The error return value, including the fatal one once max-errors is
+ * exceeded, must survive the change. */
+static void
+check_max_errors_still_fatal (const VpxCodec * codec)
+{
+  GstHarness *h = new_decoder (codec, FALSE, FALSE);
+  GPtrArray *encoded = encode_frames (codec, 2, TRUE);
+  GstBuffer *keyframe = g_ptr_array_index (encoded, 0);
+
+  fail_unless_equals_int (GST_FLOW_OK, gst_harness_push (h,
+          copy_encoded (keyframe, 0)));
+  drop_all_output (h);
+
+  g_object_set (h->element, "max-errors", 1, NULL);
+
+  fail_unless_equals_int (GST_FLOW_OK, gst_harness_push (h,
+          make_corrupt_frame (keyframe, GST_SECOND)));
+  fail_unless_equals_int (0, pending_frames (h));
+
+  fail_unless_equals_int (GST_FLOW_ERROR, gst_harness_push (h,
+          make_corrupt_frame (keyframe, 2 * GST_SECOND)));
+  fail_unless_equals_int (0, pending_frames (h));
+
+  g_ptr_array_unref (encoded);
+  gst_harness_teardown (h);
+}
+
+GST_START_TEST (test_vp8_max_errors_still_fatal)
+{
+  check_max_errors_still_fatal (&vp8_codec);
+}
+
+GST_END_TEST;
+
+GST_START_TEST (test_vp9_max_errors_still_fatal)
+{
+  check_max_errors_still_fatal (&vp9_codec);
+}
+
+GST_END_TEST;
+
+/* One sync point request per rejected frame, and none for the valid ones. */
+static void
+check_sync_point_requests (const VpxCodec * codec)
+{
+  GstHarness *h = new_decoder (codec, FALSE, FALSE);
+  GPtrArray *encoded = encode_frames (codec, 2, TRUE);
+  GstBuffer *keyframe = g_ptr_array_index (encoded, 0);
+  guint i;
+
+  fail_unless_equals_int (GST_FLOW_OK, gst_harness_push (h,
+          copy_encoded (keyframe, 0)));
+  drop_all_output (h);
+  count_force_key_unit_events (h);
+
+  for (i = 1; i <= 4; i++)
+    fail_unless_equals_int (GST_FLOW_OK, gst_harness_push (h,
+            make_corrupt_frame (keyframe,
+                gst_util_uint64_scale (i, GST_SECOND, FRAMERATE_N))));
+
+  /* GstVideoDecoder throttles repeated requests while one is outstanding,
+   * so the count is bounded by, not equal to, the number of failures. */
+  i = count_force_key_unit_events (h);
+  fail_unless (i >= 1 && i <= 4, "expected 1 to 4 sync point requests, got %u",
+      i);
+
+  fail_unless_equals_int (GST_FLOW_OK, gst_harness_push (h,
+          copy_encoded (g_ptr_array_index (encoded, 1), 5 * GST_SECOND)));
+  fail_unless_equals_int (1, drop_all_output (h));
+  fail_unless_equals_int (0, count_force_key_unit_events (h));
+  fail_unless_equals_int (0, pending_frames (h));
+
+  g_ptr_array_unref (encoded);
+  gst_harness_teardown (h);
+}
+
+GST_START_TEST (test_vp8_sync_point_requests)
+{
+  check_sync_point_requests (&vp8_codec);
+}
+
+GST_END_TEST;
+
+GST_START_TEST (test_vp9_sync_point_requests)
+{
+  check_sync_point_requests (&vp9_codec);
+}
+
+GST_END_TEST;
+
+/* Delta frames arriving while the decoder is still waiting for a sync point
+ * must not accumulate either. */
+static void
+check_delta_frames_while_awaiting_sync (const VpxCodec * codec)
+{
+  GstHarness *h = new_decoder (codec, FALSE, FALSE);
+  GPtrArray *encoded = encode_frames (codec, 6, FALSE);
+  GstBuffer *keyframe = g_ptr_array_index (encoded, 0);
+  guint i;
+
+  fail_unless_equals_int (GST_FLOW_OK, gst_harness_push (h,
+          copy_encoded (keyframe, 0)));
+  drop_all_output (h);
+
+  fail_unless_equals_int (GST_FLOW_OK, gst_harness_push (h,
+          make_corrupt_frame (keyframe, GST_SECOND)));
+  fail_unless_equals_int (0, pending_frames (h));
+
+  for (i = 1; i < encoded->len; i++) {
+    GstBuffer *delta = copy_encoded (g_ptr_array_index (encoded, i),
+        (i + 1) * GST_SECOND);
+
+    GST_BUFFER_FLAG_SET (delta, GST_BUFFER_FLAG_DELTA_UNIT);
+    fail_unless_equals_int (GST_FLOW_OK, gst_harness_push (h, delta));
+    fail_unless_equals_int (0, pending_frames (h));
+  }
+
+  drop_all_output (h);
+  g_ptr_array_unref (encoded);
+  gst_harness_teardown (h);
+}
+
+GST_START_TEST (test_vp8_delta_frames_while_awaiting_sync)
+{
+  check_delta_frames_while_awaiting_sync (&vp8_codec);
+}
+
+GST_END_TEST;
+
+GST_START_TEST (test_vp9_delta_frames_while_awaiting_sync)
+{
+  check_delta_frames_while_awaiting_sync (&vp9_codec);
+}
+
+GST_END_TEST;
+
+/* ------------------------------------------------------------------------ */
+/* recovery output stays correct                                              */
+/* ------------------------------------------------------------------------ */
+
+static void
+check_recovery_output (const VpxCodec * codec, gboolean direct_rendering,
+    gboolean video_meta)
+{
+  GstHarness *h = new_decoder (codec, direct_rendering, video_meta);
+  GPtrArray *encoded = encode_frames (codec, 4, TRUE);
+  GstBuffer *keyframe = g_ptr_array_index (encoded, 0);
+  GstClockTime recovery_pts = gst_util_uint64_scale (5, GST_SECOND,
+      FRAMERATE_N);
+  GstBuffer *out;
+  GstVideoInfo info;
+  GstVideoFrame vframe;
+  GstCaps *caps;
+  guint i;
+  guint8 luma;
+
+  fail_unless_equals_int (GST_FLOW_OK, gst_harness_push (h,
+          copy_encoded (keyframe, 0)));
+  gst_buffer_unref (gst_harness_pull (h));
+
+  for (i = 1; i <= 4; i++)
+    fail_unless_equals_int (GST_FLOW_OK, gst_harness_push (h,
+            make_corrupt_frame (keyframe,
+                gst_util_uint64_scale (i, GST_SECOND, FRAMERATE_N))));
+  fail_unless_equals_int (0, drop_all_output (h));
+
+  fail_unless_equals_int (GST_FLOW_OK, gst_harness_push (h,
+          copy_encoded (g_ptr_array_index (encoded, 1), recovery_pts)));
+
+  out = gst_harness_pull (h);
+  fail_unless (out != NULL);
+
+  fail_unless_equals_uint64 (GST_BUFFER_PTS (out), recovery_pts);
+  fail_unless_equals_uint64 (GST_BUFFER_DURATION (out),
+      gst_util_uint64_scale (1, GST_SECOND, FRAMERATE_N));
+  fail_if (GST_BUFFER_FLAG_IS_SET (out, GST_BUFFER_FLAG_DELTA_UNIT));
+  fail_if (GST_BUFFER_FLAG_IS_SET (out, GST_BUFFER_FLAG_CORRUPTED));
+
+  caps = gst_pad_get_current_caps (h->sinkpad);
+  fail_unless (caps != NULL);
+  fail_unless (gst_video_info_from_caps (&info, caps));
+  fail_unless_equals_int (WIDTH, GST_VIDEO_INFO_WIDTH (&info));
+  fail_unless_equals_int (HEIGHT, GST_VIDEO_INFO_HEIGHT (&info));
+  gst_caps_unref (caps);
+
+  /* stride safe: read through GstVideoFrame rather than the raw buffer */
+  fail_unless (gst_video_frame_map (&vframe, &info, out, GST_MAP_READ));
+  luma = *((guint8 *) GST_VIDEO_FRAME_PLANE_DATA (&vframe, 0));
+  /* frame 1 of the pattern, lossy, so allow a wide tolerance; the point is
+   * that it is the recovered picture and not a zeroed or stale buffer */
+  fail_unless (ABS ((gint) luma - (gint) (16 + 8)) < 24,
+      "unexpected recovered luma %u", luma);
+  gst_video_frame_unmap (&vframe);
+
+  gst_buffer_unref (out);
+  fail_unless_equals_int (0, pending_frames (h));
+
+  g_ptr_array_unref (encoded);
+  gst_harness_teardown (h);
+}
+
+GST_START_TEST (test_vp8_recovery_output)
+{
+  check_recovery_output (&vp8_codec, FALSE, FALSE);
+}
+
+GST_END_TEST;
+
+GST_START_TEST (test_vp9_recovery_output)
+{
+  check_recovery_output (&vp9_codec, FALSE, FALSE);
+}
+
+GST_END_TEST;
+
+GST_START_TEST (test_vp9_recovery_output_direct_rendering)
+{
+  check_recovery_output (&vp9_codec, TRUE, TRUE);
+}
+
+GST_END_TEST;
+
+/* Several corruption and recovery cycles in a row. */
+static void
+check_repeated_failure_and_recovery (const VpxCodec * codec)
+{
+  GstHarness *h = new_decoder (codec, FALSE, FALSE);
+  GPtrArray *encoded = encode_frames (codec, 8, TRUE);
+  GstBuffer *keyframe = g_ptr_array_index (encoded, 0);
+  GstClockTime pts = 0;
+  guint cycle, i, outputs = 0;
+
+  g_object_set (h->element, "max-errors", -1, NULL);
+
+  /* establish a decodable stream first, as in the incident */
+  fail_unless_equals_int (GST_FLOW_OK, gst_harness_push (h,
+          copy_encoded (keyframe, pts)));
+  pts += GST_SECOND / FRAMERATE_N;
+  fail_unless_equals_int (1, drop_all_output (h));
+
+  /* The number of recovery buffers is deliberately not asserted per cycle.
+   * libvpx stops emitting output for VP9 once enough rejected frames have
+   * been fed to the same codec instance, and the unpatched decoder behaves
+   * exactly the same way, so that is not a property of this fix. What must
+   * hold in every case is that no frame is retained by the base class. */
+  for (cycle = 0; cycle < 5; cycle++) {
+    for (i = 0; i < 3; i++) {
+      fail_unless_equals_int (GST_FLOW_OK, gst_harness_push (h,
+              make_corrupt_frame (keyframe, pts)));
+      pts += GST_SECOND / FRAMERATE_N;
+      fail_unless_equals_int (0, pending_frames (h));
+    }
+
+    fail_unless_equals_int (GST_FLOW_OK, gst_harness_push (h,
+            copy_encoded (keyframe, pts)));
+    pts += GST_SECOND / FRAMERATE_N;
+    outputs += drop_all_output (h);
+    fail_unless_equals_int (0, pending_frames (h));
+  }
+
+  fail_unless (outputs >= 1);
+
+  g_ptr_array_unref (encoded);
+  gst_harness_teardown (h);
+}
+
+GST_START_TEST (test_vp8_repeated_failure_and_recovery)
+{
+  check_repeated_failure_and_recovery (&vp8_codec);
+}
+
+GST_END_TEST;
+
+GST_START_TEST (test_vp9_repeated_failure_and_recovery)
+{
+  check_repeated_failure_and_recovery (&vp9_codec);
+}
+
+GST_END_TEST;
+
+/* ------------------------------------------------------------------------ */
+/* the other three terminal exits                                             */
+/* ------------------------------------------------------------------------ */
+
+static void
+check_unmappable_input_released (const VpxCodec * codec)
+{
+  GstHarness *h = new_decoder (codec, FALSE, FALSE);
+  GPtrArray *encoded = encode_frames (codec, 2, TRUE);
+  guint finalized = 0;
+  GstBuffer *bad;
+
+  /* codec must be up, otherwise open_codec rejects the buffer first */
+  fail_unless_equals_int (GST_FLOW_OK, gst_harness_push (h,
+          copy_encoded (g_ptr_array_index (encoded, 0), 0)));
+  drop_all_output (h);
+
+  bad = make_unmappable_buffer (GST_SECOND);
+  gst_mini_object_weak_ref (GST_MINI_OBJECT_CAST (bad), buffer_finalized_cb,
+      &finalized);
+
+  fail_unless_equals_int (GST_FLOW_ERROR, gst_harness_push (h, bad));
+  fail_unless_equals_int (0, pending_frames (h));
+  fail_unless_equals_int (1, finalized);
+
+  g_ptr_array_unref (encoded);
+  gst_harness_teardown (h);
+}
+
+GST_START_TEST (test_vp8_unmappable_input_released)
+{
+  check_unmappable_input_released (&vp8_codec);
+}
+
+GST_END_TEST;
+
+GST_START_TEST (test_vp9_unmappable_input_released)
+{
+  check_unmappable_input_released (&vp9_codec);
+}
+
+GST_END_TEST;
+
+static void
+check_open_codec_error_released (const VpxCodec * codec)
+{
+  const gchar *name = register_injecting_decoder (codec,
+      INJECT_OPEN_CODEC_ERROR, "openfail");
+  GstHarness *h = gst_harness_new (name);
+  GPtrArray *encoded = encode_frames (codec, 1, TRUE);
+  guint finalized = 0;
+  GstBuffer *buf;
+
+  gst_harness_set_src_caps_str (h, codec->caps_str);
+
+  buf = copy_encoded (g_ptr_array_index (encoded, 0), 0);
+  gst_mini_object_weak_ref (GST_MINI_OBJECT_CAST (buf), buffer_finalized_cb,
+      &finalized);
+
+  fail_unless_equals_int (GST_FLOW_ERROR, gst_harness_push (h, buf));
+  fail_unless_equals_int (0, pending_frames (h));
+  fail_unless_equals_int (1, finalized);
+
+  g_ptr_array_unref (encoded);
+  gst_harness_teardown (h);
+}
+
+GST_START_TEST (test_vp8_open_codec_error_released)
+{
+  check_open_codec_error_released (&vp8_codec);
+}
+
+GST_END_TEST;
+
+GST_START_TEST (test_vp9_open_codec_error_released)
+{
+  check_open_codec_error_released (&vp9_codec);
+}
+
+GST_END_TEST;
+
+static void
+check_unsupported_format_released (const VpxCodec * codec)
+{
+  const gchar *name = register_injecting_decoder (codec,
+      INJECT_UNSUPPORTED_FORMAT, "badformat");
+  GstHarness *h = gst_harness_new (name);
+  GPtrArray *encoded = encode_frames (codec, 1, TRUE);
+  guint finalized = 0;
+  GstBuffer *buf;
+
+  gst_harness_set_src_caps_str (h, codec->caps_str);
+
+  buf = copy_encoded (g_ptr_array_index (encoded, 0), 0);
+  gst_mini_object_weak_ref (GST_MINI_OBJECT_CAST (buf), buffer_finalized_cb,
+      &finalized);
+
+  fail_unless_equals_int (GST_FLOW_ERROR, gst_harness_push (h, buf));
+  fail_unless_equals_int (0, pending_frames (h));
+  fail_unless_equals_int (1, finalized);
+
+  g_ptr_array_unref (encoded);
+  gst_harness_teardown (h);
+}
+
+GST_START_TEST (test_vp8_unsupported_format_released)
+{
+  check_unsupported_format_released (&vp8_codec);
+}
+
+GST_END_TEST;
+
+GST_START_TEST (test_vp9_unsupported_format_released)
+{
+  check_unsupported_format_released (&vp9_codec);
+}
+
+GST_END_TEST;
+
+/* ------------------------------------------------------------------------ */
+/* event boundaries                                                           */
+/* ------------------------------------------------------------------------ */
+
+static GstEvent *
+new_marker_event (guint id, gboolean sticky)
+{
+  GstStructure *s = gst_structure_new ("test-marker", "id", G_TYPE_UINT, id,
+      NULL);
+
+  return gst_event_new_custom (sticky ? GST_EVENT_CUSTOM_DOWNSTREAM_STICKY :
+      GST_EVENT_CUSTOM_DOWNSTREAM, s);
+}
+
+static gboolean
+is_marker_event (GstEvent * event, guint * id)
+{
+  const GstStructure *s;
+
+  if (GST_EVENT_TYPE (event) != GST_EVENT_CUSTOM_DOWNSTREAM
+      && GST_EVENT_TYPE (event) != GST_EVENT_CUSTOM_DOWNSTREAM_STICKY)
+    return FALSE;
+
+  s = gst_event_get_structure (event);
+  if (s == NULL || !gst_structure_has_name (s, "test-marker"))
+    return FALSE;
+
+  return gst_structure_get_uint (s, "id", id);
+}
+
+/* Events that arrived with a frame the decoder then rejects must still be
+ * delivered, exactly once and in order, before the recovery buffer. */
+static void
+check_events_survive_rejected_frames (const VpxCodec * codec)
+{
+  GstHarness *h = new_decoder (codec, FALSE, FALSE);
+  GPtrArray *encoded = encode_frames (codec, 2, TRUE);
+  GstBuffer *keyframe = g_ptr_array_index (encoded, 0);
+  GstEvent *event;
+  guint expected = 0;
+  guint i;
+
+  fail_unless_equals_int (GST_FLOW_OK, gst_harness_push (h,
+          copy_encoded (keyframe, 0)));
+  drop_all_output (h);
+  while ((event = gst_harness_try_pull_event (h)) != NULL)
+    gst_event_unref (event);
+
+  for (i = 0; i < 4; i++) {
+    fail_unless (gst_harness_push_event (h, new_marker_event (i, FALSE)));
+    fail_unless_equals_int (GST_FLOW_OK, gst_harness_push (h,
+            make_corrupt_frame (keyframe,
+                gst_util_uint64_scale (i + 1, GST_SECOND, FRAMERATE_N))));
+  }
+
+  fail_unless_equals_int (GST_FLOW_OK, gst_harness_push (h,
+          copy_encoded (g_ptr_array_index (encoded, 1), 5 * GST_SECOND)));
+  fail_unless_equals_int (1, drop_all_output (h));
+
+  while ((event = gst_harness_try_pull_event (h)) != NULL) {
+    guint id;
+
+    if (is_marker_event (event, &id))
+      fail_unless_equals_int (expected++, id);
+    gst_event_unref (event);
+  }
+  fail_unless_equals_int (4, expected);
+  fail_unless_equals_int (0, pending_frames (h));
+
+  g_ptr_array_unref (encoded);
+  gst_harness_teardown (h);
+}
+
+GST_START_TEST (test_vp8_events_survive_rejected_frames)
+{
+  check_events_survive_rejected_frames (&vp8_codec);
+}
+
+GST_END_TEST;
+
+GST_START_TEST (test_vp9_events_survive_rejected_frames)
+{
+  check_events_survive_rejected_frames (&vp9_codec);
+}
+
+GST_END_TEST;
+
+/* Characterization, and a deliberate behaviour change. Releasing the frame
+ * hands its events to the decoder's pending list, which GAP does forward.
+ * While the frame was leaked instead, those events were unreachable and were
+ * never forwarded ahead of the GAP. */
+static void
+check_events_forwarded_before_gap (const VpxCodec * codec)
+{
+  GstHarness *h = new_decoder (codec, FALSE, FALSE);
+  GPtrArray *encoded = encode_frames (codec, 2, TRUE);
+  GstBuffer *keyframe = g_ptr_array_index (encoded, 0);
+  GstEvent *event;
+  gboolean seen_marker = FALSE;
+  gboolean seen_gap = FALSE;
+
+  fail_unless_equals_int (GST_FLOW_OK, gst_harness_push (h,
+          copy_encoded (keyframe, 0)));
+  drop_all_output (h);
+  while ((event = gst_harness_try_pull_event (h)) != NULL)
+    gst_event_unref (event);
+
+  fail_unless (gst_harness_push_event (h, new_marker_event (0, FALSE)));
+  fail_unless_equals_int (GST_FLOW_OK, gst_harness_push (h,
+          make_corrupt_frame (keyframe, GST_SECOND)));
+  fail_unless (gst_harness_push_event (h, gst_event_new_gap (2 * GST_SECOND,
+              GST_SECOND)));
+
+  while ((event = gst_harness_try_pull_event (h)) != NULL) {
+    guint id;
+
+    if (is_marker_event (event, &id)) {
+      fail_if (seen_gap, "marker event must be forwarded before the gap");
+      seen_marker = TRUE;
+    } else if (GST_EVENT_TYPE (event) == GST_EVENT_GAP) {
+      seen_gap = TRUE;
+    }
+    gst_event_unref (event);
+  }
+
+  fail_unless (seen_gap);
+  fail_unless (seen_marker, "event of a rejected frame was lost at the gap");
+  fail_unless_equals_int (0, pending_frames (h));
+
+  g_ptr_array_unref (encoded);
+  gst_harness_teardown (h);
+}
+
+GST_START_TEST (test_vp8_events_forwarded_before_gap)
+{
+  check_events_forwarded_before_gap (&vp8_codec);
+}
+
+GST_END_TEST;
+
+GST_START_TEST (test_vp9_events_forwarded_before_gap)
+{
+  check_events_forwarded_before_gap (&vp9_codec);
+}
+
+GST_END_TEST;
+
+/* Characterization of the documented tradeoff. A sticky event that came in
+ * with a rejected frame is moved to the decoder's pending event list, which
+ * FLUSH_STOP discards instead of re-storing on the source pad. This matches
+ * every other release and drop path in GstVideoDecoder. The test pins the
+ * behaviour so a future change is a deliberate one, and asserts the parts
+ * that actually matter: no crash, nothing retained. */
+static void
+check_flush_after_rejected_frame (const VpxCodec * codec)
+{
+  GstHarness *h = new_decoder (codec, FALSE, FALSE);
+  GPtrArray *encoded = encode_frames (codec, 2, TRUE);
+  GstBuffer *keyframe = g_ptr_array_index (encoded, 0);
+  GstEvent *event;
+  guint markers = 0;
+
+  fail_unless_equals_int (GST_FLOW_OK, gst_harness_push (h,
+          copy_encoded (keyframe, 0)));
+  drop_all_output (h);
+  while ((event = gst_harness_try_pull_event (h)) != NULL)
+    gst_event_unref (event);
+
+  fail_unless (gst_harness_push_event (h, new_marker_event (0, TRUE)));
+  fail_unless_equals_int (GST_FLOW_OK, gst_harness_push (h,
+          make_corrupt_frame (keyframe, GST_SECOND)));
+  fail_unless_equals_int (0, pending_frames (h));
+
+  fail_unless (gst_harness_push_event (h, gst_event_new_flush_start ()));
+  fail_unless (gst_harness_push_event (h, gst_event_new_flush_stop (TRUE)));
+  fail_unless_equals_int (0, pending_frames (h));
+
+  /* re-establish caps and segment, as any real upstream would after a flush */
+  gst_harness_set_src_caps_str (h, codec->caps_str);
+
+  fail_unless_equals_int (GST_FLOW_OK, gst_harness_push (h,
+          copy_encoded (keyframe, 2 * GST_SECOND)));
+  fail_unless_equals_int (1, drop_all_output (h));
+  fail_unless_equals_int (0, pending_frames (h));
+
+  while ((event = gst_harness_try_pull_event (h)) != NULL) {
+    guint id;
+
+    if (is_marker_event (event, &id))
+      markers++;
+    gst_event_unref (event);
+  }
+
+  /* The sticky marker is not re-delivered after the flush. Documented
+   * tradeoff, identical to gst_video_decoder_drop_frame(). */
+  fail_unless_equals_int (0, markers);
+
+  g_ptr_array_unref (encoded);
+  gst_harness_teardown (h);
+}
+
+GST_START_TEST (test_vp8_flush_after_rejected_frame)
+{
+  check_flush_after_rejected_frame (&vp8_codec);
+}
+
+GST_END_TEST;
+
+GST_START_TEST (test_vp9_flush_after_rejected_frame)
+{
+  check_flush_after_rejected_frame (&vp9_codec);
+}
+
+GST_END_TEST;
+
+/* EOS with no recovery frame at all, then teardown. Nothing may be retained
+ * and nothing may crash. */
+static void
+check_eos_without_recovery (const VpxCodec * codec)
+{
+  GstHarness *h = new_decoder (codec, FALSE, FALSE);
+  GPtrArray *encoded = encode_frames (codec, 2, TRUE);
+  GstBuffer *keyframe = g_ptr_array_index (encoded, 0);
+  guint i;
+
+  g_object_set (h->element, "max-errors", -1, NULL);
+
+  fail_unless_equals_int (GST_FLOW_OK, gst_harness_push (h,
+          copy_encoded (keyframe, 0)));
+  drop_all_output (h);
+
+  for (i = 1; i <= 4; i++) {
+    fail_unless (gst_harness_push_event (h, new_marker_event (i, FALSE)));
+    fail_unless_equals_int (GST_FLOW_OK, gst_harness_push (h,
+            make_corrupt_frame (keyframe,
+                gst_util_uint64_scale (i, GST_SECOND, FRAMERATE_N))));
+  }
+
+  fail_unless_equals_int (0, pending_frames (h));
+  fail_unless (gst_harness_push_event (h, gst_event_new_eos ()));
+  fail_unless_equals_int (0, pending_frames (h));
+  fail_unless_equals_int (0, drop_all_output (h));
+
+  g_ptr_array_unref (encoded);
+  gst_harness_teardown (h);
+}
+
+GST_START_TEST (test_vp8_eos_without_recovery)
+{
+  check_eos_without_recovery (&vp8_codec);
+}
+
+GST_END_TEST;
+
+GST_START_TEST (test_vp9_eos_without_recovery)
+{
+  check_eos_without_recovery (&vp9_codec);
+}
+
+GST_END_TEST;
+
+/* Teardown straight after a corrupt run, with no EOS at all. */
+static void
+check_teardown_after_corruption (const VpxCodec * codec)
+{
+  GstHarness *h = new_decoder (codec, FALSE, FALSE);
+  GPtrArray *encoded = encode_frames (codec, 2, TRUE);
+  GstBuffer *keyframe = g_ptr_array_index (encoded, 0);
+  guint i;
+
+  g_object_set (h->element, "max-errors", -1, NULL);
+
+  fail_unless_equals_int (GST_FLOW_OK, gst_harness_push (h,
+          copy_encoded (keyframe, 0)));
+  drop_all_output (h);
+
+  for (i = 1; i <= 4; i++)
+    fail_unless_equals_int (GST_FLOW_OK, gst_harness_push (h,
+            make_corrupt_frame (keyframe,
+                gst_util_uint64_scale (i, GST_SECOND, FRAMERATE_N))));
+
+  fail_unless_equals_int (0, pending_frames (h));
+
+  g_ptr_array_unref (encoded);
+  gst_harness_teardown (h);
+}
+
+GST_START_TEST (test_vp8_teardown_after_corruption)
+{
+  check_teardown_after_corruption (&vp8_codec);
+}
+
+GST_END_TEST;
+
+GST_START_TEST (test_vp9_teardown_after_corruption)
+{
+  check_teardown_after_corruption (&vp9_codec);
+}
+
+GST_END_TEST;
+
+/* ------------------------------------------------------------------------ */
+
+static Suite *
+vpxdec_suite (void)
+{
+  Suite *s = suite_create ("vpxdec");
+  TCase *tc = tcase_create ("general");
+
+  suite_add_tcase (s, tc);
+  tcase_set_timeout (tc, 120);
+
+#ifdef HAVE_VP8_ENCODER
+  tcase_add_test (tc, test_vp8_corrupt_frames_released);
+  tcase_add_test (tc, test_vp8_corrupt_frames_released_direct_rendering);
+  tcase_add_test (tc, test_vp8_input_buffers_released);
+  tcase_add_test (tc, test_vp8_sustained_corruption_is_bounded);
+  tcase_add_test (tc, test_vp8_no_qos_messages_on_error);
+  tcase_add_test (tc, test_vp8_max_errors_still_fatal);
+  tcase_add_test (tc, test_vp8_sync_point_requests);
+  tcase_add_test (tc, test_vp8_delta_frames_while_awaiting_sync);
+  tcase_add_test (tc, test_vp8_recovery_output);
+  tcase_add_test (tc, test_vp8_repeated_failure_and_recovery);
+  tcase_add_test (tc, test_vp8_unmappable_input_released);
+  tcase_add_test (tc, test_vp8_open_codec_error_released);
+  tcase_add_test (tc, test_vp8_unsupported_format_released);
+  tcase_add_test (tc, test_vp8_events_survive_rejected_frames);
+  tcase_add_test (tc, test_vp8_events_forwarded_before_gap);
+  tcase_add_test (tc, test_vp8_flush_after_rejected_frame);
+  tcase_add_test (tc, test_vp8_eos_without_recovery);
+  tcase_add_test (tc, test_vp8_teardown_after_corruption);
+#endif
+
+#ifdef HAVE_VP9_ENCODER
+  tcase_add_test (tc, test_vp9_corrupt_frames_released);
+  tcase_add_test (tc, test_vp9_corrupt_frames_released_direct_rendering);
+  tcase_add_test (tc, test_vp9_input_buffers_released);
+  tcase_add_test (tc, test_vp9_sustained_corruption_is_bounded);
+  tcase_add_test (tc, test_vp9_no_qos_messages_on_error);
+  tcase_add_test (tc, test_vp9_max_errors_still_fatal);
+  tcase_add_test (tc, test_vp9_sync_point_requests);
+  tcase_add_test (tc, test_vp9_delta_frames_while_awaiting_sync);
+  tcase_add_test (tc, test_vp9_recovery_output);
+  tcase_add_test (tc, test_vp9_recovery_output_direct_rendering);
+  tcase_add_test (tc, test_vp9_repeated_failure_and_recovery);
+  tcase_add_test (tc, test_vp9_unmappable_input_released);
+  tcase_add_test (tc, test_vp9_open_codec_error_released);
+  tcase_add_test (tc, test_vp9_unsupported_format_released);
+  tcase_add_test (tc, test_vp9_events_survive_rejected_frames);
+  tcase_add_test (tc, test_vp9_events_forwarded_before_gap);
+  tcase_add_test (tc, test_vp9_flush_after_rejected_frame);
+  tcase_add_test (tc, test_vp9_eos_without_recovery);
+  tcase_add_test (tc, test_vp9_teardown_after_corruption);
+#endif
+
+  return s;
+}
+
+GST_CHECK_MAIN (vpxdec);

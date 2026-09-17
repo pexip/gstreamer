@@ -145,6 +145,10 @@ if host_machine.system() != 'windows'
     [ 'elements/vp8enc', not vpx_dep.found() or not have_vp8_encoder ],
     [ 'elements/vp8dec', not vpx_dep.found() or not have_vp8_decoder ],
     [ 'elements/vp9enc', not vpx_dep.found() or not have_vp9_encoder ],
+    [ 'elements/vpxdec',
+      not vpx_dep.found() or not have_vp8_decoder or not have_vp9_decoder
+        or not have_vp8_encoder or not have_vp9_encoder,
+      [vpx_dep] ],
     [ 'pipelines/lame', not lame_dep.found() ],
     [ 'elements/wavpackdec', not wavpack_dep.found() ],
     [ 'elements/wavpackenc', not wavpack_dep.found() ],
