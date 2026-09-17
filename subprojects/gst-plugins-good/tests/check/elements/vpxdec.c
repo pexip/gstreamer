@@ -338,7 +338,11 @@ injecting_class_init (gpointer klass, gpointer user_data)
 }
 
 /* Registers "<dec_name>-<suffix>" as a subclass of the real decoder with a
- * single vfunc replaced, and returns the element name to instantiate. */
+ * single vfunc replaced, and returns the element name to instantiate. The
+ * returned string is owned by the registration table, which keeps it alive
+ * for as long as the type it names stays registered. Callers must not free
+ * it. A type can only be registered once per process, so repeat calls hand
+ * back the name stored by the first one. */
 static const gchar *
 register_injecting_decoder (const VpxCodec * codec, InjectionKind kind,
     const gchar * suffix)
@@ -349,16 +353,16 @@ register_injecting_decoder (const VpxCodec * codec, InjectionKind kind,
   GTypeQuery query;
   GTypeInfo info = { 0, };
   gchar *type_name, *element_name;
+  const gchar *existing;
 
   if (registered == NULL)
     registered = g_hash_table_new (g_str_hash, g_str_equal);
 
   element_name = g_strdup_printf ("%s-%s", codec->dec_name, suffix);
-  if (g_hash_table_contains (registered, element_name)) {
-    gchar *cached = g_strdup (element_name);
+  existing = g_hash_table_lookup (registered, element_name);
+  if (existing != NULL) {
     g_free (element_name);
-    /* leaked on purpose, lives for the duration of the test binary */
-    return cached;
+    return existing;
   }
 
   probe = gst_element_factory_make (codec->dec_name, NULL);
@@ -377,7 +381,7 @@ register_injecting_decoder (const VpxCodec * codec, InjectionKind kind,
   g_free (type_name);
 
   fail_unless (gst_element_register (NULL, element_name, GST_RANK_NONE, type));
-  g_hash_table_add (registered, g_strdup (element_name));
+  g_hash_table_add (registered, element_name);
 
   return element_name;
 }
@@ -639,7 +643,9 @@ GST_START_TEST (test_vp9_max_errors_still_fatal)
 
 GST_END_TEST;
 
-/* One sync point request per rejected frame, and none for the valid ones. */
+/* Sync point requests are made for rejected frames and never for valid ones.
+ * The base class throttles repeats while a request is outstanding, so the
+ * count is bounded by, not equal to, the number of rejected frames. */
 static void
 check_sync_point_requests (const VpxCodec * codec)
 {
@@ -696,7 +702,7 @@ check_delta_frames_while_awaiting_sync (const VpxCodec * codec)
   GstHarness *h = new_decoder (codec, FALSE, FALSE);
   GPtrArray *encoded = encode_frames (codec, 6, FALSE);
   GstBuffer *keyframe = g_ptr_array_index (encoded, 0);
-  guint i;
+  guint i, deltas = 0;
 
   fail_unless_equals_int (GST_FLOW_OK, gst_harness_push (h,
           copy_encoded (keyframe, 0)));
@@ -707,13 +713,23 @@ check_delta_frames_while_awaiting_sync (const VpxCodec * codec)
   fail_unless_equals_int (0, pending_frames (h));
 
   for (i = 1; i < encoded->len; i++) {
-    GstBuffer *delta = copy_encoded (g_ptr_array_index (encoded, i),
-        (i + 1) * GST_SECOND);
+    GstBuffer *src = g_ptr_array_index (encoded, i);
+    GstBuffer *delta;
 
-    GST_BUFFER_FLAG_SET (delta, GST_BUFFER_FLAG_DELTA_UNIT);
+    /* The encoder was configured without forced keyframes, so everything
+     * after the first buffer must already be an inter frame. Assert that
+     * rather than relabelling a payload we did not inspect. */
+    fail_unless (GST_BUFFER_FLAG_IS_SET (src, GST_BUFFER_FLAG_DELTA_UNIT),
+        "encoded buffer %u is not a delta frame", i);
+
+    delta = copy_encoded (src, (i + 1) * GST_SECOND);
+    fail_unless (GST_BUFFER_FLAG_IS_SET (delta, GST_BUFFER_FLAG_DELTA_UNIT));
     fail_unless_equals_int (GST_FLOW_OK, gst_harness_push (h, delta));
     fail_unless_equals_int (0, pending_frames (h));
+    deltas++;
   }
+
+  fail_unless (deltas >= 1);
 
   drop_all_output (h);
   g_ptr_array_unref (encoded);
@@ -738,6 +754,68 @@ GST_END_TEST;
 /* recovery output stays correct                                              */
 /* ------------------------------------------------------------------------ */
 
+/* Decodes @encoded on its own pristine decoder instance, so that a decoder
+ * that has just recovered from a run of rejected frames can be compared
+ * against the picture the very same bitstream is supposed to produce. */
+static GstBuffer *
+decode_reference (const VpxCodec * codec, GstBuffer * encoded,
+    GstVideoInfo * info)
+{
+  GstHarness *h = new_decoder (codec, FALSE, FALSE);
+  GstBuffer *out;
+  GstCaps *caps;
+
+  fail_unless_equals_int (GST_FLOW_OK, gst_harness_push (h,
+          copy_encoded (encoded, 0)));
+  out = gst_harness_pull (h);
+  fail_unless (out != NULL);
+
+  caps = gst_pad_get_current_caps (h->sinkpad);
+  fail_unless (caps != NULL);
+  fail_unless (gst_video_info_from_caps (info, caps));
+  gst_caps_unref (caps);
+
+  gst_harness_teardown (h);
+
+  return out;
+}
+
+/* Full stride aware comparison of every active pixel of every plane. */
+static void
+assert_frames_identical (GstBuffer * actual, GstVideoInfo * actual_info,
+    GstBuffer * expected, GstVideoInfo * expected_info)
+{
+  GstVideoFrame a, b;
+  guint plane;
+
+  fail_unless_equals_int (GST_VIDEO_INFO_FORMAT (expected_info),
+      GST_VIDEO_INFO_FORMAT (actual_info));
+  fail_unless_equals_int (GST_VIDEO_INFO_WIDTH (expected_info),
+      GST_VIDEO_INFO_WIDTH (actual_info));
+  fail_unless_equals_int (GST_VIDEO_INFO_HEIGHT (expected_info),
+      GST_VIDEO_INFO_HEIGHT (actual_info));
+
+  fail_unless (gst_video_frame_map (&a, actual_info, actual, GST_MAP_READ));
+  fail_unless (gst_video_frame_map (&b, expected_info, expected, GST_MAP_READ));
+
+  for (plane = 0; plane < GST_VIDEO_FRAME_N_PLANES (&a); plane++) {
+    const guint8 *pa = GST_VIDEO_FRAME_PLANE_DATA (&a, plane);
+    const guint8 *pb = GST_VIDEO_FRAME_PLANE_DATA (&b, plane);
+    gint sa = GST_VIDEO_FRAME_PLANE_STRIDE (&a, plane);
+    gint sb = GST_VIDEO_FRAME_PLANE_STRIDE (&b, plane);
+    gint w = GST_VIDEO_FRAME_COMP_WIDTH (&a, plane)
+        * GST_VIDEO_FRAME_COMP_PSTRIDE (&a, plane);
+    gint hgt = GST_VIDEO_FRAME_COMP_HEIGHT (&a, plane);
+    gint row;
+
+    for (row = 0; row < hgt; row++)
+      fail_unless_equals_int (0, memcmp (pa + row * sa, pb + row * sb, w));
+  }
+
+  gst_video_frame_unmap (&b);
+  gst_video_frame_unmap (&a);
+}
+
 static void
 check_recovery_output (const VpxCodec * codec, gboolean direct_rendering,
     gboolean video_meta)
@@ -745,14 +823,13 @@ check_recovery_output (const VpxCodec * codec, gboolean direct_rendering,
   GstHarness *h = new_decoder (codec, direct_rendering, video_meta);
   GPtrArray *encoded = encode_frames (codec, 4, TRUE);
   GstBuffer *keyframe = g_ptr_array_index (encoded, 0);
+  GstBuffer *recovery = g_ptr_array_index (encoded, 1);
   GstClockTime recovery_pts = gst_util_uint64_scale (5, GST_SECOND,
       FRAMERATE_N);
-  GstBuffer *out;
-  GstVideoInfo info;
-  GstVideoFrame vframe;
+  GstBuffer *out, *reference;
+  GstVideoInfo info, reference_info;
   GstCaps *caps;
   guint i;
-  guint8 luma;
 
   fail_unless_equals_int (GST_FLOW_OK, gst_harness_push (h,
           copy_encoded (keyframe, 0)));
@@ -765,7 +842,7 @@ check_recovery_output (const VpxCodec * codec, gboolean direct_rendering,
   fail_unless_equals_int (0, drop_all_output (h));
 
   fail_unless_equals_int (GST_FLOW_OK, gst_harness_push (h,
-          copy_encoded (g_ptr_array_index (encoded, 1), recovery_pts)));
+          copy_encoded (recovery, recovery_pts)));
 
   out = gst_harness_pull (h);
   fail_unless (out != NULL);
@@ -783,14 +860,12 @@ check_recovery_output (const VpxCodec * codec, gboolean direct_rendering,
   fail_unless_equals_int (HEIGHT, GST_VIDEO_INFO_HEIGHT (&info));
   gst_caps_unref (caps);
 
-  /* stride safe: read through GstVideoFrame rather than the raw buffer */
-  fail_unless (gst_video_frame_map (&vframe, &info, out, GST_MAP_READ));
-  luma = *((guint8 *) GST_VIDEO_FRAME_PLANE_DATA (&vframe, 0));
-  /* frame 1 of the pattern, lossy, so allow a wide tolerance; the point is
-   * that it is the recovered picture and not a zeroed or stale buffer */
-  fail_unless (ABS ((gint) luma - (gint) (16 + 8)) < 24,
-      "unexpected recovered luma %u", luma);
-  gst_video_frame_unmap (&vframe);
+  /* The recovered picture must be exactly what this bitstream decodes to on
+   * a decoder that never saw a rejected frame, not merely something that
+   * looks roughly right. */
+  reference = decode_reference (codec, recovery, &reference_info);
+  assert_frames_identical (out, &info, reference, &reference_info);
+  gst_buffer_unref (reference);
 
   gst_buffer_unref (out);
   fail_unless_equals_int (0, pending_frames (h));
@@ -1300,6 +1375,24 @@ GST_END_TEST;
 
 /* ------------------------------------------------------------------------ */
 
+/* Guards against a build that silently reports an empty suite: the meson
+ * entry is what gates this binary on the encoders and decoders being
+ * available, so if that gating is ever wrong this test says so. */
+GST_START_TEST (test_required_elements_available)
+{
+  const gchar *names[] = { "vp8enc", "vp8dec", "vp9enc", "vp9dec" };
+  guint i;
+
+  for (i = 0; i < G_N_ELEMENTS (names); i++) {
+    GstElement *e = gst_element_factory_make (names[i], NULL);
+
+    fail_unless (e != NULL, "%s is not available", names[i]);
+    gst_object_unref (e);
+  }
+}
+
+GST_END_TEST;
+
 static Suite *
 vpxdec_suite (void)
 {
@@ -1309,7 +1402,9 @@ vpxdec_suite (void)
   suite_add_tcase (s, tc);
   tcase_set_timeout (tc, 120);
 
-#ifdef HAVE_VP8_ENCODER
+  tcase_add_test (tc, test_required_elements_available);
+
+  /* VP8 cases */
   tcase_add_test (tc, test_vp8_corrupt_frames_released);
   tcase_add_test (tc, test_vp8_corrupt_frames_released_direct_rendering);
   tcase_add_test (tc, test_vp8_input_buffers_released);
@@ -1328,9 +1423,8 @@ vpxdec_suite (void)
   tcase_add_test (tc, test_vp8_flush_after_rejected_frame);
   tcase_add_test (tc, test_vp8_eos_without_recovery);
   tcase_add_test (tc, test_vp8_teardown_after_corruption);
-#endif
 
-#ifdef HAVE_VP9_ENCODER
+  /* VP9 cases */
   tcase_add_test (tc, test_vp9_corrupt_frames_released);
   tcase_add_test (tc, test_vp9_corrupt_frames_released_direct_rendering);
   tcase_add_test (tc, test_vp9_input_buffers_released);
@@ -1350,7 +1444,6 @@ vpxdec_suite (void)
   tcase_add_test (tc, test_vp9_flush_after_rejected_frame);
   tcase_add_test (tc, test_vp9_eos_without_recovery);
   tcase_add_test (tc, test_vp9_teardown_after_corruption);
-#endif
 
   return s;
 }
