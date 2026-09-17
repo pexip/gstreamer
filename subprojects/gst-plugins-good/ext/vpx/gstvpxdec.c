@@ -726,7 +726,7 @@ gst_vpx_dec_handle_frame (GstVideoDecoder * decoder, GstVideoCodecFrame * frame)
       gst_video_decoder_drop_frame (decoder, frame);
       return GST_FLOW_OK;
     } else if (ret != GST_FLOW_OK) {
-      gst_video_codec_frame_unref (frame);
+      gst_video_decoder_release_frame (decoder, frame);
       return ret;
     }
   }
@@ -742,7 +742,7 @@ gst_vpx_dec_handle_frame (GstVideoDecoder * decoder, GstVideoCodecFrame * frame)
 
   if (!gst_buffer_map (frame->input_buffer, &minfo, GST_MAP_READ)) {
     GST_ERROR_OBJECT (dec, "Failed to map input buffer");
-    gst_video_codec_frame_unref (frame);
+    gst_video_decoder_release_frame (decoder, frame);
     return GST_FLOW_ERROR;
   }
 
@@ -763,7 +763,7 @@ gst_vpx_dec_handle_frame (GstVideoDecoder * decoder, GstVideoCodecFrame * frame)
       flags |= GST_VIDEO_DECODER_REQUEST_SYNC_POINT_DISCARD_INPUT;
 
     gst_video_decoder_request_sync_point (decoder, frame, flags);
-    gst_video_codec_frame_unref (frame);
+    gst_video_decoder_release_frame (decoder, frame);
     return ret;
   }
 
@@ -774,7 +774,7 @@ gst_vpx_dec_handle_frame (GstVideoDecoder * decoder, GstVideoCodecFrame * frame)
       GST_ELEMENT_ERROR (decoder, STREAM, DECODE,
           ("Failed to decode frame"), ("Unsupported color format %d",
               img->fmt));
-      gst_video_codec_frame_unref (frame);
+      gst_video_decoder_release_frame (decoder, frame);
       return GST_FLOW_ERROR;
     }
 
