@@ -355,6 +355,221 @@ GST_START_TEST (test_timecodescale)
 
 GST_END_TEST;
 
+/* Reassemble everything the harness produced, up to and including EOS, into
+ * the byte stream that would have ended up in a file. */
+static GstBuffer *
+pull_merged_output (GstHarness * h)
+{
+  GstBuffer *merged, *outbuffer;
+  GstMapInfo info;
+
+  merged = gst_buffer_new ();
+
+  outbuffer = gst_harness_pull (h);
+  fail_unless (outbuffer != NULL);
+
+  while (outbuffer != NULL) {
+    if (outbuffer->offset == gst_buffer_get_size (merged)) {
+      gst_buffer_append_memory (merged,
+          gst_buffer_get_all_memory (outbuffer));
+    } else {
+      fail_unless (gst_buffer_map (outbuffer, &info, GST_MAP_READ));
+      gst_buffer_fill (merged, outbuffer->offset, info.data, info.size);
+      gst_buffer_unmap (outbuffer, &info);
+    }
+
+    gst_buffer_unref (outbuffer);
+    fail_unless (gst_harness_pull_until_eos (h, &outbuffer));
+  }
+
+  return merged;
+}
+
+static gboolean
+buffer_contains (GstBuffer * buffer, const guint8 * pattern, gsize size)
+{
+  GstMapInfo info;
+  gboolean found = FALSE;
+
+  fail_unless (gst_buffer_map (buffer, &info, GST_MAP_READ));
+
+  for (gsize i = 0; info.size >= size && i <= info.size - size; i++) {
+    if (memcmp (info.data + i, pattern, size) == 0) {
+      found = TRUE;
+      break;
+    }
+  }
+
+  gst_buffer_unmap (buffer, &info);
+
+  return found;
+}
+
+static const struct
+{
+  const gchar *format;
+  gsize frame_size;
+} raw_video_formats[] = {
+  /* 16x16 frames */
+  {
+  "A420", 16 * 16 * 5 / 2}, {
+  "NV12", 16 * 16 * 3 / 2}
+};
+
+static GstHarness *
+setup_matroskamux_raw_video_harness (const gchar * format)
+{
+  GstHarness *h;
+  gchar *caps_str;
+
+  h = gst_harness_new_with_padnames ("matroskamux", "video_%u", "src");
+
+  caps_str = g_strdup_printf ("video/x-raw, format=(string)%s, "
+      "width=(int)16, height=(int)16, framerate=(fraction)25/1", format);
+  gst_harness_set_src_caps_str (h, caps_str);
+  g_free (caps_str);
+
+  gst_harness_set_sink_caps_str (h, "video/x-matroska; audio/x-matroska");
+
+  return h;
+}
+
+static GstBuffer *
+mux_one_raw_frame (const gchar * format, const guint8 * frame, gsize frame_size)
+{
+  GstHarness *h;
+  GstBuffer *inbuffer, *merged;
+
+  h = setup_matroskamux_raw_video_harness (format);
+
+  inbuffer = gst_harness_create_buffer (h, frame_size);
+  gst_buffer_fill (inbuffer, 0, frame, frame_size);
+  GST_BUFFER_PTS (inbuffer) = 0;
+  GST_BUFFER_DURATION (inbuffer) = GST_SECOND / 25;
+  fail_unless_equals_int (GST_FLOW_OK, gst_harness_push (h, inbuffer));
+  fail_unless (gst_harness_push_event (h, gst_event_new_eos ()));
+
+  merged = pull_merged_output (h);
+  gst_harness_teardown (h);
+
+  return merged;
+}
+
+static guint8 *
+new_raw_frame (gsize frame_size)
+{
+  guint8 *frame = g_malloc (frame_size);
+
+  for (gsize i = 0; i < frame_size; i++)
+    frame[i] = (guint8) (i & 0xff);
+
+  return frame;
+}
+
+GST_START_TEST (test_video_raw_colourspace)
+{
+  const gchar *format = raw_video_formats[__i__].format;
+  gsize frame_size = raw_video_formats[__i__].frame_size;
+  guint8 colourspace[] = { 0x2e, 0xb5, 0x24, 0x84, 0x00, 0x00, 0x00, 0x00 };
+  guint8 *frame;
+  GstBuffer *merged;
+
+  memcpy (colourspace + 4, format, 4);
+
+  frame = new_raw_frame (frame_size);
+  merged = mux_one_raw_frame (format, frame, frame_size);
+
+  fail_unless (buffer_contains (merged, colourspace, sizeof (colourspace)),
+      "no %s ColourSpace written for V_UNCOMPRESSED", format);
+
+  gst_buffer_unref (merged);
+  g_free (frame);
+}
+
+GST_END_TEST;
+
+static void
+demux_pad_added_cb (G_GNUC_UNUSED GstElement * matroskademux, GstPad * pad,
+    gpointer user_data)
+{
+  GstHarness *h = user_data;
+
+  gst_harness_add_element_src_pad (h, pad);
+}
+
+GST_START_TEST (test_video_raw_roundtrip)
+{
+  const gchar *format = raw_video_formats[__i__].format;
+  gsize frame_size = raw_video_formats[__i__].frame_size;
+  guint8 *frame;
+  GstHarness *h;
+  GstBuffer *merged, *outbuffer;
+  GstCaps *caps;
+  GstStructure *s;
+
+  frame = new_raw_frame (frame_size);
+  merged = mux_one_raw_frame (format, frame, frame_size);
+
+  h = gst_harness_new_with_padnames ("matroskademux", "sink", NULL);
+  g_signal_connect (h->element, "pad-added", G_CALLBACK (demux_pad_added_cb),
+      h);
+  gst_harness_set_src_caps_str (h, "video/x-matroska");
+
+  GST_BUFFER_OFFSET (merged) = 0;
+  fail_unless_equals_int (GST_FLOW_OK, gst_harness_push (h, merged));
+  gst_harness_push_event (h, gst_event_new_eos ());
+
+  outbuffer = gst_harness_pull (h);
+  fail_unless (outbuffer != NULL);
+
+  caps = gst_pad_get_current_caps (h->sinkpad);
+  fail_unless (caps != NULL);
+  s = gst_caps_get_structure (caps, 0);
+  fail_unless_equals_string (gst_structure_get_name (s), "video/x-raw");
+  fail_unless_equals_string (gst_structure_get_string (s, "format"), format);
+  gst_caps_unref (caps);
+
+  fail_unless_equals_int (frame_size, gst_buffer_get_size (outbuffer));
+  fail_unless (gst_buffer_memcmp (outbuffer, 0, frame, frame_size) == 0);
+
+  gst_buffer_unref (outbuffer);
+  gst_harness_teardown (h);
+  g_free (frame);
+}
+
+GST_END_TEST;
+
+GST_START_TEST (test_subtitle_keyframe_flag)
+{
+  GstHarness *h;
+  GstBuffer *inbuffer, *merged;
+  /* SimpleBlock id, size, track number, relative timestamp, flags, payload */
+  guint8 keyframe_block[] = { 0xa3, 0x86, 0x81, 0x00, 0x00, 0x80, 'i', 'd' };
+  guint8 delta_block[] = { 0xa3, 0x86, 0x81, 0x00, 0x00, 0x00, 'i', 'd' };
+
+  h = gst_harness_new_with_padnames ("matroskamux", "subtitle_%u", "src");
+  gst_harness_set_src_caps_str (h, "text/x-raw, format=(string)utf8");
+  gst_harness_set_sink_caps_str (h, "video/x-matroska; audio/x-matroska");
+
+  /* no duration, so this goes out as a SimpleBlock rather than a BlockGroup */
+  inbuffer = gst_harness_create_buffer (h, 2);
+  gst_buffer_fill (inbuffer, 0, "id", 2);
+  GST_BUFFER_PTS (inbuffer) = 0;
+  fail_unless_equals_int (GST_FLOW_OK, gst_harness_push (h, inbuffer));
+  fail_unless (gst_harness_push_event (h, gst_event_new_eos ()));
+
+  merged = pull_merged_output (h);
+
+  fail_unless (buffer_contains (merged, keyframe_block,
+          sizeof (keyframe_block)), "subtitle block is not a keyframe");
+  fail_if (buffer_contains (merged, delta_block, sizeof (delta_block)));
+
+  gst_buffer_unref (merged);
+  gst_harness_teardown (h);
+}
+
+GST_END_TEST;
+
 /* Create a new chapter */
 static GstTocEntry *
 new_chapter (const guint chapter_nb, const gint64 start, const gint64 stop)
@@ -1014,6 +1229,12 @@ matroskamux_suite (void)
   tcase_add_test (tc_chain, test_link_webmmux_webm_sink);
   tcase_add_loop_test (tc_chain, test_timecodescale,
       0, G_N_ELEMENTS (timecodescales));
+
+  tcase_add_loop_test (tc_chain, test_video_raw_colourspace,
+      0, G_N_ELEMENTS (raw_video_formats));
+  tcase_add_loop_test (tc_chain, test_video_raw_roundtrip,
+      0, G_N_ELEMENTS (raw_video_formats));
+  tcase_add_test (tc_chain, test_subtitle_keyframe_flag);
 
   tcase_add_test (tc_chain, test_toc_with_edition);
   tcase_add_test (tc_chain, test_toc_without_edition);
