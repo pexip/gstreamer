@@ -73,6 +73,10 @@ struct _GstMatroskaMuxPad {
   GstMatroskaCapsFunc capsfunc;
   GstMatroskaTrackContext *track;
 
+  /* The layout the caps promise, so a padded raw buffer can be spotted.
+   * GST_VIDEO_FORMAT_UNKNOWN for everything that is not raw video. */
+  GstVideoInfo video_info;
+
   GstTagList *tags;
 
   GstClockTime start_ts;
