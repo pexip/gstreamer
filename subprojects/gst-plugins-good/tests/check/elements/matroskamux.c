@@ -23,6 +23,7 @@
 #include <gst/check/gstcheck.h>
 #include <gst/base/gstadapter.h>
 #include <gst/check/gstharness.h>
+#include <gst/video/video.h>
 
 #define AC3_CAPS_STRING "audio/x-ac3, " \
                         "channels = (int) 1, " \
@@ -405,16 +406,20 @@ buffer_contains (GstBuffer * buffer, const guint8 * pattern, gsize size)
   return found;
 }
 
-static const struct
+#define RAW_VIDEO_WIDTH 16
+#define RAW_VIDEO_HEIGHT 16
+
+static const gchar *raw_video_formats[] = { "I420", "A420", "NV12" };
+
+static void
+raw_video_info (const gchar * format, GstVideoInfo * info)
 {
-  const gchar *format;
-  gsize frame_size;
-} raw_video_formats[] = {
-  /* 16x16 frames */
-  {
-  "A420", 16 * 16 * 5 / 2}, {
-  "NV12", 16 * 16 * 3 / 2}
-};
+  GstVideoFormat video_format = gst_video_format_from_string (format);
+
+  fail_unless (video_format != GST_VIDEO_FORMAT_UNKNOWN);
+  fail_unless (gst_video_info_set_format (info, video_format, RAW_VIDEO_WIDTH,
+          RAW_VIDEO_HEIGHT));
+}
 
 static GstHarness *
 setup_matroskamux_raw_video_harness (const gchar * format)
@@ -425,7 +430,8 @@ setup_matroskamux_raw_video_harness (const gchar * format)
   h = gst_harness_new_with_padnames ("matroskamux", "video_%u", "src");
 
   caps_str = g_strdup_printf ("video/x-raw, format=(string)%s, "
-      "width=(int)16, height=(int)16, framerate=(fraction)25/1", format);
+      "width=(int)%d, height=(int)%d, framerate=(fraction)25/1", format,
+      RAW_VIDEO_WIDTH, RAW_VIDEO_HEIGHT);
   gst_harness_set_src_caps_str (h, caps_str);
   g_free (caps_str);
 
@@ -435,15 +441,13 @@ setup_matroskamux_raw_video_harness (const gchar * format)
 }
 
 static GstBuffer *
-mux_one_raw_frame (const gchar * format, const guint8 * frame, gsize frame_size)
+mux_one_raw_buffer (const gchar * format, GstBuffer * inbuffer)
 {
   GstHarness *h;
-  GstBuffer *inbuffer, *merged;
+  GstBuffer *merged;
 
   h = setup_matroskamux_raw_video_harness (format);
 
-  inbuffer = gst_harness_create_buffer (h, frame_size);
-  gst_buffer_fill (inbuffer, 0, frame, frame_size);
   GST_BUFFER_PTS (inbuffer) = 0;
   GST_BUFFER_DURATION (inbuffer) = GST_SECOND / 25;
   fail_unless_equals_int (GST_FLOW_OK, gst_harness_push (h, inbuffer));
@@ -453,6 +457,16 @@ mux_one_raw_frame (const gchar * format, const guint8 * frame, gsize frame_size)
   gst_harness_teardown (h);
 
   return merged;
+}
+
+static GstBuffer *
+mux_one_raw_frame (const gchar * format, const guint8 * frame, gsize frame_size)
+{
+  GstBuffer *inbuffer = gst_buffer_new_allocate (NULL, frame_size, NULL);
+
+  gst_buffer_fill (inbuffer, 0, frame, frame_size);
+
+  return mux_one_raw_buffer (format, inbuffer);
 }
 
 static guint8 *
@@ -468,11 +482,15 @@ new_raw_frame (gsize frame_size)
 
 GST_START_TEST (test_video_raw_colourspace)
 {
-  const gchar *format = raw_video_formats[__i__].format;
-  gsize frame_size = raw_video_formats[__i__].frame_size;
+  const gchar *format = raw_video_formats[__i__];
   guint8 colourspace[] = { 0x2e, 0xb5, 0x24, 0x84, 0x00, 0x00, 0x00, 0x00 };
+  GstVideoInfo info;
+  gsize frame_size;
   guint8 *frame;
   GstBuffer *merged;
+
+  raw_video_info (format, &info);
+  frame_size = GST_VIDEO_INFO_SIZE (&info);
 
   memcpy (colourspace + 4, format, 4);
 
@@ -497,18 +515,18 @@ demux_pad_added_cb (G_GNUC_UNUSED GstElement * matroskademux, GstPad * pad,
   gst_harness_add_element_src_pad (h, pad);
 }
 
-GST_START_TEST (test_video_raw_roundtrip)
+/* Mux @inbuffer, read the file back with matroskademux and require the frame
+ * that comes out to be @frame exactly. Consumes @inbuffer. */
+static void
+check_raw_frame_roundtrip (const gchar * format, GstBuffer * inbuffer,
+    const guint8 * frame, gsize frame_size)
 {
-  const gchar *format = raw_video_formats[__i__].format;
-  gsize frame_size = raw_video_formats[__i__].frame_size;
-  guint8 *frame;
   GstHarness *h;
   GstBuffer *merged, *outbuffer;
   GstCaps *caps;
   GstStructure *s;
 
-  frame = new_raw_frame (frame_size);
-  merged = mux_one_raw_frame (format, frame, frame_size);
+  merged = mux_one_raw_buffer (format, inbuffer);
 
   h = gst_harness_new_with_padnames ("matroskademux", "sink", NULL);
   g_signal_connect (h->element, "pad-added", G_CALLBACK (demux_pad_added_cb),
@@ -530,10 +548,91 @@ GST_START_TEST (test_video_raw_roundtrip)
   gst_caps_unref (caps);
 
   fail_unless_equals_int (frame_size, gst_buffer_get_size (outbuffer));
-  fail_unless (gst_buffer_memcmp (outbuffer, 0, frame, frame_size) == 0);
+  fail_unless (gst_buffer_memcmp (outbuffer, 0, frame, frame_size) == 0,
+      "%s frame did not survive the round trip", format);
 
   gst_buffer_unref (outbuffer);
   gst_harness_teardown (h);
+}
+
+GST_START_TEST (test_video_raw_roundtrip)
+{
+  const gchar *format = raw_video_formats[__i__];
+  GstVideoInfo info;
+  gsize frame_size;
+  guint8 *frame;
+  GstBuffer *inbuffer;
+
+  raw_video_info (format, &info);
+  frame_size = GST_VIDEO_INFO_SIZE (&info);
+
+  frame = new_raw_frame (frame_size);
+  inbuffer = gst_buffer_new_allocate (NULL, frame_size, NULL);
+  gst_buffer_fill (inbuffer, 0, frame, frame_size);
+
+  check_raw_frame_roundtrip (format, inbuffer, frame, frame_size);
+
+  g_free (frame);
+}
+
+GST_END_TEST;
+
+/* The same pixels at oversized strides and a padded height, described by a
+ * GstVideoMeta the way a decoder would. The padding is poisoned so that a
+ * stride mix-up shows up as wrong content and not merely as the wrong size. */
+static GstBuffer *
+new_padded_raw_buffer (GstVideoInfo * packed, const guint8 * frame)
+{
+  GstVideoInfo padded = *packed;
+  GstVideoAlignment align;
+  GstBuffer *packed_buffer, *padded_buffer;
+  GstVideoFrame src, dst;
+
+  gst_video_alignment_reset (&align);
+  align.padding_right = RAW_VIDEO_WIDTH;
+  align.padding_bottom = RAW_VIDEO_HEIGHT;
+  fail_unless (gst_video_info_align (&padded, &align));
+  fail_unless (GST_VIDEO_INFO_SIZE (&padded) > GST_VIDEO_INFO_SIZE (packed));
+
+  packed_buffer =
+      gst_buffer_new_allocate (NULL, GST_VIDEO_INFO_SIZE (packed), NULL);
+  gst_buffer_fill (packed_buffer, 0, frame, GST_VIDEO_INFO_SIZE (packed));
+
+  padded_buffer =
+      gst_buffer_new_allocate (NULL, GST_VIDEO_INFO_SIZE (&padded), NULL);
+  gst_buffer_memset (padded_buffer, 0, 0xaa, GST_VIDEO_INFO_SIZE (&padded));
+
+  fail_unless (gst_video_frame_map (&src, packed, packed_buffer, GST_MAP_READ));
+  fail_unless (gst_video_frame_map (&dst, &padded, padded_buffer,
+          GST_MAP_WRITE));
+  gst_video_frame_copy (&dst, &src);
+  gst_video_frame_unmap (&dst);
+  gst_video_frame_unmap (&src);
+  gst_buffer_unref (packed_buffer);
+
+  gst_buffer_add_video_meta_full (padded_buffer, GST_VIDEO_FRAME_FLAG_NONE,
+      GST_VIDEO_INFO_FORMAT (&padded), RAW_VIDEO_WIDTH, RAW_VIDEO_HEIGHT,
+      GST_VIDEO_INFO_N_PLANES (&padded), padded.offset, padded.stride);
+
+  return padded_buffer;
+}
+
+GST_START_TEST (test_video_raw_padded_roundtrip)
+{
+  const gchar *format = raw_video_formats[__i__];
+  GstVideoInfo info;
+  gsize frame_size;
+  guint8 *frame;
+  GstBuffer *inbuffer;
+
+  raw_video_info (format, &info);
+  frame_size = GST_VIDEO_INFO_SIZE (&info);
+
+  frame = new_raw_frame (frame_size);
+  inbuffer = new_padded_raw_buffer (&info, frame);
+
+  check_raw_frame_roundtrip (format, inbuffer, frame, frame_size);
+
   g_free (frame);
 }
 
@@ -1233,6 +1332,8 @@ matroskamux_suite (void)
   tcase_add_loop_test (tc_chain, test_video_raw_colourspace,
       0, G_N_ELEMENTS (raw_video_formats));
   tcase_add_loop_test (tc_chain, test_video_raw_roundtrip,
+      0, G_N_ELEMENTS (raw_video_formats));
+  tcase_add_loop_test (tc_chain, test_video_raw_padded_roundtrip,
       0, G_N_ELEMENTS (raw_video_formats));
   tcase_add_test (tc_chain, test_subtitle_keyframe_flag);
 
