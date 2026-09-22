@@ -1258,7 +1258,7 @@ rtp_twcc_manager_parse_fci (RTPTWCCManager * twcc,
       delta = fci_data[fci_parsed];
       fci_parsed += 1;
     } else if (pkt->status == RTP_TWCC_PACKET_STATUS_LARGE_NEGATIVE_DELTA) {
-      if (fci_length - fci_parsed < 2)
+      if (fci_length < fci_parsed + 2)
         goto malformed;
       delta = GST_READ_UINT16_BE (&fci_data[fci_parsed]);
       fci_parsed += 2;
