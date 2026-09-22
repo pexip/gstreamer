@@ -4438,20 +4438,22 @@ GST_START_TEST (test_twcc_no_marker_and_gaps)
 GST_END_TEST;
 
 static GstBuffer *
-generate_twcc_feedback_rtcp (guint8 * fci_data, guint16 fci_length)
+generate_twcc_feedback_rtcp (const guint8 * fci_data, guint fci_length)
 {
   GstRTCPPacket packet;
   GstRTCPBuffer rtcp = GST_RTCP_BUFFER_INIT;
-  GstBuffer *buffer = gst_rtcp_buffer_new (1000);
+  guint fci_words = (fci_length + 3) / 4;
+  GstBuffer *buffer = gst_rtcp_buffer_new (12 + fci_words * 4);
   guint8 *fci;
 
   fail_unless (gst_rtcp_buffer_map (buffer, GST_MAP_READWRITE, &rtcp));
   fail_unless (gst_rtcp_buffer_add_packet (&rtcp, GST_RTCP_TYPE_RTPFB,
           &packet));
   gst_rtcp_packet_fb_set_type (&packet, GST_RTCP_RTPFB_TYPE_TWCC);
-  gst_rtcp_packet_fb_set_fci_length (&packet, fci_length);
+  fail_unless (gst_rtcp_packet_fb_set_fci_length (&packet, fci_words));
   fci = gst_rtcp_packet_fb_get_fci (&packet);
   memcpy (fci, fci_data, fci_length);
+  memset (fci + fci_length, 0, fci_words * 4 - fci_length);
   gst_rtcp_packet_fb_set_sender_ssrc (&packet, TEST_BUF_SSRC);
   gst_rtcp_packet_fb_set_media_ssrc (&packet, 0);
   gst_rtcp_buffer_unmap (&rtcp);
@@ -4492,6 +4494,159 @@ GST_START_TEST (test_twcc_bad_rtcp)
   fail_unless_equals_int (packets_array->n_values, 0);
 
   gst_event_unref (event);
+  session_harness_free (h);
+}
+
+GST_END_TEST;
+
+static const struct
+{
+  guint8 fci[16];
+  guint fci_length;
+  gint n_packets;
+  gint delta_units[4];
+} twcc_feedback_bounds_cases[] = {
+  /* Short header, or header without a complete chunk: no feedback event. */
+  {{0xff, 0xff, 0x00, 0x01}, 4, -1, {0}},
+  {{0xff, 0xff, 0x00, 0x01, 0, 0, 0, 0}, 8, -1, {0}},
+  /* Two small deltas end exactly at the FCI boundary, including unsigned 255. */
+  {{0xff, 0xff, 0x00, 0x02, 0, 0, 0, 0,
+          0x20, 0x02, 0x01, 0xff}, 12, 2, {1, 256}},
+  /* A third small delta is missing: only the valid prefix is reported. */
+  {{0xff, 0xff, 0x00, 0x03, 0, 0, 0, 0,
+          0x20, 0x03, 0x01, 0xff}, 12, 2, {1, 256}},
+  /* Positive and negative large deltas end exactly at the FCI boundary. */
+  {{0xff, 0xff, 0x00, 0x01, 0, 0, 0, 0,
+          0x40, 0x01, 0x01, 0x00}, 12, 1, {256}},
+  {{0xff, 0xff, 0x00, 0x01, 0, 0, 0, 0,
+          0x40, 0x01, 0xff, 0xfe}, 12, 1, {-2}},
+  /* The second large delta has no bytes remaining. */
+  {{0xff, 0xff, 0x00, 0x02, 0, 0, 0, 0,
+          0x40, 0x02, 0x01, 0x00}, 12, 1, {256}},
+  /* A large delta has only one byte remaining after a small delta. */
+  {{0xff, 0xff, 0x00, 0x02, 0, 0, 0, 0,
+          0xd8, 0x00, 0x01, 0xff}, 12, 1, {1}},
+  /* Complete chunks, but no bytes for the first small or large delta. */
+  {{0xff, 0xff, 0x00, 0x02, 0, 0, 0, 0,
+          0x00, 0x01, 0x20, 0x01}, 12, 0, {0}},
+  {{0xff, 0xff, 0x00, 0x02, 0, 0, 0, 0,
+          0x00, 0x01, 0x40, 0x01}, 12, 0, {0}},
+  /* Missing chunks must not be read from the next RTCP packet. */
+  {{0xff, 0xff, 0x00, 0x03, 0, 0, 0, 0,
+          0x20, 0x01, 0x00, 0x00}, 12, 0, {0}},
+  /* Mixed deltas and sequence wrap, with no spare bytes at the end. */
+  {{0xff, 0xff, 0x00, 0x04, 0, 0, 0, 0,
+          0xda, 0x40, 0xff, 0x01, 0x00, 0xff, 0xfe, 0x01},
+        16, 4, {255, 511, 509, 510}},
+};
+
+GST_START_TEST (test_twcc_feedback_bounds)
+{
+  guint compound;
+
+  for (compound = 0; compound < 2; compound++) {
+    SessionHarness *h = session_harness_new ();
+    GstBuffer *buf = generate_twcc_feedback_rtcp (
+        twcc_feedback_bounds_cases[__i__].fci,
+        twcc_feedback_bounds_cases[__i__].fci_length);
+    GstEvent *event;
+    GValueArray *packets;
+    guint i;
+
+    fail_unless_equals_int (gst_buffer_get_size (buf),
+        12 + twcc_feedback_bounds_cases[__i__].fci_length);
+    if (compound) {
+      /* The following RR is mapped memory, but is not part of the TWCC FCI. */
+      const guint8 rr[] = { 0x80, 0xc9, 0x00, 0x01, 0, 0, 0, 1 };
+      buf = gst_buffer_append (buf,
+          gst_rtcp_buffer_new_copy_data (rr, sizeof (rr)));
+    }
+    fail_unless (gst_rtcp_buffer_validate_reduced (buf));
+    fail_unless_equals_int (session_harness_recv_rtcp (h, buf), GST_FLOW_OK);
+
+    for (i = 0; i < 2; i++) {
+      event = gst_harness_pull_upstream_event (h->send_rtp_h);
+      fail_unless_equals_int (GST_EVENT_TYPE (event), GST_EVENT_RECONFIGURE);
+      gst_event_unref (event);
+    }
+
+    event = gst_harness_try_pull_upstream_event (h->send_rtp_h);
+    if (twcc_feedback_bounds_cases[__i__].n_packets < 0) {
+      fail_unless (event == NULL);
+    } else {
+      fail_unless (event != NULL);
+      fail_unless (gst_structure_has_name (gst_event_get_structure (event),
+              "RTPTWCCPackets"));
+      packets = g_value_get_boxed (gst_structure_get_value (
+              gst_event_get_structure (event), "packets"));
+      fail_unless_equals_int (packets->n_values,
+          twcc_feedback_bounds_cases[__i__].n_packets);
+      for (i = 0; i < packets->n_values; i++) {
+        const GstStructure *packet =
+            gst_value_get_structure (g_value_array_get_nth (packets, i));
+        guint seqnum;
+        GstClockTime timestamp;
+        gboolean lost;
+
+        fail_unless (gst_structure_get_uint (packet, "seqnum", &seqnum));
+        fail_unless_equals_int (seqnum, (guint16) (G_MAXUINT16 + i));
+        fail_unless (gst_structure_get_clock_time (packet, "remote-ts",
+                &timestamp));
+        fail_unless_equals_clocktime (timestamp, TWCC_REF_TIME_INITIAL_OFFSET +
+            twcc_feedback_bounds_cases[__i__].delta_units[i] *
+            (GstClockTimeDiff) TWCC_DELTA_UNIT);
+        fail_unless (gst_structure_get_boolean (packet, "lost", &lost));
+        fail_if (lost);
+      }
+      gst_event_unref (event);
+    }
+    fail_unless (gst_harness_try_pull_upstream_event (h->send_rtp_h) == NULL);
+    session_harness_free (h);
+  }
+}
+
+GST_END_TEST;
+
+GST_START_TEST (test_twcc_feedback_compact_runs)
+{
+  SessionHarness *h = session_harness_new ();
+  const guint8 fci[] = {
+    0xff, 0xf0,                 /* base sequence number: 65520 */
+    0x00, 0x40,                 /* packet status count: 64 */
+    0x00, 0x00, 0x00, 0x00,
+    0x00, 0x20,                 /* 32 lost packets */
+    0x60, 0x20,                 /* 32 received packets without deltas */
+  };
+  GstEvent *event;
+  GValueArray *packets;
+  guint i;
+
+  fail_unless_equals_int (session_harness_recv_rtcp (h,
+          generate_twcc_feedback_rtcp (fci, sizeof (fci))), GST_FLOW_OK);
+  for (i = 0; i < 2; i++)
+    gst_event_unref (gst_harness_pull_upstream_event (h->send_rtp_h));
+
+  event = gst_harness_pull_upstream_event (h->send_rtp_h);
+  packets = g_value_get_boxed (gst_structure_get_value (
+          gst_event_get_structure (event), "packets"));
+  fail_unless_equals_int (packets->n_values, 32);
+  for (i = 0; i < packets->n_values; i++) {
+    const GstStructure *packet =
+        gst_value_get_structure (g_value_array_get_nth (packets, i));
+    guint seqnum;
+    GstClockTime timestamp;
+    gboolean lost;
+
+    fail_unless (gst_structure_get_uint (packet, "seqnum", &seqnum));
+    fail_unless_equals_int (seqnum, 16 + i);
+    fail_unless (gst_structure_get_clock_time (packet, "remote-ts", &timestamp));
+    fail_unless_equals_clocktime (timestamp, GST_CLOCK_TIME_NONE);
+    /* The existing event represents received-without-delta with lost=TRUE. */
+    fail_unless (gst_structure_get_boolean (packet, "lost", &lost));
+    fail_unless (lost);
+  }
+  gst_event_unref (event);
+  fail_unless (gst_harness_try_pull_upstream_event (h->send_rtp_h) == NULL);
   session_harness_free (h);
 }
 
@@ -5477,27 +5632,14 @@ static GstBuffer *
 create_twcc_rtcp_from_fci (const guint8 * fci, guint fci_len,
     guint32 sender_ssrc, guint32 media_ssrc)
 {
-  GstBuffer *buf;
+  GstBuffer *buf = generate_twcc_feedback_rtcp (fci, fci_len);
   GstRTCPBuffer rtcp = GST_RTCP_BUFFER_INIT;
   GstRTCPPacket packet;
 
-  buf = gst_rtcp_buffer_new (1400);
-  gst_rtcp_buffer_map (buf, GST_MAP_READWRITE, &rtcp);
-
-  gst_rtcp_buffer_add_packet (&rtcp, GST_RTCP_TYPE_RTPFB, &packet);
-  gst_rtcp_packet_fb_set_type (&packet, GST_RTCP_RTPFB_TYPE_TWCC);
+  fail_unless (gst_rtcp_buffer_map (buf, GST_MAP_READWRITE, &rtcp));
+  fail_unless (gst_rtcp_buffer_get_first_packet (&rtcp, &packet));
   gst_rtcp_packet_fb_set_sender_ssrc (&packet, sender_ssrc);
   gst_rtcp_packet_fb_set_media_ssrc (&packet, media_ssrc);
-
-  /* Set FCI: round up to 32-bit words */
-  guint fci_words = (fci_len + 3) / 4;
-  if (gst_rtcp_packet_fb_set_fci_length (&packet, fci_words)) {
-    guint8 *fci_data = gst_rtcp_packet_fb_get_fci (&packet);
-    memcpy (fci_data, fci, fci_len);
-    /* zero-pad the rest */
-    if (fci_words * 4 > fci_len)
-      memset (fci_data + fci_len, 0, fci_words * 4 - fci_len);
-  }
 
   gst_rtcp_buffer_unmap (&rtcp);
   return buf;
@@ -7641,6 +7783,9 @@ rtpsession_suite (void)
   tcase_add_test (tc_chain, test_twcc_multiple_markers);
   tcase_add_test (tc_chain, test_twcc_no_marker_and_gaps);
   tcase_add_test (tc_chain, test_twcc_bad_rtcp);
+  tcase_add_loop_test (tc_chain, test_twcc_feedback_bounds, 0,
+      G_N_ELEMENTS (twcc_feedback_bounds_cases));
+  tcase_add_test (tc_chain, test_twcc_feedback_compact_runs);
   tcase_add_test (tc_chain, test_twcc_delta_ts_rounding);
   tcase_add_test (tc_chain, test_twcc_double_gap);
   tcase_add_test (tc_chain, test_twcc_recv_packets_reordered);

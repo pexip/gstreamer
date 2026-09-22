@@ -1253,17 +1253,15 @@ rtp_twcc_manager_parse_fci (RTPTWCCManager * twcc,
     GstClockTimeDiff delta_ts = 0;
 
     if (pkt->status == RTP_TWCC_PACKET_STATUS_SMALL_DELTA) {
+      if (fci_parsed >= fci_length)
+        goto malformed;
       delta = fci_data[fci_parsed];
       fci_parsed += 1;
     } else if (pkt->status == RTP_TWCC_PACKET_STATUS_LARGE_NEGATIVE_DELTA) {
+      if (fci_length - fci_parsed < 2)
+        goto malformed;
       delta = GST_READ_UINT16_BE (&fci_data[fci_parsed]);
       fci_parsed += 2;
-    }
-
-    if (fci_parsed > fci_length) {
-      GST_WARNING ("Malformed TWCC RTCP feedback packet");
-      g_array_set_size (twcc->parsed_packets, 0);
-      break;
     }
 
     if (pkt->status != RTP_TWCC_PACKET_STATUS_NOT_RECV) {
@@ -1305,11 +1303,18 @@ rtp_twcc_manager_parse_fci (RTPTWCCManager * twcc,
         pkt->status == RTP_TWCC_PACKET_STATUS_NOT_RECV
         ? RTP_TWCC_FECBLOCK_PKT_LOST : RTP_TWCC_FECBLOCK_PKT_RECEIVED);
   }
+
+done:
   rtp_twcc_manager_tx_end_feedback (twcc->stats_manager);
   twcc->last_report_time = current_time;
   _structure_take_value_array (ret, "packets", array);
 
   return ret;
+
+malformed:
+  GST_WARNING ("Malformed TWCC RTCP feedback packet");
+  g_array_set_size (twcc->parsed_packets, 0);
+  goto done;
 }
 
 GstStructure *
