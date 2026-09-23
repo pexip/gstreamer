@@ -3300,7 +3300,7 @@ rtp_session_process_twcc (RTPSession * sess, guint32 sender_ssrc,
   GstStructure *twcc_stats_s;
 
   twcc_packets_s = rtp_twcc_manager_parse_fci (sess->twcc,
-      fci_data, fci_length * sizeof (guint32), current_time);
+      fci_data, fci_length, current_time);
   if (twcc_packets_s == NULL)
     return;
 
