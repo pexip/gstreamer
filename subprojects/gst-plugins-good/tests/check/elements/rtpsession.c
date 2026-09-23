@@ -4537,7 +4537,7 @@ static const struct
   /* Mixed deltas and sequence wrap, with no spare bytes at the end. */
   {{0xff, 0xff, 0x00, 0x04, 0, 0, 0, 0,
           0xda, 0x40, 0xff, 0x01, 0x00, 0xff, 0xfe, 0x01},
-        16, 4, {255, 511, 509, 510}},
+      16, 4, {255, 511, 509, 510}},
 };
 
 GST_START_TEST (test_twcc_feedback_bounds)
@@ -4546,8 +4546,8 @@ GST_START_TEST (test_twcc_feedback_bounds)
 
   for (compound = 0; compound < 2; compound++) {
     SessionHarness *h = session_harness_new ();
-    GstBuffer *buf = generate_twcc_feedback_rtcp (
-        twcc_feedback_bounds_cases[__i__].fci,
+    GstBuffer *buf =
+        generate_twcc_feedback_rtcp (twcc_feedback_bounds_cases[__i__].fci,
         twcc_feedback_bounds_cases[__i__].fci_length);
     GstEvent *event;
     GValueArray *packets;
@@ -4577,8 +4577,9 @@ GST_START_TEST (test_twcc_feedback_bounds)
       fail_unless (event != NULL);
       fail_unless (gst_structure_has_name (gst_event_get_structure (event),
               "RTPTWCCPackets"));
-      packets = g_value_get_boxed (gst_structure_get_value (
-              gst_event_get_structure (event), "packets"));
+      packets =
+          g_value_get_boxed (gst_structure_get_value (gst_event_get_structure
+              (event), "packets"));
       fail_unless_equals_int (packets->n_values,
           twcc_feedback_bounds_cases[__i__].n_packets);
       for (i = 0; i < packets->n_values; i++) {
@@ -4627,8 +4628,9 @@ GST_START_TEST (test_twcc_feedback_compact_runs)
     gst_event_unref (gst_harness_pull_upstream_event (h->send_rtp_h));
 
   event = gst_harness_pull_upstream_event (h->send_rtp_h);
-  packets = g_value_get_boxed (gst_structure_get_value (
-          gst_event_get_structure (event), "packets"));
+  packets =
+      g_value_get_boxed (gst_structure_get_value (gst_event_get_structure
+          (event), "packets"));
   fail_unless_equals_int (packets->n_values, 32);
   for (i = 0; i < packets->n_values; i++) {
     const GstStructure *packet =
@@ -4639,7 +4641,8 @@ GST_START_TEST (test_twcc_feedback_compact_runs)
 
     fail_unless (gst_structure_get_uint (packet, "seqnum", &seqnum));
     fail_unless_equals_int (seqnum, 16 + i);
-    fail_unless (gst_structure_get_clock_time (packet, "remote-ts", &timestamp));
+    fail_unless (gst_structure_get_clock_time (packet, "remote-ts",
+            &timestamp));
     fail_unless_equals_clocktime (timestamp, GST_CLOCK_TIME_NONE);
     /* The existing event represents received-without-delta with lost=TRUE. */
     fail_unless (gst_structure_get_boolean (packet, "lost", &lost));
@@ -6020,7 +6023,8 @@ GST_START_TEST (test_twcc_stats_block_fec_recover)
     }
 
     protects_seqnums[protects_seqnums_i] = next_seqnum;
-    protects_timestamps[protects_seqnums_i] = next_seqnum * TEST_RTP_TS_DURATION;
+    protects_timestamps[protects_seqnums_i] =
+        next_seqnum * TEST_RTP_TS_DURATION;
     protects_seqnums_i += 1;
     if (protects_seqnums_i >= block_len) {
       protects_seqnums_i = 0;
@@ -6791,11 +6795,11 @@ GST_START_TEST (test_twcc_keep_queue_size)
           session_harness_produce_twcc (h_recv)));
 
   /* expected_parsed_seqnum = BASE_SEQNUM + 16 + 11 = 65307
-       recovery base_seqnum  = (65307 + 70000) mod 65536 + 11 = 4235
-       gap = (gint16)(4235 - 65307) = 4464 packets marked LOST.
+     recovery base_seqnum  = (65307 + 70000) mod 65536 + 11 = 4235
+     gap = (gint16)(4235 - 65307) = 4464 packets marked LOST.
      Within the 500ms stats window (25 intervals at 20ms = 26 packets
      from TWCC 4220 to 4245):
-       15 LOST flood packets  (TWCC 4220-4234)
+     15 LOST flood packets  (TWCC 4220-4234)
      + 11 RECEIVED recovery   (TWCC 4235-4245)
      = 26 total sent */
   const guint gap_pkts_in_window = 15;
@@ -6841,7 +6845,7 @@ GST_START_TEST (test_twcc_seqnum_wrap_gap_detection)
     0x00, 0x00, 0x00,           /* reference time: 0 */
     0x00,                       /* fb_pkt_count: 0 */
     0x20, 0x0A,                 /* run-length: received small_delta, count=10 */
-    0, 0, 0, 0, 0, 0, 0, 0, 0, 0  /* 10 recv-deltas, all 0 */
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0        /* 10 recv-deltas, all 0 */
   };
 
   guint8 fci2[] = {
@@ -6850,14 +6854,14 @@ GST_START_TEST (test_twcc_seqnum_wrap_gap_detection)
     0x00, 0x00, 0x00,           /* reference time: 0 */
     0x01,                       /* fb_pkt_count: 1 */
     0x20, 0x0A,                 /* run-length: received small_delta, count=10 */
-    0, 0, 0, 0, 0, 0, 0, 0, 0, 0  /* 10 recv-deltas, all 0 */
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0        /* 10 recv-deltas, all 0 */
   };
 
   session_harness_add_twcc_caps_for_pt (h, TEST_BUF_PT);
 
   for (i = 0; i < n_packets; i++) {
     fail_unless_equals_int64 (GST_FLOW_OK,
-                              session_harness_send_rtp (h, generate_twcc_send_buffer (i, FALSE)));
+        session_harness_send_rtp (h, generate_twcc_send_buffer (i, FALSE)));
     session_harness_advance_and_crank (h, TEST_BUF_DURATION);
   }
 
@@ -6869,7 +6873,7 @@ GST_START_TEST (test_twcc_seqnum_wrap_gap_detection)
   /* Stats window 500ms/0delay covers:
      - Packet 240 (TWCC 65520, t=4800ms) through 265 (TWCC 9, t=5300ms)
      - 10 RECEIVED (65520-65529 from FCI #1) + 6 UNKNOWN (65530-65535 gap)
-       + 10 RECEIVED (0-9 from FCI #2)
+     + 10 RECEIVED (0-9 from FCI #2)
      - If gap detection worked: 6 LOST → loss_pct = 6/26 ≈ 23%
      - Bug: 6 UNKNOWN (not counted) → loss_pct = 0/20 = 0
 
@@ -6932,8 +6936,7 @@ _twcc_set_sock_ts_race_feedback_thread (gpointer data)
 {
   TwccSetSockTsRaceCtx *ctx = data;
   while (TRUE) {
-    GstBuffer *buf =
-        g_async_queue_timeout_pop (ctx->sent_bufs, 100 * 1000);
+    GstBuffer *buf = g_async_queue_timeout_pop (ctx->sent_bufs, 100 * 1000);
     if (buf) {
       GstTxFeedbackMeta *meta = gst_buffer_get_tx_feedback_meta (buf);
       if (meta)
@@ -7598,11 +7601,9 @@ GST_START_TEST (test_schedule_nack_hashtable_race)
   fail_unless (rtpsession != NULL);
 
   /* Request pads */
-  recv_rtp_sink =
-      gst_element_request_pad_simple (rtpsession, "recv_rtp_sink");
+  recv_rtp_sink = gst_element_request_pad_simple (rtpsession, "recv_rtp_sink");
   fail_unless (recv_rtp_sink != NULL);
-  send_rtcp_src =
-      gst_element_request_pad_simple (rtpsession, "send_rtcp_src");
+  send_rtcp_src = gst_element_request_pad_simple (rtpsession, "send_rtcp_src");
   fail_unless (send_rtcp_src != NULL);
 
   /* Get the recv_rtp_src pad (created when recv_rtp_sink was requested) */
@@ -7635,11 +7636,9 @@ GST_START_TEST (test_schedule_nack_hashtable_race)
   {
     GstSegment segment;
     gst_segment_init (&segment, GST_FORMAT_TIME);
-    gst_pad_push_event (rtp_srcpad,
-        gst_event_new_stream_start ("test-stream"));
+    gst_pad_push_event (rtp_srcpad, gst_event_new_stream_start ("test-stream"));
     caps = gst_caps_new_simple ("application/x-rtp",
-        "clock-rate", G_TYPE_INT, 8000,
-        "payload", G_TYPE_INT, 96, NULL);
+        "clock-rate", G_TYPE_INT, 8000, "payload", G_TYPE_INT, 96, NULL);
     gst_pad_push_event (rtp_srcpad, gst_event_new_caps (caps));
     gst_caps_unref (caps);
     gst_pad_push_event (rtp_srcpad, gst_event_new_segment (&segment));
@@ -7660,8 +7659,7 @@ GST_START_TEST (test_schedule_nack_hashtable_race)
   /* Start multiple push threads: continuously push packets from new SSRCs */
   for (t = 0; t < G_N_ELEMENTS (push_threads); t++) {
     gchar *name = g_strdup_printf ("nack-race-push-%u", t);
-    push_threads[t] =
-        g_thread_new (name, _nack_race_push_thread, &ctx);
+    push_threads[t] = g_thread_new (name, _nack_race_push_thread, &ctx);
     g_free (name);
   }
 
@@ -7678,8 +7676,7 @@ GST_START_TEST (test_schedule_nack_hashtable_race)
         "seqnum", G_TYPE_UINT, (guint) (i % 3),
         "delay", G_TYPE_UINT, (guint) 0,
         "deadline", G_TYPE_UINT, (guint) 100,
-        "avg-rtt", G_TYPE_UINT, (guint) 0,
-        NULL);
+        "avg-rtt", G_TYPE_UINT, (guint) 0, NULL);
     event = gst_event_new_custom (GST_EVENT_CUSTOM_UPSTREAM, s);
     /* Push upstream from the sinkpad connected to recv_rtp_src */
     gst_pad_push_event (rtp_sinkpad, event);
