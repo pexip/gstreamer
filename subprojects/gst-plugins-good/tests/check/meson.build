@@ -112,6 +112,8 @@ if not get_option('rtp').disabled() and not get_option('rtpmanager').disabled()
     [ 'elements/rtpptdemux' ],
     [ 'elements/rtprtx' ],
     [ 'elements/rtpsession' ],
+    [ 'elements/rtptwccstats', false, [gstrtp_dep],
+      ['../../gst/rtpmanager/rtptwccstats.c']],
     [ 'elements/rtpstorage', false, [],  ['../../gst/rtp/gstrtpstorage.c',
 					'../../gst/rtp/gstrtpelement.c',
 					'../../gst/rtp/gstrtputils.c',
