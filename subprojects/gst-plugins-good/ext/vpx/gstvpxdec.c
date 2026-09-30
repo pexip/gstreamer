@@ -770,10 +770,10 @@ gst_vpx_dec_handle_frame (GstVideoDecoder * decoder, GstVideoCodecFrame * frame)
   img = vpx_codec_get_frame (&dec->decoder, &iter);
   if (img) {
     if (vpxclass->get_frame_format (dec, img, &fmt) == FALSE) {
-      vpx_img_free (img);
       GST_ELEMENT_ERROR (decoder, STREAM, DECODE,
           ("Failed to decode frame"), ("Unsupported color format %d",
               img->fmt));
+      vpx_img_free (img);
       gst_video_decoder_release_frame (decoder, frame);
       return GST_FLOW_ERROR;
     }

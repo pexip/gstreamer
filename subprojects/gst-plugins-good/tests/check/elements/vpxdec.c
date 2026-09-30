@@ -29,6 +29,8 @@
 #include "config.h"
 #endif
 
+#include <string.h>
+
 #include <gst/check/gstcheck.h>
 #include <gst/check/gstharness.h>
 #include <gst/video/video.h>
@@ -365,6 +367,11 @@ typedef enum
   INJECT_UNSUPPORTED_FORMAT,
 } InjectionKind;
 
+/* The pixel format the injected get_frame_format() vfunc saw on the image the
+ * decoder handed it, so the unsupported-format test can require the posted
+ * error to carry that same value. */
+static gint last_rejected_img_fmt = -1;
+
 static GstFlowReturn
 failing_open_codec (GstVPXDec * dec, GstVideoCodecFrame * frame)
 {
@@ -375,6 +382,9 @@ static gboolean
 failing_get_frame_format (GstVPXDec * dec, vpx_image_t * img,
     GstVideoFormat * fmt)
 {
+  /* Recorded so the test can require the posted error to name this exact
+   * value. Only a struct field is read, no codec call is made. */
+  last_rejected_img_fmt = (gint) img->fmt;
   return FALSE;
 }
 
@@ -1093,10 +1103,16 @@ check_unsupported_format_released (const VpxCodec * codec)
       INJECT_UNSUPPORTED_FORMAT, "badformat");
   GstHarness *h = gst_harness_new (name);
   GPtrArray *encoded = encode_frames (codec, 1, TRUE);
+  GstBus *bus = gst_bus_new ();
   guint finalized = 0;
+  GstMessage *msg;
   GstBuffer *buf;
+  gboolean seen = FALSE;
 
+  gst_element_set_bus (h->element, bus);
   gst_harness_set_src_caps_str (h, codec->caps_str);
+
+  last_rejected_img_fmt = -1;
 
   buf = copy_encoded (g_ptr_array_index (encoded, 0), 0);
   gst_mini_object_weak_ref (GST_MINI_OBJECT_CAST (buf), buffer_finalized_cb,
@@ -1106,6 +1122,42 @@ check_unsupported_format_released (const VpxCodec * codec)
   fail_unless_equals_int (0, pending_frames (h));
   fail_unless_equals_int (1, finalized);
 
+  /* The vfunc has to have run, otherwise the exit under test was not the one
+   * that was taken. */
+  fail_if (last_rejected_img_fmt < 0);
+
+  /* The error has to carry the format of the image the decoder was still
+   * holding, which pins the message down to the live image rather than to
+   * whatever the memory happens to look like once it has been handed back. */
+  while ((msg = gst_bus_pop (bus)) != NULL) {
+    if (GST_MESSAGE_TYPE (msg) == GST_MESSAGE_ERROR) {
+      gchar *debug = NULL;
+      gchar *expected;
+      GError *err = NULL;
+
+      gst_message_parse_error (msg, &err, &debug);
+      fail_unless_equals_int (GST_STREAM_ERROR, err->domain);
+      fail_unless_equals_int (GST_STREAM_ERROR_DECODE, err->code);
+      fail_unless (debug != NULL);
+
+      expected = g_strdup_printf ("Unsupported color format %d",
+          last_rejected_img_fmt);
+      fail_unless (strstr (debug, expected) != NULL,
+          "error debug '%s' does not report the rejected format as '%s'",
+          debug, expected);
+
+      g_free (expected);
+      g_free (debug);
+      g_error_free (err);
+      seen = TRUE;
+    }
+    gst_message_unref (msg);
+  }
+
+  fail_unless (seen, "no error message was posted for the rejected format");
+
+  gst_element_set_bus (h->element, NULL);
+  gst_object_unref (bus);
   g_ptr_array_unref (encoded);
   gst_harness_teardown (h);
 }
