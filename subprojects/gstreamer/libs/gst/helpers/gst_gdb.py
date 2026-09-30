@@ -532,7 +532,7 @@ class GdbGstStructure:
 
 class GdbGstSegment:
     def __init__(self, val):
-        t = gdb.lookup_type("GstSegment").pointer().pointer()
+        t = gdb.lookup_type("GstSegment").pointer()
         self.val = val.cast(t).dereference()
         self.fmt = str(self.val["format"]).split("_")[-1].lower()
 

@@ -81,10 +81,9 @@ def g_type_fundamental_name(gtype):
     else:
         typenode = g_type_to_typenode(gtype)
         if typenode:
-            return g_quark_to_string(typenode["qname"])
+            return g_type_to_name(
+                typenode["supers"][int(typenode["n_supers"])])
         return None
-
-    return g_type_to_name(typenode["supers"][int(typenode["n_supers"])])
 
 
 def g_type_to_name(gtype):
