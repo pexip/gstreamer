@@ -489,6 +489,7 @@ struct _GstRtpJitterBufferPrivate
   /* for the latency estimation */
   guint estimated_latency_ms;
   GstClockTimeDiff avg_clock_diff;
+  guint64 latency_ext_rtptime;
   guint64 instant_max_jitter_top;
   guint64 instant_max_jitter_bottom;
   guint64 etimatied_max_jitter_top;
@@ -1330,6 +1331,7 @@ gst_rtp_jitter_buffer_init (GstRtpJitterBuffer * jitterbuffer)
   priv->last_rtptime = -1;
   priv->avg_jitter = 0;
   priv->avg_clock_diff = -1;
+  priv->latency_ext_rtptime = -1;
   priv->instant_max_jitter_top = 0;
   priv->instant_max_jitter_bottom = 0;
   priv->etimatied_max_jitter_top = 0;
@@ -1979,6 +1981,7 @@ gst_rtp_jitter_buffer_flush_stop (GstRtpJitterBuffer * jitterbuffer)
   priv->min_jitter = G_MAXINT64;
   priv->last_dts = -1;
   priv->avg_clock_diff = -1;
+  priv->latency_ext_rtptime = -1;
   priv->instant_max_jitter_top = 0;
   priv->instant_max_jitter_bottom = 0;
   priv->etimatied_max_jitter_top = 0;
@@ -3076,26 +3079,52 @@ max_jitter_estimation (guint64 jitter, guint64 * short_estimation,
   }
 }
 
+/* The skew calculation resyncs on a delta this big, calling it a restarted
+ * sender rather than jitter. Agree with it. */
+#define MAX_CLOCK_DIFF_STEP GST_SECOND
+
 static void
 estimate_latency (GstRtpJitterBuffer * jitterbuffer, GstClockTime dts,
     guint32 rtptime)
 {
   gint64 jitter = 0;
   GstClockTimeDiff clock_diff = 0;
+  guint64 ext_rtptime;
   GstRtpJitterBufferPrivate *priv = jitterbuffer->priv;
 
   if (G_UNLIKELY (dts == GST_CLOCK_TIME_NONE) || priv->clock_rate <= 0)
     return;
+
+  /* Extend to 64 bits, otherwise the 32-bit wrap would show up as a jump of
+   * 2^32 / clock-rate. */
+  ext_rtptime =
+      gst_rtp_buffer_ext_timestamp (&priv->latency_ext_rtptime, rtptime);
 
   /* clock_diff - consists Cd + D + J where:
    * Cd - initial clock difference between sender and recover
    * D  - constant delay.
    * J  - jitter */
   clock_diff =
-      ((gint64) dts - (gint64) gst_util_uint64_scale_int (rtptime, GST_SECOND,
-          priv->clock_rate));
+      ((gint64) dts - (gint64) gst_util_uint64_scale_int (ext_rtptime,
+          GST_SECOND, priv->clock_rate));
   if (priv->avg_clock_diff == -1) {
     priv->avg_clock_diff = clock_diff;
+    return;
+  }
+
+  /* A sender that restarted picks a new random rtptime base, which is not
+   * jitter. Resync on it, or the estimate stays pinned for minutes. */
+  if (ABS (clock_diff - priv->avg_clock_diff) > MAX_CLOCK_DIFF_STEP) {
+    GST_WARNING_OBJECT (jitterbuffer,
+        "clock diff step of %" GST_STIME_FORMAT ", reset latency estimation",
+        GST_STIME_ARGS (clock_diff - priv->avg_clock_diff));
+    priv->avg_clock_diff = clock_diff;
+    priv->instant_max_jitter_top = 0;
+    priv->instant_max_jitter_bottom = 0;
+    priv->etimatied_max_jitter_top = 0;
+    priv->etimatied_max_jitter_bottom = 0;
+    priv->dencity_ratio = 0.5f;
+    priv->estimated_latency_ms = 0;
     return;
   }
 
@@ -3130,7 +3159,13 @@ estimate_latency (GstRtpJitterBuffer * jitterbuffer, GstClockTime dts,
       priv->etimatied_max_jitter_bottom) / GST_MSECOND;
 
   GST_LOG_OBJECT (jitterbuffer,
-      "estimated_latency:%" GST_TIME_FORMAT,
+      "clock_diff %" GST_STIME_FORMAT ", avg %" GST_STIME_FORMAT ", jitter %"
+      GST_STIME_FORMAT ", top %" GST_TIME_FORMAT ", bottom %" GST_TIME_FORMAT
+      ", count %" G_GUINT64_FORMAT ", estimated_latency:%" GST_TIME_FORMAT,
+      GST_STIME_ARGS (clock_diff), GST_STIME_ARGS (priv->avg_clock_diff),
+      GST_STIME_ARGS (jitter),
+      GST_TIME_ARGS (priv->etimatied_max_jitter_top),
+      GST_TIME_ARGS (priv->etimatied_max_jitter_bottom), priv->jitter_count,
       GST_TIME_ARGS (priv->etimatied_max_jitter_top +
           priv->etimatied_max_jitter_bottom));
 }
