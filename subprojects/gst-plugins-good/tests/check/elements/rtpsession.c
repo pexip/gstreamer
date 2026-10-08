@@ -7040,6 +7040,64 @@ SET_SOCK_TS_RACE_CLEAR:
 
 GST_END_TEST;
 
+/*
+ * rtp_twcc_stats_set_sock_ts() writes SentPacket::socket_ts from the sink
+ * thread while TWCC feedback processing reads it when computing windowed
+ * stats. Meant to be run under ThreadSanitizer.
+ */
+GST_START_TEST (test_twcc_set_sock_ts_stats_race)
+{
+  SessionHarness *h_send = session_harness_new ();
+  SessionHarness *h_recv = session_harness_new ();
+  TwccSetSockTsRaceCtx ctx = { NULL, FALSE };
+  GThread *feedback_thread;
+  const guint batches = 20;
+  const guint batch_size = 20;
+  guint i, j;
+  GstFlowReturn res = GST_FLOW_OK;
+
+  session_harness_add_twcc_caps_for_pt (h_send, TEST_BUF_PT);
+  session_harness_set_twcc_recv_ext_id (h_recv, TEST_TWCC_EXT_ID);
+
+  ctx.sent_bufs = g_async_queue_new ();
+  feedback_thread = g_thread_new ("tx-feedback",
+      _twcc_set_sock_ts_race_feedback_thread, &ctx);
+
+  for (i = 0; i < batches; i++) {
+    for (j = 0; j < batch_size; j++) {
+      GstBuffer *buf = generate_twcc_send_buffer (i * batch_size + j,
+          j == batch_size - 1);
+      res = session_harness_send_rtp (h_send, buf);
+      if (res != GST_FLOW_OK)
+        goto SET_SOCK_TS_STATS_RACE_CLEAR;
+      buf = session_harness_pull_send_rtp (h_send);
+      g_async_queue_push (ctx.sent_bufs, gst_buffer_ref (buf));
+      res = session_harness_recv_rtp (h_recv, buf);
+      if (res != GST_FLOW_OK)
+        goto SET_SOCK_TS_STATS_RACE_CLEAR;
+      session_harness_advance_and_crank (h_send, TEST_BUF_DURATION);
+    }
+    res = session_harness_recv_rtcp (h_send,
+        session_harness_produce_twcc (h_recv));
+    if (res != GST_FLOW_OK)
+      goto SET_SOCK_TS_STATS_RACE_CLEAR;
+  }
+
+SET_SOCK_TS_STATS_RACE_CLEAR:
+  /* Stop and join the feedback thread before asserting so a failure can't
+   * leave it running against freed state. */
+  g_atomic_int_set (&ctx.sender_done, TRUE);
+  g_thread_join (feedback_thread);
+  g_async_queue_unref (ctx.sent_bufs);
+
+  session_harness_free (h_send);
+  session_harness_free (h_recv);
+
+  fail_unless_equals_int (res, GST_FLOW_OK);
+}
+
+GST_END_TEST;
+
 GST_START_TEST (test_send_rtcp_instantly)
 {
   SessionHarness *h = session_harness_new ();
@@ -7820,6 +7878,7 @@ rtpsession_suite (void)
   tcase_add_test (tc_chain, test_twcc_keep_queue_size);
   tcase_add_test (tc_chain, test_twcc_seqnum_wrap_gap_detection);
   tcase_add_test (tc_chain, test_twcc_set_sock_ts_race);
+  tcase_add_test (tc_chain, test_twcc_set_sock_ts_stats_race);
 
   tcase_add_test (tc_chain, test_send_rtcp_instantly);
   tcase_add_test (tc_chain, test_send_bye_signal);
