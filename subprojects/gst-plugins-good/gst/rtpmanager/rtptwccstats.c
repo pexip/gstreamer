@@ -39,7 +39,10 @@ GST_DEBUG_CATEGORY_EXTERN (rtp_twcc_debug);
 typedef struct
 {
   GstClockTime local_ts;
+  /* Written once from the sink thread, then published by setting
+     socket_ts_set atomically. Only read socket_ts after seeing the flag. */
   GstClockTime socket_ts;
+  gint socket_ts_set;
   GstClockTime remote_ts;
   guint16 seqnum;
   guint16 orig_seqnum;
@@ -266,6 +269,7 @@ _sent_packet_init (SentPacket * packet, guint16 seqnum, RTPPacketInfo * pinfo,
   packet->pt = gst_rtp_buffer_get_payload_type (rtp);
   packet->remote_ts = GST_CLOCK_TIME_NONE;
   packet->socket_ts = GST_CLOCK_TIME_NONE;
+  packet->socket_ts_set = 0;
   packet->lost = FALSE;
   packet->status = RTP_TWCC_FECBLOCK_PKT_UNKNOWN;
   packet->redundant_idx = redundant_idx;
@@ -304,7 +308,7 @@ _pkt_stats_ts (SentPacket * pkt)
   if (!pkt) {
     return GST_CLOCK_TIME_NONE;
   } else {
-    return GST_CLOCK_TIME_IS_VALID (pkt->socket_ts)
+    return g_atomic_int_get (&pkt->socket_ts_set)
         ? pkt->socket_ts : pkt->local_ts;
   }
 }
@@ -637,6 +641,8 @@ twcc_stats_ctx_calculate_windowed_stats (TWCCStatsCtx * ctx,
 
   SentPacket *first_local_pkt = NULL;
   SentPacket *last_local_pkt = NULL;
+  GstClockTime first_local_ts = GST_CLOCK_TIME_NONE;
+  GstClockTime last_local_ts = GST_CLOCK_TIME_NONE;
   SentPacket *first_remote_pkt = NULL;
   SentPacket *last_remote_pkt = NULL;
 
@@ -681,17 +687,19 @@ twcc_stats_ctx_calculate_windowed_stats (TWCCStatsCtx * ctx,
     if (!pkt) {
       continue;
     }
+    const GstClockTime pkt_ts = _pkt_stats_ts (pkt);
     GST_LOG ("STATS WINDOW: %u/%u: pkt #%u, pt: %u, size: %u, status: %s, "
         "local-ts: %" GST_TIME_FORMAT ", remote-ts %" GST_TIME_FORMAT,
         i + 1, packets_overall, pkt->seqnum, pkt->pt, pkt->size * 8,
         _pkt_status_s (pkt->status),
-        GST_TIME_ARGS (_pkt_stats_ts (pkt)), GST_TIME_ARGS (pkt->remote_ts));
+        GST_TIME_ARGS (pkt_ts), GST_TIME_ARGS (pkt->remote_ts));
 
-    if (GST_CLOCK_TIME_IS_VALID (_pkt_stats_ts (pkt))
+    if (GST_CLOCK_TIME_IS_VALID (pkt_ts)
         && pkt->status != RTP_TWCC_FECBLOCK_PKT_UNKNOWN) {
       /* don't count the bits for the first packet in the window */
       if (first_local_pkt == NULL) {
         first_local_pkt = pkt;
+        first_local_ts = pkt_ts;
       } else {
         bits_sent += pkt->size * 8;
         if (pkt->redundant_num <= 0) {
@@ -699,6 +707,7 @@ twcc_stats_ctx_calculate_windowed_stats (TWCCStatsCtx * ctx,
         }
       }
       last_local_pkt = pkt;
+      last_local_ts = pkt_ts;
     }
 
     if (pkt->status == RTP_TWCC_FECBLOCK_PKT_RECEIVED) {
@@ -736,9 +745,9 @@ twcc_stats_ctx_calculate_windowed_stats (TWCCStatsCtx * ctx,
     GstClockTimeDiff remote_delta = GST_CLOCK_STIME_NONE;
     GstClockTimeDiff delta_delta = GST_CLOCK_STIME_NONE;
 
-    if (GST_CLOCK_TIME_IS_VALID (_pkt_stats_ts (pkt)) &&
-        GST_CLOCK_TIME_IS_VALID (_pkt_stats_ts (prev))) {
-      local_delta = GST_CLOCK_DIFF (_pkt_stats_ts (prev), _pkt_stats_ts (pkt));
+    const GstClockTime prev_ts = _pkt_stats_ts (prev);
+    if (GST_CLOCK_TIME_IS_VALID (pkt_ts) && GST_CLOCK_TIME_IS_VALID (prev_ts)) {
+      local_delta = GST_CLOCK_DIFF (prev_ts, pkt_ts);
     }
 
     if (GST_CLOCK_TIME_IS_VALID (pkt->remote_ts) &&
@@ -753,7 +762,7 @@ twcc_stats_ctx_calculate_windowed_stats (TWCCStatsCtx * ctx,
       delta_delta_sum += delta_delta;
       delta_delta_count++;
       _linear_update (&dod_regression,
-          (gdouble) (_pkt_stats_ts (pkt) - _pkt_stats_ts (first_local_pkt)),
+          (gdouble) (pkt_ts - first_local_ts),
           (gdouble) delta_delta_sum);
       if (i < packets_overall / 2) {
         first_delta_delta_sum += delta_delta;
@@ -769,9 +778,7 @@ twcc_stats_ctx_calculate_windowed_stats (TWCCStatsCtx * ctx,
   ctx->packets_recv = packets_recv;
 
   if (first_local_pkt && last_local_pkt) {
-    local_duration =
-        GST_CLOCK_DIFF (_pkt_stats_ts (first_local_pkt),
-        _pkt_stats_ts (last_local_pkt));
+    local_duration = GST_CLOCK_DIFF (first_local_ts, last_local_ts);
   }
   if (first_remote_pkt && last_remote_pkt) {
     if (GST_CLOCK_TIME_IS_VALID(first_remote_pkt->remote_ts)
@@ -1207,14 +1214,15 @@ _lookup_seqnum (TWCCStatsManager * statsman, guint32 ssrc, guint16 seqnum)
   return ret;
 }
 
+/* Must be called with SENT_PKT_LOCK held */
 static SentPacket *
-_find_sentpacket (TWCCStatsManager * statsman, guint16 seqnum, const guint32 * timestamp)
+_find_sentpacket_unlocked (TWCCStatsManager * statsman, guint16 seqnum,
+    const guint32 * timestamp)
 {
   SentPacket *result = NULL;
 
-  SENT_PKT_LOCK (statsman);
   if (gst_vec_deque_is_empty (statsman->sent_packets) == TRUE) {
-    goto FIND_SEND_PKT_RETURN;
+    return NULL;
   }
 
   SentPacket *first = gst_vec_deque_peek_head_struct (statsman->sent_packets);
@@ -1225,15 +1233,24 @@ _find_sentpacket (TWCCStatsManager * statsman, guint16 seqnum, const guint32 * t
         gst_vec_deque_peek_nth_struct (statsman->sent_packets, idx);
   }
 
-FIND_SEND_PKT_RETURN:
-  SENT_PKT_UNLOCK (statsman);
-
   if (result && result->seqnum == seqnum
     && (!timestamp || result->timestamp == *timestamp)) {
     return result;
   } else {
     return NULL;
   }
+}
+
+static SentPacket *
+_find_sentpacket (TWCCStatsManager * statsman, guint16 seqnum, const guint32 * timestamp)
+{
+  SentPacket *result;
+
+  SENT_PKT_LOCK (statsman);
+  result = _find_sentpacket_unlocked (statsman, seqnum, timestamp);
+  SENT_PKT_UNLOCK (statsman);
+
+  return result;
 }
 
 /* Once we've got feedback on a packet, we need to account it in the internal
@@ -1560,10 +1577,19 @@ void
 rtp_twcc_stats_set_sock_ts (TWCCStatsManager * statsman,
     guint16 seqnum, GstClockTime sock_ts)
 {
-  SentPacket *pkt = _find_sentpacket (statsman, seqnum, NULL);
-  if (pkt) {
+  /* Called from the sink thread without RTP_SESSION_LOCK: look up and write
+     under SENT_PKT_LOCK so the slot can't be evicted/reused meanwhile.
+     socket_ts is written only once and then published through
+     socket_ts_set, so lock-free readers never see a partial value. */
+  SENT_PKT_LOCK (statsman);
+  SentPacket *pkt = _find_sentpacket_unlocked (statsman, seqnum, NULL);
+  if (pkt && GST_CLOCK_TIME_IS_VALID (sock_ts)
+      && !g_atomic_int_get (&pkt->socket_ts_set)) {
     pkt->socket_ts = sock_ts;
+    g_atomic_int_set (&pkt->socket_ts_set, 1);
   }
+  SENT_PKT_UNLOCK (statsman);
+
   if (pkt) {
     GST_LOG_OBJECT (statsman->parent,
         "packet #%u, setting socket-ts %" GST_TIME_FORMAT, seqnum,
