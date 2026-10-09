@@ -1315,7 +1315,7 @@ retry:
   GST_DEBUG_OBJECT (self, "dequeueOutputBuffer() returned %d (0x%x)", idx, idx);
 
   if (idx < 0) {
-    if (self->flushing) {
+    if (self->flushing || self->downstream_flow_ret == GST_FLOW_FLUSHING) {
       g_clear_error (&err);
       goto flushing;
     }
@@ -1358,8 +1358,9 @@ retry:
         GST_ERROR_OBJECT (self, "Failure dequeueing output buffer");
         goto dequeue_error;
       default:
-        g_assert_not_reached ();
-        break;
+        GST_ERROR_OBJECT (self, "Unexpected dequeue output buffer status %d",
+            idx);
+        goto dequeue_error;
     }
 
     goto retry;
@@ -1372,7 +1373,7 @@ retry:
 
   buf = gst_amc_codec_get_output_buffer (self->codec, idx, &err);
   if (err) {
-    if (self->flushing) {
+    if (self->flushing || self->downstream_flow_ret == GST_FLOW_FLUSHING) {
       g_clear_error (&err);
       goto flushing;
     }
@@ -1565,7 +1566,7 @@ retry:
 
   if (release_buffer) {
     if (!gst_amc_codec_release_output_buffer (self->codec, idx, FALSE, &err)) {
-      if (self->flushing) {
+      if (self->flushing || self->downstream_flow_ret == GST_FLOW_FLUSHING) {
         g_clear_error (&err);
         goto flushing;
       }
@@ -1601,7 +1602,11 @@ retry:
 
 dequeue_error:
   {
-    GST_ELEMENT_ERROR_FROM_ERROR (self, err);
+    if (err)
+      GST_ELEMENT_ERROR_FROM_ERROR (self, err);
+    else
+      GST_ELEMENT_ERROR (self, LIBRARY, FAILED, (NULL),
+          ("Failed to dequeue output buffer"));
     gst_pad_push_event (GST_VIDEO_DECODER_SRC_PAD (self), gst_event_new_eos ());
     gst_pad_pause_task (GST_VIDEO_DECODER_SRC_PAD (self));
     self->downstream_flow_ret = GST_FLOW_ERROR;
