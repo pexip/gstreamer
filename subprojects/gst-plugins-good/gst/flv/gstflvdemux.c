@@ -143,8 +143,10 @@ GST_ELEMENT_REGISTER_DEFINE_WITH_CODE (flvdemux, "flvdemux",
 /* two seconds - consider dts are resynced to another base if this different */
 #define RESYNC_THRESHOLD 2000
 
-/* how much stream time to wait for audio tags to appear after we have video, or vice versa */
-#define DEFAULT_NO_MORE_PADS_THRESHOLD -1
+/* how much stream time to wait for audio tags to appear after we have video, or vice versa.
+ * Pexip only uses flvdemux live, so by default never signal no-more-pads
+ * (this is the maximum value of the guint64 property). */
+#define DEFAULT_NO_MORE_PADS_THRESHOLD (G_MAXUINT64 - 1)
 
 enum
 {

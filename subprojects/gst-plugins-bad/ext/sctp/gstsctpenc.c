@@ -497,7 +497,8 @@ gst_sctp_enc_src_activate_mode (GstPad * pad, GstObject * parent,
     gst_data_queue_set_flushing (self->outbound_sctp_packet_queue, FALSE);
 
     result = gst_pad_start_task (pad,
-        (GstTaskFunction) gst_sctp_enc_srcpad_loop, pad, NULL);
+        (GstTaskFunction) gst_sctp_enc_srcpad_loop, gst_object_ref (pad),
+        gst_object_unref);
   } else {
     gst_data_queue_set_flushing (self->outbound_sctp_packet_queue, TRUE);
     gst_data_queue_flush (self->outbound_sctp_packet_queue);
