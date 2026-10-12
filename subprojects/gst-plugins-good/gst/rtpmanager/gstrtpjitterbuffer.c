@@ -490,6 +490,7 @@ struct _GstRtpJitterBufferPrivate
   guint estimated_latency_ms;
   GstClockTimeDiff avg_clock_diff;
   guint64 latency_ext_rtptime;
+  guint64 latency_last_sender_time;
   guint64 instant_max_jitter_top;
   guint64 instant_max_jitter_bottom;
   guint64 etimatied_max_jitter_top;
@@ -1332,6 +1333,7 @@ gst_rtp_jitter_buffer_init (GstRtpJitterBuffer * jitterbuffer)
   priv->avg_jitter = 0;
   priv->avg_clock_diff = -1;
   priv->latency_ext_rtptime = -1;
+  priv->latency_last_sender_time = -1;
   priv->instant_max_jitter_top = 0;
   priv->instant_max_jitter_bottom = 0;
   priv->etimatied_max_jitter_top = 0;
@@ -1982,6 +1984,7 @@ gst_rtp_jitter_buffer_flush_stop (GstRtpJitterBuffer * jitterbuffer)
   priv->last_dts = -1;
   priv->avg_clock_diff = -1;
   priv->latency_ext_rtptime = -1;
+  priv->latency_last_sender_time = -1;
   priv->instant_max_jitter_top = 0;
   priv->instant_max_jitter_bottom = 0;
   priv->etimatied_max_jitter_top = 0;
@@ -3079,17 +3082,16 @@ max_jitter_estimation (guint64 jitter, guint64 * short_estimation,
   }
 }
 
-/* The skew calculation resyncs on a delta this big, calling it a restarted
- * sender rather than jitter. Agree with it. */
+/* A restarted sender steps both the clock difference and its own timeline by
+ * at least this much. Neither on its own means a restart. */
 #define MAX_CLOCK_DIFF_STEP GST_SECOND
-
 static void
 estimate_latency (GstRtpJitterBuffer * jitterbuffer, GstClockTime dts,
     guint32 rtptime)
 {
   gint64 jitter = 0;
   GstClockTimeDiff clock_diff = 0;
-  guint64 ext_rtptime;
+  guint64 ext_rtptime, sender_time;
   GstRtpJitterBufferPrivate *priv = jitterbuffer->priv;
 
   if (G_UNLIKELY (dts == GST_CLOCK_TIME_NONE) || priv->clock_rate <= 0)
@@ -3099,34 +3101,41 @@ estimate_latency (GstRtpJitterBuffer * jitterbuffer, GstClockTime dts,
    * 2^32 / clock-rate. */
   ext_rtptime =
       gst_rtp_buffer_ext_timestamp (&priv->latency_ext_rtptime, rtptime);
+  sender_time =
+      gst_util_uint64_scale_int (ext_rtptime, GST_SECOND, priv->clock_rate);
 
   /* clock_diff - consists Cd + D + J where:
    * Cd - initial clock difference between sender and recover
    * D  - constant delay.
    * J  - jitter */
-  clock_diff =
-      ((gint64) dts - (gint64) gst_util_uint64_scale_int (ext_rtptime,
-          GST_SECOND, priv->clock_rate));
+  clock_diff = ((gint64) dts - (gint64) sender_time);
   if (priv->avg_clock_diff == -1) {
     priv->avg_clock_diff = clock_diff;
+    priv->latency_last_sender_time = sender_time;
     return;
   }
 
-  /* A sender that restarted picks a new random rtptime base, which is not
-   * jitter. Resync on it, or the estimate stays pinned for minutes. */
-  if (ABS (clock_diff - priv->avg_clock_diff) > MAX_CLOCK_DIFF_STEP) {
+  /* A sender that restarted picks a new random rtptime base. The network did
+   * not change, so the jitter measured so far is still the best thing we know
+   * about it -- only the mean it is measured against has to follow, and this
+   * one step must not be counted as jitter itself. Telling a restart apart
+   * takes both halves: a packet that merely turns up late moves clock_diff on
+   * its own and stays jitter however large, while a sender that pauses and
+   * resumes moves the rtptime on its own and needs no rebase at all. */
+  if (ABS (clock_diff - priv->avg_clock_diff) > MAX_CLOCK_DIFF_STEP &&
+      ABS ((gint64) sender_time - (gint64) priv->latency_last_sender_time) >
+      MAX_CLOCK_DIFF_STEP) {
     GST_WARNING_OBJECT (jitterbuffer,
-        "clock diff step of %" GST_STIME_FORMAT ", reset latency estimation",
-        GST_STIME_ARGS (clock_diff - priv->avg_clock_diff));
+        "clock diff step of %" GST_STIME_FORMAT " with a sender time step of %"
+        GST_STIME_FORMAT ", rebase latency estimation",
+        GST_STIME_ARGS (clock_diff - priv->avg_clock_diff),
+        GST_STIME_ARGS ((gint64) sender_time -
+            (gint64) priv->latency_last_sender_time));
+    priv->latency_last_sender_time = sender_time;
     priv->avg_clock_diff = clock_diff;
-    priv->instant_max_jitter_top = 0;
-    priv->instant_max_jitter_bottom = 0;
-    priv->etimatied_max_jitter_top = 0;
-    priv->etimatied_max_jitter_bottom = 0;
-    priv->dencity_ratio = 0.5f;
-    priv->estimated_latency_ms = 0;
     return;
   }
+  priv->latency_last_sender_time = sender_time;
 
   /* By averaging clock_diff we getting  (Cd + D) + Jm
    * where 'Jm' is mean of the jitter */
