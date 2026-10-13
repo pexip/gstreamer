@@ -569,6 +569,320 @@ GST_START_TEST (test_device_monitor)
 
 GST_END_TEST;
 
+/* gst_device_monitor_stop() while the start thread is still starting
+ * providers. There are three providers, started in rank order:
+ *
+ *  - "ok" starts successfully. Once it is started, the start thread has
+ *    handed it over to the list of started providers that stop() takes.
+ *  - "fast" fails to start straight away. Its probe() is called by
+ *    gst_device_monitor_get_devices() before the slow provider is probed, and
+ *    lets the slow provider return from start().
+ *  - "slow" blocks in start() until it is released, then returns
+ *    stop_race.slow_start_result.
+ *
+ * The slow provider holds its start lock while it is blocked, so
+ * gst_device_monitor_get_devices() can't probe it before it is released. It
+ * does wait for the start thread to be detached, which stop() does in the same
+ * critical section where it takes the started providers. That is how the test
+ * knows that the stop request is in before the slow provider returns. */
+static struct
+{
+  GMutex lock;
+  GCond cond;
+  /* The slow provider only blocks while armed */
+  gboolean armed;
+  gboolean slow_entered;
+  gboolean slow_released;
+  gboolean slow_start_result;
+  guint ok_started;
+  guint ok_stopped;
+  guint slow_stopped;
+} stop_race;
+
+typedef struct _GstTestOkProvider
+{
+  GstDeviceProvider parent;
+} GstTestOkProvider;
+
+typedef struct _GstTestOkProviderClass
+{
+  GstDeviceProviderClass parent_class;
+} GstTestOkProviderClass;
+
+GType gst_test_ok_provider_get_type (void);
+
+G_DEFINE_TYPE (GstTestOkProvider, gst_test_ok_provider,
+    GST_TYPE_DEVICE_PROVIDER);
+
+static gboolean
+gst_test_ok_provider_start (GstDeviceProvider * provider)
+{
+  g_mutex_lock (&stop_race.lock);
+  stop_race.ok_started++;
+  g_mutex_unlock (&stop_race.lock);
+
+  return TRUE;
+}
+
+static void
+gst_test_ok_provider_stop (GstDeviceProvider * provider)
+{
+  g_mutex_lock (&stop_race.lock);
+  stop_race.ok_stopped++;
+  g_mutex_unlock (&stop_race.lock);
+}
+
+static void
+gst_test_ok_provider_class_init (GstTestOkProviderClass * klass)
+{
+  GstDeviceProviderClass *dpclass = GST_DEVICE_PROVIDER_CLASS (klass);
+
+  dpclass->start = gst_test_ok_provider_start;
+  dpclass->stop = gst_test_ok_provider_stop;
+
+  gst_device_provider_class_set_static_metadata (dpclass, "Test Ok Provider",
+      "TestStopRace/Ok", "Starts successfully", "Unit test");
+}
+
+static void
+gst_test_ok_provider_init (GstTestOkProvider * self)
+{
+}
+
+typedef struct _GstTestFastProvider
+{
+  GstDeviceProvider parent;
+} GstTestFastProvider;
+
+typedef struct _GstTestFastProviderClass
+{
+  GstDeviceProviderClass parent_class;
+} GstTestFastProviderClass;
+
+GType gst_test_fast_provider_get_type (void);
+
+G_DEFINE_TYPE (GstTestFastProvider, gst_test_fast_provider,
+    GST_TYPE_DEVICE_PROVIDER);
+
+static gboolean
+gst_test_fast_provider_start (GstDeviceProvider * provider)
+{
+  return FALSE;
+}
+
+static GList *
+gst_test_fast_provider_probe (GstDeviceProvider * provider)
+{
+  g_mutex_lock (&stop_race.lock);
+  stop_race.slow_released = TRUE;
+  g_cond_broadcast (&stop_race.cond);
+  g_mutex_unlock (&stop_race.lock);
+
+  return NULL;
+}
+
+static void
+gst_test_fast_provider_class_init (GstTestFastProviderClass * klass)
+{
+  GstDeviceProviderClass *dpclass = GST_DEVICE_PROVIDER_CLASS (klass);
+
+  dpclass->start = gst_test_fast_provider_start;
+  dpclass->probe = gst_test_fast_provider_probe;
+
+  gst_device_provider_class_set_static_metadata (dpclass, "Test Fast Provider",
+      "TestStopRace/Fail", "Fails to start immediately", "Unit test");
+}
+
+static void
+gst_test_fast_provider_init (GstTestFastProvider * self)
+{
+}
+
+typedef struct _GstTestSlowProvider
+{
+  GstDeviceProvider parent;
+} GstTestSlowProvider;
+
+typedef struct _GstTestSlowProviderClass
+{
+  GstDeviceProviderClass parent_class;
+} GstTestSlowProviderClass;
+
+GType gst_test_slow_provider_get_type (void);
+
+G_DEFINE_TYPE (GstTestSlowProvider, gst_test_slow_provider,
+    GST_TYPE_DEVICE_PROVIDER);
+
+static gboolean
+gst_test_slow_provider_start (GstDeviceProvider * provider)
+{
+  gboolean ret;
+
+  g_mutex_lock (&stop_race.lock);
+
+  if (!stop_race.armed) {
+    g_mutex_unlock (&stop_race.lock);
+    return FALSE;
+  }
+
+  stop_race.slow_entered = TRUE;
+  g_cond_broadcast (&stop_race.cond);
+
+  while (!stop_race.slow_released)
+    g_cond_wait (&stop_race.cond, &stop_race.lock);
+
+  ret = stop_race.slow_start_result;
+  g_mutex_unlock (&stop_race.lock);
+
+  return ret;
+}
+
+static void
+gst_test_slow_provider_stop (GstDeviceProvider * provider)
+{
+  g_mutex_lock (&stop_race.lock);
+  stop_race.slow_stopped++;
+  g_mutex_unlock (&stop_race.lock);
+}
+
+static void
+gst_test_slow_provider_class_init (GstTestSlowProviderClass * klass)
+{
+  GstDeviceProviderClass *dpclass = GST_DEVICE_PROVIDER_CLASS (klass);
+
+  dpclass->start = gst_test_slow_provider_start;
+  dpclass->stop = gst_test_slow_provider_stop;
+
+  gst_device_provider_class_set_static_metadata (dpclass, "Test Slow Provider",
+      "TestStopRace/Fail/Slow", "Blocks in start() until released",
+      "Unit test");
+}
+
+static void
+gst_test_slow_provider_init (GstTestSlowProvider * self)
+{
+}
+
+static gpointer
+stop_monitor_thread (gpointer data)
+{
+  gst_device_monitor_stop (GST_DEVICE_MONITOR (data));
+
+  return NULL;
+}
+
+static gboolean
+wait_for_slow_provider (void)
+{
+  gint64 end_time = g_get_monotonic_time () + 10 * G_TIME_SPAN_SECOND;
+  gboolean entered;
+
+  g_mutex_lock (&stop_race.lock);
+  while (!stop_race.slow_entered) {
+    if (!g_cond_wait_until (&stop_race.cond, &stop_race.lock, end_time))
+      break;
+  }
+  entered = stop_race.slow_entered;
+  g_mutex_unlock (&stop_race.lock);
+
+  return entered;
+}
+
+static void
+check_stop_while_starting (gboolean with_ok_provider,
+    gboolean slow_start_result)
+{
+  GstDeviceProvider *ok, *slow;
+  GstDeviceMonitor *mon;
+  GThread *stopper;
+  GList *devs;
+  gint ok_refs, slow_refs;
+  guint ok_started, ok_stopped, slow_stopped;
+
+  gst_device_provider_register (NULL, "teststopokprovider", 4,
+      gst_test_ok_provider_get_type ());
+  gst_device_provider_register (NULL, "teststopfastprovider", 3,
+      gst_test_fast_provider_get_type ());
+  gst_device_provider_register (NULL, "teststopslowprovider", 2,
+      gst_test_slow_provider_get_type ());
+
+  ok = gst_device_provider_factory_get_by_name ("teststopokprovider");
+  slow = gst_device_provider_factory_get_by_name ("teststopslowprovider");
+  ok_refs = GST_OBJECT_REFCOUNT_VALUE (ok);
+  slow_refs = GST_OBJECT_REFCOUNT_VALUE (slow);
+
+  g_mutex_lock (&stop_race.lock);
+  stop_race.armed = TRUE;
+  stop_race.slow_entered = FALSE;
+  stop_race.slow_released = FALSE;
+  stop_race.slow_start_result = slow_start_result;
+  stop_race.ok_started = 0;
+  stop_race.ok_stopped = 0;
+  stop_race.slow_stopped = 0;
+  g_mutex_unlock (&stop_race.lock);
+
+  mon = gst_device_monitor_new ();
+  /* Filtering on "Fail" leaves out the ok provider */
+  ck_assert_int_gt (gst_device_monitor_add_filter (mon,
+          with_ok_provider ? "TestStopRace" : "TestStopRace/Fail", NULL), 0);
+  ck_assert (gst_device_monitor_start (mon));
+
+  fail_unless (wait_for_slow_provider (), "The slow provider was not started");
+
+  /* stop() joins the start thread, which is blocked in the slow provider
+   * until get_devices() below releases it */
+  stopper = g_thread_new ("stop-monitor", stop_monitor_thread, mon);
+
+  devs = gst_device_monitor_get_devices (mon);
+  ck_assert_ptr_eq (devs, NULL);
+
+  g_thread_join (stopper);
+
+  gst_object_unref (mon);
+
+  g_mutex_lock (&stop_race.lock);
+  stop_race.armed = FALSE;
+  ok_started = stop_race.ok_started;
+  ok_stopped = stop_race.ok_stopped;
+  slow_stopped = stop_race.slow_stopped;
+  g_mutex_unlock (&stop_race.lock);
+
+  /* Every provider that was started is stopped exactly once and the monitor
+   * has dropped all of its references */
+  fail_unless_equals_int (ok_started, with_ok_provider ? 1 : 0);
+  fail_unless_equals_int (ok_stopped, ok_started);
+  fail_unless_equals_int (slow_stopped, slow_start_result ? 1 : 0);
+  ASSERT_OBJECT_REFCOUNT (ok, "ok provider", ok_refs);
+  ASSERT_OBJECT_REFCOUNT (slow, "slow provider", slow_refs);
+
+  gst_object_unref (ok);
+  gst_object_unref (slow);
+}
+
+/* No provider is started when the start thread is stopped */
+GST_START_TEST (test_device_monitor_stop_while_starting_failed)
+{
+  check_stop_while_starting (FALSE, FALSE);
+}
+
+GST_END_TEST;
+
+/* The start thread has started a provider before it is stopped */
+GST_START_TEST (test_device_monitor_stop_while_starting_failed_after_started)
+{
+  check_stop_while_starting (TRUE, FALSE);
+}
+
+GST_END_TEST;
+
+/* The provider the start thread is stopped in starts successfully */
+GST_START_TEST (test_device_monitor_stop_while_starting_succeeded)
+{
+  check_stop_while_starting (TRUE, TRUE);
+}
+
+GST_END_TEST;
+
 
 static Suite *
 gst_device_suite (void)
@@ -582,6 +896,10 @@ gst_device_suite (void)
   tcase_add_test (tc_chain, test_device_provider);
   tcase_add_test (tc_chain, test_device_provider_monitor);
   tcase_add_test (tc_chain, test_device_monitor);
+  tcase_add_test (tc_chain, test_device_monitor_stop_while_starting_failed);
+  tcase_add_test (tc_chain,
+      test_device_monitor_stop_while_starting_failed_after_started);
+  tcase_add_test (tc_chain, test_device_monitor_stop_while_starting_succeeded);
 
   return s;
 }
