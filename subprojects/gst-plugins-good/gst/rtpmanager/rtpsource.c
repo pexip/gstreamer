@@ -2361,6 +2361,10 @@ rtp_source_retain_rtcp_packet (RTPSource * src, GstRTCPPacket * packet,
 
   buffer = gst_buffer_copy_region (packet->rtcp->buffer, GST_BUFFER_COPY_MEMORY,
       packet->offset, (gst_rtcp_packet_get_length (packet) + 1) * 4);
+  if (!buffer) {
+    GST_WARNING_OBJECT (src, "failed to copy the RTCP packet to retain it");
+    return;
+  }
 
   GST_BUFFER_PTS (buffer) = running_time;
 

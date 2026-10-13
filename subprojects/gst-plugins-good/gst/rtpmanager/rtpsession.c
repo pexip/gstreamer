@@ -425,8 +425,8 @@ rtp_session_class_init (RTPSessionClass * klass)
    * @fbtype: The type of RTCP FB packet, probably part of #GstRTCPFBType
    * @sender_ssrc: The SSRC of the sender
    * @media_ssrc: The SSRC of the media this refers to
-   * @fci: a #GstBuffer with the FCI data from the FB packet or %NULL if
-   * there was no FCI
+   * @fci: a #GstBuffer with the FCI data from the FB packet, without RTCP
+   * padding, or %NULL if there was no FCI
    *
    * Notify that a RTCP feedback packet has been received
    */
@@ -3214,7 +3214,7 @@ rtp_session_process_fir (RTPSession * sess, guint32 sender_ssrc,
   if (!src)
     return;
 
-  for (position = 0; position < fci_length; position += 8) {
+  for (position = 0; position + 4 <= fci_length; position += 8) {
     guint8 *data = fci_data + position;
     RTPSource *own;
 
@@ -3245,7 +3245,7 @@ rtp_session_process_nack (RTPSession * sess, guint32 sender_ssrc,
   if (!sess->callbacks.notify_nack)
     return;
 
-  while (fci_length > 0) {
+  while (fci_length >= 4) {
     guint16 seqnum, blp;
 
     seqnum = GST_READ_UINT16_BE (fci_data);
@@ -3347,11 +3347,23 @@ rtp_session_process_feedback (RTPSession * sess, GstRTCPPacket * packet,
   if (sess->scheduled_bye && src && RTP_SOURCE_IS_MARKED_BYE (src))
     return;
 
-  if (src)
-    g_object_ref (src);
-
   fci_data = gst_rtcp_packet_fb_get_fci (packet);
   fci_length = gst_rtcp_packet_fb_get_fci_length (packet) * sizeof (guint32);
+
+  if (gst_rtcp_packet_get_padding (packet)) {
+    /* the padding count is the last byte of the packet */
+    guint pad_length = fci_length > 0 ? fci_data[fci_length - 1] : 0;
+
+    if (pad_length == 0 || pad_length > fci_length) {
+      GST_WARNING ("ignoring feedback %d:%d with %u bytes of padding and an "
+          "FCI of %u bytes", type, fbtype, pad_length, fci_length);
+      return;
+    }
+    fci_length -= pad_length;
+  }
+
+  if (src)
+    g_object_ref (src);
 
   GST_DEBUG ("received feedback %d:%d from %08X about %08X with FCI of "
       "length %d", type, fbtype, sender_ssrc, media_ssrc, fci_length);
@@ -3364,13 +3376,18 @@ rtp_session_process_feedback (RTPSession * sess, GstRTCPPacket * packet,
       fci_buffer = gst_buffer_copy_region (packet->rtcp->buffer,
           GST_BUFFER_COPY_MEMORY, fci_data - packet->rtcp->map.data,
           fci_length);
-      GST_BUFFER_PTS (fci_buffer) = pinfo->running_time;
+      if (fci_buffer)
+        GST_BUFFER_PTS (fci_buffer) = pinfo->running_time;
+      else
+        GST_WARNING ("failed to copy the FCI of feedback %d:%d", type, fbtype);
     }
 
-    RTP_SESSION_UNLOCK (sess);
-    g_signal_emit (sess, rtp_session_signals[SIGNAL_ON_FEEDBACK_RTCP], 0,
-        type, fbtype, sender_ssrc, media_ssrc, fci_buffer);
-    RTP_SESSION_LOCK (sess);
+    if (fci_length == 0 || fci_buffer) {
+      RTP_SESSION_UNLOCK (sess);
+      g_signal_emit (sess, rtp_session_signals[SIGNAL_ON_FEEDBACK_RTCP], 0,
+          type, fbtype, sender_ssrc, media_ssrc, fci_buffer);
+      RTP_SESSION_LOCK (sess);
+    }
 
     if (fci_buffer)
       gst_buffer_unref (fci_buffer);
