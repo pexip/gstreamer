@@ -547,7 +547,10 @@ GST_RTP_API
 guint16         gst_rtcp_packet_fb_get_fci_length     (GstRTCPPacket *packet);
 
 GST_RTP_API
-guint16         gst_rtcp_packet_fb_get_fci_length_bytes (GstRTCPPacket * packet);
+guint16         gst_rtcp_packet_fb_get_fci_length_bytes (GstRTCPPacket *packet);
+
+GST_RTP_API
+gboolean        gst_rtcp_packet_fb_get_fci_length_bytes_full (GstRTCPPacket *packet, guint *size);
 
 GST_RTP_API
 gboolean        gst_rtcp_packet_fb_set_fci_length     (GstRTCPPacket *packet, guint16 wordlen);

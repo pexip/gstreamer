@@ -1135,6 +1135,7 @@ GST_START_TEST (test_rtcp_validate_and_parse_chrome_twcc)
   GstBuffer *buffer;
   GstRTCPPacket packet;
   GstRTCPBuffer rtcp = GST_RTCP_BUFFER_INIT;
+  guint fci_length;
 
   guint8 rtcp_pkt[] = {
     0x8f, 0xcd, 0x00, 0x05,     /* P=0, FMT=15, PT=205(FB), length=5 (x4 = 20 bytes) */
@@ -1161,6 +1162,9 @@ GST_START_TEST (test_rtcp_validate_and_parse_chrome_twcc)
   fail_unless_equals_int (3, gst_rtcp_packet_fb_get_fci_length (&packet));
   fail_unless_equals_int (12,
       gst_rtcp_packet_fb_get_fci_length_bytes (&packet));
+  fail_unless (gst_rtcp_packet_fb_get_fci_length_bytes_full (&packet,
+          &fci_length));
+  fail_unless_equals_int (12, fci_length);
 
   gst_rtcp_buffer_unmap (&rtcp);
   gst_buffer_unref (buffer);
@@ -1174,6 +1178,7 @@ GST_START_TEST (test_rtcp_validate_and_parse_padded_chrome_twcc)
   GstBuffer *buffer;
   GstRTCPPacket packet;
   GstRTCPBuffer rtcp = GST_RTCP_BUFFER_INIT;
+  guint fci_length;
 
   guint8 rtcp_pkt[] = {
     0xaf, 0xcd, 0x00, 0x06,     /* P=1, FMT=15, FTPT=205(FB), length=6 (x4 = 24 bytes) */
@@ -1204,9 +1209,112 @@ GST_START_TEST (test_rtcp_validate_and_parse_padded_chrome_twcc)
   /* hence the introduction of this API: */
   fail_unless_equals_int (13,
       gst_rtcp_packet_fb_get_fci_length_bytes (&packet));
+  fail_unless (gst_rtcp_packet_fb_get_fci_length_bytes_full (&packet,
+          &fci_length));
+  fail_unless_equals_int (13, fci_length);
 
   gst_rtcp_buffer_unmap (&rtcp);
   gst_buffer_unref (buffer);
+}
+
+GST_END_TEST;
+
+/* A FB packet with 4 bytes of FCI, which end with the padding count */
+static const struct
+{
+  guint8 pad_count;
+  gboolean valid;
+  guint fci_length;
+} fb_fci_padding_cases[] = {
+  {1, TRUE, 3},
+  {4, TRUE, 0},
+  {0, FALSE, 0},
+  /* the padding must not reach into the feedback header */
+  {5, FALSE, 0},
+  {12, FALSE, 0},
+};
+
+GST_START_TEST (test_rtcp_fb_fci_length_bytes_padding)
+{
+  gboolean valid = fb_fci_padding_cases[__i__].valid;
+  guint8 rtcp_pkt[] = {
+    0xa1, 0xcd, 0x00, 0x03,     /* P=1, FMT=1, PT=205(FB), length=3 */
+    0xce, 0x0d, 0xc2, 0xb3,     /* SSRC of packet sender */
+    0x53, 0xf6, 0x11, 0x3b,     /* SSRC of media source */
+    0x00, 0x00, 0x00, 0x00      /* FCI, the padding count is set below */
+  };
+  GstBuffer *buffer;
+  GstRTCPPacket packet;
+  GstRTCPBuffer rtcp = GST_RTCP_BUFFER_INIT;
+  guint fci_length = G_MAXUINT;
+
+  rtcp_pkt[sizeof (rtcp_pkt) - 1] = fb_fci_padding_cases[__i__].pad_count;
+  buffer = gst_buffer_new_wrapped_full (GST_MEMORY_FLAG_READONLY,
+      rtcp_pkt, sizeof (rtcp_pkt), 0, sizeof (rtcp_pkt), NULL, NULL);
+
+  gst_rtcp_buffer_map (buffer, GST_MAP_READ, &rtcp);
+  fail_unless (gst_rtcp_buffer_get_first_packet (&rtcp, &packet));
+  fail_unless (gst_rtcp_packet_get_padding (&packet));
+
+  fail_unless_equals_int (gst_rtcp_packet_fb_get_fci_length_bytes_full (&packet,
+          &fci_length), valid);
+  if (valid)
+    fail_unless_equals_int (fci_length, fb_fci_padding_cases[__i__].fci_length);
+  fail_unless_equals_int (gst_rtcp_packet_fb_get_fci_length_bytes_full (&packet,
+          NULL), valid);
+  fail_unless_equals_int (gst_rtcp_packet_fb_get_fci_length_bytes (&packet),
+      valid ? fb_fci_padding_cases[__i__].fci_length : 0);
+
+  gst_rtcp_buffer_unmap (&rtcp);
+  gst_buffer_unref (buffer);
+}
+
+GST_END_TEST;
+
+GST_START_TEST (test_rtcp_fb_fci_length_bytes_limits)
+{
+  guint16 (*legacy_get_length) (GstRTCPPacket *) =
+      gst_rtcp_packet_fb_get_fci_length_bytes;
+  const struct
+  {
+    guint wordlen;
+    guint8 padding;
+  } cases[] = {
+    {0, 0},
+    {1, 1},
+    {16384, 1},
+    {16384, 0},
+    {G_MAXUINT16 - 2, 0},
+  };
+  guint case_idx;
+
+  for (case_idx = 0; case_idx < G_N_ELEMENTS (cases); case_idx++) {
+    guint padded_length = cases[case_idx].wordlen * 4;
+    guint expected_length = padded_length - cases[case_idx].padding;
+    guint packet_size = 12 + padded_length;
+    GstBuffer *buffer = gst_buffer_new_allocate (NULL, packet_size, NULL);
+    GstRTCPBuffer rtcp = GST_RTCP_BUFFER_INIT;
+    GstRTCPPacket packet;
+    guint fci_length = G_MAXUINT;
+
+    gst_buffer_memset (buffer, 0, 0, packet_size);
+    fail_unless (gst_rtcp_buffer_map (buffer, GST_MAP_READWRITE, &rtcp));
+    rtcp.map.data[0] = 0x81 | (cases[case_idx].padding ? 0x20 : 0);
+    rtcp.map.data[1] = GST_RTCP_TYPE_RTPFB;
+    GST_WRITE_UINT16_BE (rtcp.map.data + 2, cases[case_idx].wordlen + 2);
+    if (cases[case_idx].padding)
+      rtcp.map.data[packet_size - 1] = cases[case_idx].padding;
+    fail_unless (gst_rtcp_buffer_get_first_packet (&rtcp, &packet));
+
+    fail_unless (gst_rtcp_packet_fb_get_fci_length_bytes_full (&packet,
+            &fci_length));
+    fail_unless_equals_int (fci_length, expected_length);
+    fail_unless_equals_int (legacy_get_length (&packet),
+        expected_length <= G_MAXUINT16 ? expected_length : 0);
+
+    gst_rtcp_buffer_unmap (&rtcp);
+    gst_buffer_unref (buffer);
+  }
 }
 
 GST_END_TEST;
@@ -2588,6 +2696,9 @@ rtp_suite (void)
       test_rtcp_validate_reduced_with_invalid_padding_and_length);
   tcase_add_test (tc_chain, test_rtcp_validate_and_parse_chrome_twcc);
   tcase_add_test (tc_chain, test_rtcp_validate_and_parse_padded_chrome_twcc);
+  tcase_add_test (tc_chain, test_rtcp_fb_fci_length_bytes_limits);
+  tcase_add_loop_test (tc_chain, test_rtcp_fb_fci_length_bytes_padding, 0,
+      G_N_ELEMENTS (fb_fci_padding_cases));
 
   tcase_add_test (tc_chain, test_rtcp_buffer_profile_specific_extension);
   tcase_add_test (tc_chain, test_rtcp_buffer_app);
