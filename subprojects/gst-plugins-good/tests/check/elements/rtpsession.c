@@ -542,6 +542,69 @@ create_buffer (guint8 * data, gsize size)
       data, size, 0, size, NULL, NULL);
 }
 
+/* A non-empty @padding sets the P bit, its last byte is the padding count */
+static GstBuffer *
+generate_padded_fb_rtcp (GstRTCPType type, guint8 fmt, guint32 sender_ssrc,
+    guint32 media_ssrc, const guint8 * fci, guint fci_length,
+    const guint8 * padding, guint pad_length)
+{
+  guint8 data[64];
+  guint size = 12 + fci_length + pad_length;
+
+  fail_unless (size <= sizeof (data));
+  fail_unless_equals_int (size % 4, 0);
+
+  data[0] = (GST_RTCP_VERSION << 6) | (pad_length > 0 ? 0x20 : 0x00) | fmt;
+  data[1] = type;
+  GST_WRITE_UINT16_BE (&data[2], size / 4 - 1);
+  GST_WRITE_UINT32_BE (&data[4], sender_ssrc);
+  GST_WRITE_UINT32_BE (&data[8], media_ssrc);
+  if (fci_length > 0)
+    memcpy (&data[12], fci, fci_length);
+  if (pad_length > 0)
+    memcpy (&data[12 + fci_length], padding, pad_length);
+
+  return gst_rtcp_buffer_new_copy_data (data, size);
+}
+
+static GPtrArray *
+pull_upstream_custom_events (GstHarness * h, const gchar * name)
+{
+  GPtrArray *events =
+      g_ptr_array_new_with_free_func ((GDestroyNotify) gst_event_unref);
+  GstEvent *event;
+
+  while ((event = gst_harness_try_pull_upstream_event (h))) {
+    if (GST_EVENT_TYPE (event) == GST_EVENT_RECONFIGURE) {
+      gst_event_unref (event);
+      continue;
+    }
+    fail_unless (gst_event_has_name (event, name),
+        "Unexpected upstream event %s", GST_EVENT_TYPE_NAME (event));
+    g_ptr_array_add (events, event);
+  }
+
+  return events;
+}
+
+typedef struct
+{
+  guint count;
+  GstBuffer *fci;
+} FeedbackFCIData;
+
+static void
+record_feedback_fci_cb (G_GNUC_UNUSED GObject * session,
+    G_GNUC_UNUSED guint type, G_GNUC_UNUSED guint fbtype,
+    G_GNUC_UNUSED guint sender_ssrc, G_GNUC_UNUSED guint media_ssrc,
+    GstBuffer * fci, FeedbackFCIData * data)
+{
+  data->count++;
+  gst_clear_buffer (&data->fci);
+  if (fci)
+    data->fci = gst_buffer_ref (fci);
+}
+
 GST_START_TEST (test_multiple_ssrc_rr)
 {
   SessionHarness *h = session_harness_new ();
@@ -1483,6 +1546,57 @@ GST_START_TEST (test_receive_pli_no_sender_ssrc)
 
 GST_END_TEST;
 
+GST_START_TEST (test_receive_pli_padding)
+{
+  SessionHarness *h = session_harness_new ();
+  /* The low byte of the SSRC is also a valid RTCP padding count */
+  const guint32 ssrc = 0x37569304;
+  const guint8 pli_with_padding[] = {
+    0xa1,                       /* P=1, PLI */
+    0xce,                       /* Type 206 Application layer feedback */
+    0x00, 0x03,                 /* Length */
+    0x37, 0x56, 0x93, 0x04,     /* Sender SSRC */
+    0x37, 0x56, 0x93, 0x04,     /* Media SSRC */
+    0x00, 0x00, 0x00, 0x04,     /* Padding */
+  };
+  const guint8 pli_padding_over_ssrc[] = {
+    0xa1,                       /* P=1, PLI */
+    0xce,                       /* Type 206 Application layer feedback */
+    0x00, 0x02,                 /* Length */
+    0x37, 0x56, 0x93, 0x04,     /* Sender SSRC */
+    0x37, 0x56, 0x93, 0x04,     /* Media SSRC, ends with the padding count */
+  };
+  gboolean valid_padding = (__i__ == 0);
+  FeedbackFCIData fb = { 0, NULL };
+  GPtrArray *events;
+  GstBuffer *buf;
+
+  g_signal_connect (h->internal_session, "on-feedback-rtcp",
+      G_CALLBACK (record_feedback_fci_cb), &fb);
+  fail_unless_equals_int (GST_FLOW_OK,
+      session_harness_send_rtp (h, generate_test_buffer (0, ssrc)));
+
+  if (valid_padding)
+    buf = gst_rtcp_buffer_new_copy_data (pli_with_padding,
+        sizeof (pli_with_padding));
+  else
+    buf = gst_rtcp_buffer_new_copy_data (pli_padding_over_ssrc,
+        sizeof (pli_padding_over_ssrc));
+  fail_unless (gst_rtcp_buffer_validate_reduced (buf));
+  fail_unless_equals_int (GST_FLOW_OK, session_harness_recv_rtcp (h, buf));
+
+  events = pull_upstream_custom_events (h->send_rtp_h, "GstForceKeyUnit");
+  fail_unless_equals_int (events->len, valid_padding ? 1 : 0);
+  fail_unless_equals_int (fb.count, valid_padding ? 1 : 0);
+  /* Padding is not FCI */
+  fail_unless (fb.fci == NULL);
+  g_ptr_array_unref (events);
+
+  session_harness_free (h);
+}
+
+GST_END_TEST;
+
 static void
 add_rtcp_sdes_packet (GstBuffer * gstbuf, guint32 ssrc, const char *cname)
 {
@@ -2308,6 +2422,122 @@ GST_START_TEST (test_illegal_rtcp_type_packet)
 
   /* Push the packet */
   fail_unless_equals_int (GST_FLOW_OK, session_harness_recv_rtcp (h, buf));
+
+  session_harness_free (h);
+}
+
+GST_END_TEST;
+
+static const struct
+{
+  guint8 fci[8];
+  guint fci_length;
+  guint8 padding[4];
+  guint pad_length;
+  guint n_seqnums;
+  guint seqnum;
+} nack_padding_cases[] = {
+  /* A padding word must not become a NACK for #0 and #3 */
+  {{0x00, 0x64, 0x00, 0x00}, 4, {0x00, 0x00, 0x00, 0x04}, 4, 1, 100},
+  /* A partial NACK entry in front of the padding is ignored */
+  {{0x00, 0x64, 0x00, 0x00, 0x07}, 5, {0x00, 0x00, 0x03}, 3, 1, 100},
+  /* Padding reaching into the feedback header drops the packet */
+  {{0x00, 0x64, 0x00, 0x00}, 4, {0x00, 0x00, 0x00, 0x09}, 4, 0, 0},
+};
+
+GST_START_TEST (test_receive_nack_padding)
+{
+  SessionHarness *h = session_harness_new ();
+  const guint32 media_ssrc = 0xDEADBEEF;
+  GPtrArray *events;
+
+  /* NACKs are only handled for our own sources */
+  fail_unless_equals_int (GST_FLOW_OK,
+      session_harness_send_rtp (h, generate_test_buffer (0, media_ssrc)));
+
+  fail_unless_equals_int (GST_FLOW_OK, session_harness_recv_rtcp (h,
+          generate_padded_fb_rtcp (GST_RTCP_TYPE_RTPFB,
+              GST_RTCP_RTPFB_TYPE_NACK, 0x12345678, media_ssrc,
+              nack_padding_cases[__i__].fci,
+              nack_padding_cases[__i__].fci_length,
+              nack_padding_cases[__i__].padding,
+              nack_padding_cases[__i__].pad_length)));
+
+  events = pull_upstream_custom_events (h->send_rtp_h,
+      "GstRTPRetransmissionRequest");
+  fail_unless_equals_int (events->len, nack_padding_cases[__i__].n_seqnums);
+  if (events->len > 0) {
+    const GstStructure *s =
+        gst_event_get_structure (g_ptr_array_index (events, 0));
+    guint seqnum, ssrc;
+
+    fail_unless (gst_structure_get_uint (s, "seqnum", &seqnum));
+    fail_unless_equals_int (seqnum, nack_padding_cases[__i__].seqnum);
+    fail_unless (gst_structure_get_uint (s, "ssrc", &ssrc));
+    fail_unless_equals_uint64 (ssrc, media_ssrc);
+  }
+  g_ptr_array_unref (events);
+
+  session_harness_free (h);
+}
+
+GST_END_TEST;
+
+static const struct
+{
+  guint8 fci[10];
+  guint fci_length;
+  guint8 padding[8];
+  guint pad_length;
+  guint n_requests;
+} fir_padding_cases[] = {
+  /* FIR for our SSRC followed by a word of padding */
+  {{0x12, 0x34, 0x56, 0x02, 0x01, 0, 0, 0}, 8,
+      {0x00, 0x00, 0x00, 0x04}, 4, 1},
+  /* Padding that looks like a FIR entry for our SSRC */
+  {{0xca, 0xfe, 0xba, 0xbe, 0x01, 0, 0, 0}, 8,
+      {0x12, 0x34, 0x56, 0x02, 0x00, 0x00, 0x00, 0x08}, 8, 0},
+  /* Our SSRC split between a partial FCI entry and the padding */
+  {{0xca, 0xfe, 0xba, 0xbe, 0x01, 0, 0, 0, 0x12, 0x34}, 10,
+      {0x56, 0x02}, 2, 0},
+};
+
+GST_START_TEST (test_receive_fir_padding)
+{
+  SessionHarness *h = session_harness_new ();
+  /* The low byte doubles as the padding count of the last case */
+  const guint32 media_ssrc = 0x12345602;
+  const guint32 sender_ssrc = 0x87654321;
+  GPtrArray *events;
+  guint i;
+
+  fail_unless_equals_int (GST_FLOW_OK,
+      session_harness_send_rtp (h, generate_test_buffer (0, media_ssrc)));
+  /* FIR is only handled from a known sender */
+  fail_unless_equals_int (GST_FLOW_OK,
+      session_harness_recv_rtp (h, generate_test_buffer (0, sender_ssrc)));
+
+  fail_unless_equals_int (GST_FLOW_OK, session_harness_recv_rtcp (h,
+          generate_padded_fb_rtcp (GST_RTCP_TYPE_PSFB, GST_RTCP_PSFB_TYPE_FIR,
+              sender_ssrc, 0, fir_padding_cases[__i__].fci,
+              fir_padding_cases[__i__].fci_length,
+              fir_padding_cases[__i__].padding,
+              fir_padding_cases[__i__].pad_length)));
+
+  events = pull_upstream_custom_events (h->send_rtp_h, "GstForceKeyUnit");
+  fail_unless_equals_int (events->len, fir_padding_cases[__i__].n_requests);
+  for (i = 0; i < events->len; i++) {
+    const GstStructure *s =
+        gst_event_get_structure (g_ptr_array_index (events, i));
+    guint ssrc;
+    gboolean all_headers;
+
+    fail_unless (gst_structure_get_uint (s, "ssrc", &ssrc));
+    fail_unless_equals_uint64 (ssrc, media_ssrc);
+    fail_unless (gst_structure_get_boolean (s, "all-headers", &all_headers));
+    fail_unless (all_headers);
+  }
+  g_ptr_array_unref (events);
 
   session_harness_free (h);
 }
@@ -4651,6 +4881,188 @@ GST_START_TEST (test_twcc_feedback_compact_runs)
   gst_event_unref (event);
   fail_unless (gst_harness_try_pull_upstream_event (h->send_rtp_h) == NULL);
   session_harness_free (h);
+}
+
+GST_END_TEST;
+
+typedef enum
+{
+  /* TWCC parses the FCI without the padding */
+  FB_PADDING_PARSED,
+  /* the padding covers the whole FCI */
+  FB_PADDING_EMPTY_FCI,
+  /* the padding reaches into the feedback header */
+  FB_PADDING_DROPPED,
+  /* rejected by gst_rtcp_buffer_validate_reduced() */
+  FB_PADDING_INVALID_RTCP,
+} FBPaddingResult;
+
+typedef struct
+{
+  guint8 fci[16];
+  guint fci_length;
+  guint8 padding[4];
+  guint pad_length;
+  FBPaddingResult result;
+  gint n_packets;
+  /* cumulative, -1 for received without delta */
+  gint delta_units[4];
+  guint packets_sent;
+  guint packets_recv;
+} TWCCFeedbackPaddingCase;
+
+static const TWCCFeedbackPaddingCase twcc_feedback_padding_cases[] = {
+  /* Chrome-style padding after three small deltas */
+  {{0xff, 0x00, 0x00, 0x03, 0, 0, 0, 0, 0x20, 0x03, 0x00, 0x50, 0x50}, 13,
+      {0x00, 0x00, 0x03}, 3, FB_PADDING_PARSED, 3, {0, 80, 160}, 3, 3},
+  /* One byte of padding after two chunks */
+  {{0xff, 0x00, 0x00, 0x03, 0, 0, 0, 0, 0x20, 0x01, 0x20, 0x02, 0x00, 0x50,
+          0x50}, 15, {0x01}, 1, FB_PADDING_PARSED, 3, {0, 80, 160}, 3, 3},
+  /* A whole word of padding */
+  {{0xff, 0x00, 0x00, 0x02, 0, 0, 0, 0, 0x20, 0x02, 0x00, 0x50}, 12,
+      {0x00, 0x00, 0x00, 0x04}, 4, FB_PADDING_PARSED, 2, {0, 80}, 2, 2},
+  /* A large delta ending where the padding starts */
+  {{0xff, 0x00, 0x00, 0x02, 0, 0, 0, 0, 0xd8, 0x00, 0x00, 0x00, 0x50}, 13,
+      {0x00, 0x00, 0x03}, 3, FB_PADDING_PARSED, 2, {0, 80}, 2, 2},
+  /* A compact run without deltas in the shortest possible FCI */
+  {{0xff, 0x00, 0x00, 0x04, 0, 0, 0, 0, 0x60, 0x04}, 10, {0x00, 0x02}, 2,
+      FB_PADDING_PARSED, 4, {-1, -1, -1, -1}, 4, 4},
+  /* The fourth small delta is missing, not taken from the padding */
+  {{0xff, 0x00, 0x00, 0x04, 0, 0, 0, 0, 0x20, 0x04, 0x00, 0x50, 0x50}, 13,
+      {0x00, 0x00, 0x03}, 3, FB_PADDING_PARSED, 3, {0, 80, 160}, 3, 3},
+  /* The fourth small delta is missing, not taken from the padding count */
+  {{0xff, 0x00, 0x00, 0x04, 0, 0, 0, 0, 0x20, 0x02, 0x20, 0x02, 0x00, 0x50,
+          0x50}, 15, {0x01}, 1, FB_PADDING_PARSED, 3, {0, 80, 160}, 3, 3},
+  /* A large delta truncated by the end of the FCI */
+  {{0xff, 0x00, 0x00, 0x03, 0, 0, 0, 0, 0xd6, 0x00, 0x00, 0x50, 0x01}, 13,
+      {0x00, 0x00, 0x03}, 3, FB_PADDING_PARSED, 2, {0, 80}, 2, 2},
+  /* A large delta missing, not taken from the padding */
+  {{0xff, 0x00, 0x00, 0x03, 0, 0, 0, 0, 0xd6, 0x00, 0x00, 0x50}, 12,
+      {0x00, 0x00, 0x00, 0x04}, 4, FB_PADDING_PARSED, 2, {0, 80}, 2, 2},
+  /* Padding count one byte longer than the FCI */
+  {{0xff, 0x00, 0x00, 0x02, 0, 0, 0, 0, 0x20, 0x02, 0x00, 0x50}, 12,
+      {0x00, 0x00, 0x00, 0x11}, 4, FB_PADDING_DROPPED, 0, {0}, 0, 0},
+  /* Padding count as long as the whole packet payload */
+  {{0xff, 0x00, 0x00, 0x02, 0, 0, 0, 0, 0x20, 0x02, 0x00, 0x50}, 12,
+      {0x00, 0x00, 0x00, 0x18}, 4, FB_PADDING_DROPPED, 0, {0}, 0, 0},
+  /* Padding count as long as the FCI */
+  {{0xff, 0x00, 0x00, 0x02, 0, 0, 0, 0, 0x20, 0x02, 0x00, 0x50}, 12,
+      {0x00, 0x00, 0x00, 0x10}, 4, FB_PADDING_EMPTY_FCI, 0, {0}, 0, 0},
+  /* Zero padding count */
+  {{0xff, 0x00, 0x00, 0x02, 0, 0, 0, 0, 0x20, 0x02, 0x00, 0x50}, 12,
+      {0x00, 0x00, 0x00, 0x00}, 4, FB_PADDING_INVALID_RTCP, 0, {0}, 0, 0},
+  /* Padding count longer than the packet */
+  {{0xff, 0x00, 0x00, 0x02, 0, 0, 0, 0, 0x20, 0x02, 0x00, 0x50}, 12,
+      {0x00, 0x00, 0x00, 0x19}, 4, FB_PADDING_INVALID_RTCP, 0, {0}, 0, 0},
+};
+
+GST_START_TEST (test_twcc_feedback_padding)
+{
+  const TWCCFeedbackPaddingCase *tc = &twcc_feedback_padding_cases[__i__];
+  const guint8 rr[] = { 0x80, 0xc9, 0x00, 0x01, 0, 0, 0, 1 };
+  guint layout;
+
+  /* standalone, last in a compound packet, not last in a compound packet */
+  for (layout = 0; layout < 3; layout++) {
+    SessionHarness *h = session_harness_new ();
+    FBPaddingResult result = tc->result;
+    FeedbackFCIData fb = { 0, NULL };
+    GPtrArray *events;
+    GstStructure *stats;
+    GstBuffer *buf;
+    gboolean have_twcc_stats;
+    guint packets_sent, packets_recv;
+    guint i;
+
+    /* TWCC seqnums BASE_SEQNUM .. BASE_SEQNUM + 3, as in the feedback */
+    session_harness_add_twcc_caps_for_pt (h, TEST_BUF_PT);
+    for (i = 0; i < 4; i++) {
+      fail_unless_equals_int (GST_FLOW_OK,
+          session_harness_send_rtp (h, generate_twcc_send_buffer (i, FALSE)));
+      session_harness_advance_and_crank (h, TEST_BUF_DURATION);
+    }
+    g_signal_connect (h->internal_session, "on-feedback-rtcp",
+        G_CALLBACK (record_feedback_fci_cb), &fb);
+
+    buf = generate_padded_fb_rtcp (GST_RTCP_TYPE_RTPFB,
+        GST_RTCP_RTPFB_TYPE_TWCC, TEST_BUF_SSRC, 0, tc->fci, tc->fci_length,
+        tc->padding, tc->pad_length);
+    if (layout == 1) {
+      buf = gst_buffer_append (gst_rtcp_buffer_new_copy_data (rr,
+              sizeof (rr)), buf);
+    } else if (layout == 2) {
+      buf = gst_buffer_append (buf, gst_rtcp_buffer_new_copy_data (rr,
+              sizeof (rr)));
+      result = FB_PADDING_INVALID_RTCP;
+    }
+    fail_unless_equals_int (gst_rtcp_buffer_validate_reduced (buf),
+        result != FB_PADDING_INVALID_RTCP);
+    fail_unless_equals_int (session_harness_recv_rtcp (h, buf), GST_FLOW_OK);
+
+    events = pull_upstream_custom_events (h->send_rtp_h, "RTPTWCCPackets");
+    fail_unless_equals_int (events->len, result == FB_PADDING_PARSED);
+    if (events->len > 0) {
+      GValueArray *packets =
+          g_value_get_boxed (gst_structure_get_value (gst_event_get_structure
+              (g_ptr_array_index (events, 0)), "packets"));
+
+      fail_unless_equals_int (packets->n_values, tc->n_packets);
+      for (i = 0; i < packets->n_values; i++) {
+        const GstStructure *packet =
+            gst_value_get_structure (g_value_array_get_nth (packets, i));
+        guint seqnum;
+        GstClockTime timestamp;
+        gboolean lost;
+
+        fail_unless (gst_structure_get_uint (packet, "seqnum", &seqnum));
+        fail_unless_equals_int (seqnum, (guint16) (BASE_SEQNUM + i));
+        fail_unless (gst_structure_get_clock_time (packet, "remote-ts",
+                &timestamp));
+        fail_unless (gst_structure_get_boolean (packet, "lost", &lost));
+        if (tc->delta_units[i] < 0) {
+          fail_unless_equals_clocktime (timestamp, GST_CLOCK_TIME_NONE);
+          fail_unless (lost);
+        } else {
+          fail_unless_equals_clocktime (timestamp,
+              TWCC_REF_TIME_INITIAL_OFFSET +
+              tc->delta_units[i] * TWCC_DELTA_UNIT);
+          fail_if (lost);
+        }
+      }
+    }
+    g_ptr_array_unref (events);
+
+    if (result == FB_PADDING_PARSED) {
+      fail_unless_equals_int (fb.count, 1);
+      fail_unless (fb.fci != NULL);
+      fail_unless_equals_int (gst_buffer_get_size (fb.fci), tc->fci_length);
+      fail_unless_equals_int (gst_buffer_memcmp (fb.fci, 0, tc->fci,
+              tc->fci_length), 0);
+    } else if (result == FB_PADDING_EMPTY_FCI) {
+      fail_unless_equals_int (fb.count, 1);
+      fail_unless (fb.fci == NULL);
+    } else {
+      fail_unless_equals_int (fb.count, 0);
+    }
+    gst_clear_buffer (&fb.fci);
+
+    g_mutex_lock (&h->lock);
+    have_twcc_stats = h->last_twcc_stats != NULL;
+    g_mutex_unlock (&h->lock);
+    fail_unless_equals_int (have_twcc_stats, result == FB_PADDING_PARSED);
+
+    stats = session_harness_get_twcc_stats_full (h, 4 * TEST_BUF_DURATION, 0);
+    fail_unless (gst_structure_get (stats,
+            "packets-sent", G_TYPE_UINT, &packets_sent,
+            "packets-recv", G_TYPE_UINT, &packets_recv, NULL));
+    fail_unless_equals_int (packets_sent,
+        result == FB_PADDING_PARSED ? tc->packets_sent : 0);
+    fail_unless_equals_int (packets_recv,
+        result == FB_PADDING_PARSED ? tc->packets_recv : 0);
+    gst_structure_free (stats);
+
+    session_harness_free (h);
+  }
 }
 
 GST_END_TEST;
@@ -7799,9 +8211,14 @@ rtpsession_suite (void)
   tcase_add_test (tc_chain, test_request_nack_packing);
   tcase_add_test (tc_chain, test_illegal_rtcp_fb_packet);
   tcase_add_test (tc_chain, test_illegal_rtcp_type_packet);
+  tcase_add_loop_test (tc_chain, test_receive_nack_padding, 0,
+      G_N_ELEMENTS (nack_padding_cases));
+  tcase_add_loop_test (tc_chain, test_receive_fir_padding, 0,
+      G_N_ELEMENTS (fir_padding_cases));
   tcase_add_test (tc_chain, test_feedback_rtcp_race);
   tcase_add_test (tc_chain, test_receive_regular_pli);
   tcase_add_test (tc_chain, test_receive_pli_no_sender_ssrc);
+  tcase_add_loop_test (tc_chain, test_receive_pli_padding, 0, 2);
   tcase_add_test (tc_chain, test_dont_send_rtcp_while_idle);
   tcase_add_test (tc_chain, test_send_rtcp_when_signalled);
   tcase_add_test (tc_chain, test_change_sent_sdes);
@@ -7841,6 +8258,8 @@ rtpsession_suite (void)
   tcase_add_loop_test (tc_chain, test_twcc_feedback_bounds, 0,
       G_N_ELEMENTS (twcc_feedback_bounds_cases));
   tcase_add_test (tc_chain, test_twcc_feedback_compact_runs);
+  tcase_add_loop_test (tc_chain, test_twcc_feedback_padding, 0,
+      G_N_ELEMENTS (twcc_feedback_padding_cases));
   tcase_add_test (tc_chain, test_twcc_delta_ts_rounding);
   tcase_add_test (tc_chain, test_twcc_double_gap);
   tcase_add_test (tc_chain, test_twcc_recv_packets_reordered);
