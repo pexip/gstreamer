@@ -433,6 +433,9 @@ scan_codecs (GstPlugin * plugin)
                 (vid_caps, probe_resolutions[l].width,
                 probe_resolutions[l].height, &error);
             if (framerates.upper == G_MAXDOUBLE) {
+              GST_DEBUG ("No achievable framerates for %dx%d: %s",
+                  probe_resolutions[l].width, probe_resolutions[l].height,
+                  error ? error->message : "no performance data");
               g_clear_error (&error);
             } else if (framerates.upper >= 1.0 && framerates.upper <= 32000.0) {
               GstAmcVideoCapability cap;
