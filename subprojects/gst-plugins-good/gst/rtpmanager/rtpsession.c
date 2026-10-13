@@ -3376,13 +3376,18 @@ rtp_session_process_feedback (RTPSession * sess, GstRTCPPacket * packet,
       fci_buffer = gst_buffer_copy_region (packet->rtcp->buffer,
           GST_BUFFER_COPY_MEMORY, fci_data - packet->rtcp->map.data,
           fci_length);
-      GST_BUFFER_PTS (fci_buffer) = pinfo->running_time;
+      if (fci_buffer)
+        GST_BUFFER_PTS (fci_buffer) = pinfo->running_time;
+      else
+        GST_WARNING ("failed to copy the FCI of feedback %d:%d", type, fbtype);
     }
 
-    RTP_SESSION_UNLOCK (sess);
-    g_signal_emit (sess, rtp_session_signals[SIGNAL_ON_FEEDBACK_RTCP], 0,
-        type, fbtype, sender_ssrc, media_ssrc, fci_buffer);
-    RTP_SESSION_LOCK (sess);
+    if (fci_length == 0 || fci_buffer) {
+      RTP_SESSION_UNLOCK (sess);
+      g_signal_emit (sess, rtp_session_signals[SIGNAL_ON_FEEDBACK_RTCP], 0,
+          type, fbtype, sender_ssrc, media_ssrc, fci_buffer);
+      RTP_SESSION_LOCK (sess);
+    }
 
     if (fci_buffer)
       gst_buffer_unref (fci_buffer);

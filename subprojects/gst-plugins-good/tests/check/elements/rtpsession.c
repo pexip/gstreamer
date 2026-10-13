@@ -2544,6 +2544,131 @@ GST_START_TEST (test_receive_fir_padding)
 
 GST_END_TEST;
 
+/* Memory that can be mapped, but neither shared nor copied */
+typedef struct
+{
+  GstMemory mem;
+  guint8 *data;
+} NoCopyMemory;
+
+typedef struct
+{
+  GstAllocator parent;
+} NoCopyAllocator;
+
+typedef struct
+{
+  GstAllocatorClass parent_class;
+} NoCopyAllocatorClass;
+
+GType no_copy_allocator_get_type (void);
+G_DEFINE_TYPE (NoCopyAllocator, no_copy_allocator, GST_TYPE_ALLOCATOR);
+
+static gpointer
+no_copy_mem_map (GstMemory * mem, G_GNUC_UNUSED gsize maxsize,
+    G_GNUC_UNUSED GstMapFlags flags)
+{
+  return ((NoCopyMemory *) mem)->data;
+}
+
+static void
+no_copy_mem_unmap (G_GNUC_UNUSED GstMemory * mem)
+{
+}
+
+static GstMemory *
+no_copy_mem_share (G_GNUC_UNUSED GstMemory * mem,
+    G_GNUC_UNUSED gssize offset, G_GNUC_UNUSED gssize size)
+{
+  return NULL;
+}
+
+static void
+no_copy_allocator_free (G_GNUC_UNUSED GstAllocator * allocator,
+    GstMemory * mem)
+{
+  g_free (((NoCopyMemory *) mem)->data);
+  g_free (mem);
+}
+
+static void
+no_copy_allocator_class_init (NoCopyAllocatorClass * klass)
+{
+  klass->parent_class.free = no_copy_allocator_free;
+}
+
+static void
+no_copy_allocator_init (NoCopyAllocator * self)
+{
+  GstAllocator *allocator = GST_ALLOCATOR_CAST (self);
+
+  allocator->mem_type = "NoCopyMemory";
+  allocator->mem_map = no_copy_mem_map;
+  allocator->mem_unmap = no_copy_mem_unmap;
+  allocator->mem_share = no_copy_mem_share;
+  allocator->mem_copy = no_copy_mem_share;
+}
+
+/* Moves the bytes of @buf into one memory from @allocator */
+static GstBuffer *
+buffer_in_no_copy_memory (GstAllocator * allocator, GstBuffer * buf)
+{
+  NoCopyMemory *mem = g_new0 (NoCopyMemory, 1);
+  gsize size = gst_buffer_get_size (buf);
+  GstBuffer *out = gst_buffer_new ();
+
+  mem->data = g_malloc (size);
+  gst_buffer_extract (buf, 0, mem->data, size);
+  gst_buffer_unref (buf);
+  gst_memory_init (GST_MEMORY_CAST (mem), 0, allocator, NULL, size, 0, 0,
+      size);
+  gst_buffer_append_memory (out, GST_MEMORY_CAST (mem));
+
+  return out;
+}
+
+GST_START_TEST (test_receive_feedback_copy_failure)
+{
+  SessionHarness *h = session_harness_new ();
+  GstAllocator *allocator = g_object_new (no_copy_allocator_get_type (), NULL);
+  const guint8 rr[] = { 0x80, 0xc9, 0x00, 0x01, 0x12, 0x34, 0x56, 0x78 };
+  const guint8 fci[] = { 0x00, 0x64, 0x00, 0x00 };
+  const guint32 media_ssrc = 0xDEADBEEF;
+  FeedbackFCIData fb = { 0, NULL };
+  GPtrArray *events;
+  GstBuffer *buf;
+
+  gst_object_ref_sink (allocator);
+  /* #0 only retains the NACK, #1 also copies its FCI for the signal */
+  if (__i__ == 1)
+    g_signal_connect (h->internal_session, "on-feedback-rtcp",
+        G_CALLBACK (record_feedback_fci_cb), &fb);
+
+  fail_unless_equals_int (GST_FLOW_OK,
+      session_harness_send_rtp (h, generate_test_buffer (0, media_ssrc)));
+
+  /* After an RR, so that neither copy covers the whole buffer */
+  buf = gst_buffer_append (gst_rtcp_buffer_new_copy_data (rr, sizeof (rr)),
+      generate_padded_fb_rtcp (GST_RTCP_TYPE_RTPFB, GST_RTCP_RTPFB_TYPE_NACK,
+          0x12345678, media_ssrc, fci, sizeof (fci), NULL, 0));
+  buf = buffer_in_no_copy_memory (allocator, buf);
+  fail_unless (gst_buffer_copy_region (buf, GST_BUFFER_COPY_MEMORY, 8,
+          16) == NULL);
+  fail_unless_equals_int (GST_FLOW_OK, session_harness_recv_rtcp (h, buf));
+
+  /* The NACK is still handled, but not signalled without its FCI */
+  events = pull_upstream_custom_events (h->send_rtp_h,
+      "GstRTPRetransmissionRequest");
+  fail_unless_equals_int (events->len, 1);
+  g_ptr_array_unref (events);
+  fail_unless_equals_int (fb.count, 0);
+
+  session_harness_free (h);
+  gst_object_unref (allocator);
+}
+
+GST_END_TEST;
+
 typedef struct
 {
   GCond *cond;
@@ -8215,6 +8340,7 @@ rtpsession_suite (void)
       G_N_ELEMENTS (nack_padding_cases));
   tcase_add_loop_test (tc_chain, test_receive_fir_padding, 0,
       G_N_ELEMENTS (fir_padding_cases));
+  tcase_add_loop_test (tc_chain, test_receive_feedback_copy_failure, 0, 2);
   tcase_add_test (tc_chain, test_feedback_rtcp_race);
   tcase_add_test (tc_chain, test_receive_regular_pli);
   tcase_add_test (tc_chain, test_receive_pli_no_sender_ssrc);
