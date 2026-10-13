@@ -130,6 +130,54 @@ gst_amc_codec_info_is_hardware (const GstAmcCodecInfo * codec_info)
   return FALSE;
 }
 
+/* The pad templates turn every probed size into a hard [1,W]x[1,H] limit, but
+ * only a few sizes are probed and some of them may give no result. Without
+ * this, anything bigger than the largest probed size with a result would be
+ * rejected, even when the codec supports it. Add a bucket for the maximum size
+ * the codec declares, without a framerate limit. */
+static void
+gst_amc_add_max_size_video_capability (GstAmcVideoCapabilitiesHandle * vid_caps,
+    GArray * supported_video_capabilities)
+{
+  GstAmcVideoCapability cap;
+  GstAmcValueRange width, height;
+  GError *error = NULL;
+  gint max_width = 0, max_height = 0;
+  guint i;
+
+  width = gst_amc_video_capabilities_get_supported_widths (vid_caps, &error);
+  if (error) {
+    GST_WARNING ("Failed to get video capabilities width: %s", error->message);
+    g_clear_error (&error);
+    width.upper = 4096;
+  }
+
+  height = gst_amc_video_capabilities_get_supported_heights (vid_caps, &error);
+  if (error) {
+    GST_WARNING ("Failed to get video capabilities height: %s",
+        error->message);
+    g_clear_error (&error);
+    height.upper = 4096;
+  }
+
+  for (i = 0; i < supported_video_capabilities->len; i++) {
+    const GstAmcVideoCapability *c =
+        &g_array_index (supported_video_capabilities, GstAmcVideoCapability, i);
+
+    max_width = MAX (max_width, c->width);
+    max_height = MAX (max_height, c->height);
+  }
+
+  if (width.upper <= max_width && height.upper <= max_height)
+    return;
+
+  cap.width = width.upper;
+  cap.height = height.upper;
+  cap.fps_n = G_MAXINT;
+  cap.fps_d = 1;
+  g_array_append_val (supported_video_capabilities, cap);
+}
+
 static gboolean
 scan_codecs (GstPlugin * plugin)
 {
@@ -487,6 +535,10 @@ scan_codecs (GstPlugin * plugin)
               }
             }
           }
+
+          if (supported_video_capabilities->len > 0)
+            gst_amc_add_max_size_video_capability (vid_caps,
+                supported_video_capabilities);
 
           gst_amc_capabilities_video_capabilities_handle_free (vid_caps);
         }
