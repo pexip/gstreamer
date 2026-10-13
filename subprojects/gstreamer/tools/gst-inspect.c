@@ -181,22 +181,71 @@ n_print (const char *format, ...)
   g_free (str);
 }
 
+static void print_caps (const GstCaps * caps, const gchar * pfx,
+    const gchar * fieldname);
+
+static gboolean
+holds_long_type (const GValue * v)
+{
+  return GST_VALUE_HOLDS_CAPS (v) || GST_VALUE_HOLDS_STRUCTURE (v);
+}
+
+
 static gboolean
 print_field (const GstIdStr * fieldname, const GValue * value, gpointer pfx)
 {
-  gchar *str = gst_value_serialize (value);
-  const gchar *type_name = g_type_name (G_VALUE_TYPE (value));
+  const gchar *type_name;
 
-  n_print ("%s  %s%15s%s: %s%s%s %s(%s)%s\n",
-      (gchar *) pfx, FIELD_NAME_COLOR, gst_id_str_as_str (fieldname),
-      RESET_COLOR, FIELD_VALUE_COLOR, str, RESET_COLOR,
-      DATATYPE_COLOR, type_name, RESET_COLOR);
-  g_free (str);
+  // gchararray -> string for caps fields
+  if (G_VALUE_HOLDS (value, G_TYPE_STRING)) {
+    type_name = "string";
+  } else {
+    type_name = g_type_name (G_VALUE_TYPE (value));
+  }
+
+  if (G_VALUE_HOLDS (value, GST_TYPE_UNIQUE_LIST)
+      && gst_value_unique_list_get_size (value) > 0) {
+    if (holds_long_type (gst_value_unique_list_get_value (value, 0))) {
+      guint i;
+      gchar *pfx2 = g_strdup_printf ("%s  ", (gchar *) pfx);
+
+      n_print ("%s%s%s:%s (GstUniqueList)\n", (gchar *) pfx, FIELD_VALUE_COLOR,
+          gst_id_str_as_str (fieldname), RESET_COLOR);
+      for (i = 0; i < gst_value_unique_list_get_size (value); i++) {
+        const GValue *ivalue = gst_value_unique_list_get_value (value, i);
+        print_caps (gst_value_get_caps (ivalue), pfx2, "");
+      }
+      g_free (pfx2);
+    }
+    return TRUE;
+  }
+
+  if (G_VALUE_HOLDS (value, GST_TYPE_CAPS)) {
+    gchar *pfx2 = g_strdup_printf ("%s  ", (gchar *) pfx);
+    print_caps (gst_value_get_caps (value), pfx2,
+        gst_id_str_as_str (fieldname));
+    g_free (pfx2);
+  } else if (G_VALUE_HOLDS (value, GST_TYPE_STRUCTURE)) {
+    const GstStructure *structure = gst_value_get_structure (value);
+    gchar *pfx2 = g_strdup_printf ("%s    ", (gchar *) pfx);
+    n_print ("%s  %s%s: %s%s%s (GstStructure)\n", (gchar *) pfx,
+        FIELD_NAME_COLOR, gst_id_str_as_str (fieldname), STRUCT_NAME_COLOR,
+        gst_structure_get_name (structure), RESET_COLOR);
+    gst_structure_foreach_id_str (structure, print_field, pfx2);
+    g_free (pfx2);
+  } else {
+    gchar *str = gst_value_serialize (value);
+    n_print ("%s  %s%15s%s: %s%s%s %s(%s)%s\n",
+        (gchar *) pfx, FIELD_NAME_COLOR, gst_id_str_as_str (fieldname),
+        RESET_COLOR, FIELD_VALUE_COLOR, str, RESET_COLOR,
+        DATATYPE_COLOR, type_name, RESET_COLOR);
+    g_free (str);
+  }
   return TRUE;
 }
 
 static void
-print_caps (const GstCaps * caps, const gchar * pfx)
+print_caps (const GstCaps * caps, const gchar * pfx, const gchar * fieldname)
 {
   guint i;
 
@@ -220,13 +269,15 @@ print_caps (const GstCaps * caps, const gchar * pfx)
                 GST_CAPS_FEATURES_MEMORY_SYSTEM_MEMORY))) {
       gchar *features_string = gst_caps_features_to_string (features);
 
-      n_print ("%s%s%s%s(%s%s%s)\n", pfx, STRUCT_NAME_COLOR,
+      n_print ("%s%s%s%s%s%s(%s%s%s)\n", pfx, FIELD_NAME_COLOR, fieldname,
+          STRUCT_NAME_COLOR,
           gst_structure_get_name (structure), RESET_COLOR,
           CAPS_FEATURE_COLOR, features_string, RESET_COLOR);
       g_free (features_string);
     } else {
-      n_print ("%s%s%s%s\n", pfx, STRUCT_NAME_COLOR,
-          gst_structure_get_name (structure), RESET_COLOR);
+      n_print ("%s%s%s%s%s%s%s\n", pfx, FIELD_NAME_COLOR, fieldname,
+          *fieldname ? ": " : "",
+          STRUCT_NAME_COLOR, gst_structure_get_name (structure), RESET_COLOR);
     }
     gst_structure_foreach_id_str (structure, print_field, (gpointer) pfx);
   }
@@ -437,7 +488,8 @@ flags_to_string (GFlagsValue * vals, guint flags)
   G_PARAM_READABLE | G_PARAM_WRITABLE | G_PARAM_DEPRECATED | \
   GST_PARAM_CONTROLLABLE | GST_PARAM_MUTABLE_PLAYING | \
   GST_PARAM_MUTABLE_PAUSED | GST_PARAM_MUTABLE_READY | \
-  GST_PARAM_CONDITIONALLY_AVAILABLE | GST_PARAM_DOC_SHOW_DEFAULT)
+  GST_PARAM_CONDITIONALLY_AVAILABLE | GST_PARAM_DOC_SHOW_DEFAULT | \
+  GST_PARAM_UNTRUSTED_SENSITIVE)
 
 static int
 sort_gparamspecs (GParamSpec ** a, GParamSpec ** b)
@@ -520,6 +572,12 @@ print_object_properties_info (GObject * obj, GObjectClass * obj_class,
     }
     if (param->flags & GST_PARAM_CONDITIONALLY_AVAILABLE) {
       g_print (", %s%s%s", PROP_ATTR_VALUE_COLOR, _("conditionally available"),
+          RESET_COLOR);
+      first_flag = FALSE;
+    }
+    if (param->flags & GST_PARAM_UNTRUSTED_SENSITIVE) {
+      g_print (", %s%s%s", PROP_ATTR_VALUE_COLOR,
+          _("sensitive when set from an untrusted pipeline description"),
           RESET_COLOR);
       first_flag = FALSE;
     }
@@ -681,7 +739,7 @@ print_object_properties_info (GObject * obj, GObjectClass * obj_class,
           if (!caps)
             n_print ("%sCaps%s (NULL)", DATATYPE_COLOR, RESET_COLOR);
           else {
-            print_caps (caps, "                           ");
+            print_caps (caps, "                           ", "");
           }
         } else if (G_IS_PARAM_SPEC_ENUM (param)) {
           GEnumValue *values;
@@ -902,7 +960,7 @@ print_pad_templates_info (GstElement * element, GstElementFactory * factory)
       n_print ("%sCapabilities%s:\n", PROP_NAME_COLOR, RESET_COLOR);
 
       push_indent ();
-      print_caps (caps, "");    // FIXME
+      print_caps (caps, "", "");        // FIXME
       pop_indent ();
 
       gst_caps_unref (caps);
@@ -2477,7 +2535,8 @@ main (int argc, char *argv[])
   argv = g_win32_get_command_line ();
 #endif
 
-#if defined(__APPLE__) && TARGET_OS_MAC && !TARGET_OS_IPHONE
+#if defined(__APPLE__) && TARGET_OS_MAC && !TARGET_OS_IPHONE && \
+    !defined(GST_CHECK_MAIN)
   ret = gst_macos_main ((GstMainFunc) real_main, argc, argv, NULL);
 #else
   ret = real_main (argc, argv);

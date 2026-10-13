@@ -22,6 +22,7 @@
 
 #include "gstvideometa.h"
 
+#include <math.h>
 #include <string.h>
 #include <gst/base/base.h>
 
@@ -276,7 +277,11 @@ video_meta_deserialize (const GstMetaInfo * info, GstBuffer * buffer,
   success &= gst_byte_reader_get_uint32_le (&br, &height);
   success &= gst_byte_reader_get_uint32_le (&br, &n_planes);
 
-  if (!success || n_planes > GST_VIDEO_MAX_PLANES)
+  if (!success || n_planes < 1 || n_planes > GST_VIDEO_MAX_PLANES)
+    return NULL;
+
+  /* make sure the payload holds all plane offsets, strides and alignments */
+  if (size < 36 + n_planes * 16)
     return NULL;
 
   for (int n = 0; n < n_planes; n++)
@@ -303,6 +308,50 @@ video_meta_deserialize (const GstMetaInfo * info, GstBuffer * buffer,
 #else
   gsize *offset = (gsize *) offset64;
 #endif
+
+  GstVideoInfo vinfo;
+  if (format < 0 || format >= GST_VIDEO_FORMAT_LAST || width == 0
+      || height == 0
+      || !gst_video_info_set_format (&vinfo, format, width, height)
+      || vinfo.finfo->n_planes != n_planes)
+    return NULL;
+
+  {
+    /* make sure all planes are inside the buffer */
+    gsize buffer_size = gst_buffer_get_size (buffer);
+    guint frame_height;
+
+    /* a buffer with the ONEFIELD flag only stores a single field and not the
+     * full frame */
+    if (flags & GST_VIDEO_FRAME_FLAG_ONEFIELD)
+      frame_height = GST_ROUND_UP_2 (height) / 2;
+    else
+      frame_height = height;
+
+    for (int n = 0; n < n_planes; n++) {
+      guint64 plane_size;
+
+      if (stride[n] < 0)
+        return NULL;
+
+      if (GST_VIDEO_FORMAT_INFO_IS_TILED (vinfo.finfo)) {
+        plane_size = (guint64) GST_VIDEO_TILE_X_TILES (stride[n]) *
+            GST_VIDEO_TILE_Y_TILES (stride[n]) *
+            GST_VIDEO_FORMAT_INFO_TILE_SIZE (vinfo.finfo, n);
+      } else if (GST_VIDEO_FORMAT_INFO_HAS_PALETTE (vinfo.finfo) && n == 1) {
+        plane_size = 256 * 4;
+      } else {
+        gint comp[GST_VIDEO_MAX_COMPONENTS];
+        gst_video_format_info_component (vinfo.finfo, n, comp);
+        plane_size = (guint64) (gsize) stride[n] *
+            GST_VIDEO_FORMAT_INFO_SCALE_HEIGHT (vinfo.finfo, comp[0],
+            frame_height);
+      }
+
+      if (offset[n] > buffer_size || plane_size > buffer_size - offset[n])
+        return NULL;
+    }
+  }
 
   vmeta =
       gst_buffer_add_video_meta_full (buffer, flags, format, width, height,
@@ -865,6 +914,255 @@ gst_video_meta_transform_scale_get_quark (void)
   return _value;
 }
 
+/**
+ * gst_video_meta_transform_matrix_get_quark:
+ *
+ * Get the #GQuark for the "gst-video-matrix" metadata transform operation.
+ *
+ * Returns: a #GQuark
+ *
+ * Since: 1.28
+ */
+GQuark
+gst_video_meta_transform_matrix_get_quark (void)
+{
+  static GQuark _value = 0;
+
+  if (_value == 0) {
+    _value = g_quark_from_static_string ("gst-video-matrix");
+  }
+  return _value;
+}
+
+/**
+ * gst_video_meta_transform_matrix_init:
+ * @trans: a #GstVideoMetaTransformMatrix with in_rectangle and out_rectangle
+ *  filled
+ * @in_info: (in): The #GstVideoInfo of the input image
+ * @in_rectangle: the input #GstVideoRectangle
+ * @out_info: (in): the output #GstVideoInfo
+ * @out_rectangle: the output #GstVideoRectangle
+ *
+ * Based on the rectangles, initializes the matrix to do a translation and
+ * scaling from @in_rectangle to @out_rectangle
+ *
+ * Since: 1.28
+ */
+void
+gst_video_meta_transform_matrix_init (GstVideoMetaTransformMatrix * trans,
+    const GstVideoInfo * in_info, const GstVideoRectangle * in_rectangle,
+    const GstVideoInfo * out_info, const GstVideoRectangle * out_rectangle)
+{
+  g_return_if_fail (in_info != NULL);
+  g_return_if_fail (out_info != NULL);
+  g_return_if_fail (in_rectangle->w > 0);
+  g_return_if_fail (in_rectangle->h > 0);
+  g_return_if_fail (out_rectangle->w > 0);
+  g_return_if_fail (out_rectangle->h > 0);
+
+  trans->in_info = in_info;
+  trans->out_info = out_info;
+  trans->in_rectangle = *in_rectangle;
+  trans->out_rectangle = *out_rectangle;
+
+  memset (trans->matrix, 0, sizeof (gfloat) * 9);
+
+  trans->matrix[0][0] = (gfloat) trans->out_rectangle.w /
+      (gfloat) trans->in_rectangle.w;
+  trans->matrix[1][1] = (gfloat) trans->out_rectangle.h /
+      (gfloat) trans->in_rectangle.h;
+  trans->matrix[2][2] = 1;
+}
+
+static gboolean
+_gst_video_meta_transform_matrix_point (const GstVideoMetaTransformMatrix *
+    transform, gint * x, gint * y, gboolean clip)
+{
+  gboolean ret = TRUE;
+  gdouble x_in = *x - transform->in_rectangle.x;
+  gdouble y_in = *y - transform->in_rectangle.y;
+  gdouble x_temp, y_temp;
+  gdouble w_prime = transform->matrix[2][0] * x_in +
+      transform->matrix[2][1] * y_in + transform->matrix[2][2];
+
+  g_return_val_if_fail (fabs (w_prime) >= 1e-9, FALSE);
+
+  x_temp = (transform->matrix[0][0] * x_in +
+      transform->matrix[0][1] * y_in + transform->matrix[0][2]) / w_prime;
+  y_temp = (transform->matrix[1][0] * x_in +
+      transform->matrix[1][1] * y_in + transform->matrix[1][2]) / w_prime;
+
+  *x = x_temp + 0.5f + transform->out_rectangle.x;
+  *y = y_temp + 0.5f + transform->out_rectangle.y;
+
+  if (clip) {
+    if (*x < transform->out_rectangle.x) {
+      *x = transform->out_rectangle.x;
+      ret = FALSE;
+    }
+
+    if (*x >= transform->out_rectangle.x + transform->out_rectangle.w) {
+      *x = transform->out_rectangle.x + transform->out_rectangle.w - 1;
+      ret = FALSE;
+    }
+
+    if (*y < transform->out_rectangle.y) {
+      *y = transform->out_rectangle.y;
+      ret = FALSE;
+    }
+
+    if (*y >= transform->out_rectangle.y + transform->out_rectangle.h) {
+      *y = transform->out_rectangle.y + transform->out_rectangle.h - 1;
+      ret = FALSE;
+    }
+  }
+
+  return ret;
+}
+
+/**
+ * gst_video_meta_transform_matrix_point:
+ * @transform: a #GstVideoMetaTransformMatrix
+ * @x: (inout): a non-NULL pointer to the X value of the coordinate
+ * @y: (inout): a non-NULL pointer to the Y value of the coordinate
+ *
+ * Transforms the (@x, @y) point from the input coordinates to the
+ * output ones.  The point's coordinates are transformed by first
+ * applying the @transform.matrix to it using the top left (x, y) of
+ * @transform.in_rectangle as the origin, then translate it to use
+ * the top-left of @transform.out_rectangle as new origin.
+ *
+ * Returns: %FALSE if the point is outside of @transform.out_rectangle
+ * after the transformation has been applied
+ *
+ * Since: 1.28
+ */
+gboolean
+gst_video_meta_transform_matrix_point (const GstVideoMetaTransformMatrix *
+    transform, gint * x, gint * y)
+{
+  return _gst_video_meta_transform_matrix_point (transform, x, y, FALSE);
+}
+
+/**
+ * gst_video_meta_transform_matrix_point_clipped:
+ * @transform: a #GstVideoMetaTransformMatrix
+ * @x: (inout): a non-NULL pointer to the X value of the coordinate
+ * @y: (inout): a non-NULL pointer to the Y value of the coordinate
+ *
+ * Transforms the (@x, @y) point from the input coordinates to the
+ * output ones.  The point's coordinates are transformed by first
+ * applying the @transform.matrix to it using the top left (x, y) of
+ * @transform.in_rectangle as the origin, then translate it to use
+ * the top-left of @transform.out_rectangle as new origin.
+ *
+ * Returns: %FALSE if the point is outside of @transform.out_rectangle
+ * after the transformation has been applied
+ *
+ * Since: 1.28
+ */
+gboolean
+gst_video_meta_transform_matrix_point_clipped (const GstVideoMetaTransformMatrix
+    * transform, gint * x, gint * y)
+{
+  return _gst_video_meta_transform_matrix_point (transform, x, y, TRUE);
+}
+
+static gboolean
+_gst_video_meta_transform_matrix_rectangle (const
+    GstVideoMetaTransformMatrix * transform, GstVideoRectangle * rect,
+    gboolean clip)
+{
+  gboolean ret = TRUE;
+  gint x1, y1;
+  gint x2, y2;
+
+  /* If the transformation is not affine, can't do it on a rectangle */
+  if (!G_APPROX_VALUE (transform->matrix[2][0], 0.0f, 1e-6f) ||
+      !G_APPROX_VALUE (transform->matrix[2][1], 0.0f, 1e-6f) ||
+      !G_APPROX_VALUE (transform->matrix[2][2], 1.0f, 1e-6f))
+    return FALSE;
+
+  /* If there is shearing, it won't preserve the rectangle either */
+  if ((!G_APPROX_VALUE (transform->matrix[0][0], 0.0f, 1e-6f) ||
+          !G_APPROX_VALUE (transform->matrix[1][1], 0.0f, 1e-6f)) &&
+      (!G_APPROX_VALUE (transform->matrix[0][1], 0.0f, 1e-6f) ||
+          !G_APPROX_VALUE (transform->matrix[1][0], 0.0f, 1e-6f)))
+    return FALSE;
+
+  x1 = rect->x;
+  y1 = rect->y;
+  x2 = rect->x + rect->w;
+  y2 = rect->y + rect->h;
+
+  ret = _gst_video_meta_transform_matrix_point (transform, &x1, &y1, clip) &&
+      _gst_video_meta_transform_matrix_point (transform, &x2, &y2, clip);
+
+  rect->x = MIN (x1, x2);
+  rect->y = MIN (y1, y2);
+
+  rect->w = MAX (x1, x2) - rect->x;
+  rect->h = MAX (y1, y2) - rect->y;
+
+  return ret;
+}
+
+/**
+ * gst_video_meta_transform_matrix_rectangle:
+ * @transform: A #GstVideoMetaTransformMatrix
+ * @rect: (inout): a rectangle in the coordinate of the original image
+ *
+ * Transforms @rect from the input coordinates to the
+ * output ones.  The point's coordinates are transformed by first
+ * applying the @transform.matrix to it using the top left (x, y) of
+ * @transform.in_rectangle as the origin, then translate it to use
+ * the top-left of @transform.out_rectangle as new origin.
+ *
+ * @rect is always axis aligned at input and this function only returns
+ * axis aligned rectangles as output, otherwise it returns FALSE.
+ *
+ * Output rectangle could be in partially or totally outside of
+ * @transform.out_rectangle.
+ *
+ * Returns: %FALSE is the output rectangle is not axis aligned
+ *
+ * Since: 1.28
+ */
+gboolean
+gst_video_meta_transform_matrix_rectangle (const
+    GstVideoMetaTransformMatrix * transform, GstVideoRectangle * rect)
+{
+  return _gst_video_meta_transform_matrix_rectangle (transform, rect, FALSE);
+}
+
+/**
+ * gst_video_meta_transform_matrix_rectangle_clipped:
+ * @transform: A #GstVideoMetaTransformMatrix
+ * @rect: (inout): a rectangle in the coordinate of the original image
+ *
+ * Transforms @rect from the input coordinates to the
+ * output ones.  The point's coordinates are transformed by first
+ * applying the @transform.matrix to it using the top left (x, y) of
+ * @transform.in_rectangle as the origin, then translate it to use
+ * the top-left of @transform.out_rectangle as new origin.
+ *
+ * @rect is always axis aligned at input and this function only returns
+ * axis aligned rectangles as output, otherwise it returns FALSE.
+ *
+ * Output rectangle will be clipped to fit inside @transform.out_rectangle.
+ *
+ * Returns: %FALSE if the output rectangle is not axis aligned or if
+ *  the rectangle is entirely outside of the out_rectangle.
+ *
+ * Since: 1.28
+ */
+gboolean
+gst_video_meta_transform_matrix_rectangle_clipped (const
+    GstVideoMetaTransformMatrix * transform, GstVideoRectangle * rect)
+{
+  return _gst_video_meta_transform_matrix_rectangle (transform, rect, TRUE);
+}
+
 
 GType
 gst_video_gl_texture_upload_meta_api_get_type (void)
@@ -1057,12 +1355,12 @@ static gboolean
 gst_video_region_of_interest_meta_transform (GstBuffer * dest, GstMeta * meta,
     GstBuffer * buffer, GQuark type, gpointer data)
 {
-  GstVideoRegionOfInterestMeta *dmeta, *smeta;
+  GstVideoRegionOfInterestMeta *smeta = (GstVideoRegionOfInterestMeta *) meta;
+  GstVideoRegionOfInterestMeta *dmeta;
 
   if (GST_META_TRANSFORM_IS_COPY (type)) {
-    smeta = (GstVideoRegionOfInterestMeta *) meta;
-
-    GST_DEBUG ("copy region of interest metadata");
+    GST_DEBUG ("copy region of interest metadata (seqnum: %" G_GUINT64_FORMAT
+        ")", gst_meta_get_seqnum (meta));
     dmeta =
         gst_buffer_add_video_region_of_interest_meta_id (dest,
         smeta->roi_type, smeta->x, smeta->y, smeta->w, smeta->h);
@@ -1073,6 +1371,40 @@ gst_video_region_of_interest_meta_transform (GstBuffer * dest, GstMeta * meta,
     dmeta->parent_id = smeta->parent_id;
     dmeta->params = g_list_copy_deep (smeta->params,
         (GCopyFunc) gst_structure_copy, NULL);
+  } else if (GST_VIDEO_META_TRANSFORM_IS_MATRIX (type)) {
+    GstVideoMetaTransformMatrix *trans = data;
+    GstVideoRectangle rect = { smeta->x, smeta->y, smeta->w, smeta->h };
+
+    GST_LOG ("Scaling and cropping region of interest metadata %dx%d+%d+%d"
+        " in (%dx%d) -> %dx%d+%d+%d in %dx%d (seqnum: %" G_GUINT64_FORMAT ")",
+        trans->in_rectangle.w,
+        trans->in_rectangle.h, trans->in_rectangle.x, trans->in_rectangle.y,
+        GST_VIDEO_INFO_WIDTH (trans->in_info),
+        GST_VIDEO_INFO_HEIGHT (trans->in_info), trans->out_rectangle.w,
+        trans->out_rectangle.h, trans->out_rectangle.x,
+        trans->out_rectangle.y, GST_VIDEO_INFO_WIDTH (trans->out_info),
+        GST_VIDEO_INFO_HEIGHT (trans->out_info), gst_meta_get_seqnum (meta));
+
+    if (!gst_video_meta_transform_matrix_rectangle_clipped (trans, &rect))
+      return FALSE;
+
+    dmeta = gst_buffer_add_video_region_of_interest_meta_id (dest,
+        smeta->roi_type, rect.x, rect.y, rect.w, rect.h);
+    if (!dmeta)
+      return FALSE;
+
+    dmeta->id = smeta->id;
+    dmeta->parent_id = smeta->parent_id;
+
+    GST_LOG ("region of interest (id:%d, parent id:%d) offset %dx%d -> %dx%d "
+        "(seqnum: %" G_GUINT64_FORMAT " -> %" G_GUINT64_FORMAT ")",
+        smeta->id, smeta->parent_id, smeta->x, smeta->y, dmeta->x, dmeta->y,
+        gst_meta_get_seqnum (meta),
+        gst_meta_get_seqnum (GST_META_CAST (dmeta)));
+    GST_LOG ("region of interest size   %dx%d -> %dx%d (seqnum: %"
+        G_GUINT64_FORMAT " -> %" G_GUINT64_FORMAT " ))", smeta->w, smeta->h,
+        dmeta->w, dmeta->h, gst_meta_get_seqnum (meta),
+        gst_meta_get_seqnum (GST_META_CAST (dmeta)));
   } else if (GST_VIDEO_META_TRANSFORM_IS_SCALE (type)) {
     GstVideoMetaTransform *trans = data;
     gint ow, oh, nw, nh;
@@ -1080,10 +1412,11 @@ gst_video_region_of_interest_meta_transform (GstBuffer * dest, GstMeta * meta,
     nw = GST_VIDEO_INFO_WIDTH (trans->out_info);
     oh = GST_VIDEO_INFO_HEIGHT (trans->in_info);
     nh = GST_VIDEO_INFO_HEIGHT (trans->out_info);
-    GST_DEBUG ("scaling region of interest metadata %dx%d -> %dx%d", ow, oh, nw,
-        nh);
 
-    smeta = (GstVideoRegionOfInterestMeta *) meta;
+    GST_LOG ("scaling region of interest metadata %dx%d -> %dx%d "
+        "(seqnum: %" G_GUINT64_FORMAT ")", ow, oh, nw, nh,
+        gst_meta_get_seqnum (meta));
+
     dmeta =
         gst_buffer_add_video_region_of_interest_meta_id (dest,
         smeta->roi_type, (smeta->x * nw) / ow, (smeta->y * nh) / oh,
@@ -1094,10 +1427,15 @@ gst_video_region_of_interest_meta_transform (GstBuffer * dest, GstMeta * meta,
     dmeta->id = smeta->id;
     dmeta->parent_id = smeta->parent_id;
 
-    GST_DEBUG ("region of interest (id:%d, parent id:%d) offset %dx%d -> %dx%d",
-        smeta->id, smeta->parent_id, smeta->x, smeta->y, dmeta->x, dmeta->y);
-    GST_DEBUG ("region of interest size   %dx%d -> %dx%d", smeta->w, smeta->h,
-        dmeta->w, dmeta->h);
+    GST_LOG ("region of interest (id:%d, parent id:%d) offset %dx%d -> %dx%d"
+        " (seqnum: %" G_GUINT64_FORMAT " -> %" G_GUINT64_FORMAT ")",
+        smeta->id, smeta->parent_id, smeta->x, smeta->y, dmeta->x, dmeta->y,
+        gst_meta_get_seqnum (meta),
+        gst_meta_get_seqnum (GST_META_CAST (dmeta)));
+    GST_LOG ("region of interest size   %dx%d -> %dx%d (seqnum: %"
+        G_GUINT64_FORMAT " -> %" G_GUINT64_FORMAT ")", smeta->w, smeta->h,
+        dmeta->w, dmeta->h, gst_meta_get_seqnum (meta),
+        gst_meta_get_seqnum (GST_META_CAST (dmeta)));
   } else {
     /* return FALSE, if transform type is not supported */
     return FALSE;
@@ -1350,19 +1688,170 @@ gst_video_time_code_meta_free (GstMeta * meta, GstBuffer * buffer)
   gst_video_time_code_clear (&emeta->tc);
 }
 
+#define VIDEO_TIME_CODE_META_SERIALIZE_STATIC_SIZE \
+    4 + /* hours */ \
+    4 + /* minutes */ \
+    4 + /* seconds */ \
+    4 + /* frames */ \
+    4 + /* field_count */ \
+    /* GstVideoTimeCodeConfig */ \
+    4 + /* fps_n */ \
+    4 + /* fps_d */ \
+    4 + /* GstVideoTimeCodeFlags */ \
+    4                           /* serialized GDateTime size */
+
+static gboolean
+gst_video_time_code_meta_serialize (const GstMeta * meta,
+    GstByteArrayInterface * data, guint8 * version)
+{
+  GstVideoTimeCodeMeta *tmeta = (GstVideoTimeCodeMeta *) meta;
+  GstByteWriter bw;
+  gchar *daily_jam = NULL;
+  gsize daily_jam_len = 0;
+  gsize size;
+  guint8 *ptr;
+  const GstVideoTimeCode *tc = &tmeta->tc;
+
+  if (tmeta->tc.config.latest_daily_jam) {
+    daily_jam = g_date_time_format_iso8601 (tc->config.latest_daily_jam);
+    if (!daily_jam) {
+      GST_WARNING ("Couldn't serialize datetime");
+      return FALSE;
+    }
+
+    daily_jam_len = strlen (daily_jam);
+    if (daily_jam_len + 1 >= G_MAXUINT32) {
+      GST_WARNING ("Too large datetime string");
+      g_free (daily_jam);
+      return FALSE;
+    }
+
+    /* +1 for null-terminated string */
+    daily_jam_len++;
+  }
+
+  size = VIDEO_TIME_CODE_META_SERIALIZE_STATIC_SIZE + daily_jam_len;
+  ptr = gst_byte_array_interface_append (data, size);
+  if (!ptr) {
+    g_free (daily_jam);
+    return FALSE;
+  }
+
+  gst_byte_writer_init_with_data (&bw, ptr, size, FALSE);
+  gst_byte_writer_put_uint32_le_unchecked (&bw, tc->hours);
+  gst_byte_writer_put_uint32_le_unchecked (&bw, tc->minutes);
+  gst_byte_writer_put_uint32_le_unchecked (&bw, tc->seconds);
+  gst_byte_writer_put_uint32_le_unchecked (&bw, tc->frames);
+  gst_byte_writer_put_uint32_le_unchecked (&bw, tc->field_count);
+
+  gst_byte_writer_put_uint32_le_unchecked (&bw, tc->config.fps_n);
+  gst_byte_writer_put_uint32_le_unchecked (&bw, tc->config.fps_d);
+  gst_byte_writer_put_uint32_le_unchecked (&bw, tc->config.flags);
+  gst_byte_writer_put_uint32_le_unchecked (&bw, (guint) daily_jam_len);
+
+  /* Write null-terminated datetime string if any */
+  if (daily_jam_len) {
+    gst_byte_writer_put_data_unchecked (&bw,
+        (guint8 *) daily_jam, daily_jam_len);
+  }
+
+  g_free (daily_jam);
+
+  return TRUE;
+}
+
+static GstMeta *
+gst_video_time_code_meta_deserialize (const GstMetaInfo * info,
+    GstBuffer * buffer, const guint8 * data, gsize size, guint8 version)
+{
+  GstByteReader br;
+  guint hours;
+  guint minutes;
+  guint seconds;
+  guint frames;
+  guint field_count;
+  guint fps_n;
+  guint fps_d;
+  guint flags;
+  guint daily_jam_len;
+  GDateTime *latest_daily_jam = NULL;
+  GstMeta *ret;
+
+  if (version != 0)
+    return NULL;
+
+  if (size < VIDEO_TIME_CODE_META_SERIALIZE_STATIC_SIZE) {
+    GST_WARNING ("Too small data size %" G_GSIZE_FORMAT, size);
+    return NULL;
+  }
+
+  gst_byte_reader_init (&br, data, size);
+  hours = gst_byte_reader_get_uint32_le_unchecked (&br);
+  minutes = gst_byte_reader_get_uint32_le_unchecked (&br);
+  seconds = gst_byte_reader_get_uint32_le_unchecked (&br);
+  frames = gst_byte_reader_get_uint32_le_unchecked (&br);
+  field_count = gst_byte_reader_get_uint32_le_unchecked (&br);
+
+  fps_n = gst_byte_reader_get_uint32_le_unchecked (&br);
+  fps_d = gst_byte_reader_get_uint32_le_unchecked (&br);
+  flags = gst_byte_reader_get_uint32_le_unchecked (&br);
+  daily_jam_len = gst_byte_reader_get_uint32_le_unchecked (&br);
+
+  if (daily_jam_len != gst_byte_reader_get_remaining (&br)) {
+    GST_WARNING ("Invalid datetime data size %u", daily_jam_len);
+    return NULL;
+  }
+
+  if (daily_jam_len) {
+    const gchar *daily_jam = NULL;
+    gsize len;
+
+    if (!gst_byte_reader_get_data (&br,
+            daily_jam_len, (const guint8 **) &daily_jam)) {
+      return NULL;
+    }
+
+    len = strnlen (daily_jam, daily_jam_len);
+    if (len + 1 != daily_jam_len) {
+      GST_WARNING ("Invalid datetime string");
+      return NULL;
+    }
+
+    latest_daily_jam = g_date_time_new_from_iso8601 (daily_jam, NULL);
+    if (!latest_daily_jam) {
+      GST_WARNING ("Couldn't deserialize datetime");
+      return NULL;
+    }
+  }
+
+  ret = (GstMeta *) gst_buffer_add_video_time_code_meta_full (buffer,
+      fps_n, fps_d, latest_daily_jam, flags, hours, minutes, seconds, frames,
+      field_count);
+
+  if (latest_daily_jam)
+    g_date_time_unref (latest_daily_jam);
+
+  return ret;
+}
+
 const GstMetaInfo *
 gst_video_time_code_meta_get_info (void)
 {
   static const GstMetaInfo *meta_info = NULL;
 
   if (g_once_init_enter ((GstMetaInfo **) & meta_info)) {
-    const GstMetaInfo *mi =
-        gst_meta_register (GST_VIDEO_TIME_CODE_META_API_TYPE,
-        "GstVideoTimeCodeMeta",
-        sizeof (GstVideoTimeCodeMeta),
-        gst_video_time_code_meta_init,
-        gst_video_time_code_meta_free,
-        gst_video_time_code_meta_transform);
+    GstMetaInfo *info;
+    const GstMetaInfo *mi;
+
+    info = gst_meta_info_new (GST_VIDEO_TIME_CODE_META_API_TYPE,
+        "GstVideoTimeCodeMeta", sizeof (GstVideoTimeCodeMeta));
+    info->init_func = gst_video_time_code_meta_init;
+    info->free_func = gst_video_time_code_meta_free;
+    info->transform_func = gst_video_time_code_meta_transform;
+    info->serialize_func = gst_video_time_code_meta_serialize;
+    info->deserialize_func = gst_video_time_code_meta_deserialize;
+
+    mi = gst_meta_info_register (info);
     g_once_init_leave ((GstMetaInfo **) & meta_info, (GstMetaInfo *) mi);
   }
   return meta_info;
@@ -1398,7 +1887,7 @@ gst_buffer_add_video_time_code_meta (GstBuffer * buffer,
  * @buffer: a #GstBuffer
  * @fps_n: framerate numerator
  * @fps_d: framerate denominator
- * @latest_daily_jam: a #GDateTime for the latest daily jam
+ * @latest_daily_jam: (allow-none): a #GDateTime for the latest daily jam
  * @flags: a #GstVideoTimeCodeFlags
  * @hours: hours since the daily jam
  * @minutes: minutes since the daily jam

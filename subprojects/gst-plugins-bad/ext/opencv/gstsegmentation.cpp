@@ -91,6 +91,9 @@
 
 #include "gstsegmentation.h"
 #include <opencv2/imgproc.hpp>
+#if CV_MAJOR_VERSION >= 5
+#include <opencv2/geometry.hpp>
+#endif
 
 GST_DEBUG_CATEGORY_STATIC (gst_segmentation_debug);
 #define GST_CAT_DEFAULT gst_segmentation_debug
@@ -228,6 +231,7 @@ gst_segmentation_class_init (GstSegmentationClass * klass)
       "Filter/Effect/Video",
       "Create a Foregound/Background mask applying a particular algorithm",
       "Miguel Casas-Sanchez <miguelecasassanchez@gmail.com>");
+  gst_element_class_mark_as_untrusted_aware (element_class);
 
   gst_element_class_add_static_pad_template (element_class, &src_factory);
   gst_element_class_add_static_pad_template (element_class, &sink_factory);

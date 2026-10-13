@@ -74,19 +74,18 @@ struct _GstOpusEnc {
   gboolean              dtx;
   gint                  packet_loss_percentage;
   guint                 max_payload_size;
+  gboolean              qext;
 
   gint                  frame_samples;
-  gint                  n_channels;
-  gint                  sample_rate;
-  gboolean              unpositioned;
 
   guint64               encoded_samples, consumed_samples;
   guint16               lookahead, pending_lookahead;
 
   guint8                channel_mapping_family;
-  guint8                encoding_channel_mapping[256];
-  guint8                decoding_channel_mapping[256];
+  guint8                channel_mapping[256];
   guint8                n_stereo_streams;
+  GstAudioChannelPosition opus_pos[64];
+  gboolean              needs_reorder;
 };
 
 struct _GstOpusEncClass {

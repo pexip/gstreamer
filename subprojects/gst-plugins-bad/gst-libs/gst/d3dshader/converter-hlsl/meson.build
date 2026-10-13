@@ -118,6 +118,14 @@ hlsl_cs_entry_points = [
   'CSMain_RGBA_to_BGR15',
   'CSMain_RGBA_to_r210',
   'CSMain_RGBA_to_BGRA',
+  'CSMain_RGB_Buffer_to_RGBA',
+  'CSMain_RGBA_to_RGB_Buffer',
+  'CSMain_BGR_Buffer_to_RGBA',
+  'CSMain_RGBA_to_BGR_Buffer',
+  'CSMain_RGB_F32_Buffer_to_RGBA',
+  'CSMain_RGBA_to_RGB_F32_Buffer',
+  'CSMain_RGB_F16_Buffer_to_RGBA',
+  'CSMain_RGBA_to_RGB_F16_Buffer',
 ]
 
 hlsl_ps_lut_entry_points = [

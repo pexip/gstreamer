@@ -43,45 +43,6 @@ class TimeArgsTest(TestCase):
         self.assertEqual(Gst.TIME_ARGS(Gst.SECOND), '0:00:01.000000000')
 
 
-class TestNotInitialized(TestCase):
-    def testNotInitialized(self):
-        if sys.version_info >= (3, 0):
-            assert_type = Gst.NotInitialized
-        else:
-            assert_type = TypeError
-
-        with self.assertRaises(assert_type):
-            Gst.Caps.from_string("audio/x-raw")
-
-        with self.assertRaises(assert_type):
-            Gst.Structure.from_string("audio/x-raw")
-
-        with self.assertRaises(assert_type):
-            Gst.ElementFactory.make("identity", None)
-
-    def testNotDeinitialized(self):
-        Gst.init(None)
-
-        self.assertIsNotNone(Gst.Caps.from_string("audio/x-raw"))
-        self.assertIsNotNone(Gst.Structure.from_string("audio/x-raw"))
-        self.assertIsNotNone(Gst.ElementFactory.make("identity", None))
-
-        Gst.deinit()
-        if sys.version_info >= (3, 0):
-            assert_type = Gst.NotInitialized
-        else:
-            assert_type = TypeError
-
-        with self.assertRaises(assert_type):
-            Gst.Caps.from_string("audio/x-raw")
-
-        with self.assertRaises(assert_type):
-            Gst.Structure.from_string("audio/x-raw")
-
-        with self.assertRaises(assert_type):
-            Gst.ElementFactory.make("identity", None)
-
-
 class TestCaps(TestCase):
 
     def test_writable_make_writable_no_copy(self):
@@ -201,6 +162,20 @@ class TestCaps(TestCase):
         s = caps.get_structure(0)
         self.assertNotEqual(ptr, s.__ptr__())
 
+    def test_iterate(self):
+        Gst.init(None)
+        caps = Gst.Caps()
+        caps.append_structure(Gst.Structure('test1', one=1))
+        caps.append_structure(Gst.Structure('test2', two=2))
+        caps.append_structure(Gst.Structure('test3', three=3))
+        self.assertEqual(len(caps), 3)
+        items = [s for s in caps]
+        self.assertEqual(items[0]['one'], 1)
+        self.assertEqual(items[1]['two'], 2)
+        self.assertEqual(items[2]['three'], 3)
+        with self.assertRaises(IndexError):
+            caps[3]
+
 
 class TestStructure(TestCase):
 
@@ -211,6 +186,20 @@ class TestStructure(TestCase):
 
         test = Gst.Structure('test,test=1')
         self.assertEqual(test['test'], 1)
+
+    def test_iterate_items(self):
+        Gst.init(None)
+        test = Gst.Structure('test', one=1, two=2, three=3)
+        self.assertEqual(len(test), 3)
+        self.assertEqual(test["one"], 1)
+        self.assertEqual(test["two"], 2)
+        self.assertEqual(test["three"], 3)
+        items = {k: v for k, v in test.items()}
+        self.assertEqual(items, {'one': 1, 'two': 2, 'three': 3})
+        keys = [k for k in test]
+        self.assertEqual(keys, ['one', 'two', 'three'])
+        with self.assertRaises(KeyError):
+            test["four"]
 
 
 class TestEvent(TestCase):
@@ -264,6 +253,23 @@ class TestBin(TestCase):
         Gst.init(None)
         self.assertEqual(Gst.ElementFactory.make("bin", None).sinkpads, [])
 
+    def test_make_and_add(self):
+        Gst.init(None)
+        bin = Gst.Bin()
+        with self.assertRaises(Gst.MissingPluginError):
+            bin.make_and_add("nonexistent")
+        e = bin.make_and_add("identity")
+        # Adding the same element again should fail
+        with self.assertRaises(Gst.AddError):
+            bin.add(e)
+
+    def test_iterate(self):
+        Gst.init(None)
+        bin = Gst.Bin()
+        e = bin.make_and_add("identity")
+        chidren = [c for c in bin]
+        self.assertEqual(chidren, [e])
+
 
 class TestBuffer(TestCase):
 
@@ -309,6 +315,63 @@ class TestBuffer(TestCase):
             self.assertEqual(info.data[0], 42)
         with self.assertRaises(ValueError):
             info.data[0]
+
+
+class TestPadProbe(TestCase):
+
+    def test_pad_probe(self):
+        Gst.init(None)
+        pipeline = Gst.Pipeline("pipeline")
+        src = pipeline.make_and_add("fakesrc", "src")
+        sink = pipeline.make_and_add("fakesink", "sink")
+        src.link(sink)
+
+        src.props.num_buffers = 5
+
+        buffer_count = 0
+
+        def probe_cb(pad, info):
+            nonlocal buffer_count
+
+            buffer_count += 1
+
+            # Get a writable buffer from the probe info
+            with info.writable_object() as buffer:
+                self.assertIsInstance(buffer, Gst.Buffer)
+                self.assertTrue(buffer.is_writable())
+                buffer.pts = buffer_count * Gst.SECOND * 2
+                ptr = buffer.__ptr__()
+                # Info does not hold a buffer any more
+                self.assertIsNone(info.get_buffer())
+
+            # info.get_buffer() never returns a writable buffer because both
+            # python and GstPadProbeInfo hold references to it.
+            buffer = info.get_buffer()
+            self.assertIsNotNone(buffer)
+            self.assertFalse(buffer.is_writable())
+            self.assertEqual(buffer.pts, buffer_count * Gst.SECOND * 2)
+            self.assertEqual(buffer.__ptr__(), ptr)
+
+            return Gst.PadProbeReturn.OK
+
+        sink_pad = sink.get_static_pad("sink")
+        probe_id = sink_pad.add_probe(Gst.PadProbeType.BUFFER, probe_cb)
+
+        pipeline.set_state(Gst.State.PLAYING)
+        bus = pipeline.get_bus()
+        msg = bus.timed_pop_filtered(Gst.SECOND * 5, Gst.MessageType.EOS)
+        self.assertIsNotNone(msg)
+
+        # We should have seen exactly 5 buffers
+        self.assertEqual(buffer_count, 5)
+
+        # Check that last buffer has the expected PTS
+        sample = sink.props.last_sample
+        buffer = sample.get_buffer()
+        self.assertEqual(buffer.pts, buffer_count * Gst.SECOND * 2)
+
+        sink_pad.remove_probe(probe_id)
+        pipeline.set_state(Gst.State.NULL)
 
 
 if __name__ == "__main__":

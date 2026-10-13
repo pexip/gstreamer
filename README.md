@@ -35,11 +35,11 @@ If you're on Linux, you probably already have these. On macOS, new versions of
 Xcode ship Python 3 already. If you're on an older Xcode, you can use the
 [official Python installer](https://www.python.org/downloads/mac-osx/).
 
-You can find [instructions for Windows below](#windows-prerequisites-setup).
+You can find [instructions for Windows below](#windows-development-environment).
 
 ### Install meson and ninja
 
-Meson 1.1 or newer is required.
+Meson 1.4 or newer is required.
 
 On Linux and macOS you can get meson through your package manager or using:
 
@@ -54,7 +54,7 @@ You should get `ninja` using your package manager or download the [official
 release](https://github.com/ninja-build/ninja/releases) and put the `ninja`
 binary in your PATH.
 
-You can find [instructions for Windows below](#windows-prerequisites-setup).
+You can find [instructions for Windows below](#windows-development-environment).
 
 
 If you used the official Python installer on macOS instead of the Python
@@ -297,32 +297,23 @@ $ meson compile -C builddir gst-doc
 NOTE: To visualize the documentation, `devhelp` can be run inside the development
 environment (see below).
 
-# Development environment
+## Development environment
 
-## Development environment target
+### Development environment target
 
-GStreamer ships a script that drops you into a development environment where
-all the plugins, libraries, and tools you just built are available:
-
-```
-./gst-env.py
-```
-
-Or with a custom builddir (i.e., not `build`, `_build` or `builddir`):
+GStreamer uses [Meson devenv](https://mesonbuild.com/Commands.html#devenv)
+to drop you into a development environment where all the plugins, libraries,
+and tools you just built are available:
 
 ```
-./gst-env.py --builddir <BUILDDIR>
+meson devenv -C <BUILDDIR>
 ```
-
-You can also use `ninja devenv` inside your build directory to achieve the same
-effect. However, this may not work on Windows if meson has auto-detected the
-visual studio environment.
 
 Alternatively, if you'd rather not start a shell in your workflow, you
 can mutate the current environment into a suitable state like so:
 
 ```
-./gst-env.py --only-environment
+meson devenv -C <BUILDDIR> --dump
 ```
 
 This will print output suitable for an sh-compatible `eval` function,
@@ -331,7 +322,7 @@ just like `ssh-agent -s`.
 An external script can be run in development environment with:
 
 ```
-./gst-env.py external_script.sh
+meson devenv -C <BUILDDIR> external_script.sh
 ```
 
 NOTE: In the development environment, a fully usable prefix is also configured
@@ -339,6 +330,133 @@ in `gstreamer/prefix` where you can install any extra dependency/project.
 
 For more extensive documentation about the development environment go to [the
 documentation](https://gstreamer.freedesktop.org/documentation/installing/building-from-source-using-meson.html).
+
+### Bash prompt
+
+We automatically handle `bash` and set `$PS1` accordingly.
+
+If the automatic `$PS1` override is not desired (maybe you have a fancy custom
+prompt), set the `$MESON_DISABLE_PS1_OVERRIDE` environment variable to
+`TRUE` and use `$GST_ENV` when setting the custom prompt, for example with a
+snippet like the following:
+
+```bash
+...
+if [[ -n "${GST_ENV-}" ]];
+then
+  PS1+="[ ${GST_ENV} ]"
+fi
+...
+```
+
+## Windows Development Environment
+
+### Prerequisites
+
+- **Visual Studio Community 2022** (or later) with:
+  - Desktop development with C++ workload
+  - Windows SDK
+- **Python 3.8+** (required for build system and gst-env.py)
+- **Meson 1.4.0+** (install via pip: `pip install meson`)
+
+It is recommended to use Visual Studio Community 2022 and PowerShell terminal.
+
+Meson automatically detects and activates the Visual Studio toolchain when no other compilers are found.
+GStreamer should be built in a PowerShell environment for a complete user experience.
+
+NOTE: If you have other toolchains (MinGW, Clang, etc.) in your PATH, Meson may detect those instead of Visual Studio. To ensure Visual Studio is used:
+- Remove conflicting toolchains from your Windows PATH, or
+- Use the `--vsenv` flag: `meson setup --vsenv builddir`, or
+- Run from a Developer PowerShell for VS 2022 which pre-configures the environment
+
+#### Git for Windows
+
+Use the [Git for Windows](https://gitforwindows.org/) installer. It will
+install a `bash` prompt with basic shell utils and up-to-date git binaries.
+
+During installation, when prompted about `PATH`, you should select the
+following option:
+
+![Select "Git from the command line and also from 3rd-party software"](/data/images/git-installer-PATH.png)
+
+#### Python 3.8+ on Windows
+
+Use the [official Python installer](https://www.python.org/downloads/windows/).
+You must ensure that Python is installed into `PATH`:
+
+![Enable Add Python to PATH, then click Customize Installation](/data/images/py-installer-page1.png)
+
+You may also want to customize the installation and install it into
+a system-wide location such as `C:\PythonXY`, but this is not required.
+
+#### Ninja on Windows
+
+If you are using Visual Studio 2019 or newer, Ninja is already provided.
+
+In other cases, the easiest way to install Ninja on Windows is with `pip3`,
+which will download the compiled binary and place it into the `Scripts`
+directory inside your Python installation:
+
+```
+pip3 install ninja
+```
+
+You can also download the [official release](https://github.com/ninja-build/ninja/releases)
+and place it into `PATH`, or use MSYS2.
+
+#### Meson on Windows
+
+**IMPORTANT**: Do not use the Meson MSI installer since it is experimental and known to not
+work with `GStreamer`.
+
+You can use `pip3` to install Meson, same as Ninja above:
+
+```
+pip3 install meson
+```
+
+Note that Meson is written entirely in Python, so you can also run it as-is
+from the [git repository](https://github.com/mesonbuild/meson/) if you want to
+use the latest master branch for some reason.
+
+### Running Meson on Windows
+
+Meson automatically activates the Visual Studio environment on Windows if no
+other compilers (gcc, clang, etc) are found. To force the use of Visual Studio
+in such cases, you can use:
+
+```
+meson setup --vsenv builddir
+```
+
+### Building with Visual Studio
+
+```powershell
+meson setup builddir
+meson compile -C builddir
+```
+
+NOTE: You should verify that Visual Studio is being detected. Look for output similar to:
+
+```powershell
+...
+Activating VS 17.x.x
+...
+```
+
+### Powerline devenv prompt
+
+In your powerline theme configuration file (by default in
+`{POWERLINE INSTALLATION DIR}/config_files/themes/shell/default.json`)
+you should add a new environment segment as follow:
+
+```
+{
+  "function": "powerline.segments.common.env.environment",
+  "args": { "variable": "GST_ENV" },
+  "priority": 50
+},
+```
 
 ## Custom subprojects
 
@@ -403,110 +521,11 @@ Note that the installed files have `RPATH` stripped, so you will need to set
 `LD_LIBRARY_PATH`, `DYLD_LIBRARY_PATH`, or `PATH` as appropriate for your
 platform for things to work.
 
+## Setup a mingw/wine based development environment on linux
 
-## Add information about GStreamer development environment in your prompt line
+### Install wine and mingw
 
-### Bash prompt
-
-We automatically handle `bash` and set `$PS1` accordingly.
-
-If the automatic `$PS1` override is not desired (maybe you have a fancy custom
-prompt), set the `$GST_BUILD_DISABLE_PS1_OVERRIDE` environment variable to
-`TRUE` and use `$GST_ENV` when setting the custom prompt, for example with a
-snippet like the following:
-
-```bash
-...
-if [[ -n "${GST_ENV-}" ]];
-then
-  PS1+="[ ${GST_ENV} ]"
-fi
-...
-```
-
-### Using powerline
-
-In your powerline theme configuration file (by default in
-`{POWERLINE INSTALLATION DIR}/config_files/themes/shell/default.json`)
-you should add a new environment segment as follow:
-
-```
-{
-  "function": "powerline.segments.common.env.environment",
-  "args": { "variable": "GST_ENV" },
-  "priority": 50
-},
-```
-
-## Windows Prerequisites Setup
-
-On Windows, some of the components may require special care.
-
-### Git for Windows
-
-Use the [Git for Windows](https://gitforwindows.org/) installer. It will
-install a `bash` prompt with basic shell utils and up-to-date git binaries.
-
-During installation, when prompted about `PATH`, you should select the
-following option:
-
-![Select "Git from the command line and also from 3rd-party software"](/data/images/git-installer-PATH.png)
-
-### Python 3.8+ on Windows
-
-Use the [official Python installer](https://www.python.org/downloads/windows/).
-You must ensure that Python is installed into `PATH`:
-
-![Enable Add Python to PATH, then click Customize Installation](/data/images/py-installer-page1.png)
-
-You may also want to customize the installation and install it into
-a system-wide location such as `C:\PythonXY`, but this is not required.
-
-### Ninja on Windows
-
-If you are using Visual Studio 2019 or newer, Ninja is already provided.
-
-In other cases, the easiest way to install Ninja on Windows is with `pip3`,
-which will download the compiled binary and place it into the `Scripts`
-directory inside your Python installation:
-
-```
-pip3 install ninja
-```
-
-You can also download the [official release](https://github.com/ninja-build/ninja/releases)
-and place it into `PATH`, or use MSYS2.
-
-### Meson on Windows
-
-**IMPORTANT**: Do not use the Meson MSI installer since it is experimental and known to not
-work with `GStreamer`.
-
-You can use `pip3` to install Meson, same as Ninja above:
-
-```
-pip3 install meson
-```
-
-Note that Meson is written entirely in Python, so you can also run it as-is
-from the [git repository](https://github.com/mesonbuild/meson/) if you want to
-use the latest master branch for some reason.
-
-### Running Meson on Windows
-
-Since version 0.59.0, Meson automatically activates the Visual Studio
-environment on Windows if no other compilers (gcc, clang, etc) are found. To
-force the use of Visual Studio in such cases, you can use:
-
-```
-meson setup --vsenv builddir
-```
-
-### Setup a mingw/wine based development environment on linux
-
-#### Install wine and mingw
-
-##### On fedora x64
+#### On fedora x64
 
 ``` sh
 sudo dnf install mingw64-gcc mingw64-gcc-c++ mingw64-pkg-config mingw64-winpthreads wine
@@ -514,7 +533,7 @@ sudo dnf install mingw64-gcc mingw64-gcc-c++ mingw64-pkg-config mingw64-winpthre
 
 FIXME: Figure out what needs to be installed on other distros
 
-#### Get meson from git
+### Get meson from git
 
 This simplifies the process and allows us to use the cross files
 defined in meson itself.
@@ -523,7 +542,7 @@ defined in meson itself.
 git clone https://github.com/mesonbuild/meson.git
 ```
 
-#### Build and install
+### Build and install
 
 ```
 BUILDDIR=$PWD/winebuild/
@@ -541,16 +560,9 @@ Alternatively, you can also use `mingw64-meson` on Fedora, which is a wrapper
 script that sets things up to use Fedora's cross files and settings. However,
 the wrapper script can be buggy in some cases.
 
-#### cross-mingw development environment
+### cross-mingw development environment
 
-You can get into the development environment as usual with the gst-env.py
-script:
-
-```
-./gst-env.py
-```
-
-See [above](#development-environment) for more details.
+You can get into the development environment as described [above](#development-environment).
 
 After setting up [binfmt] to use wine for windows binaries,
 you can run GStreamer tools under wine by running:
@@ -560,3 +572,9 @@ gst-launch-1.0.exe videotestsrc ! glimagesink
 ```
 
 [binfmt]: http://man7.org/linux/man-pages/man5/binfmt.d.5.html
+
+## vscode integration
+
+A file named `.vscode/launch.json.sample` can be used as a reference to debug and run
+GStreamer applications such as `gst-launch-1.0`. You just have to copy the file to
+`.vscode/launch.json` to enable the debugging session in Visual Studio Code.

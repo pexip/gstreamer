@@ -1,13 +1,14 @@
 <!-- This file was automatically generated from C sources - DO NOT EDIT!
 To affect the contents of this file, edit the original C definitions,
 and/or use gtk-doc annotations.  -->
-<repository xmlns="http://www.gtk.org/introspection/core/1.0" xmlns:c="http://www.gtk.org/introspection/c/1.0" xmlns:glib="http://www.gtk.org/introspection/glib/1.0" version="1.2">
+<repository xmlns="http://www.gtk.org/introspection/core/1.0" xmlns:c="http://www.gtk.org/introspection/c/1.0" xmlns:doc="http://www.gtk.org/introspection/doc/1.0" xmlns:glib="http://www.gtk.org/introspection/glib/1.0" version="1.2">
   <include name="GLib" version="2.0"/>
   <include name="GModule" version="2.0"/>
   <include name="GObject" version="2.0"/>
   <include name="Gst" version="1.0"/>
   <package name="gstreamer-base-1.0"/>
   <c:include name="gst/base/base.h"/>
+  <doc:format name="unknown"/>
   <namespace name="GstBase" version="1.0" shared-library="libgstbase-1.0.so.0" c:identifier-prefixes="Gst" c:symbol-prefixes="gst">
     <function-macro name="ADAPTER" c:identifier="GST_ADAPTER" introspectable="0">
       <source-position filename="../subprojects/gstreamer/libs/gst/base/gstadapter.h"/>
@@ -244,6 +245,31 @@ operations</doc>
           </instance-parameter>
         </parameters>
       </method>
+      <method name="buffer_seq_at_offset" c:identifier="gst_adapter_buffer_seq_at_offset" version="1.30">
+        <doc xml:space="preserve" filename="../subprojects/gstreamer/libs/gst/base/gstadapter.c">Get the sequence number of the buffer containing the byte at offset @offset.
+Each buffer pushed into the adapter is assigned a monotonically increasing
+sequence number starting at 0. The sequence number can be used to detect
+whether the adapter has advanced into a new buffer: if the sequence number
+at a given offset changes between two calls, the adapter has consumed
+(flushed) the previous buffer and moved to the next one.
+
+If the adapter is empty, G_MAXUINT64 is returned.</doc>
+        <source-position filename="../subprojects/gstreamer/libs/gst/base/gstadapter.h"/>
+        <return-value transfer-ownership="none">
+          <doc xml:space="preserve" filename="../subprojects/gstreamer/libs/gst/base/gstadapter.c">The sequence number of the buffer at the given offset.</doc>
+          <type name="guint64" c:type="guint64"/>
+        </return-value>
+        <parameters>
+          <instance-parameter name="adapter" transfer-ownership="none">
+            <doc xml:space="preserve" filename="../subprojects/gstreamer/libs/gst/base/gstadapter.c">a #GstAdapter</doc>
+            <type name="Adapter" c:type="GstAdapter*"/>
+          </instance-parameter>
+          <parameter name="offset" transfer-ownership="none">
+            <doc xml:space="preserve" filename="../subprojects/gstreamer/libs/gst/base/gstadapter.c">the offset in the adapter</doc>
+            <type name="gsize" c:type="gsize"/>
+          </parameter>
+        </parameters>
+      </method>
       <method name="clear" c:identifier="gst_adapter_clear">
         <doc xml:space="preserve" filename="../subprojects/gstreamer/libs/gst/base/gstadapter.c">Removes all buffers from @adapter.</doc>
         <source-position filename="../subprojects/gstreamer/libs/gst/base/gstadapter.h"/>
@@ -347,6 +373,40 @@ flag, or GST_CLOCK_TIME_NONE.</doc>
             <doc xml:space="preserve" filename="../subprojects/gstreamer/libs/gst/base/gstadapter.c">a #GstAdapter</doc>
             <type name="Adapter" c:type="GstAdapter*"/>
           </instance-parameter>
+        </parameters>
+      </method>
+      <method name="dts_at_offset" c:identifier="gst_adapter_dts_at_offset" version="1.30">
+        <doc xml:space="preserve" filename="../subprojects/gstreamer/libs/gst/base/gstadapter.c">Get the dts of the data at offset @offset in the adapter, that is the dts
+of the buffer containing the byte at @offset.
+
+Unlike gst_adapter_prev_dts() and gst_adapter_prev_dts_at_offset(), which
+remember the last dts seen and keep returning it until a new one is seen,
+this function only considers the data that is currently in the adapter and
+never returns a dts of data that has already been consumed. If the buffer
+containing @offset has no valid dts, GST_CLOCK_TIME_NONE is returned, even
+if a dts was seen earlier.
+
+When @distance is given, the amount of bytes between the dts and the byte
+at @offset is returned. If no valid dts is available, the distance is set
+to 0.</doc>
+        <source-position filename="../subprojects/gstreamer/libs/gst/base/gstadapter.h"/>
+        <return-value transfer-ownership="none">
+          <doc xml:space="preserve" filename="../subprojects/gstreamer/libs/gst/base/gstadapter.c">The dts of the data at the given offset.</doc>
+          <type name="Gst.ClockTime" c:type="GstClockTime"/>
+        </return-value>
+        <parameters>
+          <instance-parameter name="adapter" transfer-ownership="none">
+            <doc xml:space="preserve" filename="../subprojects/gstreamer/libs/gst/base/gstadapter.c">a #GstAdapter</doc>
+            <type name="Adapter" c:type="GstAdapter*"/>
+          </instance-parameter>
+          <parameter name="offset" transfer-ownership="none">
+            <doc xml:space="preserve" filename="../subprojects/gstreamer/libs/gst/base/gstadapter.c">the offset in the adapter at which to get timestamp</doc>
+            <type name="gsize" c:type="gsize"/>
+          </parameter>
+          <parameter name="distance" direction="out" caller-allocates="0" transfer-ownership="full" optional="1" allow-none="1">
+            <doc xml:space="preserve" filename="../subprojects/gstreamer/libs/gst/base/gstadapter.c">pointer to location for distance, or %NULL</doc>
+            <type name="guint64" c:type="guint64*"/>
+          </parameter>
         </parameters>
       </method>
       <method name="flush" c:identifier="gst_adapter_flush">
@@ -777,6 +837,40 @@ flag, or GST_CLOCK_TIME_NONE.</doc>
           </instance-parameter>
         </parameters>
       </method>
+      <method name="pts_at_offset" c:identifier="gst_adapter_pts_at_offset" version="1.30">
+        <doc xml:space="preserve" filename="../subprojects/gstreamer/libs/gst/base/gstadapter.c">Get the pts of the data at offset @offset in the adapter, that is the pts
+of the buffer containing the byte at @offset.
+
+Unlike gst_adapter_prev_pts() and gst_adapter_prev_pts_at_offset(), which
+remember the last pts seen and keep returning it until a new one is seen,
+this function only considers the data that is currently in the adapter and
+never returns a pts of data that has already been consumed. If the buffer
+containing @offset has no valid pts, GST_CLOCK_TIME_NONE is returned, even
+if a pts was seen earlier.
+
+When @distance is given, the amount of bytes between the pts and the byte
+at @offset is returned. If no valid pts is available, the distance is set
+to 0.</doc>
+        <source-position filename="../subprojects/gstreamer/libs/gst/base/gstadapter.h"/>
+        <return-value transfer-ownership="none">
+          <doc xml:space="preserve" filename="../subprojects/gstreamer/libs/gst/base/gstadapter.c">The pts of the data at the given offset.</doc>
+          <type name="Gst.ClockTime" c:type="GstClockTime"/>
+        </return-value>
+        <parameters>
+          <instance-parameter name="adapter" transfer-ownership="none">
+            <doc xml:space="preserve" filename="../subprojects/gstreamer/libs/gst/base/gstadapter.c">a #GstAdapter</doc>
+            <type name="Adapter" c:type="GstAdapter*"/>
+          </instance-parameter>
+          <parameter name="offset" transfer-ownership="none">
+            <doc xml:space="preserve" filename="../subprojects/gstreamer/libs/gst/base/gstadapter.c">the offset in the adapter at which to get timestamp</doc>
+            <type name="gsize" c:type="gsize"/>
+          </parameter>
+          <parameter name="distance" direction="out" caller-allocates="0" transfer-ownership="full" optional="1" allow-none="1">
+            <doc xml:space="preserve" filename="../subprojects/gstreamer/libs/gst/base/gstadapter.c">pointer to location for distance, or %NULL</doc>
+            <type name="guint64" c:type="guint64*"/>
+          </parameter>
+        </parameters>
+      </method>
       <method name="push" c:identifier="gst_adapter_push">
         <doc xml:space="preserve" filename="../subprojects/gstreamer/libs/gst/base/gstadapter.c">Adds the data from @buf to the data stored inside @adapter and takes
 ownership of the buffer.</doc>
@@ -1065,50 +1159,57 @@ This class used to live in gst-plugins-bad and was moved to core.</doc>
         </parameters>
       </virtual-method>
       <virtual-method name="clip">
-        <doc xml:space="preserve" filename="../subprojects/gstreamer/libs/gst/base/gstaggregator.h">Optional.
-                 Called when a buffer is received on a sink pad, the task of
-                 clipping it and translating it to the current segment falls
-                 on the subclass. The function should use the segment of data
-                 and the negotiated media type on the pad to perform
-                 clipping of input buffer. This function takes ownership of
-                 buf and should output a buffer or return NULL in
-                 if the buffer should be dropped.</doc>
+        <doc xml:space="preserve" filename="../subprojects/gstreamer/libs/gst/base/gstaggregator.h">Called when a buffer is received on a sink pad, the task of
+clipping it and translating it to the current segment falls
+on the subclass. The function should use the segment of data
+and the negotiated media type on the pad to perform
+clipping of input buffer. This function takes ownership of
+buf and should output a buffer or return NULL in
+if the buffer should be dropped.</doc>
         <source-position filename="../subprojects/gstreamer/libs/gst/base/gstaggregator.h"/>
-        <return-value transfer-ownership="full">
+        <return-value transfer-ownership="full" nullable="1">
+          <doc xml:space="preserve" filename="../subprojects/gstreamer/libs/gst/base/gstaggregator.h">a #GstBuffer.</doc>
           <type name="Gst.Buffer" c:type="GstBuffer*"/>
         </return-value>
         <parameters>
           <instance-parameter name="aggregator" transfer-ownership="none">
+            <doc xml:space="preserve" filename="../subprojects/gstreamer/libs/gst/base/gstaggregator.h">the #GstAggregator</doc>
             <type name="Aggregator" c:type="GstAggregator*"/>
           </instance-parameter>
           <parameter name="aggregator_pad" transfer-ownership="none">
+            <doc xml:space="preserve" filename="../subprojects/gstreamer/libs/gst/base/gstaggregator.h">a #GstAggregatorPad</doc>
             <type name="AggregatorPad" c:type="GstAggregatorPad*"/>
           </parameter>
-          <parameter name="buf" transfer-ownership="none">
+          <parameter name="buf" transfer-ownership="full">
+            <doc xml:space="preserve" filename="../subprojects/gstreamer/libs/gst/base/gstaggregator.h">a #GstBuffer</doc>
             <type name="Gst.Buffer" c:type="GstBuffer*"/>
           </parameter>
         </parameters>
       </virtual-method>
-      <virtual-method name="create_new_pad" introspectable="0">
-        <doc xml:space="preserve" filename="../subprojects/gstreamer/libs/gst/base/gstaggregator.h">Optional.
-                 Called when a new pad needs to be created. Allows subclass that
-                 don't have a single sink pad template to provide a pad based
-                 on the provided information.</doc>
+      <virtual-method name="create_new_pad">
+        <doc xml:space="preserve" filename="../subprojects/gstreamer/libs/gst/base/gstaggregator.h">Called when a new pad needs to be created. Allows subclass that
+don't have a single sink pad template to provide a pad based
+on the provided information.</doc>
         <source-position filename="../subprojects/gstreamer/libs/gst/base/gstaggregator.h"/>
-        <return-value>
+        <return-value transfer-ownership="none">
+          <doc xml:space="preserve" filename="../subprojects/gstreamer/libs/gst/base/gstaggregator.h">a new #GstAggregatorPad.</doc>
           <type name="AggregatorPad" c:type="GstAggregatorPad*"/>
         </return-value>
         <parameters>
           <instance-parameter name="self" transfer-ownership="none">
+            <doc xml:space="preserve" filename="../subprojects/gstreamer/libs/gst/base/gstaggregator.h">the #GstAggregator</doc>
             <type name="Aggregator" c:type="GstAggregator*"/>
           </instance-parameter>
           <parameter name="templ" transfer-ownership="none">
+            <doc xml:space="preserve" filename="../subprojects/gstreamer/libs/gst/base/gstaggregator.h">the pad template to use</doc>
             <type name="Gst.PadTemplate" c:type="GstPadTemplate*"/>
           </parameter>
-          <parameter name="req_name" transfer-ownership="none">
+          <parameter name="req_name" transfer-ownership="none" nullable="1" allow-none="1">
+            <doc xml:space="preserve" filename="../subprojects/gstreamer/libs/gst/base/gstaggregator.h">requested pad name</doc>
             <type name="utf8" c:type="const gchar*"/>
           </parameter>
-          <parameter name="caps" transfer-ownership="none">
+          <parameter name="caps" transfer-ownership="none" nullable="1" allow-none="1">
+            <doc xml:space="preserve" filename="../subprojects/gstreamer/libs/gst/base/gstaggregator.h">caps for the pad</doc>
             <type name="Gst.Caps" c:type="const GstCaps*"/>
           </parameter>
         </parameters>
@@ -1171,19 +1272,21 @@ sent before pushing the buffer.</doc>
         </parameters>
       </virtual-method>
       <virtual-method name="fixate_src_caps">
-        <doc xml:space="preserve" filename="../subprojects/gstreamer/libs/gst/base/gstaggregator.h">Optional.
-                  Fixate and return the src pad caps provided.  The function takes
-                  ownership of @caps and returns a fixated version of
-                  @caps. @caps is not guaranteed to be writable.</doc>
+        <doc xml:space="preserve" filename="../subprojects/gstreamer/libs/gst/base/gstaggregator.h">Fixate and return the src pad caps provided. The function takes
+ownership of @caps and returns a fixated version of
+@caps. @caps is not guaranteed to be writable.</doc>
         <source-position filename="../subprojects/gstreamer/libs/gst/base/gstaggregator.h"/>
         <return-value transfer-ownership="full">
+          <doc xml:space="preserve" filename="../subprojects/gstreamer/libs/gst/base/gstaggregator.h">the fixated caps #GstCaps.</doc>
           <type name="Gst.Caps" c:type="GstCaps*"/>
         </return-value>
         <parameters>
           <instance-parameter name="self" transfer-ownership="none">
+            <doc xml:space="preserve" filename="../subprojects/gstreamer/libs/gst/base/gstaggregator.h">the #GstAggregator</doc>
             <type name="Aggregator" c:type="GstAggregator*"/>
           </instance-parameter>
-          <parameter name="caps" transfer-ownership="none">
+          <parameter name="caps" transfer-ownership="full">
+            <doc xml:space="preserve" filename="../subprojects/gstreamer/libs/gst/base/gstaggregator.h">a #GstCaps to fixate</doc>
             <type name="Gst.Caps" c:type="GstCaps*"/>
           </parameter>
         </parameters>
@@ -1267,10 +1370,32 @@ control aggregating parameters for a given set of input samples.</doc>
         </return-value>
         <parameters>
           <instance-parameter name="aggregator" transfer-ownership="none">
+            <doc xml:space="preserve" filename="../subprojects/gstreamer/libs/gst/base/gstaggregator.h">the #GstAggregator</doc>
             <type name="Aggregator" c:type="GstAggregator*"/>
           </instance-parameter>
           <parameter name="aggregator_pad" transfer-ownership="none">
+            <doc xml:space="preserve" filename="../subprojects/gstreamer/libs/gst/base/gstaggregator.h">a #GstAggregatorPad</doc>
             <type name="AggregatorPad" c:type="GstAggregatorPad*"/>
+          </parameter>
+        </parameters>
+      </virtual-method>
+      <virtual-method name="prepare_allocator" version="1.30">
+        <doc xml:space="preserve" filename="../subprojects/gstreamer/libs/gst/base/gstaggregator.h">Orchestrates #GstBufferPool &amp; #GstAllocator configuration for
+the negotiated @caps. Default implementation relies on an
+Allocation #GstQuery &amp; calls `decide_allocation()`.</doc>
+        <source-position filename="../subprojects/gstreamer/libs/gst/base/gstaggregator.h"/>
+        <return-value transfer-ownership="none">
+          <doc xml:space="preserve" filename="../subprojects/gstreamer/libs/gst/base/gstaggregator.h">whether the #GstBufferPool &amp; #GstAllocator could be configured.</doc>
+          <type name="gboolean" c:type="gboolean"/>
+        </return-value>
+        <parameters>
+          <instance-parameter name="aggregator" transfer-ownership="none">
+            <doc xml:space="preserve" filename="../subprojects/gstreamer/libs/gst/base/gstaggregator.h">the #GstAggregator</doc>
+            <type name="Aggregator" c:type="GstAggregator*"/>
+          </instance-parameter>
+          <parameter name="caps" transfer-ownership="none">
+            <doc xml:space="preserve" filename="../subprojects/gstreamer/libs/gst/base/gstaggregator.h">the negotiated #GstCaps</doc>
+            <type name="Gst.Caps" c:type="GstCaps*"/>
           </parameter>
         </parameters>
       </virtual-method>
@@ -1297,41 +1422,45 @@ control aggregating parameters for a given set of input samples.</doc>
         </parameters>
       </virtual-method>
       <virtual-method name="sink_event">
-        <doc xml:space="preserve" filename="../subprojects/gstreamer/libs/gst/base/gstaggregator.h">Optional.
-                 Called when an event is received on a sink pad, the subclass
-                 should always chain up.</doc>
+        <doc xml:space="preserve" filename="../subprojects/gstreamer/libs/gst/base/gstaggregator.h">Called when an event is received on a sink pad, the subclass
+should always chain up.</doc>
         <source-position filename="../subprojects/gstreamer/libs/gst/base/gstaggregator.h"/>
         <return-value transfer-ownership="none">
           <type name="gboolean" c:type="gboolean"/>
         </return-value>
         <parameters>
           <instance-parameter name="aggregator" transfer-ownership="none">
+            <doc xml:space="preserve" filename="../subprojects/gstreamer/libs/gst/base/gstaggregator.h">the #GstAggregator</doc>
             <type name="Aggregator" c:type="GstAggregator*"/>
           </instance-parameter>
           <parameter name="aggregator_pad" transfer-ownership="none">
+            <doc xml:space="preserve" filename="../subprojects/gstreamer/libs/gst/base/gstaggregator.h">a #GstAggregatorPad</doc>
             <type name="AggregatorPad" c:type="GstAggregatorPad*"/>
           </parameter>
-          <parameter name="event" transfer-ownership="none">
+          <parameter name="event" transfer-ownership="full">
+            <doc xml:space="preserve" filename="../subprojects/gstreamer/libs/gst/base/gstaggregator.h">a #GstEvent</doc>
             <type name="Gst.Event" c:type="GstEvent*"/>
           </parameter>
         </parameters>
       </virtual-method>
       <virtual-method name="sink_event_pre_queue">
-        <doc xml:space="preserve" filename="../subprojects/gstreamer/libs/gst/base/gstaggregator.h">Optional.
-                       Called when an event is received on a sink pad before queueing up
-                       serialized events. The subclass should always chain up (Since: 1.18).</doc>
+        <doc xml:space="preserve" filename="../subprojects/gstreamer/libs/gst/base/gstaggregator.h">Called when an event is received on a sink pad before queueing up
+serialized events. The subclass should always chain up (Since: 1.18).</doc>
         <source-position filename="../subprojects/gstreamer/libs/gst/base/gstaggregator.h"/>
         <return-value transfer-ownership="none">
           <type name="Gst.FlowReturn" c:type="GstFlowReturn"/>
         </return-value>
         <parameters>
           <instance-parameter name="aggregator" transfer-ownership="none">
+            <doc xml:space="preserve" filename="../subprojects/gstreamer/libs/gst/base/gstaggregator.h">the #GstAggregator</doc>
             <type name="Aggregator" c:type="GstAggregator*"/>
           </instance-parameter>
           <parameter name="aggregator_pad" transfer-ownership="none">
+            <doc xml:space="preserve" filename="../subprojects/gstreamer/libs/gst/base/gstaggregator.h">a #GstAggregatorPad</doc>
             <type name="AggregatorPad" c:type="GstAggregatorPad*"/>
           </parameter>
-          <parameter name="event" transfer-ownership="none">
+          <parameter name="event" transfer-ownership="full">
+            <doc xml:space="preserve" filename="../subprojects/gstreamer/libs/gst/base/gstaggregator.h">a #GstEvent</doc>
             <type name="Gst.Event" c:type="GstEvent*"/>
           </parameter>
         </parameters>
@@ -1397,18 +1526,19 @@ control aggregating parameters for a given set of input samples.</doc>
         </parameters>
       </virtual-method>
       <virtual-method name="src_event">
-        <doc xml:space="preserve" filename="../subprojects/gstreamer/libs/gst/base/gstaggregator.h">Optional.
-                 Called when an event is received on the src pad, the subclass
-                 should always chain up.</doc>
+        <doc xml:space="preserve" filename="../subprojects/gstreamer/libs/gst/base/gstaggregator.h">Called when an event is received on the src pad, the subclass
+should always chain up.</doc>
         <source-position filename="../subprojects/gstreamer/libs/gst/base/gstaggregator.h"/>
         <return-value transfer-ownership="none">
           <type name="gboolean" c:type="gboolean"/>
         </return-value>
         <parameters>
           <instance-parameter name="aggregator" transfer-ownership="none">
+            <doc xml:space="preserve" filename="../subprojects/gstreamer/libs/gst/base/gstaggregator.h">the #GstAggregator</doc>
             <type name="Aggregator" c:type="GstAggregator*"/>
           </instance-parameter>
-          <parameter name="event" transfer-ownership="none">
+          <parameter name="event" transfer-ownership="full">
+            <doc xml:space="preserve" filename="../subprojects/gstreamer/libs/gst/base/gstaggregator.h">a #GstEvent</doc>
             <type name="Gst.Event" c:type="GstEvent*"/>
           </parameter>
         </parameters>
@@ -1466,12 +1596,14 @@ control aggregating parameters for a given set of input samples.</doc>
         </return-value>
         <parameters>
           <instance-parameter name="self" transfer-ownership="none">
+            <doc xml:space="preserve" filename="../subprojects/gstreamer/libs/gst/base/gstaggregator.h">the #GstAggregator</doc>
             <type name="Aggregator" c:type="GstAggregator*"/>
           </instance-parameter>
           <parameter name="caps" transfer-ownership="none">
+            <doc xml:space="preserve" filename="../subprojects/gstreamer/libs/gst/base/gstaggregator.h">the new source pad #GstCaps</doc>
             <type name="Gst.Caps" c:type="GstCaps*"/>
           </parameter>
-          <parameter name="ret" direction="out" caller-allocates="0" transfer-ownership="full" optional="1" allow-none="1">
+          <parameter name="ret" direction="out" caller-allocates="0" transfer-ownership="full" nullable="1">
             <type name="Gst.Caps" c:type="GstCaps**"/>
           </parameter>
         </parameters>
@@ -1564,6 +1696,7 @@ by @trans; free it after use it</doc>
         </return-value>
         <parameters>
           <instance-parameter name="self" transfer-ownership="none">
+            <doc xml:space="preserve" filename="../subprojects/gstreamer/libs/gst/base/gstaggregator.c">A #GstAggregator</doc>
             <type name="Aggregator" c:type="GstAggregator*"/>
           </instance-parameter>
         </parameters>
@@ -1576,6 +1709,7 @@ by @trans; free it after use it</doc>
         </return-value>
         <parameters>
           <instance-parameter name="self" transfer-ownership="none">
+            <doc xml:space="preserve" filename="../subprojects/gstreamer/libs/gst/base/gstaggregator.c">A #GstAggregator</doc>
             <type name="Aggregator" c:type="GstAggregator*"/>
           </instance-parameter>
         </parameters>
@@ -1676,6 +1810,7 @@ function.</doc>
         </return-value>
         <parameters>
           <instance-parameter name="self" transfer-ownership="none">
+            <doc xml:space="preserve" filename="../subprojects/gstreamer/libs/gst/base/gstaggregator.c">A #GstAggregator</doc>
             <type name="Aggregator" c:type="GstAggregator*"/>
           </instance-parameter>
           <parameter name="pts" transfer-ownership="none">
@@ -1696,6 +1831,37 @@ function.</doc>
           </parameter>
         </parameters>
       </method>
+      <method name="set_allocator" c:identifier="gst_aggregator_set_allocator" version="1.30">
+        <doc xml:space="preserve" filename="../subprojects/gstreamer/libs/gst/base/gstaggregator.c">Allows #GstAggregator sub-classes to set the buffer @pool, memory @allocator,
+its @params and the @query if they originate from an Allocation #GstQuery.</doc>
+        <source-position filename="../subprojects/gstreamer/libs/gst/base/gstaggregator.h"/>
+        <return-value transfer-ownership="none">
+          <doc xml:space="preserve" filename="../subprojects/gstreamer/libs/gst/base/gstaggregator.c">TRUE on success or FALSE if buffer @pool activation failed</doc>
+          <type name="gboolean" c:type="gboolean"/>
+        </return-value>
+        <parameters>
+          <instance-parameter name="self" transfer-ownership="none">
+            <doc xml:space="preserve" filename="../subprojects/gstreamer/libs/gst/base/gstaggregator.c">a #GstAggregator</doc>
+            <type name="Aggregator" c:type="GstAggregator*"/>
+          </instance-parameter>
+          <parameter name="pool" transfer-ownership="full" nullable="1" allow-none="1">
+            <doc xml:space="preserve" filename="../subprojects/gstreamer/libs/gst/base/gstaggregator.c">the #GstBufferPool</doc>
+            <type name="Gst.BufferPool" c:type="GstBufferPool*"/>
+          </parameter>
+          <parameter name="allocator" transfer-ownership="full" nullable="1" allow-none="1">
+            <doc xml:space="preserve" filename="../subprojects/gstreamer/libs/gst/base/gstaggregator.c">the #GstAllocator</doc>
+            <type name="Gst.Allocator" c:type="GstAllocator*"/>
+          </parameter>
+          <parameter name="params" transfer-ownership="none" nullable="1" allow-none="1">
+            <doc xml:space="preserve" filename="../subprojects/gstreamer/libs/gst/base/gstaggregator.c">the #GstAllocationParams of @allocator</doc>
+            <type name="Gst.AllocationParams" c:type="const GstAllocationParams*"/>
+          </parameter>
+          <parameter name="query" transfer-ownership="full" nullable="1" allow-none="1">
+            <doc xml:space="preserve" filename="../subprojects/gstreamer/libs/gst/base/gstaggregator.c">the Allocation #GstQuery if any</doc>
+            <type name="Gst.Query" c:type="GstQuery*"/>
+          </parameter>
+        </parameters>
+      </method>
       <method name="set_force_live" c:identifier="gst_aggregator_set_force_live" version="1.22">
         <doc xml:space="preserve" filename="../subprojects/gstreamer/libs/gst/base/gstaggregator.c">Subclasses should call this at construction time in order for @self to
 aggregate on a timeout even when no live source is connected.</doc>
@@ -1705,9 +1871,11 @@ aggregate on a timeout even when no live source is connected.</doc>
         </return-value>
         <parameters>
           <instance-parameter name="self" transfer-ownership="none">
+            <doc xml:space="preserve" filename="../subprojects/gstreamer/libs/gst/base/gstaggregator.c">A #GstAggregator</doc>
             <type name="Aggregator" c:type="GstAggregator*"/>
           </instance-parameter>
           <parameter name="force_live" transfer-ownership="none">
+            <doc xml:space="preserve" filename="../subprojects/gstreamer/libs/gst/base/gstaggregator.c">The new value</doc>
             <type name="gboolean" c:type="gboolean"/>
           </parameter>
         </parameters>
@@ -1725,6 +1893,7 @@ sure upstream has had a fair chance to start up.</doc>
         </return-value>
         <parameters>
           <instance-parameter name="self" transfer-ownership="none">
+            <doc xml:space="preserve" filename="../subprojects/gstreamer/libs/gst/base/gstaggregator.c">A #GstAggregator</doc>
             <type name="Aggregator" c:type="GstAggregator*"/>
           </instance-parameter>
           <parameter name="ignore" transfer-ownership="none">
@@ -1805,9 +1974,11 @@ if it is used at all.</doc>
         </return-value>
         <parameters>
           <instance-parameter name="self" transfer-ownership="none">
+            <doc xml:space="preserve" filename="../subprojects/gstreamer/libs/gst/base/gstaggregator.c">A #GstAggregator</doc>
             <type name="Aggregator" c:type="GstAggregator*"/>
           </instance-parameter>
           <parameter name="segment" transfer-ownership="none">
+            <doc xml:space="preserve" filename="../subprojects/gstreamer/libs/gst/base/gstaggregator.c">The new #GstSegment</doc>
             <type name="Gst.Segment" c:type="const GstSegment*"/>
           </parameter>
         </parameters>
@@ -1921,17 +2092,21 @@ _finish_buffer from inside that function.</doc>
                  if the buffer should be dropped.</doc>
         <callback name="clip">
           <source-position filename="../subprojects/gstreamer/libs/gst/base/gstaggregator.h"/>
-          <return-value transfer-ownership="full">
+          <return-value transfer-ownership="full" nullable="1">
+            <doc xml:space="preserve" filename="../subprojects/gstreamer/libs/gst/base/gstaggregator.h">a #GstBuffer.</doc>
             <type name="Gst.Buffer" c:type="GstBuffer*"/>
           </return-value>
           <parameters>
             <parameter name="aggregator" transfer-ownership="none">
+              <doc xml:space="preserve" filename="../subprojects/gstreamer/libs/gst/base/gstaggregator.h">the #GstAggregator</doc>
               <type name="Aggregator" c:type="GstAggregator*"/>
             </parameter>
             <parameter name="aggregator_pad" transfer-ownership="none">
+              <doc xml:space="preserve" filename="../subprojects/gstreamer/libs/gst/base/gstaggregator.h">a #GstAggregatorPad</doc>
               <type name="AggregatorPad" c:type="GstAggregatorPad*"/>
             </parameter>
-            <parameter name="buf" transfer-ownership="none">
+            <parameter name="buf" transfer-ownership="full">
+              <doc xml:space="preserve" filename="../subprojects/gstreamer/libs/gst/base/gstaggregator.h">a #GstBuffer</doc>
               <type name="Gst.Buffer" c:type="GstBuffer*"/>
             </parameter>
           </parameters>
@@ -1973,12 +2148,15 @@ _finish_buffer from inside that function.</doc>
           </return-value>
           <parameters>
             <parameter name="aggregator" transfer-ownership="none">
+              <doc xml:space="preserve" filename="../subprojects/gstreamer/libs/gst/base/gstaggregator.h">the #GstAggregator</doc>
               <type name="Aggregator" c:type="GstAggregator*"/>
             </parameter>
             <parameter name="aggregator_pad" transfer-ownership="none">
+              <doc xml:space="preserve" filename="../subprojects/gstreamer/libs/gst/base/gstaggregator.h">a #GstAggregatorPad</doc>
               <type name="AggregatorPad" c:type="GstAggregatorPad*"/>
             </parameter>
-            <parameter name="event" transfer-ownership="none">
+            <parameter name="event" transfer-ownership="full">
+              <doc xml:space="preserve" filename="../subprojects/gstreamer/libs/gst/base/gstaggregator.h">a #GstEvent</doc>
               <type name="Gst.Event" c:type="GstEvent*"/>
             </parameter>
           </parameters>
@@ -2017,9 +2195,11 @@ _finish_buffer from inside that function.</doc>
           </return-value>
           <parameters>
             <parameter name="aggregator" transfer-ownership="none">
+              <doc xml:space="preserve" filename="../subprojects/gstreamer/libs/gst/base/gstaggregator.h">the #GstAggregator</doc>
               <type name="Aggregator" c:type="GstAggregator*"/>
             </parameter>
-            <parameter name="event" transfer-ownership="none">
+            <parameter name="event" transfer-ownership="full">
+              <doc xml:space="preserve" filename="../subprojects/gstreamer/libs/gst/base/gstaggregator.h">a #GstEvent</doc>
               <type name="Gst.Event" c:type="GstEvent*"/>
             </parameter>
           </parameters>
@@ -2141,27 +2321,32 @@ _finish_buffer from inside that function.</doc>
           </parameters>
         </callback>
       </field>
-      <field name="create_new_pad" introspectable="0">
+      <field name="create_new_pad">
         <doc xml:space="preserve" filename="../subprojects/gstreamer/libs/gst/base/gstaggregator.h">Optional.
                  Called when a new pad needs to be created. Allows subclass that
                  don't have a single sink pad template to provide a pad based
                  on the provided information.</doc>
-        <callback name="create_new_pad" introspectable="0">
+        <callback name="create_new_pad">
           <source-position filename="../subprojects/gstreamer/libs/gst/base/gstaggregator.h"/>
-          <return-value>
+          <return-value transfer-ownership="none">
+            <doc xml:space="preserve" filename="../subprojects/gstreamer/libs/gst/base/gstaggregator.h">a new #GstAggregatorPad.</doc>
             <type name="AggregatorPad" c:type="GstAggregatorPad*"/>
           </return-value>
           <parameters>
             <parameter name="self" transfer-ownership="none">
+              <doc xml:space="preserve" filename="../subprojects/gstreamer/libs/gst/base/gstaggregator.h">the #GstAggregator</doc>
               <type name="Aggregator" c:type="GstAggregator*"/>
             </parameter>
             <parameter name="templ" transfer-ownership="none">
+              <doc xml:space="preserve" filename="../subprojects/gstreamer/libs/gst/base/gstaggregator.h">the pad template to use</doc>
               <type name="Gst.PadTemplate" c:type="GstPadTemplate*"/>
             </parameter>
-            <parameter name="req_name" transfer-ownership="none">
+            <parameter name="req_name" transfer-ownership="none" nullable="1" allow-none="1">
+              <doc xml:space="preserve" filename="../subprojects/gstreamer/libs/gst/base/gstaggregator.h">requested pad name</doc>
               <type name="utf8" c:type="const gchar*"/>
             </parameter>
-            <parameter name="caps" transfer-ownership="none">
+            <parameter name="caps" transfer-ownership="none" nullable="1" allow-none="1">
+              <doc xml:space="preserve" filename="../subprojects/gstreamer/libs/gst/base/gstaggregator.h">caps for the pad</doc>
               <type name="Gst.Caps" c:type="const GstCaps*"/>
             </parameter>
           </parameters>
@@ -2181,12 +2366,14 @@ _finish_buffer from inside that function.</doc>
           </return-value>
           <parameters>
             <parameter name="self" transfer-ownership="none">
+              <doc xml:space="preserve" filename="../subprojects/gstreamer/libs/gst/base/gstaggregator.h">the #GstAggregator</doc>
               <type name="Aggregator" c:type="GstAggregator*"/>
             </parameter>
             <parameter name="caps" transfer-ownership="none">
+              <doc xml:space="preserve" filename="../subprojects/gstreamer/libs/gst/base/gstaggregator.h">the new source pad #GstCaps</doc>
               <type name="Gst.Caps" c:type="GstCaps*"/>
             </parameter>
-            <parameter name="ret" direction="out" caller-allocates="0" transfer-ownership="full" optional="1" allow-none="1">
+            <parameter name="ret" direction="out" caller-allocates="0" transfer-ownership="full" nullable="1">
               <type name="Gst.Caps" c:type="GstCaps**"/>
             </parameter>
           </parameters>
@@ -2200,13 +2387,16 @@ _finish_buffer from inside that function.</doc>
         <callback name="fixate_src_caps">
           <source-position filename="../subprojects/gstreamer/libs/gst/base/gstaggregator.h"/>
           <return-value transfer-ownership="full">
+            <doc xml:space="preserve" filename="../subprojects/gstreamer/libs/gst/base/gstaggregator.h">the fixated caps #GstCaps.</doc>
             <type name="Gst.Caps" c:type="GstCaps*"/>
           </return-value>
           <parameters>
             <parameter name="self" transfer-ownership="none">
+              <doc xml:space="preserve" filename="../subprojects/gstreamer/libs/gst/base/gstaggregator.h">the #GstAggregator</doc>
               <type name="Aggregator" c:type="GstAggregator*"/>
             </parameter>
-            <parameter name="caps" transfer-ownership="none">
+            <parameter name="caps" transfer-ownership="full">
+              <doc xml:space="preserve" filename="../subprojects/gstreamer/libs/gst/base/gstaggregator.h">a #GstCaps to fixate</doc>
               <type name="Gst.Caps" c:type="GstCaps*"/>
             </parameter>
           </parameters>
@@ -2303,12 +2493,15 @@ _finish_buffer from inside that function.</doc>
           </return-value>
           <parameters>
             <parameter name="aggregator" transfer-ownership="none">
+              <doc xml:space="preserve" filename="../subprojects/gstreamer/libs/gst/base/gstaggregator.h">the #GstAggregator</doc>
               <type name="Aggregator" c:type="GstAggregator*"/>
             </parameter>
             <parameter name="aggregator_pad" transfer-ownership="none">
+              <doc xml:space="preserve" filename="../subprojects/gstreamer/libs/gst/base/gstaggregator.h">a #GstAggregatorPad</doc>
               <type name="AggregatorPad" c:type="GstAggregatorPad*"/>
             </parameter>
-            <parameter name="event" transfer-ownership="none">
+            <parameter name="event" transfer-ownership="full">
+              <doc xml:space="preserve" filename="../subprojects/gstreamer/libs/gst/base/gstaggregator.h">a #GstEvent</doc>
               <type name="Gst.Event" c:type="GstEvent*"/>
             </parameter>
           </parameters>
@@ -2366,16 +2559,37 @@ _finish_buffer from inside that function.</doc>
           </return-value>
           <parameters>
             <parameter name="aggregator" transfer-ownership="none">
+              <doc xml:space="preserve" filename="../subprojects/gstreamer/libs/gst/base/gstaggregator.h">the #GstAggregator</doc>
               <type name="Aggregator" c:type="GstAggregator*"/>
             </parameter>
             <parameter name="aggregator_pad" transfer-ownership="none">
+              <doc xml:space="preserve" filename="../subprojects/gstreamer/libs/gst/base/gstaggregator.h">a #GstAggregatorPad</doc>
               <type name="AggregatorPad" c:type="GstAggregatorPad*"/>
             </parameter>
           </parameters>
         </callback>
       </field>
+      <field name="prepare_allocator">
+        <callback name="prepare_allocator">
+          <source-position filename="../subprojects/gstreamer/libs/gst/base/gstaggregator.h"/>
+          <return-value transfer-ownership="none">
+            <doc xml:space="preserve" filename="../subprojects/gstreamer/libs/gst/base/gstaggregator.h">whether the #GstBufferPool &amp; #GstAllocator could be configured.</doc>
+            <type name="gboolean" c:type="gboolean"/>
+          </return-value>
+          <parameters>
+            <parameter name="aggregator" transfer-ownership="none">
+              <doc xml:space="preserve" filename="../subprojects/gstreamer/libs/gst/base/gstaggregator.h">the #GstAggregator</doc>
+              <type name="Aggregator" c:type="GstAggregator*"/>
+            </parameter>
+            <parameter name="caps" transfer-ownership="none">
+              <doc xml:space="preserve" filename="../subprojects/gstreamer/libs/gst/base/gstaggregator.h">the negotiated #GstCaps</doc>
+              <type name="Gst.Caps" c:type="GstCaps*"/>
+            </parameter>
+          </parameters>
+        </callback>
+      </field>
       <field name="_gst_reserved" readable="0" private="1">
-        <array zero-terminated="0" fixed-size="15">
+        <array zero-terminated="0" fixed-size="14">
           <type name="gpointer" c:type="gpointer"/>
         </array>
       </field>
@@ -3515,6 +3729,38 @@ This must be called with sinkpad STREAM_LOCK held.</doc>
           </parameter>
         </parameters>
       </method>
+      <method name="set_allow_duplicated_pts" c:identifier="gst_base_parse_set_allow_duplicated_pts" version="1.30">
+        <doc xml:space="preserve" filename="../subprojects/gstreamer/libs/gst/base/gstbaseparse.c">By default, the base class will not allow two frames in a row to have the
+same PTS but instead will set the second frame's PTS to GST_CLOCK_TIME_NONE.
+Setting @allow_duplicated_pts would allow outputting the same PTS multiple
+times.
+
+For audio parsers this is generally not a good idea to allow as it can lead to
+unnecessary resyncs if upstream provides coarse grained timestamps and
+decoders and other elements generally interpolate missing timestamps based on
+the number of samples so missing timestamps would be fixed up later.
+
+For video parsers this generally should be allowed as various elements expect
+valid timestamps on all video frames and will error out or misbehave
+otherwise.
+
+This value is not reset during PAUSED-&gt;READY state changes. Subclasses
+can call this function from their instance init function.</doc>
+        <source-position filename="../subprojects/gstreamer/libs/gst/base/gstbaseparse.h"/>
+        <return-value transfer-ownership="none">
+          <type name="none" c:type="void"/>
+        </return-value>
+        <parameters>
+          <instance-parameter name="parse" transfer-ownership="none">
+            <doc xml:space="preserve" filename="../subprojects/gstreamer/libs/gst/base/gstbaseparse.c">a #GstBaseParse</doc>
+            <type name="BaseParse" c:type="GstBaseParse*"/>
+          </instance-parameter>
+          <parameter name="allow_duplicated_pts" transfer-ownership="none">
+            <doc xml:space="preserve" filename="../subprojects/gstreamer/libs/gst/base/gstbaseparse.c">%TRUE if parser should allow duplicated PTS on the output</doc>
+            <type name="gboolean" c:type="gboolean"/>
+          </parameter>
+        </parameters>
+      </method>
       <method name="set_average_bitrate" c:identifier="gst_base_parse_set_average_bitrate">
         <doc xml:space="preserve" filename="../subprojects/gstreamer/libs/gst/base/gstbaseparse.c">Optionally sets the average bitrate detected in media (if non-zero),
 e.g. based on metadata, as it will be posted to the application.
@@ -3522,7 +3768,10 @@ e.g. based on metadata, as it will be posted to the application.
 By default, announced average bitrate is estimated. The average bitrate
 is used to estimate the total duration of the stream and to estimate
 a seek position, if there's no index and the format is syncable
-(see gst_base_parse_set_syncable()).</doc>
+(see gst_base_parse_set_syncable()).
+
+This value is reset during PAUSED-&gt;READY state changes. Subclasses must
+call this function from #GstBaseParseClass::start if they want to set a static value.</doc>
         <source-position filename="../subprojects/gstreamer/libs/gst/base/gstbaseparse.h"/>
         <return-value transfer-ownership="none">
           <type name="none" c:type="void"/>
@@ -3543,7 +3792,10 @@ a seek position, if there's no index and the format is syncable
 when it is able to determine duration and/or notices a change in the media
 duration.  Alternatively, if @interval is non-zero (default), then stream
 duration is determined based on estimated bitrate, and updated every @interval
-frames.</doc>
+frames.
+
+This value is reset during PAUSED-&gt;READY state changes. Subclasses must
+call this function from #GstBaseParseClass::start if they want to set a static value.</doc>
         <source-position filename="../subprojects/gstreamer/libs/gst/base/gstbaseparse.h"/>
         <return-value transfer-ownership="none">
           <type name="none" c:type="void"/>
@@ -3572,7 +3824,10 @@ frames.</doc>
 and timestamping.  When performing segment clipping, or seeking to a specific
 location, a corresponding decoder might need an initial @lead_in and a
 following @lead_out number of frames to ensure the desired segment is
-entirely filled upon decoding.</doc>
+entirely filled upon decoding.
+
+This value is reset during PAUSED-&gt;READY state changes. Subclasses must
+call this function from #GstBaseParseClass::start if they want to set a static value.</doc>
         <source-position filename="../subprojects/gstreamer/libs/gst/base/gstbaseparse.h"/>
         <return-value transfer-ownership="none">
           <type name="none" c:type="void"/>
@@ -3603,7 +3858,10 @@ entirely filled upon decoding.</doc>
       <method name="set_has_timing_info" c:identifier="gst_base_parse_set_has_timing_info">
         <doc xml:space="preserve" filename="../subprojects/gstreamer/libs/gst/base/gstbaseparse.c">Set if frames carry timing information which the subclass can (generally)
 parse and provide.  In particular, intrinsic (rather than estimated) time
-can be obtained following a seek.</doc>
+can be obtained following a seek.
+
+This value is reset during PAUSED-&gt;READY state changes. Subclasses must
+call this function from #GstBaseParseClass::start if they want to set a static value.</doc>
         <source-position filename="../subprojects/gstreamer/libs/gst/base/gstbaseparse.h"/>
         <return-value transfer-ownership="none">
           <type name="none" c:type="void"/>
@@ -3623,7 +3881,10 @@ can be obtained following a seek.</doc>
         <doc xml:space="preserve" filename="../subprojects/gstreamer/libs/gst/base/gstbaseparse.c">By default, the base class might try to infer PTS from DTS and vice
 versa.  While this is generally correct for audio data, it may not
 be otherwise. Sub-classes implementing such formats should disable
-timestamp inferring.</doc>
+timestamp inferring.
+
+This value is retained over PAUSED-&gt;READY state changes. Subclasses
+can call this function from their instance init function.</doc>
         <source-position filename="../subprojects/gstreamer/libs/gst/base/gstbaseparse.h"/>
         <return-value transfer-ownership="none">
           <type name="none" c:type="void"/>
@@ -3646,7 +3907,10 @@ particular parsing of the format, it typically corresponds to 1 frame duration.
 
 If the provided values changed from previously provided ones, this will
 also post a LATENCY message on the bus so the pipeline can reconfigure its
-global latency.</doc>
+global latency.
+
+This value is retained over PAUSED-&gt;READY state changes. Subclasses
+can call this function from their instance init function.</doc>
         <source-position filename="../subprojects/gstreamer/libs/gst/base/gstbaseparse.h"/>
         <return-value transfer-ownership="none">
           <type name="none" c:type="void"/>
@@ -3668,7 +3932,10 @@ global latency.</doc>
       </method>
       <method name="set_min_frame_size" c:identifier="gst_base_parse_set_min_frame_size">
         <doc xml:space="preserve" filename="../subprojects/gstreamer/libs/gst/base/gstbaseparse.c">Subclass can use this function to tell the base class that it needs to
-be given buffers of at least @min_size bytes.</doc>
+be given buffers of at least @min_size bytes.
+
+This value is reset during PAUSED-&gt;READY state changes. Subclasses must
+call this function from #GstBaseParseClass::start if they want to set a static value.</doc>
         <source-position filename="../subprojects/gstreamer/libs/gst/base/gstbaseparse.h"/>
         <return-value transfer-ownership="none">
           <type name="none" c:type="void"/>
@@ -3692,7 +3959,10 @@ applies when operating in push mode). That is, incoming buffers are
 pushed through unmodified, i.e. no #GstBaseParseClass::handle_frame
 will be invoked, but #GstBaseParseClass::pre_push_frame will still be
 invoked, so subclass can perform as much or as little is appropriate for
-passthrough semantics in #GstBaseParseClass::pre_push_frame.</doc>
+passthrough semantics in #GstBaseParseClass::pre_push_frame.
+
+This value is reset during PAUSED-&gt;READY state changes. Subclasses must
+call this function from #GstBaseParseClass::start if they want to set a static value.</doc>
         <source-position filename="../subprojects/gstreamer/libs/gst/base/gstbaseparse.h"/>
         <return-value transfer-ownership="none">
           <type name="none" c:type="void"/>
@@ -3712,7 +3982,10 @@ passthrough semantics in #GstBaseParseClass::pre_push_frame.</doc>
         <doc xml:space="preserve" filename="../subprojects/gstreamer/libs/gst/base/gstbaseparse.c">By default, the base class will guess PTS timestamps using a simple
 interpolation (previous timestamp + duration), which is incorrect for
 data streams with reordering, where PTS can go backward. Sub-classes
-implementing such formats should disable PTS interpolation.</doc>
+implementing such formats should disable PTS interpolation.
+
+This value is retained over PAUSED-&gt;READY state changes. Subclasses
+can call this function from their instance init function.</doc>
         <source-position filename="../subprojects/gstreamer/libs/gst/base/gstbaseparse.h"/>
         <return-value transfer-ownership="none">
           <type name="none" c:type="void"/>
@@ -3731,7 +4004,10 @@ implementing such formats should disable PTS interpolation.</doc>
       <method name="set_syncable" c:identifier="gst_base_parse_set_syncable">
         <doc xml:space="preserve" filename="../subprojects/gstreamer/libs/gst/base/gstbaseparse.c">Set if frame starts can be identified. This is set by default and
 determines whether seeking based on bitrate averages
-is possible for a format/stream.</doc>
+is possible for a format/stream.
+
+This value is reset during PAUSED-&gt;READY state changes. Subclasses must
+call this function from #GstBaseParseClass::start if they want to set a static value.</doc>
         <source-position filename="../subprojects/gstreamer/libs/gst/base/gstbaseparse.h"/>
         <return-value transfer-ownership="none">
           <type name="none" c:type="void"/>
@@ -5273,6 +5549,13 @@ set to %NULL. This can be useful if you need buffers to be released as soon
 as possible, eg. if you're using a buffer pool.</doc>
         <type name="gboolean" c:type="gboolean"/>
       </property>
+      <property name="enable-last-sample-notify" version="1.30" writable="1" transfer-ownership="none" default-value="FALSE">
+        <doc xml:space="preserve" filename="../subprojects/gstreamer/libs/gst/base/gstbasesink.c">Enable emission of the "notify::last-sample" signal. This is disabled by
+default as it can be expensive: the notification is emitted for every
+buffer that updates the last sample. It has no effect unless
+#GstBaseSink:enable-last-sample is also %TRUE.</doc>
+        <type name="gboolean" c:type="gboolean"/>
+      </property>
       <property name="last-sample" transfer-ownership="none" getter="get_last_sample">
         <doc xml:space="preserve" filename="../subprojects/gstreamer/libs/gst/base/gstbasesink.c">The last buffer that arrived in the sink and was used for preroll or for
 rendering. This property can be used to generate thumbnails. This property
@@ -6057,6 +6340,26 @@ buffer is allocated.</doc>
           </instance-parameter>
         </parameters>
       </virtual-method>
+      <virtual-method name="prepare_allocator" version="1.30">
+        <doc xml:space="preserve" filename="../subprojects/gstreamer/libs/gst/base/gstbasesrc.h">Orchestrates #GstBufferPool &amp; #GstAllocator configuration for
+the negotiated @caps. Default implementation relies on an
+Allocation #GstQuery &amp; calls `decide_allocation()`.</doc>
+        <source-position filename="../subprojects/gstreamer/libs/gst/base/gstbasesrc.h"/>
+        <return-value transfer-ownership="none">
+          <doc xml:space="preserve" filename="../subprojects/gstreamer/libs/gst/base/gstbasesrc.h">whether the #GstBufferPool &amp; #GstAllocator could be configured.</doc>
+          <type name="gboolean" c:type="gboolean"/>
+        </return-value>
+        <parameters>
+          <instance-parameter name="src" transfer-ownership="none">
+            <doc xml:space="preserve" filename="../subprojects/gstreamer/libs/gst/base/gstbasesrc.h">the #GstBaseSrc</doc>
+            <type name="BaseSrc" c:type="GstBaseSrc*"/>
+          </instance-parameter>
+          <parameter name="caps" transfer-ownership="none">
+            <doc xml:space="preserve" filename="../subprojects/gstreamer/libs/gst/base/gstbasesrc.h">the negotiated #GstCaps</doc>
+            <type name="Gst.Caps" c:type="GstCaps*"/>
+          </parameter>
+        </parameters>
+      </virtual-method>
       <virtual-method name="prepare_seek_segment">
         <doc xml:space="preserve" filename="../subprojects/gstreamer/libs/gst/base/gstbasesrc.h">Prepare the #GstSegment that will be passed to the
   #GstBaseSrcClass::do_seek vmethod for executing a seek
@@ -6403,6 +6706,33 @@ This function is mostly used by subclasses.</doc>
           <parameter name="max_latency" direction="out" caller-allocates="0" transfer-ownership="full" optional="1" allow-none="1">
             <doc xml:space="preserve" filename="../subprojects/gstreamer/libs/gst/base/gstbasesrc.c">the max latency of the source</doc>
             <type name="Gst.ClockTime" c:type="GstClockTime*"/>
+          </parameter>
+        </parameters>
+      </method>
+      <method name="set_allocator" c:identifier="gst_base_src_set_allocator" version="1.30">
+        <doc xml:space="preserve" filename="../subprojects/gstreamer/libs/gst/base/gstbasesrc.c">Allows #GstBaseSrc sub-classes to set the buffer @pool, memory @allocator
+and its @params.</doc>
+        <source-position filename="../subprojects/gstreamer/libs/gst/base/gstbasesrc.h"/>
+        <return-value transfer-ownership="none">
+          <doc xml:space="preserve" filename="../subprojects/gstreamer/libs/gst/base/gstbasesrc.c">TRUE on success or FALSE if buffer @pool activation failed</doc>
+          <type name="gboolean" c:type="gboolean"/>
+        </return-value>
+        <parameters>
+          <instance-parameter name="src" transfer-ownership="none">
+            <doc xml:space="preserve" filename="../subprojects/gstreamer/libs/gst/base/gstbasesrc.c">a #GstBaseSrc</doc>
+            <type name="BaseSrc" c:type="GstBaseSrc*"/>
+          </instance-parameter>
+          <parameter name="pool" transfer-ownership="full" nullable="1" allow-none="1">
+            <doc xml:space="preserve" filename="../subprojects/gstreamer/libs/gst/base/gstbasesrc.c">the #GstBufferPool</doc>
+            <type name="Gst.BufferPool" c:type="GstBufferPool*"/>
+          </parameter>
+          <parameter name="allocator" transfer-ownership="full" nullable="1" allow-none="1">
+            <doc xml:space="preserve" filename="../subprojects/gstreamer/libs/gst/base/gstbasesrc.c">the #GstAllocator</doc>
+            <type name="Gst.Allocator" c:type="GstAllocator*"/>
+          </parameter>
+          <parameter name="params" transfer-ownership="none" nullable="1" allow-none="1">
+            <doc xml:space="preserve" filename="../subprojects/gstreamer/libs/gst/base/gstbasesrc.c">the #GstAllocationParams of @allocator</doc>
+            <type name="Gst.AllocationParams" c:type="const GstAllocationParams*"/>
           </parameter>
         </parameters>
       </method>
@@ -7112,8 +7442,27 @@ buffers.</doc>
           </parameters>
         </callback>
       </field>
+      <field name="prepare_allocator">
+        <callback name="prepare_allocator">
+          <source-position filename="../subprojects/gstreamer/libs/gst/base/gstbasesrc.h"/>
+          <return-value transfer-ownership="none">
+            <doc xml:space="preserve" filename="../subprojects/gstreamer/libs/gst/base/gstbasesrc.h">whether the #GstBufferPool &amp; #GstAllocator could be configured.</doc>
+            <type name="gboolean" c:type="gboolean"/>
+          </return-value>
+          <parameters>
+            <parameter name="src" transfer-ownership="none">
+              <doc xml:space="preserve" filename="../subprojects/gstreamer/libs/gst/base/gstbasesrc.h">the #GstBaseSrc</doc>
+              <type name="BaseSrc" c:type="GstBaseSrc*"/>
+            </parameter>
+            <parameter name="caps" transfer-ownership="none">
+              <doc xml:space="preserve" filename="../subprojects/gstreamer/libs/gst/base/gstbasesrc.h">the negotiated #GstCaps</doc>
+              <type name="Gst.Caps" c:type="GstCaps*"/>
+            </parameter>
+          </parameters>
+        </callback>
+      </field>
       <field name="_gst_reserved" readable="0" private="1">
-        <array zero-terminated="0" fixed-size="20">
+        <array zero-terminated="0" fixed-size="19">
           <type name="gpointer" c:type="gpointer"/>
         </array>
       </field>
@@ -7393,6 +7742,26 @@ It provides for:
           </parameter>
           <parameter name="size" direction="out" caller-allocates="0" transfer-ownership="full">
             <type name="gsize" c:type="gsize*"/>
+          </parameter>
+        </parameters>
+      </virtual-method>
+      <virtual-method name="prepare_allocator" version="1.30">
+        <doc xml:space="preserve" filename="../subprojects/gstreamer/libs/gst/base/gstbasetransform.h">Orchestrates #GstBufferPool &amp; #GstAllocator configuration for
+the negotiated @caps. Default implementation relies on an
+Allocation #GstQuery &amp; calls `decide_allocation()`.</doc>
+        <source-position filename="../subprojects/gstreamer/libs/gst/base/gstbasetransform.h"/>
+        <return-value transfer-ownership="none">
+          <doc xml:space="preserve" filename="../subprojects/gstreamer/libs/gst/base/gstbasetransform.h">whether the #GstBufferPool &amp; #GstAllocator could be configured.</doc>
+          <type name="gboolean" c:type="gboolean"/>
+        </return-value>
+        <parameters>
+          <instance-parameter name="trans" transfer-ownership="none">
+            <doc xml:space="preserve" filename="../subprojects/gstreamer/libs/gst/base/gstbasetransform.h">the #GstBaseTransform</doc>
+            <type name="BaseTransform" c:type="GstBaseTransform*"/>
+          </instance-parameter>
+          <parameter name="caps" transfer-ownership="none">
+            <doc xml:space="preserve" filename="../subprojects/gstreamer/libs/gst/base/gstbasetransform.h">the negotiated #GstCaps</doc>
+            <type name="Gst.Caps" c:type="GstCaps*"/>
           </parameter>
         </parameters>
       </virtual-method>
@@ -7809,6 +8178,37 @@ were set that influence the output format.</doc>
             <doc xml:space="preserve" filename="../subprojects/gstreamer/libs/gst/base/gstbasetransform.c">a #GstBaseTransform</doc>
             <type name="BaseTransform" c:type="GstBaseTransform*"/>
           </instance-parameter>
+        </parameters>
+      </method>
+      <method name="set_allocator" c:identifier="gst_base_transform_set_allocator" version="1.30">
+        <doc xml:space="preserve" filename="../subprojects/gstreamer/libs/gst/base/gstbasetransform.c">Allows #GstBaseTransform sub-classes to set the buffer @pool, memory @allocator,
+its @params and the @query if they originate from an Allocation #GstQuery.</doc>
+        <source-position filename="../subprojects/gstreamer/libs/gst/base/gstbasetransform.h"/>
+        <return-value transfer-ownership="none">
+          <doc xml:space="preserve" filename="../subprojects/gstreamer/libs/gst/base/gstbasetransform.c">TRUE on success or FALSE if buffer @pool activation failed</doc>
+          <type name="gboolean" c:type="gboolean"/>
+        </return-value>
+        <parameters>
+          <instance-parameter name="trans" transfer-ownership="none">
+            <doc xml:space="preserve" filename="../subprojects/gstreamer/libs/gst/base/gstbasetransform.c">a #GstBaseTransform</doc>
+            <type name="BaseTransform" c:type="GstBaseTransform*"/>
+          </instance-parameter>
+          <parameter name="pool" transfer-ownership="full" nullable="1" allow-none="1">
+            <doc xml:space="preserve" filename="../subprojects/gstreamer/libs/gst/base/gstbasetransform.c">the #GstBufferPool</doc>
+            <type name="Gst.BufferPool" c:type="GstBufferPool*"/>
+          </parameter>
+          <parameter name="allocator" transfer-ownership="full" nullable="1" allow-none="1">
+            <doc xml:space="preserve" filename="../subprojects/gstreamer/libs/gst/base/gstbasetransform.c">the #GstAllocator</doc>
+            <type name="Gst.Allocator" c:type="GstAllocator*"/>
+          </parameter>
+          <parameter name="params" transfer-ownership="none" nullable="1" allow-none="1">
+            <doc xml:space="preserve" filename="../subprojects/gstreamer/libs/gst/base/gstbasetransform.c">the #GstAllocationParams of @allocator</doc>
+            <type name="Gst.AllocationParams" c:type="const GstAllocationParams*"/>
+          </parameter>
+          <parameter name="query" transfer-ownership="full" nullable="1" allow-none="1">
+            <doc xml:space="preserve" filename="../subprojects/gstreamer/libs/gst/base/gstbasetransform.c">the Allocation #GstQuery if any</doc>
+            <type name="Gst.Query" c:type="GstQuery*"/>
+          </parameter>
         </parameters>
       </method>
       <method name="set_gap_aware" c:identifier="gst_base_transform_set_gap_aware">
@@ -8541,8 +8941,27 @@ same type and quantity) it should provide @transform_ip.</doc>
           </parameters>
         </callback>
       </field>
+      <field name="prepare_allocator">
+        <callback name="prepare_allocator">
+          <source-position filename="../subprojects/gstreamer/libs/gst/base/gstbasetransform.h"/>
+          <return-value transfer-ownership="none">
+            <doc xml:space="preserve" filename="../subprojects/gstreamer/libs/gst/base/gstbasetransform.h">whether the #GstBufferPool &amp; #GstAllocator could be configured.</doc>
+            <type name="gboolean" c:type="gboolean"/>
+          </return-value>
+          <parameters>
+            <parameter name="trans" transfer-ownership="none">
+              <doc xml:space="preserve" filename="../subprojects/gstreamer/libs/gst/base/gstbasetransform.h">the #GstBaseTransform</doc>
+              <type name="BaseTransform" c:type="GstBaseTransform*"/>
+            </parameter>
+            <parameter name="caps" transfer-ownership="none">
+              <doc xml:space="preserve" filename="../subprojects/gstreamer/libs/gst/base/gstbasetransform.h">the negotiated #GstCaps</doc>
+              <type name="Gst.Caps" c:type="GstCaps*"/>
+            </parameter>
+          </parameters>
+        </callback>
+      </field>
       <field name="_gst_reserved" readable="0" private="1">
-        <array zero-terminated="0" fixed-size="18">
+        <array zero-terminated="0" fixed-size="17">
           <type name="gpointer" c:type="gpointer"/>
         </array>
       </field>
@@ -14212,7 +14631,7 @@ of size @struct_size, with an initial queue size of @initial_size.</doc>
       <method name="get_typefind" c:identifier="gst_type_find_data_get_typefind" version="1.22" introspectable="0">
         <doc xml:space="preserve" filename="../subprojects/gstreamer/libs/gst/base/gsttypefindhelper.c">Returns #GstTypeFind associated with #GstTypeFindData</doc>
         <source-position filename="../subprojects/gstreamer/libs/gst/base/gsttypefindhelper.h"/>
-        <return-value>
+        <return-value transfer-ownership="full">
           <doc xml:space="preserve" filename="../subprojects/gstreamer/libs/gst/base/gsttypefindhelper.c">#GstTypeFind.</doc>
           <type name="Gst.TypeFind" c:type="GstTypeFind*"/>
         </return-value>

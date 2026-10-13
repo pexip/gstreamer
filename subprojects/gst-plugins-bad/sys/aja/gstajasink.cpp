@@ -54,6 +54,12 @@
 #include <ajaanc/includes/ancillarylist.h>
 #include <ajantv2/includes/ntv2rp188.h>
 
+#ifdef _WIN32
+#include <windows.h>
+#else
+#include <pthread.h>
+#endif
+
 #include "gstajacommon.h"
 #include "gstajasink.h"
 
@@ -91,7 +97,9 @@ enum {
   PROP_QUEUE_SIZE,
   PROP_START_FRAME,
   PROP_END_FRAME,
+#if !defined(__APPLE__)
   PROP_OUTPUT_CPU_CORE,
+#endif
   PROP_HANDLE_ANCILLARY_META,
 };
 
@@ -263,6 +271,7 @@ static void gst_aja_sink_class_init(GstAjaSinkClass *klass) {
           (GParamFlags)(G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
                         G_PARAM_CONSTRUCT)));
 
+#if !defined(__APPLE__)
   g_object_class_install_property(
       gobject_class, PROP_OUTPUT_CPU_CORE,
       g_param_spec_uint(
@@ -272,6 +281,7 @@ static void gst_aja_sink_class_init(GstAjaSinkClass *klass) {
           0, G_MAXUINT, DEFAULT_OUTPUT_CPU_CORE,
           (GParamFlags)(G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
                         G_PARAM_CONSTRUCT)));
+#endif
 
   /**
    * GstAjaSink:handle-ancillary-meta:
@@ -326,7 +336,9 @@ static void gst_aja_sink_init(GstAjaSink *self) {
   self->output_destination = DEFAULT_OUTPUT_DESTINATION;
   self->timecode_index = DEFAULT_TIMECODE_INDEX;
   self->reference_source = DEFAULT_REFERENCE_SOURCE;
+#if !defined(__APPLE__)
   self->output_cpu_core = DEFAULT_OUTPUT_CPU_CORE;
+#endif
   self->handle_ancillary_meta = DEFAULT_HANDLE_ANCILLARY_META;
 
   self->queue =
@@ -379,9 +391,11 @@ void gst_aja_sink_set_property(GObject *object, guint property_id,
     case PROP_CEA708_LINE_NUMBER:
       self->cea708_line_number = g_value_get_uint(value);
       break;
+#if !defined(__APPLE__)
     case PROP_OUTPUT_CPU_CORE:
       self->output_cpu_core = g_value_get_uint(value);
       break;
+#endif
     case PROP_HANDLE_ANCILLARY_META:
       self->handle_ancillary_meta = g_value_get_boolean(value);
       break;
@@ -435,9 +449,11 @@ void gst_aja_sink_get_property(GObject *object, guint property_id,
     case PROP_CEA708_LINE_NUMBER:
       g_value_set_uint(value, self->cea708_line_number);
       break;
+#if !defined(__APPLE__)
     case PROP_OUTPUT_CPU_CORE:
       g_value_set_uint(value, self->output_cpu_core);
       break;
+#endif
     case PROP_HANDLE_ANCILLARY_META:
       g_value_set_boolean(value, self->handle_ancillary_meta);
       break;
@@ -803,7 +819,7 @@ static gboolean gst_aja_sink_set_caps(GstBaseSink *bsink, GstCaps *caps) {
   }
   GST_DEBUG_OBJECT(self, "Configuring reference source %d",
                    (int)reference_source);
-  self->device->device->SetFramePulseReference(reference_source);
+  self->device->device->SetReference(reference_source);
 
   self->device->device->DMABufferAutoLock(false, true, 0);
 
@@ -1474,21 +1490,12 @@ static GstFlowReturn gst_aja_sink_render(GstBaseSink *bsink,
                                          GstBuffer *buffer) {
   GstAjaSink *self = GST_AJA_SINK(bsink);
   GstFlowReturn flow_ret = GST_FLOW_OK;
-  GstAjaAudioMeta *meta;
+  GstAjaAudioMeta* meta = NULL;
   GstBuffer *item_buffer = NULL, *item_audio_buffer = NULL;
-  GstVideoTimeCodeMeta *tc_meta;
+  GstVideoTimeCodeMeta* tc_meta = NULL;
   QueueItem item = {
-      .type = QUEUE_ITEM_TYPE_FRAME,
-      .video_buffer = NULL,
-      .video_map = GST_MAP_INFO_INIT,
-      .audio_buffer = NULL,
-      .audio_map = GST_MAP_INFO_INIT,
-      .tc = NTV2_RP188(),
-      .anc_buffer = NULL,
-      .anc_map = GST_MAP_INFO_INIT,
-      .anc_buffer2 = NULL,
-      .anc_map2 = GST_MAP_INFO_INIT,
-  };
+      QUEUE_ITEM_TYPE_FRAME, NULL, GST_MAP_INFO_INIT, NULL, GST_MAP_INFO_INIT,
+      NTV2_RP188(),          NULL, GST_MAP_INFO_INIT, NULL, GST_MAP_INFO_INIT};
 
   guint video_buffer_size = ::GetVideoActiveSize(
       self->video_format, ::NTV2_FBF_10BIT_YCBCR, self->vanc_mode);
@@ -1749,8 +1756,8 @@ static GstFlowReturn gst_aja_sink_render(GstBaseSink *bsink,
       AJAAncillaryData pkt;
       guint8 data[256];
 
-      pkt.SetDID(anc_meta->DID);
-      pkt.SetSID(anc_meta->SDID_block_number);
+      pkt.SetDID(anc_meta->DID & 0xff);
+      pkt.SetSID(anc_meta->SDID_block_number & 0xff);
       pkt.SetDataLocation(loc);
       pkt.SetDataCoding(AJAAncillaryDataCoding_Digital);
 
@@ -1892,7 +1899,26 @@ static void output_thread_func(AJAThread *thread, void *data) {
   guint64 frames_dropped_last = G_MAXUINT64;
   AUTOCIRCULATE_TRANSFER transfer;
 
+#if defined(__APPLE__)
+  pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
+#else
   if (self->output_cpu_core != G_MAXUINT) {
+#ifdef _WIN32
+    if (self->output_cpu_core < 64) {
+      const DWORD_PTR mask = 1ULL << self->output_cpu_core;
+      HANDLE current_thread = GetCurrentThread();
+
+      if (SetThreadAffinityMask(current_thread, mask) == 0) {
+        GST_ERROR_OBJECT(self,
+                         "Failed to set affinity for current thread to core %u",
+                         self->output_cpu_core);
+      }
+    } else {
+      // SetThreadAffinityMask can only handle up to 64 processors
+      GST_ERROR_OBJECT(self, "Invalid or out of range core %u",
+                       self->output_cpu_core);
+    }
+#else
     cpu_set_t mask;
     pthread_t current_thread = pthread_self();
 
@@ -1904,7 +1930,9 @@ static void output_thread_func(AJAThread *thread, void *data) {
                        "Failed to set affinity for current thread to core %u",
                        self->output_cpu_core);
     }
+#endif
   }
+#endif  // defined(__APPLE__)
 
   g_mutex_lock(&self->queue_lock);
 restart:

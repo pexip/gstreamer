@@ -91,17 +91,20 @@ gst_ffmpeg_channel_positions_to_layout (const GstAudioChannelPosition *
 {
   gint i, j;
   guint64 ret = 0;
-  gint channels_found = 0;
+  gint channels_found = 0, none_channels = 0;
 
 #if LIBAVUTIL_VERSION_INT >= AV_VERSION_INT(57, 28, 100)
   g_assert (layout);
 
   if (!pos) {
-    memset (layout, 0, sizeof (AVChannelLayout));
+    av_channel_layout_uninit (layout);
+    layout->order = AV_CHANNEL_ORDER_UNSPEC;
+    layout->nb_channels = channels;
     return;
   }
 
   if (channels == 1 && pos[0] == GST_AUDIO_CHANNEL_POSITION_MONO) {
+    av_channel_layout_uninit (layout);
     *layout = (AVChannelLayout) AV_CHANNEL_LAYOUT_MONO;
     return;
   }
@@ -114,21 +117,35 @@ gst_ffmpeg_channel_positions_to_layout (const GstAudioChannelPosition *
 #endif
 
   for (i = 0; i < channels; i++) {
-    for (j = 0; j < G_N_ELEMENTS (_ff_to_gst_layout); j++) {
-      if (_ff_to_gst_layout[j].gst == pos[i]) {
-        ret |= _ff_to_gst_layout[j].ff;
-        channels_found++;
-        break;
+    if (pos[i] == GST_AUDIO_CHANNEL_POSITION_NONE) {
+      /* We cannot handle some positioned and some unpositioned channels. Assume
+       * all are unpositioned */
+      none_channels++;
+      goto beach;
+    } else {
+      for (j = 0; j < G_N_ELEMENTS (_ff_to_gst_layout); j++) {
+        if (_ff_to_gst_layout[j].gst == pos[i]) {
+          ret |= _ff_to_gst_layout[j].ff;
+          channels_found++;
+          break;
+        }
       }
     }
   }
 
+beach:
 #if LIBAVUTIL_VERSION_INT >= AV_VERSION_INT(57, 28, 100)
-  if (channels_found != channels && av_channel_layout_check (layout)) {
-    memset (layout, 0, sizeof (AVChannelLayout));
+  if (none_channels > 0) {
+    av_channel_layout_uninit (layout);
+    layout->order = AV_CHANNEL_ORDER_UNSPEC;
+    layout->nb_channels = channels;
+    return;
+  } else if (channels_found != channels && av_channel_layout_check (layout)) {
+    av_channel_layout_uninit (layout);
     return;
   }
 
+  av_channel_layout_uninit (layout);
   layout->u.mask = ret;
   layout->nb_channels = channels_found;
   layout->order = AV_CHANNEL_ORDER_NATIVE;
@@ -204,7 +221,8 @@ gst_ffmpeg_channel_layout_to_gst (guint64 channel_layout, gint channels,
             if (_ff_to_gst_layout[i].gst == GST_AUDIO_CHANNEL_POSITION_NONE)
               none_layout = TRUE;
           }
-        } else if (channel_layout->order == AV_CHANNEL_ORDER_CUSTOM) {
+        } else if (channel_layout->order == AV_CHANNEL_ORDER_CUSTOM
+            && i < channel_layout->nb_channels) {
           if (_ff_to_gst_layout[i].ff == (1ULL << channel_layout->u.map[i].id)) {
             pos[j++] = _ff_to_gst_layout[i].gst;
 
@@ -245,6 +263,25 @@ gst_ffmpeg_channel_layout_to_gst (guint64 channel_layout, gint channels,
   if (none_layout) {
     if (nchannels == 1) {
       pos[0] = GST_AUDIO_CHANNEL_POSITION_MONO;
+#if LIBAVUTIL_VERSION_INT >= AV_VERSION_INT(57, 28, 100)
+    } else if (nchannels == 2
+        && channel_layout->order != AV_CHANNEL_ORDER_CUSTOM) {
+      pos[0] = GST_AUDIO_CHANNEL_POSITION_FRONT_LEFT;
+      pos[1] = GST_AUDIO_CHANNEL_POSITION_FRONT_RIGHT;
+    } else {
+      guint i;
+
+      if (nchannels == 2 && channel_layout->order == AV_CHANNEL_ORDER_CUSTOM
+          && channel_layout->u.map[0].id == AV_CHAN_FRONT_LEFT
+          && channel_layout->u.map[1].id == AV_CHAN_FRONT_RIGHT) {
+        pos[0] = GST_AUDIO_CHANNEL_POSITION_FRONT_LEFT;
+        pos[1] = GST_AUDIO_CHANNEL_POSITION_FRONT_RIGHT;
+      } else {
+        for (i = 0; i < nchannels && i < 64; i++)
+          pos[i] = GST_AUDIO_CHANNEL_POSITION_NONE;
+      }
+    }
+#else
     } else if (nchannels == 2) {
       pos[0] = GST_AUDIO_CHANNEL_POSITION_FRONT_LEFT;
       pos[1] = GST_AUDIO_CHANNEL_POSITION_FRONT_RIGHT;
@@ -254,6 +291,7 @@ gst_ffmpeg_channel_layout_to_gst (guint64 channel_layout, gint channels,
       for (i = 0; i < nchannels && i < 64; i++)
         pos[i] = GST_AUDIO_CHANNEL_POSITION_NONE;
     }
+#endif
   }
 
   return TRUE;
@@ -656,7 +694,7 @@ gst_ff_aud_caps_new (AVCodecContext * context, AVCodec * codec,
 #else
   if (context != NULL && context->channels != -1) {
 #endif
-    GstAudioChannelPosition pos[64];
+    GstAudioChannelPosition pos[64] = { GST_AUDIO_CHANNEL_POSITION_INVALID, };
     guint64 mask;
 
 #if LIBAVUTIL_VERSION_INT >= AV_VERSION_INT(57, 28, 100)
@@ -665,11 +703,18 @@ gst_ff_aud_caps_new (AVCodecContext * context, AVCodec * codec,
         "channels", G_TYPE_INT, context->ch_layout.nb_channels, NULL);
 
     static const AVChannelLayout mono = AV_CHANNEL_LAYOUT_MONO;
-    const gboolean needs_mask = (context->ch_layout.nb_channels == 1 &&
-        av_channel_layout_compare (&context->ch_layout, &mono) != 0)
-        || (context->ch_layout.nb_channels > 1
-        && gst_ffmpeg_channel_layout_to_gst (&context->ch_layout,
-            context->ch_layout.nb_channels, pos));
+    gboolean needs_mask = FALSE;
+
+    if (context->ch_layout.nb_channels == 1 &&
+        av_channel_layout_compare (&context->ch_layout, &mono) != 0) {
+      pos[0] = GST_AUDIO_CHANNEL_POSITION_MONO;
+      needs_mask = TRUE;
+    } else if (context->ch_layout.nb_channels > 1
+        && context->ch_layout.nb_channels <= 64) {
+      gst_ffmpeg_channel_layout_to_gst (&context->ch_layout,
+          context->ch_layout.nb_channels, pos);
+      needs_mask = TRUE;
+    }
 
     if (needs_mask &&
         gst_audio_channel_positions_to_mask (pos,
@@ -815,6 +860,9 @@ gst_ff_aud_caps_new (AVCodecContext * context, AVCodec * codec,
       case AV_CODEC_ID_WMAPRO:
       case AV_CODEC_ID_TRUEHD:
         maxchannels = 8;
+        break;
+      case AV_CODEC_ID_TTA:
+        maxchannels = 16;
         break;
       default:
         break;

@@ -5,9 +5,17 @@ if ptp_helper_option.disabled()
   subdir_done()
 endif
 
-if host_system not in ['linux', 'freebsd', 'openbsd', 'netbsd', 'dragonfly', 'darwin', 'sunos', 'solaris', 'illumos', 'windows', 'gnu']
+ptp_supported = false
+if host_system in ['linux', 'darwin', 'freebsd', 'openbsd', 'netbsd', 'dragonfly', 'sunos', 'solaris', 'illumos', 'windows', 'gnu']
+  ptp_supported = true
+  if host_system == 'darwin' and subsystem != 'macos'
+    ptp_supported = false
+  endif
+endif
+
+if not ptp_supported
   if ptp_helper_option.enabled()
-    error('PTP not supported on this OS')
+    error(f'PTP not supported on @host_system@ (@subsystem@)')
   endif
   subdir_done()
 endif
@@ -108,13 +116,16 @@ exe = executable('gst-ptp-helper', 'main.rs',
   install_dir : helpers_install_dir,
   install : true)
 
-exe_test = executable('gst-ptp-helper-test', 'main.rs',
-  override_options : ['rust_std=2018'],
-  rust_args : ['--test', rust_args],
-  dependencies : [cap_dep],
-  link_with : conf)
+# sanity checking
+if get_option('tests').enabled()
+  exe_test = executable('gst_ptp_helper_test', 'main.rs',
+    override_options : ['rust_std=2018'],
+    rust_args : ['--test', rust_args],
+    dependencies : [cap_dep],
+    link_with : conf)
 
-test('gst-ptp-helper-test', exe_test, protocol : 'rust')
+  test('gst-ptp-helper-test', exe_test, protocol : 'rust')
+endif
 
 if host_system != 'windows'
   meson.add_install_script('ptp_helper_post_install.sh',

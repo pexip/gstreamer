@@ -1,0 +1,155 @@
+/*
+ * Copyright (C) 2023 Nirbheek Chauhan <nirbheek@centricular.com>
+ *
+ * This library is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Library General Public
+ * License as published by the Free Software Foundation; either
+ * version 2 of the License, or (at your option) any later version.
+ *
+ * This library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * Library General Public License for more details.
+ *
+ * You should have received a copy of the GNU Library General Public
+ * License along with this library; if not, write to the
+ * Free Software Foundation, Inc., 51 Franklin St, Fifth Floor,
+ * Boston, MA 02110-1301, USA.
+ */
+
+#ifdef HAVE_CONFIG_H
+# include "config.h"
+#endif
+
+#include <TargetConditionals.h>
+#import <Foundation/Foundation.h>
+#include <CoreVideo/CVPixelBuffer.h>
+#include "helpers.h"
+#include "corevideomemory.h"
+
+#if TARGET_OS_IOS || TARGET_OS_TV
+#include "iosglmemory.h"
+#endif
+
+#if TARGET_OS_OSX
+static void
+enable_mt_mode (void)
+{
+  NSThread * th = [[NSThread alloc] init];
+  [th start];
+  g_assert ([NSThread isMultiThreaded]);
+}
+#endif
+
+GstVideoFormat
+gst_video_format_from_cvpixelformat (int fmt)
+{
+  /* Note that video and full-range color values map to the same format */
+  switch (fmt) {
+      /* YUV */
+    case kCVPixelFormatType_420YpCbCr8Planar:
+    case kCVPixelFormatType_420YpCbCr8PlanarFullRange:
+      return GST_VIDEO_FORMAT_I420;
+    case kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange:
+    case kCVPixelFormatType_420YpCbCr8BiPlanarFullRange:
+      return GST_VIDEO_FORMAT_NV12;
+    case kCVPixelFormatType_420YpCbCr8VideoRange_8A_TriPlanar:
+      return GST_VIDEO_FORMAT_AV12;
+    case kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange:
+    case kCVPixelFormatType_420YpCbCr10BiPlanarFullRange:
+      return GST_VIDEO_FORMAT_P010_10LE;
+    case kCVPixelFormatType_422YpCbCr8:
+      return GST_VIDEO_FORMAT_UYVY;
+    case kCVPixelFormatType_422YpCbCr8_yuvs:
+      return GST_VIDEO_FORMAT_YUY2;
+      /* Alpha YUV */
+    case kCVPixelFormatType_4444AYpCbCr16:
+      return GST_VIDEO_FORMAT_AYUV64;
+      /* RGB formats */
+    case kCVPixelFormatType_32ARGB:
+      return GST_VIDEO_FORMAT_ARGB;
+    case kCVPixelFormatType_32BGRA:
+      return GST_VIDEO_FORMAT_BGRA;
+    case kCVPixelFormatType_64ARGB:
+      return GST_VIDEO_FORMAT_ARGB64_BE;
+    case kCVPixelFormatType_64RGBALE:
+      return GST_VIDEO_FORMAT_RGBA64_LE;
+    default:
+      return GST_VIDEO_FORMAT_UNKNOWN;
+  }
+}
+
+int
+gst_video_format_to_cvpixelformat (GstVideoFormat fmt)
+{
+  switch (fmt) {
+      /* YUV */
+    case GST_VIDEO_FORMAT_I420:
+      return kCVPixelFormatType_420YpCbCr8Planar;
+    case GST_VIDEO_FORMAT_NV12:
+      return kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange;
+    case GST_VIDEO_FORMAT_AV12:
+      return kCVPixelFormatType_420YpCbCr8VideoRange_8A_TriPlanar;
+    case GST_VIDEO_FORMAT_P010_10LE:
+      return kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange;
+    case GST_VIDEO_FORMAT_UYVY:
+      return kCVPixelFormatType_422YpCbCr8;
+    case GST_VIDEO_FORMAT_YUY2:
+      return kCVPixelFormatType_422YpCbCr8_yuvs;
+      /* Alpha YUV */
+    case GST_VIDEO_FORMAT_AYUV64:
+/* This is fine for now because Apple only ships LE devices */
+#if G_BYTE_ORDER != G_LITTLE_ENDIAN
+#error "AYUV64 is NE but kCVPixelFormatType_4444AYpCbCr16 is LE"
+#endif
+      return kCVPixelFormatType_4444AYpCbCr16;
+      /* RGB formats */
+    case GST_VIDEO_FORMAT_ARGB:
+      return kCVPixelFormatType_32ARGB;
+    case GST_VIDEO_FORMAT_BGRA:
+      return kCVPixelFormatType_32BGRA;
+    case GST_VIDEO_FORMAT_ARGB64_BE:
+      return kCVPixelFormatType_64ARGB;
+    case GST_VIDEO_FORMAT_RGBA64_LE:
+      return kCVPixelFormatType_64RGBALE;
+    default:
+      g_assert_not_reached ();
+      return -1;
+  }
+}
+
+GstCaps *
+gst_applemedia_copy_caps_with_feature (GstCaps * caps, const gchar * feature)
+{
+  GstCaps *copy;
+  guint n_structs;
+
+  g_return_val_if_fail (caps != NULL, NULL);
+  g_return_val_if_fail (feature != NULL, NULL);
+
+  copy = gst_caps_copy (caps);
+
+  n_structs = gst_caps_get_size (copy);
+  for (guint i = 0; i < n_structs; i++)
+    gst_caps_set_features (copy, i, gst_caps_features_new_static_str (feature,
+            NULL));
+
+  return copy;
+}
+
+void
+gst_applemedia_init_once (void)
+{
+  static gsize init_once = 0;
+
+  if (g_once_init_enter (&init_once)) {
+    gst_apple_core_video_memory_init ();
+#if TARGET_OS_IOS || TARGET_OS_TV
+    gst_ios_gl_memory_init ();
+#endif
+#if TARGET_OS_OSX
+    enable_mt_mode ();
+#endif
+    g_once_init_leave (&init_once, 1);
+  }
+}

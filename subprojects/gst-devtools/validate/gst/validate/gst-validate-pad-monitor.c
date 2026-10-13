@@ -180,7 +180,7 @@ _find_master_report_on_pad (GstPad * pad, GstValidateReport * report)
 
   pad = _get_actual_pad (pad);
   if (pad == NULL) {
-    GST_ERROR_OBJECT (tmppad, "Does not have a target yet");
+    GST_LOG_OBJECT (tmppad, "Could not resolve proxy pad target or peer yet");
 
     return FALSE;
   }
@@ -2690,24 +2690,31 @@ gst_validate_pad_monitor_buffer_probe (GstPad * pad, GstBuffer * buffer,
       GST_BUFFER_TIMESTAMP (buffer));
 
   /* a GstValidatePadMonitor parent must be a GstValidateElementMonitor */
-  if (PAD_PARENT_IS_DECODER (monitor)) {
-
-    /* should not push out of segment data */
-    if (GST_CLOCK_TIME_IS_VALID (GST_BUFFER_TIMESTAMP (buffer)) &&
-        GST_CLOCK_TIME_IS_VALID (GST_BUFFER_DURATION (buffer)) &&
-        ((!gst_segment_clip (&monitor->segment, monitor->segment.format,
-                    GST_BUFFER_TIMESTAMP (buffer),
-                    GST_BUFFER_TIMESTAMP (buffer) +
-                    GST_BUFFER_DURATION (buffer), NULL, NULL)) ||
-            /* In the case of raw data, buffers should be strictly contained inside the
-             * segment */
-            (monitor->caps_is_raw &&
-                GST_BUFFER_PTS (buffer) + GST_BUFFER_DURATION (buffer) <
-                monitor->segment.start))
-        ) {
+  if (GST_CLOCK_TIME_IS_VALID (GST_BUFFER_TIMESTAMP (buffer)) &&
+      GST_CLOCK_TIME_IS_VALID (GST_BUFFER_DURATION (buffer)) &&
+      ((!gst_segment_clip (&monitor->segment, monitor->segment.format,
+                  GST_BUFFER_TIMESTAMP (buffer),
+                  GST_BUFFER_TIMESTAMP (buffer) +
+                  GST_BUFFER_DURATION (buffer), NULL, NULL)) ||
+          /* In the case of raw data, buffers should be strictly contained inside the
+           * segment */
+          (monitor->caps_is_raw &&
+              GST_BUFFER_PTS (buffer) + GST_BUFFER_DURATION (buffer) <
+              monitor->segment.start))
+      ) {
+    if (monitor->caps_is_raw || PAD_PARENT_IS_DECODER (monitor)) {
       /* TODO is this a timestamp issue? */
       GST_VALIDATE_REPORT (monitor, BUFFER_IS_OUT_OF_SEGMENT,
           "buffer is out of segment and shouldn't be pushed. Timestamp: %"
+          GST_TIME_FORMAT " - Duration: %" GST_TIME_FORMAT ". Range: %"
+          GST_TIME_FORMAT " - %" GST_TIME_FORMAT,
+          GST_TIME_ARGS (GST_BUFFER_TIMESTAMP (buffer)),
+          GST_TIME_ARGS (GST_BUFFER_DURATION (buffer)),
+          GST_TIME_ARGS (monitor->segment.start),
+          GST_TIME_ARGS (monitor->segment.stop));
+    } else {
+      GST_VALIDATE_REPORT (monitor, BUFFER_IS_OUT_OF_SEGMENT_ENCODED,
+          "buffer is out of segment. Timestamp: %"
           GST_TIME_FORMAT " - Duration: %" GST_TIME_FORMAT ". Range: %"
           GST_TIME_FORMAT " - %" GST_TIME_FORMAT,
           GST_TIME_ARGS (GST_BUFFER_TIMESTAMP (buffer)),

@@ -141,6 +141,8 @@ caps_to_mime (GstCaps * caps)
 
       if (!gst_structure_get_int (s, "layer", &layer) || layer == 3)
         return "audio/mpeg";
+      else if (layer == 1)
+        return "audio/mpeg-L1";
       else if (layer == 2)
         return "audio/mpeg-L2";
     } else if (mpegversion == 2 || mpegversion == 4) {
@@ -158,6 +160,14 @@ caps_to_mime (GstCaps * caps)
     return "audio/vorbis";
   } else if (strcmp (name, "audio/x-opus") == 0) {
     return "audio/opus";
+  } else if (strcmp (name, "audio/x-flac") == 0) {
+    return "audio/flac";
+  } else if (strcmp (name, "audio/x-ac3") == 0) {
+    return "audio/ac3";
+  } else if (strcmp (name, "audio/x-eac3") == 0) {
+    return "audio/eac3";
+  } else if (strcmp (name, "audio/x-ac4") == 0) {
+    return "audio/ac4";
   }
 
   return NULL;
@@ -1005,7 +1015,8 @@ gst_amc_audio_dec_set_format (GstAudioDecoder * decoder, GstCaps * caps)
   self->flushing = FALSE;
   self->downstream_flow_ret = GST_FLOW_OK;
   gst_pad_start_task (GST_AUDIO_DECODER_SRC_PAD (self),
-      (GstTaskFunction) gst_amc_audio_dec_loop, decoder, NULL);
+      (GstTaskFunction) gst_amc_audio_dec_loop, gst_object_ref (decoder),
+      gst_object_unref);
 
   return TRUE;
 }
@@ -1045,7 +1056,8 @@ gst_amc_audio_dec_flush (GstAudioDecoder * decoder, gboolean hard)
   self->drained = TRUE;
   self->downstream_flow_ret = GST_FLOW_OK;
   gst_pad_start_task (GST_AUDIO_DECODER_SRC_PAD (self),
-      (GstTaskFunction) gst_amc_audio_dec_loop, decoder, NULL);
+      (GstTaskFunction) gst_amc_audio_dec_loop, gst_object_ref (decoder),
+      gst_object_unref);
 
   GST_DEBUG_OBJECT (self, "Reset decoder");
 }
@@ -1155,8 +1167,6 @@ gst_amc_audio_dec_handle_frame (GstAudioDecoder * decoder, GstBuffer * inbuf)
     memset (&buffer_info, 0, sizeof (buffer_info));
     buffer_info.offset = 0;
     buffer_info.size = MIN (minfo.size - offset, buf->size);
-    gst_amc_buffer_set_position_and_limit (buf, NULL, buffer_info.offset,
-        buffer_info.size);
 
     orc_memcpy (buf->data, minfo.data + offset, buffer_info.size);
 
@@ -1204,8 +1214,14 @@ gst_amc_audio_dec_handle_frame (GstAudioDecoder * decoder, GstBuffer * inbuf)
 
 downstream_error:
   {
-    GST_ERROR_OBJECT (self, "Downstream returned %s",
-        gst_flow_get_name (self->downstream_flow_ret));
+    if (self->downstream_flow_ret == GST_FLOW_NOT_LINKED
+        || self->downstream_flow_ret < GST_FLOW_EOS) {
+      GST_ERROR_OBJECT (self, "Downstream returned %s",
+          gst_flow_get_name (self->downstream_flow_ret));
+    } else {
+      GST_DEBUG_OBJECT (self, "Downstream returned %s",
+          gst_flow_get_name (self->downstream_flow_ret));
+    }
     if (minfo.data)
       gst_buffer_unmap (inbuf, &minfo);
     if (inbuf)
@@ -1306,7 +1322,6 @@ gst_amc_audio_dec_drain (GstAmcAudioDec * self)
           gst_util_uint64_scale (self->last_upstream_ts, 1, GST_USECOND);
       buffer_info.flags |= BUFFER_FLAG_END_OF_STREAM;
 
-      gst_amc_buffer_set_position_and_limit (buf, NULL, 0, 0);
       gst_amc_buffer_free (buf);
       buf = NULL;
 

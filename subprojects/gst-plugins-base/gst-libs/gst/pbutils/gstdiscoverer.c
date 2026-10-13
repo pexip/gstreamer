@@ -811,7 +811,6 @@ uridecodebin_pad_removed_cb (GstElement * uridecodebin, GstPad * pad,
   /* references removed here */
   gst_bin_remove_many (dc->priv->pipeline, ps->sink, ps->queue, NULL);
 
-  DISCO_UNLOCK (dc);
   if (ps->tags) {
     gst_tag_list_unref (ps->tags);
   }
@@ -821,6 +820,7 @@ uridecodebin_pad_removed_cb (GstElement * uridecodebin, GstPad * pad,
   g_free (ps->stream_id);
 
   g_free (ps);
+  DISCO_UNLOCK (dc);
 
   GST_DEBUG_OBJECT (dc, "Done handling pad");
 }
@@ -1280,9 +1280,33 @@ parse_stream_topology (GstDiscoverer * dc, const GstStructure * topology,
           parse_stream_topology (dc, st, parent);
           add_to_list = FALSE;
         } else {
-          GstDiscovererStreamInfo *next = parse_stream_topology (dc, st, NULL);
-          res->next = next;
-          next->previous = res;
+          gboolean parent_is_elementary = parent->caps
+              && !(gst_pb_utils_get_caps_description_flags (parent->caps)
+              & GST_PBUTILS_CAPS_DESCRIPTION_FLAG_CONTAINER);
+          gboolean child_is_elementary =
+              !(gst_pb_utils_get_caps_description_flags (caps)
+              & GST_PBUTILS_CAPS_DESCRIPTION_FLAG_CONTAINER);
+
+          if (parent_is_elementary && child_is_elementary) {
+            /* A decode chain refines a single elementary stream, so all its
+             * stages are elementary (non-container) caps of that one stream. A
+             * "next" node that is elementary - like its parent - and whose caps
+             * neither intersect the parent's nor are its raw form is that same
+             * stream re-exposed by a parser (e.g. HE-AAC's AAC-LC base and
+             * SBR-doubled nodes, or a stream whose caps change mid-parse), so
+             * merge it rather than counting a phantom. When either side is a
+             * container (or has no caps), the next node is a genuinely distinct
+             * stream - e.g. the sequential streams of a chained Ogg - so keep
+             * it separate. */
+            gst_caps_replace (&parent->caps, caps);
+            parse_stream_topology (dc, st, parent);
+            add_to_list = FALSE;
+          } else {
+            GstDiscovererStreamInfo *next =
+                parse_stream_topology (dc, st, NULL);
+            res->next = next;
+            next->previous = res;
+          }
         }
         gst_caps_unref (caps);
       }
@@ -1504,13 +1528,16 @@ discoverer_collect (GstDiscoverer * dc)
     else
       dc->priv->current_info->live = TRUE;
 
+    DISCO_LOCK (dc);
     if (dc->priv->current_topology) {
-      dc->priv->current_info_stream_count = 1;
+      /* Number the elementary streams 0, 1, 2, ... in declaration order, like
+       * ffmpeg's stream index and a GstStreamCollection. A container root is
+       * not an elementary stream and keeps its default -1. */
+      dc->priv->current_info_stream_count = 0;
       dc->priv->current_info->stream_info = parse_stream_topology (dc,
           dc->priv->current_topology, NULL);
-      if (dc->priv->current_info->stream_info)
-        dc->priv->current_info->stream_info->stream_number = 0;
     }
+    DISCO_UNLOCK (dc);
 
     /*
      * Images need some special handling. They do not have a duration, have
@@ -1719,6 +1746,7 @@ handle_message (GstDiscoverer * dc, GstMessage * msg)
       dc->priv->all_tags = tmp;
 
       if (scope == GST_TAG_SCOPE_STREAM) {
+        DISCO_LOCK (dc);
         for (GList * curr = dc->priv->streams; curr; curr = curr->next) {
           PrivateStream *ps = (PrivateStream *) curr->data;
           if (GST_MESSAGE_SRC (msg) == GST_OBJECT_CAST (ps->sink)) {
@@ -1730,6 +1758,7 @@ handle_message (GstDiscoverer * dc, GstMessage * msg)
             break;
           }
         }
+        DISCO_UNLOCK (dc);
       } else {
         tmp =
             gst_tag_list_merge (dc->priv->global_tags, tl,

@@ -34,7 +34,7 @@
  *
  * gst_rtsp_thread_pool_get_thread() can be used to create a #GstRTSPThread
  * object of the right type. The thread object contains a mainloop and context
- * that run in a seperate thread and can be used to attached sources to.
+ * that run in a separate thread and can be used to attached sources to.
  *
  * gst_rtsp_thread_reuse() can be used to reuse a thread for multiple purposes.
  * If all gst_rtsp_thread_reuse() calls are matched with a
@@ -73,7 +73,9 @@ _gst_rtsp_thread_free (GstRTSPThreadImpl * impl)
 {
   GST_DEBUG ("free thread %p", impl);
 
-  g_source_unref (impl->source);
+  /* impl->source is only set once the thread has been stopped */
+  if (impl->source)
+    g_source_unref (impl->source);
   g_main_loop_unref (impl->thread.loop);
   g_main_context_unref (impl->thread.context);
   g_free (impl);

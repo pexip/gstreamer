@@ -106,6 +106,18 @@ static const ShaderItem g_cs_map[] = {
   {GST_D3D_PLUGIN_CS_WEAVE_INTERLACE_1, BUILD_SOURCE (CSMain_weave_interlace_1)},
   {GST_D3D_PLUGIN_CS_WEAVE_INTERLACE_2, BUILD_SOURCE (CSMain_weave_interlace_2)},
   {GST_D3D_PLUGIN_CS_WEAVE_INTERLACE_4, BUILD_SOURCE (CSMain_weave_interlace_4)},
+  {GST_D3D_PLUGIN_CS_NV12_TO_R8_LOAD, BUILD_SOURCE (CSMain_nv12_to_r8_load)},
+  {GST_D3D_PLUGIN_CS_NV12_TO_R8_SAMPLE, BUILD_SOURCE (CSMain_nv12_to_r8_sample)},
+  {GST_D3D_PLUGIN_CS_P010_TO_A420_10_LOAD, BUILD_SOURCE (CSMain_p010_to_a420_10_load)},
+  {GST_D3D_PLUGIN_CS_P010_TO_A420_10_SAMPLE, BUILD_SOURCE (CSMain_p010_to_a420_10_sample)},
+  {GST_D3D_PLUGIN_CS_BUFFER_COPY_2D, BUILD_SOURCE (CSMain_buffer_copy_2d)},
+  {GST_D3D_PLUGIN_CS_BUFFER_COPY_2D_UNALIGNED, BUILD_SOURCE (CSMain_buffer_copy_2d_unaligned)},
+  {GST_D3D_PLUGIN_CS_TEXTURE_COPY_2D_U8, BUILD_SOURCE (CSMain_texture_copy_2d_u8)},
+  {GST_D3D_PLUGIN_CS_TEXTURE_SCALE_2D_U8, BUILD_SOURCE (CSMain_texture_scale_2d_u8)},
+  {GST_D3D_PLUGIN_CS_TEXTURE_COPY_2D_F32, BUILD_SOURCE (CSMain_texture_copy_2d_f32)},
+  {GST_D3D_PLUGIN_CS_TEXTURE_SCALE_2D_F32, BUILD_SOURCE (CSMain_texture_scale_2d_f32)},
+  {GST_D3D_PLUGIN_CS_BUFFER_SCALE_2D_U8, BUILD_SOURCE (CSMain_buffer_scale_2d_u8)},
+  {GST_D3D_PLUGIN_CS_BUFFER_SCALE_2D_F32, BUILD_SOURCE (CSMain_buffer_scale_2d_f32)},
 };
 
 #undef BUILD_SOURCE
@@ -328,10 +340,10 @@ gst_d3d_converter_shader_get_vs_blob (GstD3DShaderModel shader_model,
   return TRUE;
 }
 
-gboolean
-gst_d3d_converter_shader_get_cs_blob (GstVideoFormat in_format,
+static gboolean
+gst_d3d_converter_shader_get_cs_blob_internal (GstVideoFormat in_format,
     GstVideoFormat out_format, GstD3DShaderModel shader_model,
-    GstD3DConverterCSByteCode * byte_code)
+    gboolean is_d3d11, GstD3DConverterCSByteCode * byte_code)
 {
   g_return_val_if_fail (shader_model < GST_D3D_SM_LAST, FALSE);
   g_return_val_if_fail (byte_code, FALSE);
@@ -394,13 +406,37 @@ gst_d3d_converter_shader_get_cs_blob (GstVideoFormat in_format,
       x_unit = 32;
       break;
     case GST_VIDEO_FORMAT_RGB:
-      srv_format = DXGI_FORMAT_R8G8B8A8_UNORM;
-      in_format_str = "RGB";
+      if (is_d3d11) {
+        srv_format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        in_format_str = "RGB";
+      } else {
+        srv_format = DXGI_FORMAT_R32_TYPELESS;
+        in_format_str = "RGB_Buffer";
+      }
       x_unit = 32;
       break;
+    case GST_VIDEO_FORMAT_RGB_F16LE:
+      if (is_d3d11)
+        return FALSE;
+      srv_format = DXGI_FORMAT_R32_TYPELESS;
+      in_format_str = "RGB_F16_Buffer";
+      x_unit = 16;
+      break;
+    case GST_VIDEO_FORMAT_RGB_F32LE:
+      if (is_d3d11)
+        return FALSE;
+      srv_format = DXGI_FORMAT_R32_TYPELESS;
+      in_format_str = "RGB_F32_Buffer";
+      x_unit = 8;
+      break;
     case GST_VIDEO_FORMAT_BGR:
-      srv_format = DXGI_FORMAT_R8G8B8A8_UNORM;
-      in_format_str = "BGR";
+      if (is_d3d11) {
+        srv_format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        in_format_str = "BGR";
+      } else {
+        srv_format = DXGI_FORMAT_R32_TYPELESS;
+        in_format_str = "BGR_Buffer";
+      }
       x_unit = 32;
       break;
     case GST_VIDEO_FORMAT_RGB16:
@@ -436,6 +472,10 @@ gst_d3d_converter_shader_get_cs_blob (GstVideoFormat in_format,
       srv_format = DXGI_FORMAT_R16G16B16A16_UNORM;
       in_format_str = "AYUV";
       break;
+    case GST_VIDEO_FORMAT_AYUV_F32:
+      srv_format = DXGI_FORMAT_R32G32B32A32_FLOAT;
+      in_format_str = "AYUV";
+      break;
     case GST_VIDEO_FORMAT_RGBA:
       srv_format = DXGI_FORMAT_R8G8B8A8_UNORM;
       in_format_str = "RGBA";
@@ -446,6 +486,14 @@ gst_d3d_converter_shader_get_cs_blob (GstVideoFormat in_format,
       break;
     case GST_VIDEO_FORMAT_RGBA64_LE:
       srv_format = DXGI_FORMAT_R16G16B16A16_UNORM;
+      in_format_str = "RGBA";
+      break;
+    case GST_VIDEO_FORMAT_RGBA_F16LE:
+      srv_format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+      in_format_str = "RGBA";
+      break;
+    case GST_VIDEO_FORMAT_RGBA_F32LE:
+      srv_format = DXGI_FORMAT_R32G32B32A32_FLOAT;
       in_format_str = "RGBA";
       break;
     default:
@@ -512,13 +560,37 @@ gst_d3d_converter_shader_get_cs_blob (GstVideoFormat in_format,
       x_unit = 8;
       break;
     case GST_VIDEO_FORMAT_RGB:
-      uav_format = DXGI_FORMAT_R8G8B8A8_UNORM;
-      out_format_str = "RGB";
+      if (is_d3d11) {
+        uav_format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        out_format_str = "RGB";
+      } else {
+        uav_format = DXGI_FORMAT_R32_TYPELESS;
+        out_format_str = "RGB_Buffer";
+      }
       x_unit = 32;
       break;
+    case GST_VIDEO_FORMAT_RGB_F16LE:
+      if (is_d3d11)
+        return FALSE;
+      uav_format = DXGI_FORMAT_R32_TYPELESS;
+      out_format_str = "RGB_F16_Buffer";
+      x_unit = 16;
+      break;
+    case GST_VIDEO_FORMAT_RGB_F32LE:
+      if (is_d3d11)
+        return FALSE;
+      uav_format = DXGI_FORMAT_R32_TYPELESS;
+      out_format_str = "RGB_F32_Buffer";
+      x_unit = 8;
+      break;
     case GST_VIDEO_FORMAT_BGR:
-      uav_format = DXGI_FORMAT_R8G8B8A8_UNORM;
-      out_format_str = "BGR";
+      if (is_d3d11) {
+        uav_format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        out_format_str = "BGR";
+      } else {
+        uav_format = DXGI_FORMAT_R32_TYPELESS;
+        out_format_str = "BGR_Buffer";
+      }
       x_unit = 32;
       break;
     case GST_VIDEO_FORMAT_RGB16:
@@ -564,12 +636,24 @@ gst_d3d_converter_shader_get_cs_blob (GstVideoFormat in_format,
       uav_format = DXGI_FORMAT_R16G16B16A16_UNORM;
       out_format_str = "AYUV";
       break;
+    case GST_VIDEO_FORMAT_AYUV_F32:
+      uav_format = DXGI_FORMAT_R32G32B32A32_FLOAT;
+      out_format_str = "AYUV";
+      break;
     case GST_VIDEO_FORMAT_RGBA:
       uav_format = DXGI_FORMAT_R8G8B8A8_UNORM;
       out_format_str = "RGBA";
       break;
     case GST_VIDEO_FORMAT_RGB10A2_LE:
       uav_format = DXGI_FORMAT_R10G10B10A2_UNORM;
+      out_format_str = "RGBA";
+      break;
+    case GST_VIDEO_FORMAT_RGBA_F16LE:
+      uav_format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+      out_format_str = "RGBA";
+      break;
+    case GST_VIDEO_FORMAT_RGBA_F32LE:
+      uav_format = DXGI_FORMAT_R32G32B32A32_FLOAT;
       out_format_str = "RGBA";
       break;
     default:
@@ -632,6 +716,24 @@ gst_d3d_converter_shader_get_cs_blob (GstVideoFormat in_format,
   g_compiled_blobs.push_back ({ shader_name, blob });
 
   return TRUE;
+}
+
+gboolean
+gst_d3d_converter_shader_get_cs_blob (GstVideoFormat in_format,
+    GstVideoFormat out_format, GstD3DShaderModel shader_model,
+    GstD3DConverterCSByteCode * byte_code)
+{
+  return gst_d3d_converter_shader_get_cs_blob_internal (in_format, out_format,
+      shader_model, FALSE, byte_code);
+}
+
+gboolean
+gst_d3d_converter_shader_get_cs_blob_d3d11 (GstVideoFormat in_format,
+    GstVideoFormat out_format, GstD3DShaderModel shader_model,
+    GstD3DConverterCSByteCode * byte_code)
+{
+  return gst_d3d_converter_shader_get_cs_blob_internal (in_format, out_format,
+      shader_model, TRUE, byte_code);
 }
 
 enum class PS_OUTPUT
@@ -702,6 +804,8 @@ conv_ps_make_input (GstVideoFormat format, gboolean premul)
     case GST_VIDEO_FORMAT_RGBA64_LE:
     case GST_VIDEO_FORMAT_RGB10A2_LE:
     case GST_VIDEO_FORMAT_BGRA:
+    case GST_VIDEO_FORMAT_RGBA_F32LE:
+    case GST_VIDEO_FORMAT_RGBA_F16LE:
       if (premul)
         return "RGBAPremul";
       return "RGBA";
@@ -710,6 +814,7 @@ conv_ps_make_input (GstVideoFormat format, gboolean premul)
       return "RGBx";
     case GST_VIDEO_FORMAT_ARGB:
     case GST_VIDEO_FORMAT_ARGB64_LE:
+    case GST_VIDEO_FORMAT_ARGB_F32:
       if (premul)
         return "ARGBPremul";
       return "ARGB";
@@ -727,6 +832,7 @@ conv_ps_make_input (GstVideoFormat format, gboolean premul)
       return "VUYA";
     case GST_VIDEO_FORMAT_AYUV:
     case GST_VIDEO_FORMAT_AYUV64:
+    case GST_VIDEO_FORMAT_AYUV_F32:
       return "AYUV";
     case GST_VIDEO_FORMAT_NV12:
     case GST_VIDEO_FORMAT_P010_10LE:
@@ -762,8 +868,12 @@ conv_ps_make_input (GstVideoFormat format, gboolean premul)
       return "Y410";
     case GST_VIDEO_FORMAT_GRAY8:
     case GST_VIDEO_FORMAT_GRAY16_LE:
+    case GST_VIDEO_FORMAT_GRAY_F16LE:
+    case GST_VIDEO_FORMAT_GRAY_F32LE:
       return "GRAY";
     case GST_VIDEO_FORMAT_RGBP:
+    case GST_VIDEO_FORMAT_RGBP_F16LE:
+    case GST_VIDEO_FORMAT_RGBP_F32LE:
       return "RGBP";
     case GST_VIDEO_FORMAT_BGRP:
       return "BGRP";
@@ -842,6 +952,8 @@ conv_ps_make_output (GstVideoFormat format, gboolean premul)
     case GST_VIDEO_FORMAT_RGBA64_LE:
     case GST_VIDEO_FORMAT_RGB10A2_LE:
     case GST_VIDEO_FORMAT_BGRA:
+    case GST_VIDEO_FORMAT_RGBA_F32LE:
+    case GST_VIDEO_FORMAT_RGBA_F16LE:
       if (premul)
         ret.push_back({PS_OUTPUT::PACKED, "RGBAPremul"});
       else
@@ -853,6 +965,7 @@ conv_ps_make_output (GstVideoFormat format, gboolean premul)
       break;
     case GST_VIDEO_FORMAT_ARGB:
     case GST_VIDEO_FORMAT_ARGB64_LE:
+    case GST_VIDEO_FORMAT_ARGB_F32:
       if (premul)
         ret.push_back({PS_OUTPUT::PACKED, "ARGBPremul"});
       else
@@ -878,6 +991,7 @@ conv_ps_make_output (GstVideoFormat format, gboolean premul)
       break;
     case GST_VIDEO_FORMAT_AYUV:
     case GST_VIDEO_FORMAT_AYUV64:
+    case GST_VIDEO_FORMAT_AYUV_F32:
       ret.push_back({PS_OUTPUT::PACKED, "AYUV"});
       break;
     case GST_VIDEO_FORMAT_NV12:
@@ -949,9 +1063,13 @@ conv_ps_make_output (GstVideoFormat format, gboolean premul)
       break;
     case GST_VIDEO_FORMAT_GRAY8:
     case GST_VIDEO_FORMAT_GRAY16_LE:
+    case GST_VIDEO_FORMAT_GRAY_F16LE:
+    case GST_VIDEO_FORMAT_GRAY_F32LE:
       ret.push_back({PS_OUTPUT::LUMA, "Luma"});
       break;
     case GST_VIDEO_FORMAT_RGBP:
+    case GST_VIDEO_FORMAT_RGBP_F16LE:
+    case GST_VIDEO_FORMAT_RGBP_F32LE:
       ret.push_back({PS_OUTPUT::PLANAR, "RGBP"});
       break;
     case GST_VIDEO_FORMAT_BGRP:

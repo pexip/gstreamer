@@ -19,11 +19,9 @@
 
 #pragma once
 
-#include <gst/gst.h>
 #include <gst/video/video.h>
-#include <gst/cuda/cuda-prelude.h>
+#include <gst/cuda/gstcuda_fwd.h>
 #include <gst/cuda/cuda-gst.h>
-#include <gst/cuda/gstcudacontext.h>
 
 G_BEGIN_DECLS
 
@@ -163,6 +161,12 @@ void            gst_cuda_graphics_resource_free (GstCudaGraphicsResource * resou
 
 GST_CUDA_API
 gint64          gst_cuda_create_user_token (void);
+
+GST_CUDA_API
+gboolean        gst_cuda_fill_video_frame (GstCudaContext * context,
+                                           GstCudaStream * stream,
+                                           GstVideoFrame * frame,
+                                           const gfloat * color_rgba);
 
 G_END_DECLS
 

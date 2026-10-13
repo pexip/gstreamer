@@ -69,9 +69,11 @@ struct _GstVulkaneEncoderCallbacks
 /**
  * GstVulkanEncoderPicture:
  * @slotIndex: slot index
- * @offset: headers offset
+ * @bitstream_extra_size: bitstream headers extra size
  * @in_buffer: input buffer
  * @out_buffer: output buffer
+ * @img_view: input image's vulkan view
+ * @dpb_view: input image's in DPB vulkan view
  *
  * It contains the whole state for encoding a single picture.
  *
@@ -79,7 +81,7 @@ struct _GstVulkaneEncoderCallbacks
  */
 struct _GstVulkanEncoderPicture
 {
-  guint64 offset;
+  guint64 bitstream_header_size;
 
   GstBuffer *in_buffer;
   GstBuffer *dpb_buffer;
@@ -89,6 +91,7 @@ struct _GstVulkanEncoderPicture
   GstVulkanImageView *img_view;
   GstVulkanImageView *dpb_view;
 
+  /*< private >*/
   VkVideoPictureResourceInfoKHR dpb;
   VkVideoReferenceSlotInfoKHR dpb_slot;
 
@@ -150,7 +153,6 @@ union _GstVulkanEncoderParametersFeedback
 
 struct _GstVulkanEncoderQualityPoperties
 {
-  gint32 quality_level;
   union
   {
     VkVideoEncodeH264QualityLevelPropertiesKHR h264;
@@ -172,12 +174,13 @@ void                    gst_vulkan_encoder_set_callbacks        (GstVulkanEncode
                                                                  GDestroyNotify notify);
 GST_VULKAN_API
 void                    gst_vulkan_encoder_set_rc_mode          (GstVulkanEncoder * self,
+                                                                 const GstVulkanVideoCapabilities * vk_caps,
                                                                  VkVideoEncodeRateControlModeFlagBitsKHR rc_mode);
 
 GST_VULKAN_API
 gboolean                gst_vulkan_encoder_start                (GstVulkanEncoder * self,
                                                                  GstVulkanVideoProfile * profile,
-                                                                 GstVulkanEncoderQualityProperties * codec_quality_props,
+                                                                 gconstpointer session_create_pnext,
                                                                  GError ** error);
 GST_VULKAN_API
 gboolean                gst_vulkan_encoder_stop                 (GstVulkanEncoder * self);
@@ -211,9 +214,16 @@ gboolean                gst_vulkan_encoder_is_started           (GstVulkanEncode
 GST_VULKAN_API
 GstCaps *               gst_vulkan_encoder_profile_caps         (GstVulkanEncoder * self);
 GST_VULKAN_API
-gint32                  gst_vulkan_encoder_quality_level        (GstVulkanEncoder * self);
+gboolean                gst_vulkan_encoder_set_quality_level    (GstVulkanEncoder * self,
+                                                                 guint32 quality,
+                                                                 const GstVulkanVideoProfile * vk_profile,
+                                                                 const GstVulkanVideoCapabilities * vk_caps,
+                                                                 GstVulkanEncoderQualityProperties * out_quality_props,
+                                                                 GError ** error);
 GST_VULKAN_API
-gint32                  gst_vulkan_encoder_rc_mode              (GstVulkanEncoder * self);
+guint32                 gst_vulkan_encoder_quality_level        (GstVulkanEncoder * self);
+GST_VULKAN_API
+guint32                 gst_vulkan_encoder_rc_mode              (GstVulkanEncoder * self);
 
 GST_VULKAN_API
 gboolean                gst_vulkan_encoder_picture_init         (GstVulkanEncoderPicture * pic,

@@ -195,6 +195,7 @@ gst_audio_rate_class_init (GstAudioRateClass * klass)
       "Audio rate adjuster", "Filter/Effect/Audio",
       "Drops/duplicates/adjusts timestamps on audio samples to make a perfect stream",
       "Wim Taymans <wim@fluendo.com>");
+  gst_element_class_mark_as_untrusted_aware (element_class);
 
   gst_element_class_add_static_pad_template (element_class,
       &gst_audio_rate_sink_template);
@@ -374,6 +375,7 @@ gst_audio_rate_sink_event (GstPad * pad, GstObject * parent, GstEvent * event)
       res = gst_pad_push_event (audiorate->srcpad, event);
       break;
     }
+    case GST_EVENT_SEGMENT_DONE:
     case GST_EVENT_EOS:
       /* Fill segment until the end */
       if (GST_CLOCK_TIME_IS_VALID (audiorate->src_segment.stop))
@@ -807,6 +809,8 @@ gst_audio_rate_change_state (GstElement * element, GstStateChange transition)
 static gboolean
 plugin_init (GstPlugin * plugin)
 {
+  gst_plugin_set_static_features_flag (plugin);
+
   return GST_ELEMENT_REGISTER (audiorate, plugin);
 }
 

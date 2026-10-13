@@ -96,6 +96,27 @@ GST_DEBUG_CATEGORY_STATIC (gst_qt_mux_debug);
 #define ABSDIFF(a, b) ((a) > (b) ? (a) - (b) : (b) - (a))
 #endif
 
+#define READ_BITSTREAM_UINT8(bits, val, nbits) G_STMT_START { \
+    if (!gst_bit_reader_get_bits_uint8 (&bits, &val, nbits)) { \
+      GST_WARNING_OBJECT (qtpad, "Failed to read " G_STRINGIFY (val)); \
+      goto error; \
+    } \
+  } G_STMT_END
+
+#define READ_BITSTREAM_UINT16(bits, val, nbits) G_STMT_START { \
+  if (!gst_bit_reader_get_bits_uint16 (&bits, &val, nbits)) { \
+    GST_WARNING_OBJECT (qtpad, "Failed to read " G_STRINGIFY (val)); \
+    goto error; \
+  } \
+} G_STMT_END
+
+#define SKIP_BITSTREAM_BITS(bits, nbits) G_STMT_START { \
+    if (!gst_bit_reader_skip (&bits, nbits)) { \
+      GST_WARNING_OBJECT (qtpad, "Failed to skip %d bits", nbits); \
+      goto error; \
+    } \
+  } G_STMT_END
+
 /* Hacker notes.
  *
  * The basic building blocks of MP4 files are:
@@ -285,6 +306,7 @@ static void
 gst_qt_mux_pad_init (GstQTMuxPad * pad)
 {
   pad->trak_timescale = DEFAULT_PAD_TRAK_TIMESCALE;
+  pad->warned_av1_unparsed = FALSE;
 }
 
 static guint32
@@ -653,6 +675,7 @@ gst_qt_mux_pad_reset (GstQTMuxPad * qtpad)
   qtpad->sample_offset = 0;
   qtpad->dts_adjustment = GST_CLOCK_TIME_NONE;
   qtpad->first_ts = GST_CLOCK_TIME_NONE;
+  qtpad->earliest_pts = GST_CLOCK_TIME_NONE;
   qtpad->first_dts = GST_CLOCK_TIME_NONE;
   qtpad->prepare_buf_func = NULL;
   qtpad->create_empty_buffer = NULL;
@@ -668,6 +691,7 @@ gst_qt_mux_pad_reset (GstQTMuxPad * qtpad)
   gst_buffer_replace (&qtpad->last_buf, NULL);
 
   gst_caps_replace (&qtpad->configured_caps, NULL);
+  qtpad->warned_av1_unparsed = FALSE;
 
   if (qtpad->tags) {
     gst_tag_list_unref (qtpad->tags);
@@ -1158,29 +1182,33 @@ gst_qt_mux_prepare_parse_ac3_frame (GstQTMuxPad * qtpad, GstBuffer * buf,
 
   if (off != -1) {
     GstBitReader bits;
-    guint8 fscod, frmsizcod, bsid, bsmod, acmod, lfe_on;
+    guint8 fscod = 0;
+    guint8 frmsizcod = 0;
+    guint8 bsid = 0;
+    guint8 bsmod = 0;
+    guint8 acmod = 0;
+    guint8 lfe_on = 0;
 
     GST_DEBUG_OBJECT (qtpad, "Found ac3 sync point at offset: %u", off);
 
     gst_bit_reader_init (&bits, map.data, map.size);
 
     /* off + sync + crc */
-    gst_bit_reader_skip_unchecked (&bits, off * 8 + 16 + 16);
+    SKIP_BITSTREAM_BITS (bits, off * 8 + 16 + 16);
 
-    fscod = gst_bit_reader_get_bits_uint8_unchecked (&bits, 2);
-    frmsizcod = gst_bit_reader_get_bits_uint8_unchecked (&bits, 6);
-    bsid = gst_bit_reader_get_bits_uint8_unchecked (&bits, 5);
-    bsmod = gst_bit_reader_get_bits_uint8_unchecked (&bits, 3);
-    acmod = gst_bit_reader_get_bits_uint8_unchecked (&bits, 3);
-
+    READ_BITSTREAM_UINT8 (bits, fscod, 2);
+    READ_BITSTREAM_UINT8 (bits, frmsizcod, 6);
+    READ_BITSTREAM_UINT8 (bits, bsid, 5);
+    READ_BITSTREAM_UINT8 (bits, bsmod, 3);
+    READ_BITSTREAM_UINT8 (bits, acmod, 3);
     if ((acmod & 0x1) && (acmod != 0x1))        /* 3 front channels */
-      gst_bit_reader_skip_unchecked (&bits, 2);
+      SKIP_BITSTREAM_BITS (bits, 2);
     if ((acmod & 0x4))          /* if a surround channel exists */
-      gst_bit_reader_skip_unchecked (&bits, 2);
+      SKIP_BITSTREAM_BITS (bits, 2);
     if (acmod == 0x2)           /* if in 2/0 mode */
-      gst_bit_reader_skip_unchecked (&bits, 2);
+      SKIP_BITSTREAM_BITS (bits, 2);
 
-    lfe_on = gst_bit_reader_get_bits_uint8_unchecked (&bits, 1);
+    READ_BITSTREAM_UINT8 (bits, lfe_on, 1);
 
     gst_qt_mux_pad_add_ac3_extension (qtmux, qtpad, fscod, frmsizcod, bsid,
         bsmod, acmod, lfe_on);
@@ -1194,6 +1222,399 @@ gst_qt_mux_prepare_parse_ac3_frame (GstQTMuxPad * qtpad, GstBuffer * buf,
 
 done:
   gst_buffer_unmap (buf, &map);
+  return buf;
+
+error:
+  GST_WARNING_OBJECT (qtpad, "Failed to parse AC3 bitstream");
+  goto done;
+}
+
+static void
+gst_qt_mux_pad_add_eac3_extension (GstQTMuxPad * qtpad, GstBuffer * buf,
+    GstQTMux * qtmux, GArray * bitstreamInfo)
+{
+  AtomInfo *ext;
+
+  g_return_if_fail (qtpad->trak_ste);
+
+  ext = build_eac3_extension (bitstreamInfo);
+
+  if (!ext) {
+    GST_WARNING_OBJECT (qtpad, "Failed to build EAC3 extension atom");
+    return;
+  }
+
+  sample_table_entry_add_ext_atom (qtpad->trak_ste, ext);
+}
+
+static gboolean
+gst_qtmux_parse_eac3_bsi_bitstream (GstQTMuxPad * qtpad,
+    EAC3BitstreamInfo * info, GstBitReader * bitReader)
+{
+
+  /* EAC3 bsi - Bit stream information (ETSI TS 102 366 V1.4.1 E.1.2.2: */
+  GstBitReader bits = *bitReader;
+
+  READ_BITSTREAM_UINT8 (bits, info->strmtyp, 2);
+  READ_BITSTREAM_UINT8 (bits, info->substreamid, 3);
+  READ_BITSTREAM_UINT16 (bits, info->frmsiz, 11);
+  READ_BITSTREAM_UINT8 (bits, info->fscod, 2);
+  READ_BITSTREAM_UINT8 (bits, info->numblkscod, 2);
+  READ_BITSTREAM_UINT8 (bits, info->acmod, 3);
+  READ_BITSTREAM_UINT8 (bits, info->lfeon, 1);
+  READ_BITSTREAM_UINT8 (bits, info->bsid, 5);
+
+  SKIP_BITSTREAM_BITS (bits, 5);        /* skip dialnorm */
+  guint8 compre = 0;
+  READ_BITSTREAM_UINT8 (bits, compre, 1);
+  if (compre) {
+    SKIP_BITSTREAM_BITS (bits, 8);      /* skip compr */
+  }
+  if (info->acmod == 0x0) {
+    SKIP_BITSTREAM_BITS (bits, 5);      /* skip dialnorm2 */
+    guint8 compr2e = 0;
+    READ_BITSTREAM_UINT8 (bits, compr2e, 1);
+    if (compr2e) {
+      SKIP_BITSTREAM_BITS (bits, 8);    /* skip compr2 */
+    }
+  }
+
+  if (info->strmtyp == 0x1) {
+    guint8 chanmape = 0;
+    READ_BITSTREAM_UINT8 (bits, chanmape, 1);
+    if (chanmape)
+      READ_BITSTREAM_UINT16 (bits, info->chanmap, 16);
+  }
+
+  guint8 mixmdate = 0;
+  READ_BITSTREAM_UINT8 (bits, mixmdate, 1);
+  if (mixmdate) {
+    if (info->acmod > 0x2) {
+      SKIP_BITSTREAM_BITS (bits, 2);    /* skip dmixmod */
+    }
+    if ((info->acmod & 0x1) && (info->acmod > 0x2)) {
+      SKIP_BITSTREAM_BITS (bits, 3);    /* skip ltrtcmixlev */
+      SKIP_BITSTREAM_BITS (bits, 3);    /* skip lorocmixlev */
+    }
+    if (info->acmod & 0x4) {
+      SKIP_BITSTREAM_BITS (bits, 3);    /* skip ltrtsurmixlev */
+      SKIP_BITSTREAM_BITS (bits, 3);    /* skip lorosurmixlev */
+    }
+    if (info->lfeon) {
+      guint8 lfemixlevcode = 0;
+      READ_BITSTREAM_UINT8 (bits, lfemixlevcode, 1);
+      if (lfemixlevcode) {
+        SKIP_BITSTREAM_BITS (bits, 5);  /* skip lfemixlevcod */
+      }
+    }
+    if (info->strmtyp == 0x0) {
+      guint8 pgmscle = 0;
+      READ_BITSTREAM_UINT8 (bits, pgmscle, 1);
+      if (pgmscle) {
+        SKIP_BITSTREAM_BITS (bits, 6);  /* skip pgmscl */
+      }
+      if (info->acmod == 0x0) {
+        guint8 pgmscl2e = 0;
+        READ_BITSTREAM_UINT8 (bits, pgmscl2e, 1);
+        if (pgmscl2e) {
+          SKIP_BITSTREAM_BITS (bits, 6);        /* skip pgmscl2 */
+        }
+      }
+      guint8 extpgmscle = 0;
+      READ_BITSTREAM_UINT8 (bits, extpgmscle, 1);
+      if (extpgmscle) {
+        SKIP_BITSTREAM_BITS (bits, 6);  /* skip extpgmscl */
+      }
+      guint8 mixdef = 0;
+      READ_BITSTREAM_UINT8 (bits, mixdef, 2);
+      if (mixdef == 0x1) {
+        SKIP_BITSTREAM_BITS (bits, 1);  /* skip premixcmpsel */
+        SKIP_BITSTREAM_BITS (bits, 1);  /* skip drcsrc */
+        SKIP_BITSTREAM_BITS (bits, 3);  /* skip premixcmpscl */
+      } else if (mixdef == 0x2) {
+        SKIP_BITSTREAM_BITS (bits, 12); /* skip mixdata */
+      } else if (mixdef == 0x3) {
+        guint8 mixdeflen;
+        READ_BITSTREAM_UINT8 (bits, mixdeflen, 5);
+        guint8 mixdata2e;
+        READ_BITSTREAM_UINT8 (bits, mixdata2e, 1);
+        if (mixdata2e) {
+          SKIP_BITSTREAM_BITS (bits, 1);        /* skip premixcmpsel */
+          SKIP_BITSTREAM_BITS (bits, 1);        /* skip drcsrc */
+          SKIP_BITSTREAM_BITS (bits, 3);        /* skip premixcmpscl */
+          guint8 extpgmlscle;
+          READ_BITSTREAM_UINT8 (bits, extpgmlscle, 1);
+          if (extpgmlscle) {
+            SKIP_BITSTREAM_BITS (bits, 4);      /* skip extpgmlscl */
+          }
+          guint8 extpgmcscle;
+          READ_BITSTREAM_UINT8 (bits, extpgmcscle, 1);
+          if (extpgmcscle) {
+            SKIP_BITSTREAM_BITS (bits, 4);      /* skip extpgmcscl */
+          }
+          guint8 extpgmrscle;
+          READ_BITSTREAM_UINT8 (bits, extpgmrscle, 1);
+          if (extpgmrscle) {
+            SKIP_BITSTREAM_BITS (bits, 4);      /* skip extpgmrscl */
+          }
+          guint8 extpgmlsscle;
+          READ_BITSTREAM_UINT8 (bits, extpgmlsscle, 1);
+          if (extpgmlsscle) {
+            SKIP_BITSTREAM_BITS (bits, 4);      /* skip extpgmlsscl */
+          }
+          guint8 extpgmrsscle;
+          READ_BITSTREAM_UINT8 (bits, extpgmrsscle, 1);
+          if (extpgmrsscle) {
+            SKIP_BITSTREAM_BITS (bits, 4);      /* skip extpgmrsscl */
+          }
+          guint8 extpgmlfescle;
+          READ_BITSTREAM_UINT8 (bits, extpgmlfescle, 1);
+          if (extpgmlfescle) {
+            SKIP_BITSTREAM_BITS (bits, 4);      /* skip extpgmlfescl */
+          }
+          guint8 dmixscle;
+          READ_BITSTREAM_UINT8 (bits, dmixscle, 1);
+          if (dmixscle) {
+            SKIP_BITSTREAM_BITS (bits, 4);      /* skip dmixscl */
+          }
+          guint8 addche;
+          READ_BITSTREAM_UINT8 (bits, addche, 1);
+          if (addche) {
+            guint8 extpgmaux1scle;
+            READ_BITSTREAM_UINT8 (bits, extpgmaux1scle, 1);
+            if (extpgmaux1scle) {
+              SKIP_BITSTREAM_BITS (bits, 4);    /* skip extpgmaux1scl */
+            }
+            guint8 extpgmaux2scle;
+            READ_BITSTREAM_UINT8 (bits, extpgmaux2scle, 1);
+            if (extpgmaux2scle) {
+              SKIP_BITSTREAM_BITS (bits, 4);    /* skip extpgmaux2scl */
+            }
+          }
+        }
+        guint8 mixdata3e;
+        READ_BITSTREAM_UINT8 (bits, mixdata3e, 1);
+        if (mixdata3e) {
+          SKIP_BITSTREAM_BITS (bits, 5);        /* skip spchdat */
+          guint8 addspchdate;
+          READ_BITSTREAM_UINT8 (bits, addspchdate, 1);
+          if (addspchdate) {
+            SKIP_BITSTREAM_BITS (bits, 5);      /* skip spchdat1 */
+            SKIP_BITSTREAM_BITS (bits, 2);      /* skip spchan1att */
+            guint8 addspchdat1e;
+            READ_BITSTREAM_UINT8 (bits, addspchdat1e, 1);
+            if (addspchdat1e) {
+              SKIP_BITSTREAM_BITS (bits, 5);    /* skip spchdat2 */
+              SKIP_BITSTREAM_BITS (bits, 3);    /* skip spchan2att */
+            }
+          }
+        }
+        guint32 mixdata_bits = 8 * (mixdeflen + 2);
+        SKIP_BITSTREAM_BITS (bits, mixdata_bits);       /* skip mixdata */
+        guint32 mixdatafill_bits = (8 - (mixdata_bits % 8)) % 8;
+        if (mixdatafill_bits > 0)
+          SKIP_BITSTREAM_BITS (bits, mixdatafill_bits); /* skip mixdatafill */
+      }
+      if (info->acmod < 0x2) {
+        guint8 paninfoe;
+        READ_BITSTREAM_UINT8 (bits, paninfoe, 1);
+        if (paninfoe) {
+          SKIP_BITSTREAM_BITS (bits, 8);        /* skip panmean */
+          SKIP_BITSTREAM_BITS (bits, 6);        /* skip paninfo */
+        }
+        if (info->acmod == 0x0) {
+          guint8 paninfo2e;
+          READ_BITSTREAM_UINT8 (bits, paninfo2e, 1);
+          if (paninfo2e) {
+            SKIP_BITSTREAM_BITS (bits, 8);      /* skip panmean2 */
+            SKIP_BITSTREAM_BITS (bits, 6);      /* skip paninfo2 */
+          }
+        }
+      }
+      guint8 frmmixcfginfoe = 0;
+      READ_BITSTREAM_UINT8 (bits, frmmixcfginfoe, 1);
+      if (frmmixcfginfoe) {
+        if (info->numblkscod == 0x0) {
+          SKIP_BITSTREAM_BITS (bits, 5);        /* skip blkmixcfginfo[0] */
+        } else {
+          static const guint32 numblks_table[] = { 1, 2, 3, 6 };
+          guint32 number_of_blocks = numblks_table[info->numblkscod];
+          for (guint32 blk = 0; blk < number_of_blocks; blk++) {
+            guint8 blkmixcfginfoe = 0;
+            READ_BITSTREAM_UINT8 (bits, blkmixcfginfoe, 1);
+            if (blkmixcfginfoe) {
+              SKIP_BITSTREAM_BITS (bits, 5);    /* skip blkmixcfginfo[blk] */
+            }
+          }
+        }
+      }
+    }
+  }
+
+  guint8 infomdate = 0;
+  READ_BITSTREAM_UINT8 (bits, infomdate, 1);
+  if (infomdate) {
+    READ_BITSTREAM_UINT8 (bits, info->bsmod, 3);
+
+    /* The fields parsed after bsmod are not used for filling the EC3SpecificBox (dec3 atom) */
+    SKIP_BITSTREAM_BITS (bits, 1);      /* skip copyrightb */
+    SKIP_BITSTREAM_BITS (bits, 1);      /* skip origbs */
+    if (info->acmod == 0x2) {
+      SKIP_BITSTREAM_BITS (bits, 2);    /* skip dsurmod */
+      SKIP_BITSTREAM_BITS (bits, 2);    /* skip dheadphonmod */
+    }
+    if (info->acmod >= 0x6) {
+      SKIP_BITSTREAM_BITS (bits, 2);    /* skip dsurexmod */
+    }
+    guint8 audprodie = 0;
+    READ_BITSTREAM_UINT8 (bits, audprodie, 1);
+    if (audprodie) {
+      SKIP_BITSTREAM_BITS (bits, 5);    /* skip mixlevel */
+      SKIP_BITSTREAM_BITS (bits, 2);    /* skip roomtyp */
+      SKIP_BITSTREAM_BITS (bits, 1);    /* skip adconvtyp */
+    }
+    if (info->acmod == 0x0) {
+      guint8 audprodi2e = 0;
+      READ_BITSTREAM_UINT8 (bits, audprodi2e, 1);
+      if (audprodi2e) {
+        SKIP_BITSTREAM_BITS (bits, 5);  /* skip mixlevel2 */
+        SKIP_BITSTREAM_BITS (bits, 2);  /* skip roomtyp2 */
+        SKIP_BITSTREAM_BITS (bits, 1);  /* skip adconvtyp2 */
+      }
+    }
+    if (info->fscod < 0x3) {
+      SKIP_BITSTREAM_BITS (bits, 1);    /* skip sourcefscod */
+    }
+  }
+
+  if ((info->strmtyp == 0x0) && (info->numblkscod != 0x3)) {
+    SKIP_BITSTREAM_BITS (bits, 1);      /* skip convsync */
+  }
+
+  if (info->strmtyp == 0x2) {
+    if (info->numblkscod == 0x3) {
+      /* blkid = 1 (implicitly, we just skip it) */
+    } else {
+      guint8 blkid = 0;
+      READ_BITSTREAM_UINT8 (bits, blkid, 1);
+      if (blkid) {
+        SKIP_BITSTREAM_BITS (bits, 6);  /* skip frmsizecod */
+      }
+    }
+  }
+
+  guint8 addbsie = 0;
+  READ_BITSTREAM_UINT8 (bits, addbsie, 1);
+  if (addbsie) {
+    guint8 addbsil = 0;
+    READ_BITSTREAM_UINT8 (bits, addbsil, 6);
+    guint32 addbsi_bits = (addbsil + 1) * 8;
+    SKIP_BITSTREAM_BITS (bits, addbsi_bits);    /* skip addbsi */
+  }
+
+  return TRUE;
+error:
+  return FALSE;
+}
+
+static void
+gst_qt_mux_parse_eac3_bsi (GstQTMuxPad * qtpad, GstBitReader * bits,
+    EAC3BitstreamInfo * info)
+{
+  guint16 framesize = 0;
+  guint read_bits = 0;
+  guint initial_read_position = 0;
+  guint final_read_position = 0;
+  guint framesize_bits = 0;
+  guint bits_to_skip = 0;
+
+  initial_read_position = gst_bit_reader_get_pos (bits);
+
+  if (!gst_qtmux_parse_eac3_bsi_bitstream (qtpad, info, bits))
+    GST_WARNING_OBJECT (qtpad,
+        "There's been some error parsing EAC3 Bitstream Info!");
+
+  GST_DEBUG_OBJECT (qtpad,
+      "EAC3 BSI parsed: strmtyp=%u substreamid=%u frmsiz=%u fscod=%u "
+      "numblkscod=%u acmod=%u lfeon=%u bsid=%u chanmap=0x%04x",
+      info->strmtyp, info->substreamid, info->frmsiz, info->fscod,
+      info->numblkscod, info->acmod, info->lfeon, info->bsid, info->chanmap);
+
+  if (info->frmsiz == 0)
+    GST_WARNING_OBJECT (qtpad,
+        "No error detected when parsing EAC3 Bitstream, however, "
+        "the read frame size is 0. There might be an error parsing or in the input stream.");
+
+  framesize = (info->frmsiz + 1) * 2;
+  final_read_position = gst_bit_reader_get_pos (bits);
+  read_bits = final_read_position - initial_read_position;
+  framesize_bits = framesize * 8;
+  /* framesize includes syncword (16 bits), but syncword was already consumed */
+  bits_to_skip = framesize_bits - 16 - read_bits;
+
+  /* Move bit reader to the start of next frame (skip audio blocks and CRC) */
+  if (gst_bit_reader_get_remaining (bits) > bits_to_skip)
+    gst_bit_reader_skip_unchecked (bits, bits_to_skip);
+
+}
+
+static gboolean
+gst_qt_mux_parse_eac3_syncword (GstBitReader * bits)
+{
+  guint16 syncword;
+
+  if (gst_bit_reader_get_remaining (bits) < 16) {
+    return FALSE;
+  }
+
+  syncword = gst_bit_reader_get_bits_uint16_unchecked (bits, 16);
+  return syncword == 0x0B77;
+}
+
+/* This actually parses an EAC3 SAMPLE. Keeping the function name because of resemblance with AC3 */
+static GstBuffer *
+gst_qt_mux_prepare_parse_eac3_frame (GstQTMuxPad * qtpad, GstBuffer * buf,
+    GstQTMux * qtmux)
+{
+  GArray *bitstreamInfo;
+  GstMapInfo map;
+  GstBitReader bits;
+
+  if (!gst_buffer_map (buf, &map, GST_MAP_READ)) {
+    GST_WARNING_OBJECT (qtpad, "Failed to map buffer");
+    return buf;
+  }
+
+  if (G_UNLIKELY (map.size < 8)) {
+    GST_WARNING_OBJECT (qtpad, "EAC3 buffer too small, can't parse stream");
+    goto done;
+  }
+
+  gst_bit_reader_init (&bits, map.data, map.size);
+
+  bitstreamInfo = g_array_new (FALSE, FALSE, sizeof (EAC3BitstreamInfo));
+
+  while (gst_qt_mux_parse_eac3_syncword (&bits)) {
+    EAC3BitstreamInfo info = { 0 };
+    gst_qt_mux_parse_eac3_bsi (qtpad, &bits, &info);
+    g_array_append_val (bitstreamInfo, info);
+  }
+
+  if (bitstreamInfo->len == 0) {
+    GST_WARNING_OBJECT (qtpad,
+        "No EAC3 syncword found in buffer, can't parse EAC3 stream");
+    g_array_free (bitstreamInfo, TRUE);
+    goto done;
+  }
+
+  /* Write EC3SpecificBox */
+  gst_qt_mux_pad_add_eac3_extension (qtpad, buf, qtmux, bitstreamInfo);
+
+  g_array_free (bitstreamInfo, TRUE);
+
+done:
+  gst_buffer_unmap (buf, &map);
+  qtpad->prepare_buf_func = NULL;
   return buf;
 }
 
@@ -3025,6 +3446,8 @@ gst_qt_mux_prefill_samples (GstQTMux * qtmux)
 
     if (qpad->first_ts == GST_CLOCK_TIME_NONE)
       qpad->first_ts = timestamp;
+    if (qpad->earliest_pts == GST_CLOCK_TIME_NONE)
+      qpad->earliest_pts = timestamp;
     if (qpad->first_dts == GST_CLOCK_TIME_NONE)
       qpad->first_dts = timestamp;
 
@@ -3087,7 +3510,7 @@ gst_qt_mux_start_file (GstQTMux * qtmux)
 {
   GstQTMuxClass *qtmux_klass = (GstQTMuxClass *) (G_OBJECT_GET_CLASS (qtmux));
   GstFlowReturn ret = GST_FLOW_OK;
-  GstCaps *caps;
+  GstCaps *caps, *tcaps;
   GstClockTime reserved_max_duration;
   guint reserved_bytes_per_sec_per_trak;
   GList *l;
@@ -3100,9 +3523,10 @@ gst_qt_mux_start_file (GstQTMux * qtmux)
   reserved_bytes_per_sec_per_trak = qtmux->reserved_bytes_per_sec_per_trak;
   GST_OBJECT_UNLOCK (qtmux);
 
-  caps =
-      gst_caps_copy (gst_pad_get_pad_template_caps (GST_AGGREGATOR_SRC_PAD
-          (qtmux)));
+  tcaps = gst_pad_get_pad_template_caps (GST_AGGREGATOR_SRC_PAD (qtmux));
+  caps = gst_caps_copy (tcaps);
+  gst_caps_unref (tcaps);
+
   /* qtmux has structure with and without variant, remove all but the first */
   trunc_caps = gst_caps_truncate (caps);
   g_assert (trunc_caps);
@@ -3472,6 +3896,7 @@ gst_qt_mux_start_file (GstQTMux * qtmux)
         qtpad->total_bytes = 0;
         qtpad->total_duration = 0;
         qtpad->first_dts = qtpad->first_ts = GST_CLOCK_TIME_NONE;
+        qtpad->earliest_pts = GST_CLOCK_TIME_NONE;
         qtpad->last_dts = GST_CLOCK_TIME_NONE;
         qtpad->sample_offset = 0;
       }
@@ -3616,8 +4041,8 @@ gst_qt_mux_update_global_statistics (GstQTMux * qtmux)
     }
 
     /* having flushed above, can check for buffers now */
-    if (GST_CLOCK_TIME_IS_VALID (qtpad->first_ts)) {
-      GstClockTime first_pts_in = qtpad->first_ts;
+    if (GST_CLOCK_TIME_IS_VALID (qtpad->earliest_pts)) {
+      GstClockTime first_pts_in = qtpad->earliest_pts;
       /* it should be, since we got first_ts by adding adjustment
        * to a positive incoming PTS */
       if (qtpad->dts_adjustment <= first_pts_in)
@@ -3697,17 +4122,18 @@ gst_qt_mux_update_edit_lists (GstQTMux * qtmux)
 
     atom_trak_edts_clear (qtpad->trak);
 
-    if (GST_CLOCK_TIME_IS_VALID (qtpad->first_ts)) {
+    if (GST_CLOCK_TIME_IS_VALID (qtpad->earliest_pts)) {
       guint32 lateness = 0;
       guint32 duration = qtpad->trak->tkhd.duration;
       gboolean has_gap;
 
-      has_gap = (qtpad->first_ts > (qtmux->first_ts + qtpad->dts_adjustment));
+      has_gap =
+          (qtpad->earliest_pts > (qtmux->first_ts + qtpad->dts_adjustment));
 
       if (has_gap) {
         GstClockTime diff, trak_lateness;
 
-        diff = qtpad->first_ts - (qtmux->first_ts + qtpad->dts_adjustment);
+        diff = qtpad->earliest_pts - (qtmux->first_ts + qtpad->dts_adjustment);
         lateness = gst_util_uint64_scale_round (diff,
             qtmux->timescale, GST_SECOND);
 
@@ -3736,8 +4162,8 @@ gst_qt_mux_update_edit_lists (GstQTMux * qtmux)
         GstClockTime ctts = 0;
         guint32 media_start;
 
-        if (qtpad->first_ts > qtpad->first_dts)
-          ctts = qtpad->first_ts - qtpad->first_dts;
+        if (qtpad->earliest_pts > qtpad->first_dts)
+          ctts = qtpad->earliest_pts - qtpad->first_dts;
 
         media_start = gst_util_uint64_scale_round (ctts,
             atom_trak_get_timescale (qtpad->trak), GST_SECOND);
@@ -4750,11 +5176,23 @@ gst_qt_mux_robust_recording_rewrite_moov (GstQTMux * qtmux)
   if (qtmux->last_moov_size > qtmux->base_moov_size && qtmux->last_dts > 0) {
     GstClockTime remain;
     GstClockTime time_muxed = qtmux->last_dts;
+    guint32 remain_bytes = qtmux->reserved_moov_size - qtmux->last_moov_size;
+    guint32 bytes_used_for_samples =
+        qtmux->last_moov_size - qtmux->base_moov_size;
+
+    /* Might need to account for an initial timestamp offset on this mux */
+    if (GST_CLOCK_TIME_IS_VALID (qtmux->first_ts)) {
+      if (time_muxed > qtmux->first_ts) {
+        time_muxed -= qtmux->first_ts;
+      } else {
+        time_muxed = 0;
+      }
+    }
 
     remain =
-        gst_util_uint64_scale (qtmux->reserved_moov_size -
-        qtmux->last_moov_size, time_muxed,
-        qtmux->last_moov_size - qtmux->base_moov_size);
+        gst_util_uint64_scale (time_muxed, remain_bytes,
+        bytes_used_for_samples);
+
     /* Always under-estimate slightly, so users
      * have time to stop muxing before we run out */
     if (remain < GST_SECOND / 2)
@@ -4764,10 +5202,11 @@ gst_qt_mux_robust_recording_rewrite_moov (GstQTMux * qtmux)
 
     GST_INFO_OBJECT (qtmux,
         "Reserved %u header bytes. Used %u in %" GST_TIME_FORMAT
-        ". Remaining now %u or approx %" G_GUINT64_FORMAT " ns\n",
-        qtmux->reserved_moov_size, qtmux->last_moov_size,
+        " = %f bytes/sec. Remaining now %u or approx %" G_GUINT64_FORMAT
+        " ns\n", qtmux->reserved_moov_size, qtmux->last_moov_size,
         GST_TIME_ARGS (qtmux->last_dts),
-        qtmux->reserved_moov_size - qtmux->last_moov_size, remain);
+        (double) (bytes_used_for_samples) / ((double) time_muxed / GST_SECOND),
+        remain_bytes, remain);
 
     GST_OBJECT_LOCK (qtmux);
     qtmux->reserved_duration_remaining = remain;
@@ -5152,6 +5591,10 @@ gst_qt_mux_add_buffer (GstQTMux * qtmux, GstQTMuxPad * pad, GstBuffer * buf)
 
   if (!GST_BUFFER_PTS_IS_VALID (last_buf))
     goto no_pts;
+
+  if (!GST_CLOCK_TIME_IS_VALID (pad->earliest_pts) ||
+      GST_BUFFER_PTS (last_buf) < pad->earliest_pts)
+    pad->earliest_pts = GST_BUFFER_PTS (last_buf);
 
   /* if this is the first buffer, store the timestamp */
   if (G_UNLIKELY (pad->first_ts == GST_CLOCK_TIME_NONE)) {
@@ -5834,7 +6277,8 @@ check_field (const GstIdStr * fieldname, const GValue * value,
 
   if (g_strcmp0 (name, "video/x-h264") == 0 ||
       g_strcmp0 (name, "video/x-h265") == 0 ||
-      g_strcmp0 (name, "video/x-h266") == 0) {
+      g_strcmp0 (name, "video/x-h266") == 0 ||
+      g_strcmp0 (name, "video/x-av1") == 0) {
     /* We support muxing multiple codec_data structures, and the new SPS
      * will contain updated tier / level / profiles, which means we do
      * not need to fail renegotiation when those change.
@@ -6182,6 +6626,15 @@ gst_qt_mux_audio_sink_set_caps (GstQTMuxPad * qtpad, GstCaps * caps)
      * the stream itself. Abuse the prepare_buf_func so we parse a frame
      * and get the needed data */
     qtpad->prepare_buf_func = gst_qt_mux_prepare_parse_ac3_frame;
+  } else if (strcmp (mimetype, "audio/x-eac3") == 0) {
+    entry.fourcc = FOURCC_ec_3;
+
+    /* Fixed values according to TS 102 366 but it also mentions that
+     * they should be ignored */
+    entry.channels = channels;
+    entry.sample_size = 16;
+
+    qtpad->prepare_buf_func = gst_qt_mux_prepare_parse_eac3_frame;
   } else if (strcmp (mimetype, "audio/x-opus") == 0) {
     /* Based on the specification defined in:
      * https://www.opus-codec.org/docs/opus_in_isobmff.html */
@@ -6604,68 +7057,15 @@ gst_qt_mux_video_sink_set_caps (GstQTMuxPad * qtpad, GstCaps * caps)
       GST_DEBUG_OBJECT (qtmux, "missing or invalid fourcc in jp2 caps");
       goto refuse_caps;
     }
-  } else if (strcmp (mimetype, "video/x-vp8") == 0) {
-    entry.fourcc = FOURCC_vp08;
-  } else if (strcmp (mimetype, "video/x-vp9") == 0) {
-    const char *profile_str, *chroma_format_str, *colorimetry_str;
-    guint bitdepth_luma, bitdepth_chroma;
-    guint8 profile = -1, chroma_format = -1;
-    gboolean video_full_range;
-    GstVideoColorimetry cinfo = { 0, };
-
-    entry.fourcc = FOURCC_vp09;
-
-    profile_str = gst_structure_get_string (structure, "profile");
-    if (g_strcmp0 (profile_str, "0") == 0) {
-      profile = 0;
-    } else if (g_strcmp0 (profile_str, "1") == 0) {
-      profile = 1;
-    } else if (g_strcmp0 (profile_str, "2") == 0) {
-      profile = 2;
-    } else if (g_strcmp0 (profile_str, "3") == 0) {
-      profile = 3;
-    }
-
-    colorimetry_str = gst_structure_get_string (structure, "colorimetry");
-    gst_video_colorimetry_from_string (&cinfo, colorimetry_str);
-    video_full_range = cinfo.range == GST_VIDEO_COLOR_RANGE_0_255;
-
-    chroma_format_str = gst_structure_get_string (structure, "chroma-format");
-    if (g_strcmp0 (chroma_format_str, "4:2:0") == 0) {
-      const char *chroma_site_str;
-      GstVideoChromaSite chroma_site;
-
-      chroma_site_str = gst_structure_get_string (structure, "chroma-site");
-      chroma_site = gst_video_chroma_site_from_string (chroma_site_str);
-      if (chroma_site == GST_VIDEO_CHROMA_SITE_V_COSITED) {
-        chroma_format = 0;
-      } else if (chroma_site == GST_VIDEO_CHROMA_SITE_COSITED) {
-        chroma_format = 1;
-      } else {
-        chroma_format = 1;
-      }
-    } else if (g_strcmp0 (chroma_format_str, "4:2:2") == 0) {
-      chroma_format = 2;
-    } else if (g_strcmp0 (chroma_format_str, "4:4:4") == 0) {
-      chroma_format = 3;
-    }
-
-    gst_structure_get (structure, "bit-depth-luma", G_TYPE_UINT,
-        &bitdepth_luma, "bit-depth-chroma", G_TYPE_UINT, &bitdepth_chroma,
-        NULL);
-
-    if (profile == 0xFF || chroma_format == 0xFF
-        || bitdepth_luma != bitdepth_chroma || bitdepth_luma == 0) {
-      GST_WARNING_OBJECT (qtmux, "cannot construct vpcC atom from "
-          "incomplete caps");
+  } else if (strcmp (mimetype, "video/x-vp8") == 0 ||
+      strcmp (mimetype, "video/x-vp9") == 0) {
+    entry.fourcc =
+        g_str_has_suffix (mimetype, "vp8") ? FOURCC_vp08 : FOURCC_vp09;
+    ext_atom = build_vpcC_extension (caps);
+    if (ext_atom == NULL) {
+      GST_WARNING_OBJECT (qtmux, "cannot construct vpcC atom");
     } else {
-      ext_atom = build_vpcC_extension (profile, /* XXX: level */ 10,
-          bitdepth_luma, chroma_format, video_full_range,
-          gst_video_color_primaries_to_iso (cinfo.primaries),
-          gst_video_transfer_function_to_iso (cinfo.transfer),
-          gst_video_color_matrix_to_iso (cinfo.matrix));
-      if (ext_atom)
-        ext_atom_list = g_list_append (ext_atom_list, ext_atom);
+      ext_atom_list = g_list_append (ext_atom_list, ext_atom);
     }
   } else if (strcmp (mimetype, "video/x-dirac") == 0) {
     entry.fourcc = FOURCC_drac;
@@ -6706,86 +7106,20 @@ gst_qt_mux_video_sink_set_caps (GstQTMuxPad * qtpad, GstCaps * caps)
     entry.fourcc = FOURCC_cfhd;
     sync = FALSE;
   } else if (strcmp (mimetype, "video/x-av1") == 0) {
-    gint presentation_delay = -1;
     GstBuffer *av1_codec_data = NULL;
+    gboolean parsed = FALSE;
 
     if (codec_data) {
       av1_codec_data = gst_buffer_ref ((GstBuffer *) codec_data);
     } else {
-      GstMapInfo map;
-      const gchar *tmp;
-      guint tmp2;
+      av1_codec_data = gst_codec_utils_av1_create_av1c_from_caps (caps);
+    }
 
-      gst_structure_get_int (structure, "presentation-delay",
-          &presentation_delay);
-
-      av1_codec_data = gst_buffer_new_allocate (NULL, 4, NULL);
-      gst_buffer_map (av1_codec_data, &map, GST_MAP_WRITE);
-
-      /*
-       *  unsigned int (1) marker = 1;
-       *  unsigned int (7) version = 1;
-       *  unsigned int (3) seq_profile;
-       *  unsigned int (5) seq_level_idx_0;
-       *  unsigned int (1) seq_tier_0;
-       *  unsigned int (1) high_bitdepth;
-       *  unsigned int (1) twelve_bit;
-       *  unsigned int (1) monochrome;
-       *  unsigned int (1) chroma_subsampling_x;
-       *  unsigned int (1) chroma_subsampling_y;
-       *  unsigned int (2) chroma_sample_position;
-       *  unsigned int (3) reserved = 0;
-       *
-       *  unsigned int (1) initial_presentation_delay_present;
-       *  if (initial_presentation_delay_present) {
-       *    unsigned int (4) initial_presentation_delay_minus_one;
-       *  } else {
-       *    unsigned int (4) reserved = 0;
-       *  }
-       */
-
-      map.data[0] = 0x81;
-      map.data[1] = 0x00;
-      if ((tmp = gst_structure_get_string (structure, "profile"))) {
-        if (strcmp (tmp, "main") == 0)
-          map.data[1] |= (0 << 5);
-        if (strcmp (tmp, "high") == 0)
-          map.data[1] |= (1 << 5);
-        if (strcmp (tmp, "professional") == 0)
-          map.data[1] |= (2 << 5);
-      }
-      /* FIXME: level set to 1 */
-      map.data[1] |= 0x01;
-      /* FIXME: tier set to 0 */
-
-      if (gst_structure_get_uint (structure, "bit-depth-luma", &tmp2)) {
-        if (tmp2 == 10) {
-          map.data[2] |= 0x40;
-        } else if (tmp2 == 12) {
-          map.data[2] |= 0x60;
-        }
-      }
-
-      /* Assume 4:2:0 if nothing else is given */
-      map.data[2] |= 0x0C;
-      if ((tmp = gst_structure_get_string (structure, "chroma-format"))) {
-        if (strcmp (tmp, "4:0:0") == 0)
-          map.data[2] |= 0x1C;
-        if (strcmp (tmp, "4:2:0") == 0)
-          map.data[2] |= 0x0C;
-        if (strcmp (tmp, "4:2:2") == 0)
-          map.data[2] |= 0x08;
-        if (strcmp (tmp, "4:4:4") == 0)
-          map.data[2] |= 0x00;
-      }
-
-      /* FIXME: keep chroma-site unknown */
-
-      if (presentation_delay != -1) {
-        map.data[3] = 0x10 | (MAX (0xF, presentation_delay) & 0xF);
-      }
-
-      gst_buffer_unmap (av1_codec_data, &map);
+    if ((!gst_structure_get_boolean (structure, "parsed", &parsed) || !parsed)
+        && !qtpad->warned_av1_unparsed) {
+      GST_WARNING_OBJECT (qtmux,
+          "AV1 caps are not marked parsed; consider inserting av1parse");
+      qtpad->warned_av1_unparsed = TRUE;
     }
 
     entry.fourcc = FOURCC_av01;
@@ -7399,7 +7733,7 @@ gst_qt_mux_get_property (GObject * object,
         else
           remaining = 0;
         GST_LOG_OBJECT (qtmux, "reserved duration remaining - reporting %"
-            G_GUINT64_FORMAT "(%" G_GUINT64_FORMAT " - %" G_GUINT64_FORMAT,
+            G_GUINT64_FORMAT " (%" G_GUINT64_FORMAT " - %" G_GUINT64_FORMAT ")",
             remaining, qtmux->reserved_duration_remaining,
             qtmux->muxed_since_last_update);
         g_value_set_uint64 (value, remaining);

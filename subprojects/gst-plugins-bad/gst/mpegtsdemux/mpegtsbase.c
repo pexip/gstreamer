@@ -61,14 +61,17 @@ static GstStaticPadTemplate sink_template = GST_STATIC_PAD_TEMPLATE ("sink",
 
 #define DEFAULT_IGNORE_PCR FALSE
 #define DEFAULT_SKEW_CORRECTIONS TRUE
+#define DEFAULT_ENABLE_STATS FALSE
 
 enum
 {
   PROP_0,
   PROP_PARSE_PRIVATE_SECTIONS,
   PROP_IGNORE_PCR,
-  PROP_SKEW_CORRECTIONS
-      /* FILL ME */
+  PROP_SKEW_CORRECTIONS,
+  PROP_ENABLE_STATS,
+  PROP_STATS,
+  /* FILL ME */
 };
 
 static void mpegts_base_dispose (GObject * object);
@@ -100,6 +103,7 @@ static gboolean mpegts_base_parse_atsc_mgt (MpegTSBase * base,
     GstMpegtsSection * section);
 static void remove_each_program (MpegTSBaseProgram * program,
     MpegTSBase * base);
+static GstStructure *mpegts_base_get_stats (MpegTSBase * base);
 
 static void
 _extra_init (void)
@@ -177,6 +181,29 @@ mpegts_base_class_init (MpegTSBaseClass * klass)
           "Apply skew corrections", DEFAULT_SKEW_CORRECTIONS,
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 
+  /**
+   * MpegTSBase:enable-stats:
+   *
+   * Collect stats to be retrieved via the stats property.
+   *
+   * Since: 1.30
+   */
+  g_object_class_install_property (gobject_class, PROP_ENABLE_STATS,
+      g_param_spec_boolean ("enable-stats", "Enable statistics",
+          "Enable MPEG-TS statistics collection", DEFAULT_ENABLE_STATS,
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+
+  /**
+   * MpegTSBase:stats:
+   *
+   * Retrieve statistics about the MPEG-TS stream, if enable-stats is TRUE.
+   *
+   * Since: 1.30
+   */
+  g_object_class_install_property (gobject_class, PROP_STATS,
+      g_param_spec_boxed ("stats", "Statistics", "MPEG-TS statistics",
+          GST_TYPE_STRUCTURE, G_PARAM_READABLE | G_PARAM_STATIC_STRINGS));
+
   klass->sink_query = GST_DEBUG_FUNCPTR (mpegts_base_default_sink_query);
   klass->handle_psi = NULL;
 
@@ -199,6 +226,11 @@ mpegts_base_set_property (GObject * object, guint prop_id,
     case PROP_SKEW_CORRECTIONS:
       base->packetizer->skew_correction = g_value_get_boolean (value);
       break;
+    case PROP_ENABLE_STATS:
+      base->enable_stats = g_value_get_boolean (value);
+      mpegts_packetizer_set_packet_counts_enabled (base->packetizer,
+          base->enable_stats);
+      break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
   }
@@ -219,6 +251,12 @@ mpegts_base_get_property (GObject * object, guint prop_id,
       break;
     case PROP_SKEW_CORRECTIONS:
       g_value_set_boolean (value, base->packetizer->skew_correction);
+      break;
+    case PROP_ENABLE_STATS:
+      g_value_set_boolean (value, base->enable_stats);
+      break;
+    case PROP_STATS:
+      g_value_take_boxed (value, mpegts_base_get_stats (base));
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
@@ -304,6 +342,8 @@ mpegts_base_init (MpegTSBase * base)
   base->push_data = TRUE;
   base->push_section = TRUE;
   base->ignore_pcr = DEFAULT_IGNORE_PCR;
+
+  base->enable_stats = DEFAULT_ENABLE_STATS;
 
   mpegts_base_reset (base);
 }
@@ -623,9 +663,13 @@ find_registration_in_descriptors (GPtrArray * descriptors,
   for (i = 0; i < nb_desc; i++) {
     GstMpegtsDescriptor *desc = g_ptr_array_index (descriptors, i);
     if (desc->tag == GST_MTS_DESC_REGISTRATION) {
-      guint32 reg_desc = GST_READ_UINT32_BE (desc->data + 2);
-      if (reg_desc == registration_id)
-        return TRUE;
+      if (G_UNLIKELY (desc->length < 4)) {
+        GST_WARNING ("Registration descriptor with length < 4. (Corrupted ?)");
+      } else {
+        guint32 reg_desc = GST_READ_UINT32_BE (desc->data + 2);
+        if (reg_desc == registration_id)
+          return TRUE;
+      }
     }
   }
   return FALSE;
@@ -1427,6 +1471,26 @@ remove_each_program (MpegTSBaseProgram * program, MpegTSBase * base)
   mpegts_base_deactivate_program (base, program);
 }
 
+static GstStructure *
+mpegts_base_get_stats (MpegTSBase * base)
+{
+  GstStructure *s;
+
+  s = gst_structure_new_empty ("application/x-gst-mpegts-stats");
+
+  if (base->enable_stats) {
+    GstStructure *counts;
+    GValue counts_v = G_VALUE_INIT;
+
+    counts = mpegts_packetizer_get_packet_counts (base->packetizer);
+    g_value_init (&counts_v, GST_TYPE_STRUCTURE);
+    g_value_take_boxed (&counts_v, counts);
+    gst_structure_take_value (s, "packet-counts", &counts_v);
+  }
+
+  return s;
+}
+
 static inline GstFlowReturn
 mpegts_base_drain (MpegTSBase * base)
 {
@@ -1952,10 +2016,8 @@ mpegts_base_handle_seek_event (MpegTSBase * base, GstPad * pad,
     flush_event = NULL;
   }
 
-  if (flush_event)
-    gst_event_unref (flush_event);
-  gst_pad_start_task (base->sinkpad, (GstTaskFunction) mpegts_base_loop, base,
-      NULL);
+  gst_pad_start_task (base->sinkpad, (GstTaskFunction) mpegts_base_loop,
+      gst_object_ref (base), gst_object_unref);
 
   GST_PAD_STREAM_UNLOCK (base->sinkpad);
   return ret == GST_FLOW_OK;
@@ -2012,8 +2074,8 @@ mpegts_base_sink_activate_mode (GstPad * pad, GstObject * parent,
         base->packetizer->calculate_skew = FALSE;
         gst_segment_init (&base->segment, GST_FORMAT_BYTES);
         res =
-            gst_pad_start_task (pad, (GstTaskFunction) mpegts_base_loop, base,
-            NULL);
+            gst_pad_start_task (pad, (GstTaskFunction) mpegts_base_loop,
+            gst_object_ref (base), gst_object_unref);
       } else
         res = gst_pad_stop_task (pad);
       break;

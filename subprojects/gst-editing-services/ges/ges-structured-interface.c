@@ -29,6 +29,43 @@
 
 #define LAST_CONTAINER_QDATA g_quark_from_string("ges-structured-last-container")
 #define LAST_CHILD_QDATA g_quark_from_string("ges-structured-last-child")
+#define EXPLICIT_RESTRICTIONS_QDATA \
+    g_quark_from_string("ges-structured-explicit-restrictions")
+
+static void
+_last_container_weak_ref_free (gpointer data)
+{
+  GWeakRef *ref = data;
+
+  g_weak_ref_clear (ref);
+  g_free (ref);
+}
+
+static GESContainer *
+_get_last_container (GObject * timeline)
+{
+  GWeakRef *ref = g_object_get_qdata (timeline, LAST_CONTAINER_QDATA);
+
+  if (!ref)
+    return NULL;
+
+  return g_weak_ref_get (ref);
+}
+
+static void
+_set_last_container (GObject * timeline, GESClip * clip)
+{
+  GWeakRef *ref = g_object_get_qdata (timeline, LAST_CONTAINER_QDATA);
+
+  if (!ref) {
+    ref = g_new0 (GWeakRef, 1);
+    g_weak_ref_init (ref, clip);
+    g_object_set_qdata_full (timeline, LAST_CONTAINER_QDATA, ref,
+        _last_container_weak_ref_free);
+  } else {
+    g_weak_ref_set (ref, clip);
+  }
+}
 
 #define REPORT_UNLESS(condition, errpoint, ...)                                \
   G_STMT_START {                                                               \
@@ -228,9 +265,7 @@ find_element_for_property (GESTimeline * timeline, GstStructure * structure,
   }
 
   if (!element) {
-    element = g_object_get_qdata (G_OBJECT (timeline), LAST_CONTAINER_QDATA);
-    if (element)
-      gst_object_ref (element);
+    element = GES_TIMELINE_ELEMENT (_get_last_container (G_OBJECT (timeline)));
   }
 
   REPORT_UNLESS (GES_IS_TIMELINE_ELEMENT (element), err,
@@ -602,6 +637,202 @@ get_flags_from_string (GType type, const gchar * str_flags, guint * flags)
   return TRUE;
 }
 
+/* Resolves a '+' separated list of stream-numbers or stream-ids into the
+ * matching #GESUriSourceAsset-s of @asset. Returns a (transfer container) list
+ * of borrowed assets, or %NULL and sets @error if a token matches no stream. */
+/* Returns the @n-th (0-based) track of @type in @tracks, or NULL. */
+static GESTrack *
+_nth_track_of_type (GList * tracks, GESTrackType type, guint n)
+{
+  GList *tmp;
+  guint i = 0;
+
+  for (tmp = tracks; tmp; tmp = tmp->next) {
+    if (GES_TRACK (tmp->data)->type == type) {
+      if (i == n)
+        return tmp->data;
+      i++;
+    }
+  }
+
+  return NULL;
+}
+
+/* The stream of @asset matching @spec (a stream-number or a full stream-id), or
+ * NULL. */
+static GESUriSourceAsset *
+_lookup_stream (GESUriClipAsset * asset, const gchar * spec)
+{
+  const GList *tmp;
+  gchar *endptr = NULL;
+  gint64 number = g_ascii_strtoll (spec, &endptr, 10);
+  gboolean is_number = (endptr && *endptr == '\0');
+
+  for (tmp = ges_uri_clip_asset_get_stream_assets (asset); tmp; tmp = tmp->next) {
+    GstDiscovererStreamInfo *info =
+        ges_uri_source_asset_get_stream_info (GES_URI_SOURCE_ASSET (tmp->data));
+
+    if (is_number ? gst_discoverer_stream_info_get_stream_number (info) ==
+        number : !g_strcmp0 (spec,
+            gst_discoverer_stream_info_get_stream_id (info)))
+      return tmp->data;
+  }
+
+  return NULL;
+}
+
+typedef struct
+{
+  gchar *stream_spec;           /* unescaped stream-number or stream-id */
+  gchar *track_spec;            /* unescaped track index, or NULL */
+} StreamEntry;
+
+static void
+_stream_entry_free (gpointer data)
+{
+  StreamEntry *e = data;
+
+  g_free (e->stream_spec);
+  g_free (e->track_spec);
+  g_free (e);
+}
+
+/* Splits @streams_str into '<stream>[:<track>]' entries on unescaped '+',
+ * then each entry on the first unescaped ':'. A '\' escapes the next char
+ * (so '\+', '\:', '\\' become '+', ':', '\' in the spec), so a stream-id
+ * containing ':' or '+' can be given escaped. Returns a (transfer container)
+ * #GPtrArray of #StreamEntry, or %NULL and sets @error on a dangling escape. */
+static GPtrArray *
+_split_stream_entries (const gchar * streams_str, GError ** error)
+{
+  GPtrArray *entries = g_ptr_array_new_with_free_func (_stream_entry_free);
+  GString *stream_spec = g_string_new (NULL);
+  GString *track_spec = NULL;
+  const gchar *p;
+
+  for (p = streams_str; *p; p++) {
+    if (*p == '\\') {
+      /* escape: take the next char literally; a dangling '\' is an error */
+      if (p[1] == '\0') {
+        g_set_error (error, GES_ERROR, 0,
+            "Dangling '\\' in stream selection '%s'", streams_str);
+        goto error;
+      }
+      g_string_append_c (stream_spec, p[1]);
+      p++;
+    } else if (*p == '+') {
+      /* end of entry: flush into a new StreamEntry */
+      StreamEntry *e = g_new (StreamEntry, 1);
+
+      e->stream_spec = g_string_free (stream_spec, FALSE);
+      e->track_spec = track_spec ? g_string_free (track_spec, FALSE) : NULL;
+      g_ptr_array_add (entries, e);
+      stream_spec = g_string_new (NULL);
+      track_spec = NULL;
+    } else if (*p == ':') {
+      /* first unescaped ':' separates stream from track; further ':' go into
+       * the track spec so a track spec is never ambiguous (it is a number) */
+      if (track_spec) {
+        g_string_append_c (track_spec, ':');
+      } else {
+        track_spec = g_string_new (NULL);
+      }
+    } else {
+      if (track_spec)
+        g_string_append_c (track_spec, *p);
+      else
+        g_string_append_c (stream_spec, *p);
+    }
+  }
+
+  /* flush the trailing entry (even if empty, to mirror g_strsplit) */
+  {
+    StreamEntry *e = g_new (StreamEntry, 1);
+
+    e->stream_spec = g_string_free (stream_spec, FALSE);
+    e->track_spec = track_spec ? g_string_free (track_spec, FALSE) : NULL;
+    g_ptr_array_add (entries, e);
+  }
+
+  return entries;
+
+error:
+  g_string_free (stream_spec, TRUE);
+  if (track_spec)
+    g_string_free (track_spec, TRUE);
+  g_ptr_array_unref (entries);
+  return NULL;
+}
+
+
+/* Builds the source->track map from a '+' separated list of `<stream>[:<track>]`
+ * entries: <stream> is a stream-number or stream-id, and the optional <track>
+ * is the target track by index (in declaration order). Without <track>, the
+ * stream is routed to the matching-type track at its per-type position. A '\'
+ * escapes the next char, so a stream-id containing '+' or ':' can be given. */
+static GESSourceTrackMap *
+_build_source_track_map (GESTimeline * timeline, GESUriClipAsset * asset,
+    const gchar * streams_str, GError ** error)
+{
+  GESSourceTrackMapBuilder *builder = ges_source_track_map_builder_new ();
+  GList *tracks = ges_timeline_get_tracks (timeline);
+  GPtrArray *entries;
+  guint per_type[2] = { 0, 0 };
+  guint i;
+
+  entries = _split_stream_entries (streams_str, error);
+  if (!entries)
+    goto error;
+
+  for (i = 0; i < entries->len; i++) {
+    StreamEntry *e = g_ptr_array_index (entries, i);
+    GESUriSourceAsset *stream;
+    GESTrack *track = NULL;
+
+    if (e->stream_spec[0] == '\0')
+      continue;
+
+    stream = _lookup_stream (asset, e->stream_spec);
+    if (!stream) {
+      *error = g_error_new (GES_ERROR, 0, "No stream matching '%s' in %s",
+          e->stream_spec, ges_asset_get_id (GES_ASSET (asset)));
+      goto error;
+    }
+
+    if (e->track_spec) {
+      gchar *endptr = NULL;
+      gint64 idx = g_ascii_strtoll (e->track_spec, &endptr, 10);
+
+      if (endptr && *endptr == '\0' && idx >= 0)
+        track = g_list_nth_data (tracks, idx);
+      if (!track) {
+        *error = g_error_new (GES_ERROR, 0, "No track at index '%s'",
+            e->track_spec);
+        goto error;
+      }
+    } else {
+      GESTrackType type =
+          ges_track_element_asset_get_track_type (GES_TRACK_ELEMENT_ASSET
+          (stream));
+      guint *n = type == GES_TRACK_TYPE_AUDIO ? &per_type[0] : &per_type[1];
+
+      track = _nth_track_of_type (tracks, type, (*n)++);
+    }
+
+    ges_source_track_map_builder_add (builder, stream, track);
+  }
+
+  g_ptr_array_unref (entries);
+  g_list_free_full (tracks, gst_object_unref);
+  return ges_source_track_map_builder_build (builder);
+
+error:
+  g_clear_pointer (&entries, g_ptr_array_unref);
+  g_list_free_full (tracks, gst_object_unref);
+  ges_source_track_map_builder_free (builder);
+  return NULL;
+}
+
 gboolean
 _ges_add_clip_from_struct (GESTimeline * timeline, GstStructure * structure,
     GError ** error)
@@ -614,6 +845,7 @@ _ges_add_clip_from_struct (GESTimeline * timeline, GstStructure * structure,
   const gchar *text;
   const gchar *pattern;
   const gchar *track_types_str;
+  const gchar *selected_streams_str;
   const gchar *nested_timeline_id;
   gchar *asset_id = NULL;
   gchar *check_asset_id = NULL;
@@ -630,6 +862,7 @@ _ges_add_clip_from_struct (GESTimeline * timeline, GstStructure * structure,
   const gchar *valid_fields[] =
       { "asset-id", "pattern", "name", "layer-priority", "layer", "type",
     "start", "inpoint", "duration", "text", "track-types", "project-uri",
+    "selected-streams",
     NULL
   };
 
@@ -651,6 +884,7 @@ _ges_add_clip_from_struct (GESTimeline * timeline, GstStructure * structure,
   TRY_GET_TIME ("inpoint", &inpoint, &inpoint_frame, 0);
   TRY_GET_TIME ("duration", &duration, &duration_frame, GST_CLOCK_TIME_NONE);
   TRY_GET_STRING ("track-types", &track_types_str, NULL);
+  TRY_GET_STRING ("selected-streams", &selected_streams_str, NULL);
   TRY_GET_STRING ("project-uri", &nested_timeline_id, NULL);
 
   if (track_types_str) {
@@ -687,11 +921,13 @@ _ges_add_clip_from_struct (GESTimeline * timeline, GstStructure * structure,
   if (layer_priority == -1) {
     GESContainer *container;
 
-    container = g_object_get_qdata (G_OBJECT (timeline), LAST_CONTAINER_QDATA);
-    if (!container || !GES_IS_CLIP (container))
+    container = _get_last_container (G_OBJECT (timeline));
+    if (!container || !GES_IS_CLIP (container)) {
       layer = _ges_get_layer_by_priority (timeline, 0);
-    else
+    } else {
       layer = ges_clip_get_layer (GES_CLIP (container));
+    }
+    g_clear_object (&container);
 
     if (!layer)
       layer = _ges_get_layer_by_priority (timeline, 0);
@@ -728,8 +964,48 @@ _ges_add_clip_from_struct (GESTimeline * timeline, GstStructure * structure,
         ges_uri_clip_asset_get_duration (GES_URI_CLIP_ASSET (asset)));
   }
 
-  clip = ges_layer_add_asset (layer, asset, start, inpoint, duration,
-      track_types);
+  if (selected_streams_str && GES_IS_URI_CLIP_ASSET (asset)) {
+    GESSourceTrackMap *map = _build_source_track_map (timeline,
+        GES_URI_CLIP_ASSET (asset), selected_streams_str, error);
+
+    if (!map) {
+      res = FALSE;
+      goto beach;
+    }
+
+    clip = GES_CLIP (ges_asset_extract (asset, error));
+    if (!clip) {
+      res = FALSE;
+      ges_source_track_map_unref (map);
+      goto beach;
+    }
+
+    if (!GST_CLOCK_TIME_IS_VALID (start))
+      start = ges_layer_get_duration (layer);
+    ges_timeline_element_set_start (GES_TIMELINE_ELEMENT (clip), start);
+    ges_timeline_element_set_inpoint (GES_TIMELINE_ELEMENT (clip), inpoint);
+    if (track_types != GES_TRACK_TYPE_UNKNOWN)
+      ges_clip_set_supported_formats (clip, track_types);
+    if (GST_CLOCK_TIME_IS_VALID (duration))
+      ges_timeline_element_set_duration (GES_TIMELINE_ELEMENT (clip), duration);
+
+    /* transfer full: set_source_track_map() takes ownership of map */
+    res = ges_uri_clip_set_source_track_map (GES_URI_CLIP (clip), map, NULL,
+        error);
+    if (!res) {
+      clip = NULL;
+      goto beach;
+    }
+
+    if (!ges_layer_add_clip_full (layer, clip, error)) {
+      clip = NULL;
+      res = FALSE;
+      goto beach;
+    }
+  } else {
+    clip = ges_layer_add_asset (layer, asset, start, inpoint, duration,
+        track_types);
+  }
 
   if (clip) {
     res = TRUE;
@@ -774,7 +1050,7 @@ _ges_add_clip_from_struct (GESTimeline * timeline, GstStructure * structure,
   }
 
   if (res) {
-    g_object_set_qdata (G_OBJECT (timeline), LAST_CONTAINER_QDATA, clip);
+    _set_last_container (G_OBJECT (timeline), GES_CLIP (clip));
     g_object_set_qdata (G_OBJECT (timeline), LAST_CHILD_QDATA, NULL);
   }
 
@@ -846,9 +1122,19 @@ _ges_add_track_from_struct (GESTimeline * timeline,
 
     ges_track_set_restriction_caps (track, caps);
     gst_caps_unref (caps);
+
+    g_object_set_qdata (G_OBJECT (track), EXPLICIT_RESTRICTIONS_QDATA,
+        GINT_TO_POINTER (1));
   }
 
   return ges_timeline_add_track (timeline, track);
+}
+
+gboolean
+_ges_track_has_explicit_restrictions (GESTrack * track)
+{
+  return g_object_get_qdata (G_OBJECT (track),
+      EXPLICIT_RESTRICTIONS_QDATA) != NULL;
 }
 
 gboolean
@@ -856,7 +1142,7 @@ _ges_container_add_child_from_struct (GESTimeline * timeline,
     GstStructure * structure, GError ** error)
 {
   GESAsset *asset = NULL;
-  GESContainer *container;
+  GESContainer *container = NULL;
   GESTimelineElement *child = NULL;
   const gchar *container_name, *child_name, *child_type, *id;
 
@@ -873,7 +1159,7 @@ _ges_container_add_child_from_struct (GESTimeline * timeline,
   container_name = gst_structure_get_string (structure, "container-name");
 
   if (container_name == NULL) {
-    container = g_object_get_qdata (G_OBJECT (timeline), LAST_CONTAINER_QDATA);
+    container = _get_last_container (G_OBJECT (timeline));
   } else {
     container =
         GES_CONTAINER (ges_timeline_get_element (timeline, container_name));
@@ -994,6 +1280,7 @@ _ges_container_add_child_from_struct (GESTimeline * timeline,
 
 beach:
   gst_clear_object (&asset);
+  g_clear_object (&container);
   return res;
 }
 

@@ -47,6 +47,7 @@
 #include <gst/base/base.h>
 #include <gst/pbutils/pbutils.h>
 #include "gstvideoparserselements.h"
+#include <gst/video/gstvideodscmeta.h>
 #include "gsth266parse.h"
 
 #include <string.h>
@@ -165,6 +166,9 @@ static GstCaps *gst_h266_parse_get_caps (GstBaseParse * parse,
 static void
 gst_h266_parse_process_sei_user_data (GstH266Parse * h266parse,
     GstH266RegisteredUserData * rud);
+static void
+gst_h266_parse_process_sei_user_data_unregistered (GstH266Parse * h266parse,
+    GstH274UserDataUnregistered * urud);
 
 static void
 gst_h266_parse_class_init (GstH266ParseClass * klass)
@@ -222,6 +226,7 @@ gst_h266_parse_init (GstH266Parse * h266parse)
   h266parse->frame_out = gst_adapter_new ();
   gst_base_parse_set_pts_interpolation (GST_BASE_PARSE (h266parse), FALSE);
   gst_base_parse_set_infer_ts (GST_BASE_PARSE (h266parse), FALSE);
+  gst_base_parse_set_allow_duplicated_pts (GST_BASE_PARSE (h266parse), TRUE);
   GST_PAD_SET_ACCEPT_INTERSECT (GST_BASE_PARSE_SINK_PAD (h266parse));
   GST_PAD_SET_ACCEPT_TEMPLATE (GST_BASE_PARSE_SINK_PAD (h266parse));
 }
@@ -257,6 +262,21 @@ gst_h266_parse_reset_frame (GstH266Parse * h266parse)
   h266parse->have_sps_in_frame = FALSE;
   h266parse->have_pps_in_frame = FALSE;
   gst_adapter_clear (h266parse->frame_out);
+  gst_video_clear_user_data (&h266parse->user_data);
+  gst_video_clear_user_data_unregistered (&h266parse->user_data_unregistered,
+      FALSE);
+  if (h266parse->dsc_initialization_state == GST_H266_PARSE_SEI_ACTIVE) {
+    gst_h274_dsc_initialization_clear (&h266parse->dsc_initialization);
+    h266parse->dsc_initialization_state = GST_H266_PARSE_SEI_EXPIRED;
+  }
+  if (h266parse->dsc_selection_state == GST_H266_PARSE_SEI_ACTIVE) {
+    gst_h274_dsc_selection_clear (&h266parse->dsc_selection);
+    h266parse->dsc_selection_state = GST_H266_PARSE_SEI_EXPIRED;
+  }
+  if (h266parse->dsc_verification_state == GST_H266_PARSE_SEI_ACTIVE) {
+    gst_h274_dsc_verification_clear (&h266parse->dsc_verification);
+    h266parse->dsc_verification_state = GST_H266_PARSE_SEI_EXPIRED;
+  }
 }
 
 static void
@@ -287,6 +307,8 @@ gst_h266_parse_reset_stream_info (GstH266Parse * h266parse)
   h266parse->packetized = FALSE;
   h266parse->push_codec = FALSE;
   h266parse->first_frame = TRUE;
+  memset (&h266parse->opi, 0, sizeof (GstH266OPI));
+  h266parse->have_opi = FALSE;
   memset (&h266parse->sei_frame_field, 0, sizeof (GstH266FrameFieldInfo));
   h266parse->interlaced_mode = GST_H266_PARSE_PROGRESSIVE_ONLY;
 
@@ -308,6 +330,9 @@ gst_h266_parse_reset_stream_info (GstH266Parse * h266parse)
 
   gst_video_content_light_level_init (&h266parse->content_light_level);
   h266parse->content_light_level_state = GST_H266_PARSE_SEI_EXPIRED;
+  h266parse->dsc_initialization_state = GST_H266_PARSE_SEI_EXPIRED;
+  h266parse->dsc_selection_state = GST_H266_PARSE_SEI_EXPIRED;
+  h266parse->dsc_verification_state = GST_H266_PARSE_SEI_EXPIRED;
 }
 
 static void
@@ -627,6 +652,27 @@ gst_h266_parse_process_sei (GstH266Parse * h266parse, GstH266NalUnit * nalu)
         gst_h266_parse_process_sei_user_data (h266parse,
             &sei.payload.registered_user_data);
         break;
+      case GST_H266_SEI_USER_DATA_UNREGISTERED:
+        gst_h266_parse_process_sei_user_data_unregistered (h266parse,
+            &sei.payload.user_data_unregistered);
+        break;
+      case GST_H266_SEI_DIGITALLY_SIGNED_CONTENT_INITIALIZATION:
+        gst_h274_dsc_initialization_clear (&h266parse->dsc_initialization);
+        gst_h274_dsc_initialization_copy (&h266parse->dsc_initialization,
+            &sei.payload.dsc_initialization);
+        h266parse->dsc_initialization_state = GST_H266_PARSE_SEI_ACTIVE;
+        break;
+      case GST_H266_SEI_DIGITALLY_SIGNED_CONTENT_SELECTION:
+        gst_h274_dsc_selection_copy (&h266parse->dsc_selection,
+            &sei.payload.dsc_selection);
+        h266parse->dsc_selection_state = GST_H266_PARSE_SEI_ACTIVE;
+        break;
+      case GST_H266_SEI_DIGITALLY_SIGNED_CONTENT_VERIFICATION:
+        gst_h274_dsc_verification_clear (&h266parse->dsc_verification);
+        gst_h274_dsc_verification_copy (&h266parse->dsc_verification,
+            &sei.payload.dsc_verification);
+        h266parse->dsc_verification_state = GST_H266_PARSE_SEI_ACTIVE;
+        break;
       default:
         break;
     }
@@ -798,7 +844,9 @@ gst_h266_parse_process_nal (GstH266Parse * h266parse, GstH266NalUnit * nalu)
     case GST_H266_NAL_PREFIX_SEI:
     case GST_H266_NAL_SUFFIX_SEI:
       /* expected state: got-sps */
-      if (!GST_H266_PARSE_STATE_VALID (h266parse, GST_H266_PARSE_STATE_GOT_SPS))
+      if (nal_type == GST_H266_NAL_SUFFIX_SEI
+          && !GST_H266_PARSE_STATE_VALID (h266parse,
+              GST_H266_PARSE_STATE_GOT_SPS))
         return FALSE;
 
       h266parse->header = TRUE;
@@ -825,6 +873,11 @@ gst_h266_parse_process_nal (GstH266Parse * h266parse, GstH266NalUnit * nalu)
       }
 
       if (ph->gdr_or_irap_pic_flag) {
+        if (h266parse->mastering_display_info_state ==
+            GST_H266_PARSE_SEI_ACTIVE ||
+            h266parse->content_light_level_state == GST_H266_PARSE_SEI_ACTIVE)
+          h266parse->update_caps = TRUE;
+
         if (h266parse->mastering_display_info_state ==
             GST_H266_PARSE_SEI_PARSED)
           h266parse->mastering_display_info_state = GST_H266_PARSE_SEI_ACTIVE;
@@ -889,6 +942,11 @@ gst_h266_parse_process_nal (GstH266Parse * h266parse, GstH266NalUnit * nalu)
       /* if slice.picture_header_in_slice_header_flag == 0, PH will do this. */
       if (is_irap_or_gdr && slice.picture_header_in_slice_header_flag) {
         if (h266parse->mastering_display_info_state ==
+            GST_H266_PARSE_SEI_ACTIVE ||
+            h266parse->content_light_level_state == GST_H266_PARSE_SEI_ACTIVE)
+          h266parse->update_caps = TRUE;
+
+        if (h266parse->mastering_display_info_state ==
             GST_H266_PARSE_SEI_PARSED)
           h266parse->mastering_display_info_state = GST_H266_PARSE_SEI_ACTIVE;
         else if (h266parse->mastering_display_info_state ==
@@ -917,6 +975,21 @@ gst_h266_parse_process_nal (GstH266Parse * h266parse, GstH266NalUnit * nalu)
         GST_WARNING_OBJECT (h266parse, "failed to parse AUD:");
         return FALSE;
       }
+      break;
+    }
+    case GST_H266_NAL_OPI:
+    {
+      GstH266OPI opi;
+
+      pres = gst_h266_parser_parse_opi (nalparser, nalu, &opi);
+      if (pres != GST_H266_PARSER_OK) {
+        GST_WARNING_OBJECT (h266parse, "failed to parse OPI:");
+        return FALSE;
+      }
+
+      h266parse->opi = opi;
+      h266parse->have_opi = TRUE;
+      h266parse->update_caps = TRUE;
       break;
     }
     default:
@@ -1003,7 +1076,7 @@ gst_h266_parse_handle_frame_packetized (GstBaseParse * parse,
   GstH266NalUnit nalu;
   const guint nl = h266parse->nal_length_size;
   GstMapInfo map;
-  gint left;
+  gsize parsed, left;
 
   GST_TRACE_OBJECT (h266parse, "Handling packetized frame");
 
@@ -1011,10 +1084,6 @@ gst_h266_parse_handle_frame_packetized (GstBaseParse * parse,
     GST_DEBUG_OBJECT (h266parse, "Unsupported NAL length size %d", nl);
     return GST_FLOW_NOT_NEGOTIATED;
   }
-
-  /* need to save buffer from invalidation upon _finish_frame */
-  if (h266parse->split_packetized)
-    buffer = gst_buffer_copy (frame->buffer);
 
   gst_buffer_map (buffer, &map, GST_MAP_READ);
 
@@ -1059,11 +1128,11 @@ gst_h266_parse_handle_frame_packetized (GstBaseParse * parse,
        * a replacement output buffer is provided anyway. */
       gst_h266_parse_parse_frame (parse, &tmp_frame);
       ret = gst_base_parse_finish_frame (parse, &tmp_frame, nl + nalu.size);
+      gst_base_parse_frame_free (&tmp_frame);
 
       /* Bail out if we get a flow error. */
       if (ret != GST_FLOW_OK) {
         gst_buffer_unmap (buffer, &map);
-        gst_buffer_unref (buffer);
         return ret;
       }
     }
@@ -1073,11 +1142,10 @@ gst_h266_parse_handle_frame_packetized (GstBaseParse * parse,
         map.data, nalu.offset + nalu.size, map.size, nl, &nalu);
   }
 
+  parsed = map.size - left;
   gst_buffer_unmap (buffer, &map);
 
   if (!h266parse->split_packetized) {
-    gint parsed = map.size - left;
-
     /* Nothing to do if no NAL unit was parsed, the whole AU will be dropped
      * below. */
     if (parsed > 0) {
@@ -1085,8 +1153,7 @@ gst_h266_parse_handle_frame_packetized (GstBaseParse * parse,
         /* Only part of the AU could be parsed, split out that part the rest
          * will be dropped below. Should not be happening for nice VVC. */
         GST_WARNING_OBJECT (parse, "Problem parsing part of AU, keep part that "
-            "has been correctly parsed (%d bytes).", parsed);
-        buffer = gst_buffer_copy (frame->buffer);
+            "has been correctly parsed (%" G_GSIZE_FORMAT " bytes).", parsed);
         GstBaseParseFrame tmp_frame;
 
         gst_base_parse_frame_init (&tmp_frame);
@@ -1099,28 +1166,24 @@ gst_h266_parse_handle_frame_packetized (GstBaseParse * parse,
         h266parse->marker = TRUE;
         gst_h266_parse_parse_frame (parse, &tmp_frame);
         ret = gst_base_parse_finish_frame (parse, &tmp_frame, parsed);
-        gst_buffer_unref (buffer);
+        gst_base_parse_frame_free (&tmp_frame);
 
         /* Bail out if we get a flow error. */
-        if (ret != GST_FLOW_OK) {
-          gst_buffer_unmap (buffer, &map);
-          gst_buffer_unref (buffer);
+        if (ret != GST_FLOW_OK)
           return ret;
-        }
       } else {
         /* The whole AU succesfully parsed. */
         h266parse->marker = TRUE;
         gst_h266_parse_parse_frame (parse, frame);
-        ret = gst_base_parse_finish_frame (parse, frame, map.size);
+        ret = gst_base_parse_finish_frame (parse, frame, parsed);
       }
     }
-  } else {
-    gst_buffer_unref (buffer);
   }
 
   if (G_UNLIKELY (left)) {
     /* should not be happening for nice VVC */
-    GST_WARNING_OBJECT (parse, "skipping leftover VVC data %d", left);
+    GST_WARNING_OBJECT (parse, "skipping leftover VVC data %" G_GSIZE_FORMAT,
+        left);
     frame->flags |= GST_BASE_PARSE_FRAME_FLAG_DROP;
     ret = gst_base_parse_finish_frame (parse, frame, left);
   }
@@ -1692,10 +1755,12 @@ gst_h266_parse_make_codec_data (GstH266Parse * h266parse)
     guint8 constant_frame_rate = 1;
     guint8 chroma_format_idc = sps->chroma_format_idc;
     GstBuffer *pci;
+    guint16 ols_idx = 0;
 
     /* ols_idx(9) | num_sublayers(3) | constant_frame_rate(2) | chroma_format_idc(2) */
-    /* FIXME: OPI isn't parsed so we don't store an ols_idx in the parser and just write 0 here. */
-    guint16 ols_idx = 0;
+    if (h266parse->have_opi && h266parse->opi.ols_info_present_flag)
+      ols_idx = h266parse->opi.ols_idx;
+
     gst_byte_writer_put_uint16_be (&bw,
         (ols_idx << 7) | (num_sublayers << 4) |
         (constant_frame_rate << 2) | chroma_format_idc);
@@ -2243,6 +2308,8 @@ gst_h266_parse_update_src_caps (GstH266Parse * h266parse, GstCaps * caps)
     GstH266VUIParams *vui = &sps->vui_params;
     gchar *colorimetry = NULL;
     guint interlaced_mode;
+    gint upstream_fps_n = 0;
+    gint upstream_fps_d = 1;
 
     GST_DEBUG_OBJECT (h266parse, "vps: %p", vps);
 
@@ -2275,7 +2342,15 @@ gst_h266_parse_update_src_caps (GstH266Parse * h266parse, GstCaps * caps)
       modified = TRUE;
     }
 
-    if (!h266parse->framerate_from_caps) {
+    if (s && gst_structure_get_fraction (s,
+            "framerate", &upstream_fps_n, &upstream_fps_d)) {
+      if (upstream_fps_n <= 0 || upstream_fps_d <= 0) {
+        upstream_fps_n = 0;
+        upstream_fps_d = 1;
+      }
+    }
+
+    if (!upstream_fps_n) {
       gint fps_num, fps_den;
 
       /* 0/1 is set as the default in the codec parser */
@@ -2358,26 +2433,16 @@ gst_h266_parse_update_src_caps (GstH266Parse * h266parse, GstCaps * caps)
 
       caps = gst_caps_copy (sink_caps);
 
-      /* sps should give this but upstream overrides */
-      if (s && gst_structure_has_field (s, "width"))
-        gst_structure_get_int (s, "width", &width);
-      else
-        width = h266parse->width;
-
-      if (s && gst_structure_has_field (s, "height"))
-        gst_structure_get_int (s, "height", &height);
-      else
-        height = h266parse->height;
+      width = h266parse->width;
+      height = h266parse->height;
 
       gst_caps_set_simple (caps, "width", G_TYPE_INT, width,
           "height", G_TYPE_INT, height, NULL);
 
-      h266parse->framerate_from_caps = FALSE;
       /* upstream overrides */
-      if (s && gst_structure_has_field (s, "framerate")) {
-        gst_structure_get_fraction (s, "framerate", &fps_num, &fps_den);
-        if (fps_den > 0)
-          h266parse->framerate_from_caps = TRUE;
+      if (upstream_fps_n > 0 && upstream_fps_d > 0) {
+        fps_num = upstream_fps_n;
+        fps_den = upstream_fps_d;
       }
 
       /* but not necessarily or reliably this */
@@ -2445,6 +2510,7 @@ gst_h266_parse_update_src_caps (GstH266Parse * h266parse, GstCaps * caps)
     const gchar *mdi_str = NULL;
     const gchar *cll_str = NULL;
     gboolean codec_data_modified = FALSE;
+    GstVideoHDRFormat hdr_format = GST_VIDEO_HDR_FORMAT_NONE;
     GstStructure *st;
 
     gst_caps_set_simple (caps, "parsed", G_TYPE_BOOLEAN, TRUE,
@@ -2561,6 +2627,19 @@ gst_h266_parse_update_src_caps (GstH266Parse * h266parse, GstCaps * caps)
       gst_caps_set_simple (caps, "lcevc", G_TYPE_BOOLEAN, TRUE, NULL);
     else
       gst_caps_set_simple (caps, "lcevc", G_TYPE_BOOLEAN, FALSE, NULL);
+
+    if (h266parse->user_data.has_hdr10_plus_data) {
+      hdr_format = GST_VIDEO_HDR_FORMAT_HDR10_PLUS;
+    } else if (gst_structure_has_field (st, "mastering-display-info") &&
+        gst_structure_has_field (st, "content-light-level")) {
+      hdr_format = GST_VIDEO_HDR_FORMAT_HDR10;
+    }
+
+    if (hdr_format != GST_VIDEO_HDR_FORMAT_NONE) {
+      gst_caps_set_simple (caps,
+          "hdr-format", G_TYPE_STRING,
+          gst_video_hdr_format_to_string (hdr_format), NULL);
+    }
 
     src_caps = gst_pad_get_current_caps (GST_BASE_PARSE_SRC_PAD (h266parse));
 
@@ -3061,6 +3140,18 @@ gst_h266_parse_pre_push_frame (GstBaseParse * parse, GstBaseParseFrame * frame)
   gst_video_push_user_data_unregistered ((GstElement *) h266parse,
       &h266parse->user_data_unregistered, parse_buffer);
 
+  if (h266parse->dsc_initialization_state == GST_H266_PARSE_SEI_ACTIVE)
+    gst_buffer_add_video_dsc_initialization_meta
+        (parse_buffer, &h266parse->dsc_initialization);
+
+  if (h266parse->dsc_selection_state == GST_H266_PARSE_SEI_ACTIVE)
+    gst_buffer_add_video_dsc_selection_meta
+        (parse_buffer, &h266parse->dsc_selection);
+
+  if (h266parse->dsc_verification_state == GST_H266_PARSE_SEI_ACTIVE)
+    gst_buffer_add_video_dsc_verification_meta
+        (parse_buffer, &h266parse->dsc_verification);
+
   gst_h266_parse_reset_frame (h266parse);
 
   return GST_FLOW_OK;
@@ -3360,6 +3451,18 @@ gst_h266_parse_process_sei_user_data (GstH266Parse * h266parse,
 
   gst_video_parse_user_data ((GstElement *) h266parse, &h266parse->user_data,
       &br, field, provider_code);
+}
+
+static void
+gst_h266_parse_process_sei_user_data_unregistered (GstH266Parse * h266parse,
+    GstH274UserDataUnregistered * urud)
+{
+  GstByteReader br;
+
+  gst_byte_reader_init (&br, urud->data, urud->size);
+
+  gst_video_parse_user_data_unregistered ((GstElement *) h266parse,
+      &h266parse->user_data_unregistered, &br, urud->uuid);
 }
 
 static void

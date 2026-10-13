@@ -286,9 +286,10 @@ gst_field_analysis_class_init (GstFieldAnalysisClass * klass)
 
   gst_element_class_set_static_metadata (gstelement_class,
       "Video field analysis",
-      "Filter/Analysis/Video",
+      "Filter/Analyzer/Video",
       "Analyse fields from video frames to identify if they are progressive/telecined/interlaced",
       "Robert Swain <robert.swain@collabora.co.uk>");
+  gst_element_class_mark_as_untrusted_aware (gstelement_class);
 
   gst_element_class_add_static_pad_template (gstelement_class, &src_factory);
   gst_element_class_add_static_pad_template (gstelement_class, &sink_factory);
@@ -1848,6 +1849,7 @@ gst_field_analysis_finalize (GObject * object)
 static gboolean
 fieldanalysis_init (GstPlugin * plugin)
 {
+  gst_plugin_set_static_features_flag (plugin);
   return GST_ELEMENT_REGISTER (fieldanalysis, plugin);
 }
 

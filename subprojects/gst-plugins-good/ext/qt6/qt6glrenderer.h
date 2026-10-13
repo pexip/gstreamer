@@ -56,6 +56,7 @@ public:
     void setSize(int w, int h);
 
     GstGLMemory *generateOutput(GstClockTime input_ns);
+    bool generateInto(GstClockTime input_ns, GstGLMemory *input_gl_mem);
 
     /* cleanup any resources.  Any use of this object after calling this
      * function may result in undefined behaviour */
@@ -66,14 +67,20 @@ public:
     QQuickItem *rootItem() const;
     bool setRootItem(QQuickItem *root);
 
+    bool needsGenerate();
+    void setNeedsGenerateCallback(GCallback cb, gpointer data, GDestroyNotify destroy);
+
 private slots:
     void initializeQml();
+    void sceneChanged();
+    void renderRequested();
 
 private:
     void init();
     void ensureFbo();
 
     void updateSizes();
+    void generate(GstClockTime input_ns);
 
     static void render_gst_gl_c (GstGLContext * context, GstQt6QuickRenderer * self) { self->renderGstGL (); }
     void renderGstGL ();
@@ -105,9 +112,18 @@ private:
     GstGLAllocationParams *gl_params;
     GstVideoInfo v_info;
     GstGLMemory *gl_mem;
+    GstMemory* previous_gl_mem;
 
     QString m_errorString;
     struct SharedRenderData *m_sharedRenderData;
+
+    bool m_needsPolish = true;
+    bool m_needsSync = true;
+    GCallback m_needsGenerateCallback;
+    gpointer m_needsGenerateCallbackData;
+    GDestroyNotify m_needsGenerateCallbackDestroy;
+
+    void callNeedsGenerateCB();
 };
 
 class Qt6CreateSurfaceWorker : public QObject

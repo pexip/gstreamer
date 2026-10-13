@@ -520,7 +520,7 @@ gst_rtp_src_class_init (GstRtpSrcClass * klass)
 
   gst_element_class_set_static_metadata (gstelement_class,
       "RTP Source element",
-      "Generic/Bin/Src",
+      "Generic/Bin/Source",
       "Simple RTP src", "Marc Leeman <marc.leeman@gmail.com>");
 }
 
@@ -780,8 +780,8 @@ gst_rtp_src_start (GstRtpSrc * self)
 dns_resolve_failed:
   GST_ELEMENT_ERROR (self, RESOURCE, NOT_FOUND,
       ("Could not resolve hostname '%s'", gst_uri_get_host (self->uri)),
-      ("DNS resolver reported: %s", error->message));
-  g_error_free (error);
+      ("DNS resolver reported: %s", error ? error->message : "[unknown]"));
+  g_clear_error (&error);
   return FALSE;
 }
 

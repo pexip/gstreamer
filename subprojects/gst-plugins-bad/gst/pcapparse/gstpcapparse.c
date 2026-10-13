@@ -465,7 +465,7 @@ gst_pcap_parse_scan_frame (GstPcapParse * self,
   ip_header_size = (b & 0x0f) * 4;
   if (ip_header_size < IP_HEADER_MIN_LEN ||
       buf_ip + ip_header_size > buf + buf_size)
-    goto done;
+    return FALSE;
 
   flags = buf_ip[6] >> 5;
   fragment_offset =
@@ -487,10 +487,10 @@ gst_pcap_parse_scan_frame (GstPcapParse * self,
   buf_proto = buf_ip + ip_header_size;
   ip_packet_len = GUINT16_FROM_BE (*(guint16 *) (buf_ip + 2));
   if (ip_packet_len < ip_header_size)
-    goto done;
+    return FALSE;
 
   if (buf_proto + 4 > buf + buf_size)
-    goto done;
+    return FALSE;
 
   /* ok for tcp and udp */
   src_port = GUINT16_FROM_BE (*((guint16 *) (buf_proto + 0)));
@@ -499,7 +499,7 @@ gst_pcap_parse_scan_frame (GstPcapParse * self,
   /* extract some params and data according to protocol */
   if (ip_protocol == IP_PROTO_UDP) {
     if (buf_proto + 6 > buf + buf_size)
-      goto done;
+      return FALSE;
     len = GUINT16_FROM_BE (*((guint16 *) (buf_proto + 4)));
     if (len < UDP_HEADER_LEN || buf_proto + len > buf + buf_size)
       goto done;
@@ -508,13 +508,13 @@ gst_pcap_parse_scan_frame (GstPcapParse * self,
     *payload_size = len - UDP_HEADER_LEN;
   } else {
     if (buf_proto + 13 > buf + buf_size)
-      goto done;
+      return FALSE;
     len = (buf_proto[12] >> 4) * 4;
     if (len < TCP_HEADER_MIN_LEN || buf_proto + len > buf + buf_size)
-      goto done;
+      return FALSE;
     if (ip_packet_len < ip_header_size + len ||
         buf_ip + ip_packet_len > buf + buf_size)
-      goto done;
+      return FALSE;
 
     const guint8 *tcp_payload = buf_proto + len;
     gint tcp_payload_size = ip_packet_len - ip_header_size - len;

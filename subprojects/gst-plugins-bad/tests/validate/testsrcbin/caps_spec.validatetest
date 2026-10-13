@@ -1,7 +1,7 @@
 meta,
-    args = {
-        "testbin://video,caps=[video/x-raw,width=1920,height=1080],num-buffers=1 ! fakesink",
+    args={
+        "testbin://video,caps=[video/x-raw,format=A444_16LE,width=1920,height=1080],num-buffers=1 ! fakesink",
     },
-    configs = {
-        "$(validateflow), pad=testsrcbin0:video_src_0",
+    configs={
+        [validateflow, pad=testsrcbin0:video_src_0],
     }

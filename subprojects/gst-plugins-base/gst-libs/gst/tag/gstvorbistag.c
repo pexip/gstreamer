@@ -69,8 +69,10 @@ static const GstTagEntryMatch tag_matches[] = {
   {GST_TAG_ISRC, "ISRC"},
   {GST_TAG_COMMENT, "COMMENT"},
   {GST_TAG_TRACK_GAIN, "REPLAYGAIN_TRACK_GAIN"},
+  {GST_TAG_TRACK_GAIN_R128, "R128_TRACK_GAIN"},
   {GST_TAG_TRACK_PEAK, "REPLAYGAIN_TRACK_PEAK"},
   {GST_TAG_ALBUM_GAIN, "REPLAYGAIN_ALBUM_GAIN"},
+  {GST_TAG_ALBUM_GAIN_R128, "R128_ALBUM_GAIN"},
   {GST_TAG_ALBUM_PEAK, "REPLAYGAIN_ALBUM_PEAK"},
   {GST_TAG_REFERENCE_LEVEL, "REPLAYGAIN_REFERENCE_LOUDNESS"},
   {GST_TAG_ACOUSTID_ID, "ACOUSTID_ID"},
@@ -216,13 +218,15 @@ gst_vorbis_tag_add (GstTagList * list, const gchar * tag, const gchar * value)
 
       is_track_number_tag = (strcmp (gst_tag, GST_TAG_TRACK_NUMBER) == 0);
       is_disc_number_tag = (strcmp (gst_tag, GST_TAG_ALBUM_VOLUME_NUMBER) == 0);
-      tmp = strtoul (value, &check, 10);
+      tmp = g_ascii_strtoull (value, &check, 10);
+      if (tmp > G_MAXUINT32)
+        break;
       if (*check == '/' && (is_track_number_tag || is_disc_number_tag)) {
         guint count;
 
         check++;
-        count = strtoul (check, &check, 10);
-        if (*check != '\0' || count == 0)
+        count = g_ascii_strtoull (check, &check, 10);
+        if (*check != '\0' || count == 0 || count > G_MAXUINT32)
           break;
         if (is_track_number_tag) {
           gst_tag_list_add (list, GST_TAG_MERGE_APPEND, GST_TAG_TRACK_COUNT,
@@ -268,12 +272,25 @@ gst_vorbis_tag_add (GstTagList * list, const gchar * tag, const gchar * value)
       break;
     }
     case G_TYPE_DOUBLE:{
+      if (strcmp (tag, "R128_TRACK_GAIN") == 0 ||
+          strcmp (tag, "R128_ALBUM_GAIN") == 0) {
+        gint tmp;
+        gchar *check;
+
+        tmp = g_ascii_strtoll (value, &check, 10);
+        if (*check != '\0' || tmp < -32768 || tmp > 32767)
+          break;
+        gst_tag_list_add (list, GST_TAG_MERGE_APPEND, gst_tag,
+            (gdouble) tmp / 256., NULL);
+        break;
+      }
+
       gchar *c;
 
       c = g_strdup (value);
       g_strdelimit (c, ",", '.');
       gst_tag_list_add (list, GST_TAG_MERGE_APPEND, gst_tag,
-          g_strtod (c, NULL), NULL);
+          g_ascii_strtod (c, NULL), NULL);
       g_free (c);
       break;
     }
@@ -301,7 +318,7 @@ gst_vorbis_tag_add (GstTagList * list, const gchar * tag, const gchar * value)
 
 static void
 gst_vorbis_tag_add_coverart (GstTagList * tags, gchar * img_data_base64,
-    gint base64_len)
+    gsize base64_len)
 {
   GstSample *img;
   gsize img_len;
@@ -352,13 +369,16 @@ convert_failed:
  */
 static void
 gst_vorbis_tag_add_metadata_block_picture (GstTagList * tags,
-    gchar * value, gint value_len)
+    gchar * value, gsize value_len)
 {
   GstByteReader reader;
   guint32 img_len = 0, img_type = 0;
   guint32 img_mimetype_len = 0, img_description_len = 0;
   gsize decoded_len;
   const guint8 *data = NULL;
+
+  if (value_len < 2)
+    goto not_enough_data;
 
   /* img_data_base64 points to a temporary copy of the base64 encoded data, so
    * it's safe to do inpace decoding here
@@ -397,13 +417,25 @@ gst_vorbis_tag_add_metadata_block_picture (GstTagList * tags,
 
   return;
 
+/* ERRORS */
+not_enough_data:
+  {
+    GST_WARNING
+        ("METADATA_BLOCK_PICTURE tag with too little base64-encoded data");
+    return;
+  }
 error:
-  GST_WARNING
-      ("Couldn't extract image or image type from METADATA_BLOCK_PICTURE tag");
-  return;
+  {
+    GST_WARNING
+        ("Couldn't extract image or image type from METADATA_BLOCK_PICTURE tag");
+    return;
+  }
 decode_failed:
-  GST_WARNING ("Failed to decode Base64 data from METADATA_BLOCK_PICTURE tag");
-  return;
+  {
+    GST_WARNING
+        ("Failed to decode Base64 data from METADATA_BLOCK_PICTURE tag");
+    return;
+  }
 }
 
 /**
@@ -438,7 +470,7 @@ gst_tag_list_from_vorbiscomment (const guint8 * data, gsize size,
   gchar *cur, *value;
   guint cur_size;
   guint iterations;
-  guint value_len;
+  gsize value_len;
   GstTagList *list;
 
   g_return_val_if_fail (data != NULL, NULL);
@@ -473,7 +505,8 @@ gst_tag_list_from_vorbiscomment (const guint8 * data, gsize size,
     *value = '\0';
     value++;
     value_len = strlen (value);
-    if (value_len == 0 || !g_utf8_validate (value, value_len, NULL)) {
+    if (value_len == 0 || value_len > G_MAXSSIZE
+        || !g_utf8_validate (value, value_len, NULL)) {
       g_free (cur);
       continue;
     }
@@ -727,8 +760,13 @@ gst_tag_to_vorbis_comments (const GstTagList * list, const gchar * tag)
 
         if (!gst_tag_list_get_double_index (list, tag, i, &value))
           g_return_val_if_reached (NULL);
-        g_ascii_formatd (buf, G_ASCII_DTOSTR_BUF_SIZE, "%f", value);
-        result = g_strconcat (vorbis_tag, "=", buf, NULL);
+        if (strcmp (tag, GST_TAG_TRACK_GAIN_R128) == 0 ||
+            strcmp (tag, GST_TAG_ALBUM_GAIN_R128) == 0) {
+          result = g_strdup_printf ("%s=%u", vorbis_tag, (gint) (value * 256.));
+        } else {
+          g_ascii_formatd (buf, G_ASCII_DTOSTR_BUF_SIZE, "%f", value);
+          result = g_strconcat (vorbis_tag, "=", buf, NULL);
+        }
         break;
       }
       default:{

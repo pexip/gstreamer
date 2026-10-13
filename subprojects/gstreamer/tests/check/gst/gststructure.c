@@ -238,10 +238,21 @@ GST_START_TEST (test_from_string)
   fail_unless (G_VALUE_HOLDS_STRING (val));
   gst_structure_free (structure);
 
-  /* make sure we bail out correctly in case of an error or if parsing fails */
-  s = "***foo***, abc=(boolean)false";
+  /* make sure we bail out correctly in case of an error or if parsing fails
+   * '!' is an operator in the pipeline syntax and can not be part of a
+   * structure name */
+  s = "foo!bar, abc=(boolean)false";
   structure = gst_structure_from_string (s, NULL);
   fail_unless (structure == NULL);
+
+  /* '*' is valid in structure names and values */
+  s = "foo*bar, value=*:6";
+  structure = gst_structure_from_string (s, NULL);
+  fail_if (structure == NULL, "Could not get structure from string %s", s);
+  fail_unless ((val = gst_structure_get_value (structure, "value")) != NULL);
+  fail_unless (G_VALUE_HOLDS_STRING (val));
+  fail_unless_equals_string (g_value_get_string (val), "*:6");
+  gst_structure_free (structure);
 
   /* assert that we get a warning if the structure wasn't entirely consumed, but
    * we didn't provide an end pointer */
@@ -1194,6 +1205,36 @@ GST_START_TEST (test_strv)
 
 GST_END_TEST;
 
+GST_START_TEST (test_container_type_marker)
+{
+  GstStructure *s;
+  const gchar expected[] = "root, f-set=(/uniquelist){ (int)1, (int)2 };";
+  gchar *res;
+  GValue vset = { 0 };
+  GValue v1 = { 0 }, v2 = { 0 };
+  s = gst_structure_new_empty ("root");
+  fail_unless (s);
+
+  g_value_init (&vset, GST_TYPE_UNIQUE_LIST);
+  g_value_init (&v1, G_TYPE_INT);
+  g_value_init (&v2, G_TYPE_INT);
+  g_value_set_int (&v1, 1);
+  g_value_set_int (&v2, 2);
+
+  gst_value_unique_list_append_and_take_value (&vset, &v1);
+  gst_value_unique_list_append_and_take_value (&vset, &v2);
+  gst_structure_take_value (s, "f-set", &vset);
+
+  res = gst_structure_serialize_full (s, GST_SERIALIZE_FLAG_NONE);
+  fail_unless (g_strcmp0 (expected, res) == 0);
+
+  gst_structure_free (s);
+
+  g_free (res);
+}
+
+GST_END_TEST;
+
 GST_START_TEST (test_get_string_winpath)
 {
   GstStructure *s;
@@ -1248,6 +1289,7 @@ gst_structure_suite (void)
   tcase_add_test (tc_chain, test_flags);
   tcase_add_test (tc_chain, test_strict);
   tcase_add_test (tc_chain, test_strv);
+  tcase_add_test (tc_chain, test_container_type_marker);
   tcase_add_test (tc_chain, test_get_string_winpath);
   return s;
 }

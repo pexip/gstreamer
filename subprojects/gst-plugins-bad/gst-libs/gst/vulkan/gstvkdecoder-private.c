@@ -24,6 +24,7 @@
 
 #include "gstvkdecoder-private.h"
 
+#include "gstvkimagebufferpool.h"
 #include "gstvkoperation.h"
 #include "gstvkphysicaldevice-private.h"
 #include "gstvkvideo-private.h"
@@ -84,7 +85,8 @@ _populate_function_table (GstVulkanDecoder * self)
     return TRUE;
 
   priv->vk_populated =
-      gst_vulkan_video_get_vk_functions (self->queue->device, &priv->vk);
+      gst_vulkan_video_get_vk_functions (self->queue->device, &priv->vk,
+      self->codec);
   return priv->vk_populated;
 }
 
@@ -480,6 +482,7 @@ gst_vulkan_decoder_flush (GstVulkanDecoder * self, GError ** error)
   };
   /* *INDENT-ON* */
 
+again:
   if (!gst_vulkan_operation_begin (priv->exec, error))
     return FALSE;
 
@@ -487,7 +490,19 @@ gst_vulkan_decoder_flush (GstVulkanDecoder * self, GError ** error)
   priv->vk.CmdControlVideoCoding (priv->exec->cmd_buf->cmd, &decode_ctrl);
   priv->vk.CmdEndVideoCoding (priv->exec->cmd_buf->cmd, &decode_end);
 
-  ret = gst_vulkan_operation_end (priv->exec, error);
+  GError *error_internal = NULL;
+  if (!(ret = gst_vulkan_operation_end (priv->exec, &error_internal))) {
+    if (g_error_matches (error_internal, GST_VULKAN_ERROR,
+            VK_ERROR_OUT_OF_DATE_KHR)) {
+      GST_DEBUG_OBJECT (self, "Detected a synchronisation hazard, retrying");
+      g_clear_error (&error_internal);
+      goto again;
+    }
+    if (error)
+      *error = error_internal;
+    else
+      g_clear_error (&error_internal);
+  }
 
   return ret;
 }
@@ -601,7 +616,6 @@ gst_vulkan_decoder_decode (GstVulkanDecoder * self,
   VkVideoEndCodingInfoKHR decode_end = {
     .sType = VK_STRUCTURE_TYPE_VIDEO_END_CODING_INFO_KHR,
   };
-  GArray *barriers;
   VkImageLayout new_layout;
   GstVulkanCommandBuffer *cmd_buf;
   gboolean ret;
@@ -649,31 +663,36 @@ gst_vulkan_decoder_decode (GstVulkanDecoder * self,
   pic->decode_info.srcBufferRange = GST_ROUND_UP_N (slices_size,
       priv->caps.caps.minBitstreamBufferSizeAlignment);
 
+again:
   if (!gst_vulkan_operation_begin (priv->exec, error))
     return FALSE;
 
   cmd_buf = priv->exec->cmd_buf;
+  GstVulkanBarrierState *barriers =
+      gst_vulkan_operation_get_barriers (priv->exec);
 
   if (!gst_vulkan_operation_add_dependency_frame (priv->exec, pic->out,
           VK_PIPELINE_STAGE_2_VIDEO_DECODE_BIT_KHR,
           VK_PIPELINE_STAGE_2_VIDEO_DECODE_BIT_KHR)) {
-    return FALSE;
+    goto reset_and_error;
   }
 
   new_layout = ((self->layered_dpb && self->dedicated_dpb) || pic->dpb) ?
       VK_IMAGE_LAYOUT_VIDEO_DECODE_DST_KHR :
       VK_IMAGE_LAYOUT_VIDEO_DECODE_DPB_KHR;
-  gst_vulkan_operation_add_frame_barrier (priv->exec, pic->out,
-      VK_PIPELINE_STAGE_2_VIDEO_DECODE_BIT_KHR,
-      VK_PIPELINE_STAGE_2_VIDEO_DECODE_BIT_KHR,
-      VK_ACCESS_2_VIDEO_DECODE_WRITE_BIT_KHR, new_layout, NULL);
+  if (!gst_vulkan_operation_add_frame_barrier (priv->exec, pic->out,
+          VK_PIPELINE_STAGE_2_VIDEO_DECODE_BIT_KHR,
+          VK_PIPELINE_STAGE_2_VIDEO_DECODE_BIT_KHR,
+          VK_ACCESS_2_VIDEO_DECODE_WRITE_BIT_KHR, new_layout, NULL)) {
+    goto reset_and_error;
+  }
 
   /* Reference for the current image, if existing and not layered */
   if (pic->dpb) {
     if (!gst_vulkan_operation_add_dependency_frame (priv->exec, pic->dpb,
             VK_PIPELINE_STAGE_2_VIDEO_DECODE_BIT_KHR,
             VK_PIPELINE_STAGE_2_VIDEO_DECODE_BIT_KHR)) {
-      return FALSE;
+      goto reset_and_error;
     }
   }
 
@@ -687,13 +706,11 @@ gst_vulkan_decoder_decode (GstVulkanDecoder * self,
       if (!gst_vulkan_operation_add_dependency_frame (priv->exec, ref_buf,
               VK_PIPELINE_STAGE_2_VIDEO_DECODE_BIT_KHR,
               VK_PIPELINE_STAGE_2_VIDEO_DECODE_BIT_KHR)) {
-        return FALSE;
+        goto reset_and_error;
       }
 
       if (!ref_pic->dpb) {
         guint i, n = gst_buffer_n_memory (ref_buf);
-        GArray *barriers =
-            gst_vulkan_operation_new_extra_image_barriers (priv->exec);
 
         for (i = 0; i < n; i++) {
           GstVulkanImageMemory *vkmem =
@@ -713,12 +730,11 @@ gst_vulkan_decoder_decode (GstVulkanDecoder * self,
             .image = vkmem->image,
             .subresourceRange = vkmem->barrier.subresource_range,
           };
-
-          g_array_append_val (barriers, barrier);
+          gst_vulkan_barrier_state_add_raw_barrier (barriers, &barrier,
+              VK_PIPELINE_STAGE_2_VIDEO_DECODE_BIT_KHR,
+              VK_PIPELINE_STAGE_2_VIDEO_DECODE_BIT_KHR);
         }
 
-        gst_vulkan_operation_add_extra_image_barriers (priv->exec, barriers);
-        g_array_unref (barriers);
         gst_vulkan_operation_update_frame (priv->exec, ref_buf,
             VK_PIPELINE_STAGE_2_VIDEO_DECODE_BIT_KHR,
             VK_ACCESS_2_VIDEO_DECODE_WRITE_BIT_KHR
@@ -732,21 +748,13 @@ gst_vulkan_decoder_decode (GstVulkanDecoder * self,
     if (!gst_vulkan_operation_add_dependency_frame (priv->exec,
             self->layered_buffer, VK_PIPELINE_STAGE_2_VIDEO_DECODE_BIT_KHR,
             VK_PIPELINE_STAGE_2_VIDEO_DECODE_BIT_KHR)) {
-      return FALSE;
+      goto reset_and_error;
     }
   }
 
   /* change image layout */
-  barriers = gst_vulkan_operation_retrieve_image_barriers (priv->exec);
-  /* *INDENT-OFF* */
-  vkCmdPipelineBarrier2 (cmd_buf->cmd, &(VkDependencyInfo) {
-      .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
-      .dependencyFlags = VK_DEPENDENCY_BY_REGION_BIT,
-      .pImageMemoryBarriers = (VkImageMemoryBarrier2 *) barriers->data,
-      .imageMemoryBarrierCount = barriers->len,
-    });
-  /* *INDENT-ON* */
-  g_array_unref (barriers);
+  gst_vulkan_barrier_state_pipeline_barrier (barriers, cmd_buf,
+      VK_DEPENDENCY_BY_REGION_BIT);
 
   priv->vk.CmdBeginVideoCoding (cmd_buf->cmd, &decode_start);
   gst_vulkan_operation_begin_query (priv->exec,
@@ -755,9 +763,28 @@ gst_vulkan_decoder_decode (GstVulkanDecoder * self,
   gst_vulkan_operation_end_query (priv->exec, 0);
   priv->vk.CmdEndVideoCoding (cmd_buf->cmd, &decode_end);
 
-  ret = gst_vulkan_operation_end (priv->exec, error);
+  GError *error_internal = NULL;
+  if (!(ret = gst_vulkan_operation_end (priv->exec, &error_internal))) {
+    if (g_error_matches (error_internal, GST_VULKAN_ERROR,
+            VK_ERROR_OUT_OF_DATE_KHR)) {
+      GST_DEBUG_OBJECT (self, "Detected a synchronisation hazard, retrying");
+      g_clear_error (&error_internal);
+      goto again;
+    }
+    if (error)
+      *error = error_internal;
+    else
+      g_clear_error (&error_internal);
+  }
 
   return ret;
+
+reset_and_error:
+  {
+    GST_WARNING_OBJECT (self, "Failed barrier operation");
+    gst_vulkan_operation_reset (priv->exec);
+    return FALSE;
+  }
 }
 
 /**
@@ -949,19 +976,6 @@ gst_vulkan_decoder_update_video_session_parameters (GstVulkanDecoder * self,
   return TRUE;
 }
 
-static void
-gst_vulkan_handle_free_sampler_ycbcr_conversion (GstVulkanHandle * handle,
-    gpointer data)
-{
-  g_return_if_fail (handle != NULL);
-  g_return_if_fail (handle->handle != VK_NULL_HANDLE);
-  g_return_if_fail (handle->type ==
-      GST_VULKAN_HANDLE_TYPE_SAMPLER_YCBCR_CONVERSION);
-
-  vkDestroySamplerYcbcrConversion (handle->device->device,
-      (VkSamplerYcbcrConversion) handle->handle, NULL);
-}
-
 /**
  * gst_vulkan_decoder_update_ycbcr_sampler:
  * @self: a #GstVulkanDecoder
@@ -986,8 +1000,6 @@ gst_vulkan_decoder_update_ycbcr_sampler (GstVulkanDecoder * self,
   GstVulkanDecoderPrivate *priv;
   GstVulkanHandle *handle;
   VkSamplerYcbcrConversionCreateInfo create_info;
-  VkSamplerYcbcrConversion ycbr_conversion;
-  VkResult res;
 
   g_return_val_if_fail (GST_IS_VULKAN_DECODER (self), FALSE);
 
@@ -1014,16 +1026,10 @@ gst_vulkan_decoder_update_ycbcr_sampler (GstVulkanDecoder * self,
   };
   /* *INDENT-ON* */
 
-  res = vkCreateSamplerYcbcrConversion (device->device, &create_info, NULL,
-      &ycbr_conversion);
-  if (gst_vulkan_error_to_g_error (res, error,
-          "vkCreateSamplerYcbcrConversion") != VK_SUCCESS)
+  handle = gst_vulkan_handle_create_sampler_ycbcr_conversion (device,
+      &create_info, error);
+  if (!handle)
     return FALSE;
-
-  handle = gst_vulkan_handle_new_wrapped (device,
-      GST_VULKAN_HANDLE_TYPE_SAMPLER_YCBCR_CONVERSION,
-      (GstVulkanHandleTypedef) ycbr_conversion,
-      gst_vulkan_handle_free_sampler_ycbcr_conversion, NULL);
 
   gst_clear_vulkan_handle (&priv->sampler);
   priv->sampler = handle;
@@ -1182,7 +1188,7 @@ gst_vulkan_decoder_append_slice (GstVulkanDecoder * self,
 
   /* append data */
   {
-    GstBufferMapInfo mapinfo;
+    GstMapInfo mapinfo;
     guint32 offset;
 
     if (!gst_buffer_map (self->input_buffer, &mapinfo, GST_MAP_WRITE))
@@ -1349,4 +1355,39 @@ gst_vulkan_decoder_has_feature (GstVulkanDecoder * self, guint32 features)
   priv = gst_vulkan_decoder_get_instance_private (self);
 
   return ((priv->features & features) != 0);
+}
+
+/* Usage flags the decoder always requires for its output images. */
+#define GST_VULKAN_DECODER_IMAGE_USAGE_DEFAULT \
+  ((VkImageUsageFlags) (VK_IMAGE_USAGE_TRANSFER_SRC_BIT | \
+   VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_VIDEO_DECODE_DST_BIT_KHR))
+
+/* Peer pool usage bits safe to combine with video-decode output usage.
+ * Excludes the bits already in GST_VULKAN_DECODER_IMAGE_USAGE_DEFAULT. */
+#define GST_VULKAN_DECODER_PEER_IMAGE_USAGE_MASK \
+  ((VkImageUsageFlags) (VK_IMAGE_USAGE_TRANSFER_DST_BIT | \
+   VK_IMAGE_USAGE_STORAGE_BIT))
+
+/**
+ * gst_vulkan_decoder_output_usage:
+ * @pool: a #GstVulkanImageBufferPool
+ *
+ * Returns: the usage flags required by the decoder for its output images,
+ * combined with the usage flags explicitly configured on @pool that are safe
+ * to use alongside video decode output
+ */
+VkImageUsageFlags
+gst_vulkan_decoder_output_usage (GstBufferPool * pool)
+{
+  GstStructure *config;
+  VkImageUsageFlags pool_usage = 0;
+
+  g_return_val_if_fail (GST_IS_VULKAN_IMAGE_BUFFER_POOL (pool), 0);
+
+  config = gst_buffer_pool_get_config (pool);
+  gst_structure_get_uint (config, "usage", &pool_usage);
+  gst_structure_free (config);
+
+  return GST_VULKAN_DECODER_IMAGE_USAGE_DEFAULT |
+      (pool_usage & GST_VULKAN_DECODER_PEER_IMAGE_USAGE_MASK);
 }

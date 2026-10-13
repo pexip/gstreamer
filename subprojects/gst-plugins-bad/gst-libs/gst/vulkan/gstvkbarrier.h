@@ -61,8 +61,6 @@ typedef enum
  * @queue: the #GstVulkanQueue this barrier is to execute with
  * @pipeline_stages: the stages in the graphics pipeline to execute the barrier
  * @access_flags: access flags
- * @semaphore: timeline semaphore
- * @semaphore_value: current value of the timeline semaphore
  *
  * Since: 1.18
  */
@@ -74,26 +72,18 @@ struct _GstVulkanBarrierMemoryInfo
   guint64 pipeline_stages;
   guint64 access_flags;
 
-  /**
-   * GstVulkanBarrierMemoryInfo.semaphore:
-   *
-   * Timeline semaphore
-   *
-   * Since: 1.24
-   */
-  VkSemaphore semaphore;
-  /**
-   * GstVulkanBarrierMemoryInfo.semaphore_value:
-   *
-   * Current value of the timeline semaphore
-   *
-   * Since: 1.24
-   */
-  guint64 semaphore_value;
-
   /* <private> */
   gpointer _reserved        [GST_PADDING];
 };
+
+GST_VULKAN_API
+void            gst_vulkan_barrier_memory_info_clear       (GstVulkanBarrierMemoryInfo * info);
+GST_VULKAN_API
+gboolean        gst_vulkan_barrier_memory_info_is_equal    (GstVulkanBarrierMemoryInfo * info,
+                                                            GstVulkanBarrierMemoryInfo * other);
+GST_VULKAN_API
+void            gst_vulkan_barrier_memory_info_copy_into   (GstVulkanBarrierMemoryInfo * info,
+                                                            GstVulkanBarrierMemoryInfo * other);
 
 G_END_DECLS
 

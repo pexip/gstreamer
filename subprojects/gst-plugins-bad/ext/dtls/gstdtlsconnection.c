@@ -52,9 +52,6 @@
 GST_DEBUG_CATEGORY_STATIC (gst_dtls_connection_debug);
 #define GST_CAT_DEFAULT gst_dtls_connection_debug
 
-#define SRTP_KEY_LEN 16
-#define SRTP_SALT_LEN 14
-
 enum
 {
   SIGNAL_ON_ENCODER_KEY,
@@ -70,6 +67,7 @@ enum
   PROP_0,
   PROP_AGENT,
   PROP_CONNECTION_STATE,
+  PROP_VERSION,
   NUM_PROPERTIES
 };
 
@@ -173,6 +171,19 @@ gst_dtls_connection_class_init (GstDtlsConnectionClass * klass)
       "Current connection state",
       GST_DTLS_TYPE_CONNECTION_STATE,
       GST_DTLS_CONNECTION_STATE_NEW, G_PARAM_READABLE | G_PARAM_STATIC_STRINGS);
+
+  /**
+   * GstDtlsConnection:version:
+   *
+   * The negotiated DTLS protocol version, represented as 2 bytes. Each
+   * component of the version is translated to a byte using `hex(255 - component)`.
+   * For instance if the version is 1.3, the resulting value will be `0xFEFC`.
+   *
+   * Since: 1.30
+   */
+  properties[PROP_VERSION] =
+      g_param_spec_uint ("version", "DTLS version", "Negotiated version", 0,
+      G_MAXUINT16, 0, G_PARAM_READABLE | G_PARAM_STATIC_STRINGS);
 
   g_object_class_install_properties (gobject_class, NUM_PROPERTIES, properties);
 
@@ -314,6 +325,11 @@ gst_dtls_connection_get_property (GObject * object, guint prop_id,
     case PROP_CONNECTION_STATE:
       g_mutex_lock (&priv->mutex);
       g_value_set_enum (value, priv->connection_state);
+      g_mutex_unlock (&priv->mutex);
+      break;
+    case PROP_VERSION:
+      g_mutex_lock (&priv->mutex);
+      g_value_set_uint (value, SSL_version (priv->ssl));
       g_mutex_unlock (&priv->mutex);
       break;
     default:
@@ -861,51 +877,52 @@ log_state (GstDtlsConnection * self, const gchar * str)
 }
 
 static gboolean
+export_srtp_keys_len (GstDtlsConnection * self, gsize key_len, gsize salt_len,
+    guint8 ** client_key, guint8 ** server_key)
+{
+  gboolean result;
+
+  gsize exported_keys_len = 2 * (key_len + salt_len);
+  guint8 *exported_keys = g_malloc (exported_keys_len);
+  guint8 *ptr = exported_keys;
+
+  static gchar export_string[] = "EXTRACTOR-dtls_srtp";
+
+  result = SSL_export_keying_material (self->priv->ssl,
+      exported_keys, exported_keys_len, export_string, strlen (export_string),
+      NULL, 0, 0);
+
+  if (!result) {
+    goto out;
+  }
+
+  *client_key = g_malloc (key_len + salt_len);
+  *server_key = g_malloc (key_len + salt_len);
+  memcpy (*client_key, ptr, key_len);
+  ptr += key_len;
+  memcpy (*server_key, ptr, key_len);
+  ptr += key_len;
+  memcpy (*client_key + key_len, ptr, salt_len);
+  ptr += salt_len;
+  memcpy (*server_key + key_len, ptr, salt_len);
+
+  result = TRUE;
+
+out:
+  g_clear_pointer (&exported_keys, g_free);
+
+  return result;
+}
+
+static gboolean
 export_srtp_keys (GstDtlsConnection * self, GError ** err)
 {
-  typedef struct
-  {
-    guint8 v[SRTP_KEY_LEN];
-  } Key;
-
-  typedef struct
-  {
-    guint8 v[SRTP_SALT_LEN];
-  } Salt;
-
-  struct
-  {
-    Key client_key;
-    Key server_key;
-    Salt client_salt;
-    Salt server_salt;
-  } exported_keys;
-
-  struct
-  {
-    Key key;
-    Salt salt;
-  } client_key, server_key;
-
   SRTP_PROTECTION_PROFILE *profile;
   GstDtlsSrtpCipher cipher;
   GstDtlsSrtpAuth auth;
   gint success;
-
-  static gchar export_string[] = "EXTRACTOR-dtls_srtp";
-
-  success = SSL_export_keying_material (self->priv->ssl,
-      (gpointer) & exported_keys, 60, export_string, strlen (export_string),
-      NULL, 0, 0);
-
-  if (!success) {
-    GST_WARNING_OBJECT (self, "Failed to export SRTP keys");
-    if (err)
-      *err =
-          g_error_new_literal (GST_RESOURCE_ERROR, GST_RESOURCE_ERROR_READ,
-          "Failed to export SRTP keys");
-    return FALSE;
-  }
+  guint8 *client_key;
+  guint8 *server_key;
 
   profile = SSL_get_selected_srtp_profile (self->priv->ssl);
 
@@ -925,10 +942,22 @@ export_srtp_keys (GstDtlsConnection * self, GError ** err)
     case SRTP_AES128_CM_SHA1_80:
       cipher = GST_DTLS_SRTP_CIPHER_AES_128_ICM;
       auth = GST_DTLS_SRTP_AUTH_HMAC_SHA1_80;
+      success = export_srtp_keys_len (self, 16, 14, &client_key, &server_key);
       break;
     case SRTP_AES128_CM_SHA1_32:
       cipher = GST_DTLS_SRTP_CIPHER_AES_128_ICM;
       auth = GST_DTLS_SRTP_AUTH_HMAC_SHA1_32;
+      success = export_srtp_keys_len (self, 16, 14, &client_key, &server_key);
+      break;
+    case SRTP_AEAD_AES_128_GCM:
+      cipher = GST_DTLS_SRTP_CIPHER_AES_128_GCM;
+      auth = GST_DTLS_SRTP_AUTH_NULL;
+      success = export_srtp_keys_len (self, 16, 12, &client_key, &server_key);
+      break;
+    case SRTP_AEAD_AES_256_GCM:
+      cipher = GST_DTLS_SRTP_CIPHER_AES_256_GCM;
+      auth = GST_DTLS_SRTP_AUTH_NULL;
+      success = export_srtp_keys_len (self, 32, 12, &client_key, &server_key);
       break;
     default:
       GST_WARNING_OBJECT (self,
@@ -940,22 +969,29 @@ export_srtp_keys (GstDtlsConnection * self, GError ** err)
       return FALSE;
   }
 
-  client_key.key = exported_keys.client_key;
-  server_key.key = exported_keys.server_key;
-  client_key.salt = exported_keys.client_salt;
-  server_key.salt = exported_keys.server_salt;
+  if (!success) {
+    GST_WARNING_OBJECT (self, "Failed to export SRTP keys");
+    if (err)
+      *err =
+          g_error_new_literal (GST_RESOURCE_ERROR, GST_RESOURCE_ERROR_READ,
+          "Failed to export SRTP keys");
+    return FALSE;
+  }
 
   if (self->priv->is_client) {
-    g_signal_emit (self, signals[SIGNAL_ON_ENCODER_KEY], 0, &client_key, cipher,
+    g_signal_emit (self, signals[SIGNAL_ON_ENCODER_KEY], 0, client_key, cipher,
         auth);
-    g_signal_emit (self, signals[SIGNAL_ON_DECODER_KEY], 0, &server_key,
+    g_signal_emit (self, signals[SIGNAL_ON_DECODER_KEY], 0, server_key,
         cipher, auth);
   } else {
-    g_signal_emit (self, signals[SIGNAL_ON_ENCODER_KEY], 0, &server_key,
+    g_signal_emit (self, signals[SIGNAL_ON_ENCODER_KEY], 0, server_key,
         cipher, auth);
-    g_signal_emit (self, signals[SIGNAL_ON_DECODER_KEY], 0, &client_key, cipher,
+    g_signal_emit (self, signals[SIGNAL_ON_DECODER_KEY], 0, client_key, cipher,
         auth);
   }
+
+  g_clear_pointer (&client_key, g_free);
+  g_clear_pointer (&server_key, g_free);
 
   self->priv->keys_exported = TRUE;
 
@@ -1114,16 +1150,29 @@ openssl_verify_callback (int preverify_ok, X509_STORE_CTX * x509_ctx)
   } else {
     bio = BIO_new (BIO_s_mem ());
     if (bio) {
-      gchar buffer[2048];
       gint len;
+      gint read_len;
 
       len =
           X509_NAME_print_ex (bio,
           X509_get_subject_name (X509_STORE_CTX_get0_cert (x509_ctx)), 1,
           XN_FLAG_MULTILINE);
-      BIO_read (bio, buffer, len);
-      buffer[len] = '\0';
-      GST_DEBUG_OBJECT (self, "Peer certificate received:\n%s", buffer);
+
+      if (len > 0) {
+        gchar *buffer;
+
+        buffer = g_new (gchar, (gsize) len + 1);
+        read_len = BIO_read (bio, buffer, len);
+        if (read_len > 0) {
+          buffer[read_len] = '\0';
+          GST_DEBUG_OBJECT (self, "Peer certificate received:\n%s", buffer);
+        } else {
+          GST_DEBUG_OBJECT (self, "failed to read certificate subject");
+        }
+        g_free (buffer);
+      } else {
+        GST_DEBUG_OBJECT (self, "failed to read certificate subject");
+      }
       BIO_free (bio);
     } else {
       GST_DEBUG_OBJECT (self, "failed to create certificate print membio");
@@ -1217,8 +1266,9 @@ bio_method_read (BIO * bio, char *out_buffer, int size)
   internal_size = priv->bio_buffer_len - priv->bio_buffer_offset;
 
   if (!priv->bio_buffer) {
-    GST_LOG_OBJECT (self, "BIO: EOF");
-    return 0;
+    GST_LOG_OBJECT (self, "BIO: no data available, retry later");
+    BIO_set_retry_read (bio);
+    return -1;
   }
 
   if (!out_buffer || size <= 0) {
@@ -1285,8 +1335,8 @@ bio_method_ctrl (BIO * bio, int cmd, long arg1, void *arg2)
       GST_LOG_OBJECT (self, "BIO: flushing");
       return 1;
     case BIO_CTRL_DGRAM_QUERY_MTU:
-      GST_DEBUG_OBJECT (self, "BIO: MTU query, returning 0...");
-      return 0;
+      GST_DEBUG_OBJECT (self, "BIO: MTU query, returning 1200...");
+      return 1200;
     case BIO_CTRL_DGRAM_MTU_EXCEEDED:
       GST_WARNING_OBJECT (self, "BIO: MTU exceeded");
       return 0;
@@ -1338,4 +1388,19 @@ gst_dtls_connection_state_get_type (void)
     type = g_enum_register_static ("GstDtlsConnectionState", values);
   }
   return type;
+}
+
+gsize
+gst_dtls_srtp_master_key_length (GstDtlsSrtpCipher cipher)
+{
+  switch (cipher) {
+    case GST_DTLS_SRTP_CIPHER_AES_128_ICM:
+      return 30;
+    case GST_DTLS_SRTP_CIPHER_AES_128_GCM:
+      return 28;
+    case GST_DTLS_SRTP_CIPHER_AES_256_GCM:
+      return 44;
+    default:
+      g_assert_not_reached ();
+  }
 }

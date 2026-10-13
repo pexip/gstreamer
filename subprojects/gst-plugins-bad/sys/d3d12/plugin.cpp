@@ -56,6 +56,8 @@
 #include "gstd3d12memorycopy.h"
 #include "gstd3d12interlace.h"
 #include "gstd3d12overlaycompositor.h"
+#include "gstd3d12vp9alphadbin.h"
+#include "gstd3d12alphacombine.h"
 #include <windows.h>
 #include <versionhelpers.h>
 #include <wrl.h>
@@ -155,8 +157,29 @@ plugin_init (GstPlugin * plugin)
         decoder_rank, d3d11_interop);
     gst_d3d12_vp8_dec_register (plugin, device, video_device.Get (),
         decoder_rank, d3d11_interop);
-    gst_d3d12_vp9_dec_register (plugin, device, video_device.Get (),
-        decoder_rank, d3d11_interop);
+    auto vp9_data = gst_d3d12_vp9_dec_register (plugin,
+        device, video_device.Get (), decoder_rank, d3d11_interop);
+    if (vp9_data) {
+      auto sink_caps = vp9_data->sink_caps;
+      auto caps_size = gst_caps_get_size (sink_caps);
+      for (guint i = 0; i < caps_size; i++) {
+        auto s = gst_caps_get_structure (sink_caps, i);
+        /* Remove alignment field so that conversion happens after
+         * alpha demux */
+        gst_structure_remove_field (s, "alignment");
+
+        /* And accept codec-alpha only */
+        gst_structure_set (s, "codec-alpha", G_TYPE_BOOLEAN, TRUE, nullptr);
+      }
+
+      /* Make this higher rank than SW vp9alphadecodebin */
+      guint rank = GST_RANK_PRIMARY + 10 + 1;
+      gst_d3d12_vp9_alpha_decodebin_register (plugin, device, rank, sink_caps,
+          vp9_data->factory_name);
+      gst_caps_unref (sink_caps);
+      g_free (vp9_data->factory_name);
+      g_free (vp9_data);
+    }
     gst_d3d12_av1_dec_register (plugin, device, video_device.Get (),
         decoder_rank, d3d11_interop);
 
@@ -208,6 +231,8 @@ plugin_init (GstPlugin * plugin)
       "d3d12interlace", GST_RANK_NONE, GST_TYPE_D3D12_INTERLACE);
   gst_element_register (plugin, "d3d12overlaycompositor",
       GST_RANK_NONE, GST_TYPE_D3D12_OVERLAY_COMPOSITOR);
+  gst_element_register (plugin, "d3d12alphacombine",
+      GST_RANK_NONE, GST_TYPE_D3D12_ALPHA_COMBINE);
 
   g_object_set_data_full (G_OBJECT (plugin),
       "plugin-d3d12-shutdown", (gpointer) "shutdown-data",

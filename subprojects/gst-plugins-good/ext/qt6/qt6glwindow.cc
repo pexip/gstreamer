@@ -32,6 +32,7 @@
 
 #include <QtCore/QDateTime>
 #include <QtGui/QGuiApplication>
+#include <QtQuick/QQuickOpenGLUtils>
 #include <QtQuick/QQuickWindow>
 #include <QQuickRenderTarget>
 
@@ -46,7 +47,7 @@
 /**
  * SECTION:
  *
- * #Qt6GLWindow is an #QQuickWindow that grab QtQuick view to GStreamer OpenGL video buffers.
+ * #Qt6GLWindow is an #QObject that grab QtQuick view to GStreamer OpenGL video buffers.
  */
 
 GST_DEBUG_CATEGORY_STATIC (qt6_gl_window_debug);
@@ -79,8 +80,8 @@ struct _Qt6GLWindowPrivate
   GstBuffer *produced_buffer;
 };
 
-Qt6GLWindow::Qt6GLWindow (QWindow * parent, QQuickWindow *src)
-  : QQuickWindow( parent ), source (src)
+Qt6GLWindow::Qt6GLWindow (QQuickWindow *src, QObject *parent)
+  : QObject( parent ), source (src)
 {
   QGuiApplication *app = static_cast<QGuiApplication *> (QCoreApplication::instance ());
   static gsize _debug;
@@ -102,7 +103,7 @@ Qt6GLWindow::Qt6GLWindow (QWindow * parent, QQuickWindow *src)
   this->priv->internal_format = GL_RGBA;
 
   connect (source, SIGNAL(beforeRendering()), this, SLOT(beforeRendering()), Qt::DirectConnection);
-  connect (source, SIGNAL(afterFrameEnd()), this, SLOT(afterFrameEnd()), Qt::DirectConnection);
+  connect (source, SIGNAL(afterRendering()), this, SLOT(afterRendering()), Qt::DirectConnection);
   if (source->isSceneGraphInitialized())
     source->scheduleRenderJob(new RenderJob(std::bind(&Qt6GLWindow::onSceneGraphInitialized, this)), QQuickWindow::BeforeSynchronizingStage);
   else
@@ -193,7 +194,7 @@ Qt6GLWindow::beforeRendering()
 }
 
 void
-Qt6GLWindow::afterFrameEnd()
+Qt6GLWindow::afterRendering()
 {
   gboolean ret;
   guint width, height;
@@ -208,6 +209,10 @@ Qt6GLWindow::afterFrameEnd()
     g_mutex_unlock (&this->priv->lock);
     return;
   }
+
+  source->beginExternalCommands();
+
+  QQuickOpenGLUtils::resetOpenGLState();
 
   width = GST_VIDEO_INFO_WIDTH (&this->priv->v_info);
   height = GST_VIDEO_INFO_HEIGHT (&this->priv->v_info);
@@ -281,6 +286,8 @@ Qt6GLWindow::afterFrameEnd()
   GST_DEBUG ("rendering finished");
 
 done:
+  source->endExternalCommands();
+
   gst_gl_context_activate (this->priv->other_context, FALSE);
 
   this->priv->result = ret;

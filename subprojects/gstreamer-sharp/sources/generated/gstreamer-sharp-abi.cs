@@ -337,11 +337,6 @@ namespace AbiTester {
 			Console.WriteLine("\"sizeof(GstStructure)\": \"" + Gst.Structure.abi_info.Size + "\"");
 			Console.WriteLine("\"GstStructure.type\": \"" + Gst.Structure.abi_info.GetFieldOffset("type") + "\"");
 			Console.WriteLine("\"GstStructure.name\": \"" + Gst.Structure.abi_info.GetFieldOffset("name") + "\"");
-			Console.WriteLine("\"sizeof(GstTypeFind)\": \"" + Gst.TypeFind.abi_info.Size + "\"");
-			Console.WriteLine("\"GstTypeFind.peek\": \"" + Gst.TypeFind.abi_info.GetFieldOffset("peek") + "\"");
-			Console.WriteLine("\"GstTypeFind.suggest\": \"" + Gst.TypeFind.abi_info.GetFieldOffset("suggest") + "\"");
-			Console.WriteLine("\"GstTypeFind.data\": \"" + Gst.TypeFind.abi_info.GetFieldOffset("data") + "\"");
-			Console.WriteLine("\"GstTypeFind.get_length\": \"" + Gst.TypeFind.abi_info.GetFieldOffset("get_length") + "\"");
 			Console.WriteLine("\"sizeof(GstAppSinkClass)\": \"" + Gst.App.AppSink.class_abi.Size + "\"");
 			Console.WriteLine("\"GstAppSinkClass.eos\": \"" + Gst.App.AppSink.class_abi.GetFieldOffset("eos") + "\"");
 			Console.WriteLine("\"GstAppSinkClass.new_preroll\": \"" + Gst.App.AppSink.class_abi.GetFieldOffset("new_preroll") + "\"");
@@ -441,6 +436,7 @@ namespace AbiTester {
 			Console.WriteLine("\"GstAudioEncoderClass.transform_meta\": \"" + Gst.Audio.AudioEncoder.class_abi.GetFieldOffset("transform_meta") + "\"");
 			Console.WriteLine("\"GstAudioEncoderClass.sink_query\": \"" + Gst.Audio.AudioEncoder.class_abi.GetFieldOffset("sink_query") + "\"");
 			Console.WriteLine("\"GstAudioEncoderClass.src_query\": \"" + Gst.Audio.AudioEncoder.class_abi.GetFieldOffset("src_query") + "\"");
+			Console.WriteLine("\"GstAudioEncoderClass.prepare_allocator\": \"" + Gst.Audio.AudioEncoder.class_abi.GetFieldOffset("prepare_allocator") + "\"");
 			Console.WriteLine("\"sizeof(GstAudioEncoder)\": \"" + Gst.Audio.AudioEncoder.abi_info.Size + "\"");
 			Console.WriteLine("\"GstAudioEncoder.sinkpad\": \"" + Gst.Audio.AudioEncoder.abi_info.GetFieldOffset("sinkpad") + "\"");
 			Console.WriteLine("\"GstAudioEncoder.srcpad\": \"" + Gst.Audio.AudioEncoder.abi_info.GetFieldOffset("srcpad") + "\"");
@@ -553,6 +549,7 @@ namespace AbiTester {
 			Console.WriteLine("\"GstAggregatorClass.sink_query_pre_queue\": \"" + Gst.Base.Aggregator.class_abi.GetFieldOffset("sink_query_pre_queue") + "\"");
 			Console.WriteLine("\"GstAggregatorClass.finish_buffer_list\": \"" + Gst.Base.Aggregator.class_abi.GetFieldOffset("finish_buffer_list") + "\"");
 			Console.WriteLine("\"GstAggregatorClass.peek_next_sample\": \"" + Gst.Base.Aggregator.class_abi.GetFieldOffset("peek_next_sample") + "\"");
+			Console.WriteLine("\"GstAggregatorClass.prepare_allocator\": \"" + Gst.Base.Aggregator.class_abi.GetFieldOffset("prepare_allocator") + "\"");
 			Console.WriteLine("\"sizeof(GstAggregator)\": \"" + Gst.Base.Aggregator.abi_info.Size + "\"");
 			Console.WriteLine("\"GstAggregator.srcpad\": \"" + Gst.Base.Aggregator.abi_info.GetFieldOffset("srcpad") + "\"");
 			Console.WriteLine("\"GstAggregator.priv\": \"" + Gst.Base.Aggregator.abi_info.GetFieldOffset("priv") + "\"");
@@ -640,6 +637,7 @@ namespace AbiTester {
 			Console.WriteLine("\"GstBaseSrcClass.create\": \"" + Gst.Base.BaseSrc.class_abi.GetFieldOffset("create") + "\"");
 			Console.WriteLine("\"GstBaseSrcClass.alloc\": \"" + Gst.Base.BaseSrc.class_abi.GetFieldOffset("alloc") + "\"");
 			Console.WriteLine("\"GstBaseSrcClass.fill\": \"" + Gst.Base.BaseSrc.class_abi.GetFieldOffset("fill") + "\"");
+			Console.WriteLine("\"GstBaseSrcClass.prepare_allocator\": \"" + Gst.Base.BaseSrc.class_abi.GetFieldOffset("prepare_allocator") + "\"");
 			Console.WriteLine("\"sizeof(GstBaseSrc)\": \"" + Gst.Base.BaseSrc.abi_info.Size + "\"");
 			Console.WriteLine("\"GstBaseSrc.srcpad\": \"" + Gst.Base.BaseSrc.abi_info.GetFieldOffset("srcpad") + "\"");
 			Console.WriteLine("\"GstBaseSrc.live_lock\": \"" + Gst.Base.BaseSrc.abi_info.GetFieldOffset("live_lock") + "\"");
@@ -683,6 +681,7 @@ namespace AbiTester {
 			Console.WriteLine("\"GstBaseTransformClass.transform_ip\": \"" + Gst.Base.BaseTransform.class_abi.GetFieldOffset("transform_ip") + "\"");
 			Console.WriteLine("\"GstBaseTransformClass.submit_input_buffer\": \"" + Gst.Base.BaseTransform.class_abi.GetFieldOffset("submit_input_buffer") + "\"");
 			Console.WriteLine("\"GstBaseTransformClass.generate_output\": \"" + Gst.Base.BaseTransform.class_abi.GetFieldOffset("generate_output") + "\"");
+			Console.WriteLine("\"GstBaseTransformClass.prepare_allocator\": \"" + Gst.Base.BaseTransform.class_abi.GetFieldOffset("prepare_allocator") + "\"");
 			Console.WriteLine("\"sizeof(GstBaseTransform)\": \"" + Gst.Base.BaseTransform.abi_info.Size + "\"");
 			Console.WriteLine("\"GstBaseTransform.sinkpad\": \"" + Gst.Base.BaseTransform.abi_info.GetFieldOffset("sinkpad") + "\"");
 			Console.WriteLine("\"GstBaseTransform.srcpad\": \"" + Gst.Base.BaseTransform.abi_info.GetFieldOffset("srcpad") + "\"");
@@ -955,6 +954,7 @@ namespace AbiTester {
 			Console.WriteLine("\"GstVideoEncoderClass.sink_query\": \"" + Gst.Video.VideoEncoder.class_abi.GetFieldOffset("sink_query") + "\"");
 			Console.WriteLine("\"GstVideoEncoderClass.src_query\": \"" + Gst.Video.VideoEncoder.class_abi.GetFieldOffset("src_query") + "\"");
 			Console.WriteLine("\"GstVideoEncoderClass.transform_meta\": \"" + Gst.Video.VideoEncoder.class_abi.GetFieldOffset("transform_meta") + "\"");
+			Console.WriteLine("\"GstVideoEncoderClass.prepare_allocator\": \"" + Gst.Video.VideoEncoder.class_abi.GetFieldOffset("prepare_allocator") + "\"");
 			Console.WriteLine("\"sizeof(GstVideoEncoder)\": \"" + Gst.Video.VideoEncoder.abi_info.Size + "\"");
 			Console.WriteLine("\"GstVideoEncoder.sinkpad\": \"" + Gst.Video.VideoEncoder.abi_info.GetFieldOffset("sinkpad") + "\"");
 			Console.WriteLine("\"GstVideoEncoder.srcpad\": \"" + Gst.Video.VideoEncoder.abi_info.GetFieldOffset("srcpad") + "\"");
@@ -1015,6 +1015,7 @@ namespace AbiTester {
 			Console.WriteLine("\"GstWebRTCICEClass.get_local_candidates\": \"" + Gst.WebRTC.WebRTCICE.class_abi.GetFieldOffset("get_local_candidates") + "\"");
 			Console.WriteLine("\"GstWebRTCICEClass.get_remote_candidates\": \"" + Gst.WebRTC.WebRTCICE.class_abi.GetFieldOffset("get_remote_candidates") + "\"");
 			Console.WriteLine("\"GstWebRTCICEClass.get_selected_pair\": \"" + Gst.WebRTC.WebRTCICE.class_abi.GetFieldOffset("get_selected_pair") + "\"");
+			Console.WriteLine("\"GstWebRTCICEClass.close\": \"" + Gst.WebRTC.WebRTCICE.class_abi.GetFieldOffset("close") + "\"");
 			Console.WriteLine("\"sizeof(GstWebRTCICE)\": \"" + Gst.WebRTC.WebRTCICE.abi_info.Size + "\"");
 			Console.WriteLine("\"GstWebRTCICE.ice_gathering_state\": \"" + Gst.WebRTC.WebRTCICE.abi_info.GetFieldOffset("ice_gathering_state") + "\"");
 			Console.WriteLine("\"GstWebRTCICE.ice_connection_state\": \"" + Gst.WebRTC.WebRTCICE.abi_info.GetFieldOffset("ice_connection_state") + "\"");
@@ -1027,6 +1028,7 @@ namespace AbiTester {
 			Console.WriteLine("\"GstWebRTCICEStream.stream_id\": \"" + Gst.WebRTC.WebRTCICEStream.abi_info.GetFieldOffset("stream_id") + "\"");
 			Console.WriteLine("\"sizeof(GstWebRTCICETransportClass)\": \"" + Gst.WebRTC.WebRTCICETransport.class_abi.Size + "\"");
 			Console.WriteLine("\"GstWebRTCICETransportClass.gather_candidates\": \"" + Gst.WebRTC.WebRTCICETransport.class_abi.GetFieldOffset("gather_candidates") + "\"");
+			Console.WriteLine("\"GstWebRTCICETransportClass.get_selected_candidate_pair\": \"" + Gst.WebRTC.WebRTCICETransport.class_abi.GetFieldOffset("get_selected_candidate_pair") + "\"");
 			Console.WriteLine("\"sizeof(GstWebRTCICETransport)\": \"" + Gst.WebRTC.WebRTCICETransport.abi_info.Size + "\"");
 			Console.WriteLine("\"GstWebRTCICETransport.role\": \"" + Gst.WebRTC.WebRTCICETransport.abi_info.GetFieldOffset("role") + "\"");
 			Console.WriteLine("\"GstWebRTCICETransport.component\": \"" + Gst.WebRTC.WebRTCICETransport.abi_info.GetFieldOffset("component") + "\"");

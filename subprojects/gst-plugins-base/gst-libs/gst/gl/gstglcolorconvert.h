@@ -90,12 +90,12 @@ struct _GstGLColorConvertClass
 #define GST_GL_COLOR_CONVERT_EXT_FORMATS \
     ", RGBA64_LE, BGR10A2_LE, RGB10A2_LE, BGR10x2_LE, RGB10x2_LE, P010_10LE, P012_LE, P016_LE, Y212_LE, Y412_LE" \
     ", A444_16LE, A422_16LE, A420_16LE, A444_12LE, A422_12LE, A420_12LE, A420_10LE" \
-    ", A422_10LE, A444_10LE, I420_12LE, I420_10LE, I422_10LE, I422_12LE, Y444_16LE, Y444_10LE"
+    ", A422_10LE, A444_10LE, I420_12LE, I420_10LE, I422_10LE, I422_12LE, Y444_16LE, Y444_12LE, Y444_10LE"
 #else
 #define GST_GL_COLOR_CONVERT_EXT_FORMATS \
     ", RGBA64_BE, P010_10BE, P012_BE, P016_BE, Y212_BE, Y412_BE" \
     ", A444_16BE, A422_16BE, A420_16BE, A444_12BE, A422_12BE, A420_12BE, A420_10BE" \
-    ", A422_10BE, A444_10BE, I420_12BE, I420_10BE, I422_10BE, I422_12BE, Y444_10BE, Y444_16BE"
+    ", A422_10BE, A444_10BE, I420_12BE, I420_10BE, I422_10BE, I422_12BE, Y444_10BE, Y444_12BE, Y444_16BE"
 #endif
 
 /**
@@ -131,7 +131,11 @@ struct _GstGLColorConvertClass
     "framerate = " GST_VIDEO_FPS_RANGE ", "                             \
     "texture-target = (string) { 2D, rectangle, external-oes }"         \
     " ; "                                                               \
-    GST_VIDEO_DMA_DRM_CAPS_MAKE
+    GST_VIDEO_DMA_DRM_CAPS_MAKE                                         \
+    " ; "                                                               \
+    GST_VIDEO_CAPS_MAKE_WITH_FEATURES ("memory:DMABuf,"                 \
+      GST_CAPS_FEATURE_META_GST_VIDEO_OVERLAY_COMPOSITION,              \
+      "DMA_DRM")
 
 GST_GL_API
 GstGLColorConvert * gst_gl_color_convert_new (GstGLContext * context) G_GNUC_WARN_UNUSED_RESULT;

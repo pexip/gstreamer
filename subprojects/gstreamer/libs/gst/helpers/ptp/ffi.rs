@@ -279,17 +279,17 @@ pub mod unix {
             all(target_os = "macos", target_arch = "x86"),
             link_name = "open$UNIX2003"
         )]
-        pub fn open(path: *const u8, oflag: c_int, ...) -> i32;
+        pub fn open(path: *const c_char, oflag: c_int, ...) -> c_int;
         #[cfg_attr(
             all(target_os = "macos", target_arch = "x86"),
             link_name = "read$UNIX2003"
         )]
-        pub fn read(fd: RawFd, buf: *mut u8, count: usize) -> isize;
+        pub fn read(fd: RawFd, buf: *mut c_void, count: usize) -> isize;
         #[cfg_attr(
             all(target_os = "macos", target_arch = "x86"),
             link_name = "write$UNIX2003"
         )]
-        pub fn write(fd: RawFd, buf: *const u8, count: usize) -> isize;
+        pub fn write(fd: RawFd, buf: *const c_void, count: usize) -> isize;
 
         #[cfg_attr(
             all(target_os = "macos", target_arch = "x86"),
@@ -868,7 +868,22 @@ pub mod windows {
 
         pub fn QueryPerformanceFrequency(lpfrequence: *mut i64) -> i32;
         pub fn QueryPerformanceCounter(lpperformancecount: *mut i64) -> i32;
+
+        pub fn CreateFileA(
+            lpfilename: *const u8,
+            dwdesiredaccess: u32,
+            dwsharemode: u32,
+            lpsecurityattributes: *const c_void,
+            dwcreationdisposition: u32,
+            dwflagsandattributes: u32,
+            htemplatefile: HANDLE,
+        ) -> HANDLE;
     }
+
+    pub const GENERIC_READ: u32 = 0x80000000;
+    pub const GENERIC_WRITE: u32 = 0x40000000;
+    pub const OPEN_EXISTING: u32 = 3;
+    pub const FILE_ATTRIBUTE_NORMAL: u32 = 0x80;
 
     pub const BCRYPT_USE_SYSTEM_PREFERRED_RNG: u32 = 0x00000002;
 

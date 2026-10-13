@@ -114,7 +114,7 @@ _audio_system_get_devices (gint * ndevices)
 
   *ndevices = propertySize / sizeof (AudioDeviceID);
 
-  devices = (AudioDeviceID *) g_malloc0 (propertySize);
+  devices = (AudioDeviceID *) g_malloc (propertySize);
 
   status = AudioObjectGetPropertyData (kAudioObjectSystemObject,
       &audioDevicesAddress, 0, NULL, &propertySize, devices);
@@ -133,6 +133,8 @@ _audio_system_get_devices (gint * ndevices)
     g_ptr_array_add (ret, d);
     GST_DEBUG ("Found device '%s' id %i", d->unique_id, d->id);
   }
+
+  g_free (devices);
 
   return ret;
 }
@@ -296,7 +298,7 @@ _audio_device_set_mixing (AudioDeviceID device_id, gboolean enable_mix)
       GST_ERROR ("failed to set mixmode: %d", (int) status);
     }
   } else {
-    GST_DEBUG ("property not found, mixing coudln't be changed");
+    GST_DEBUG ("property not found, mixing couldn't be changed");
   }
 
   return res;
@@ -876,7 +878,7 @@ _remove_render_spdif_callback (GstCoreAudio * core_audio)
 
   /* We're deactivated.. */
   core_audio->procID = 0;
-  core_audio->io_proc_needs_deactivation = FALSE;
+  g_atomic_int_set (&core_audio->io_proc_dropping, FALSE);
   core_audio->io_proc_active = FALSE;
 }
 
@@ -902,7 +904,7 @@ _io_proc_spdif_start (GstCoreAudio * core_audio)
     core_audio->io_proc_active = TRUE;
   }
 
-  core_audio->io_proc_needs_deactivation = FALSE;
+  g_atomic_int_set (&core_audio->io_proc_dropping, FALSE);
 
   /* Start device */
   status = AudioDeviceStart (core_audio->device_id, core_audio->procID);
@@ -1006,11 +1008,13 @@ gst_core_audio_pause_processing_impl (GstCoreAudio * core_audio)
         "osx ring buffer pause ioproc: %p device_id %lu",
         core_audio->element->io_proc, (gulong) core_audio->device_id);
     if (core_audio->io_proc_active) {
-      /* CoreAudio isn't threadsafe enough to do this here;
-       * we must deactivate the render callback elsewhere. See:
+      /* CoreAudio isn't threadsafe enough to remove the render callback in the
+       * render notify callback, so we pause by having the callback drop
+       * samples or feed silence. See:
        * http://lists.apple.com/archives/Coreaudio-api/2006/Mar/msg00010.html
+       * https://gitlab.freedesktop.org/gstreamer/gstreamer/-/issues/4155
        */
-      core_audio->io_proc_needs_deactivation = TRUE;
+      g_atomic_int_set (&core_audio->io_proc_dropping, TRUE);
     }
   }
   return TRUE;
@@ -1147,10 +1151,10 @@ gst_core_audio_select_device_impl (GstCoreAudio * core_audio)
   gboolean res = FALSE;
 
   if (ndevices < 1) {
-    GST_ERROR ("No audio %s devices found", audio_type);
+    GST_ERROR ("No audio devices found");
     goto done;
   }
-  GST_DEBUG ("Found %d audio %s device(s)", ndevices, audio_type);
+  GST_DEBUG ("Found %d audio device(s)", ndevices);
 
   /* Prefer unique-id since that is more likely to be correct */
   if (unique_id) {
@@ -1173,7 +1177,10 @@ gst_core_audio_select_device_impl (GstCoreAudio * core_audio)
   /* Here we decide if selected device_id is valid or autoselect
    * the default one when required */
   if (device_id == kAudioDeviceUnknown) {
-    if (default_device->id != kAudioDeviceUnknown) {
+    if (default_device == NULL) {
+      GST_ERROR ("Cannot auto-select %s device, no default", audio_type);
+      res = FALSE;
+    } else if (default_device->id != kAudioDeviceUnknown) {
       device_id = default_device->id;
       unique_id = default_device->unique_id;
       default_device->unique_id = NULL;
@@ -1223,7 +1230,8 @@ done:
     g_assert_cmpint (device_id, !=, kAudioDeviceUnknown);
     g_assert (unique_id != NULL);
     core_audio->device_id = device_id;
-    core_audio->is_default = (device_id == default_device->id);
+    core_audio->is_default = (default_device && (device_id ==
+            default_device->id));
     if (unique_id != core_audio->unique_id) {
       g_free (core_audio->unique_id);
       core_audio->unique_id = unique_id;
@@ -1231,7 +1239,8 @@ done:
   }
 
   g_ptr_array_unref (devices);
-  g_free (default_device->unique_id);
+  if (default_device)
+    g_free (default_device->unique_id);
   g_free (default_device);
 
   return res;

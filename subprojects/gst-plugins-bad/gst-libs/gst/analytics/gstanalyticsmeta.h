@@ -141,6 +141,22 @@ gsize gst_analytics_mtd_get_size (const GstAnalyticsMtd * instance);
 GST_ANALYTICS_META_API
 const gchar *gst_analytics_mtd_type_get_name (GstAnalyticsMtdType type);
 
+GST_ANALYTICS_META_API
+gboolean gst_analytics_mtd_set_semantic_tag (GstAnalyticsMtd * instance,
+    const gchar * tag);
+
+GST_ANALYTICS_META_API
+gchar * gst_analytics_mtd_get_semantic_tag (const GstAnalyticsMtd *
+    instance);
+
+GST_ANALYTICS_META_API
+gboolean gst_analytics_mtd_has_semantic_tag (const GstAnalyticsMtd *
+    instance, const gchar * tag);
+
+GST_ANALYTICS_META_API
+gboolean gst_analytics_mtd_semantic_tag_has_prefix (const GstAnalyticsMtd *
+    instance, const gchar * prefix);
+
 typedef struct _GstAnalyticsRelationMetaInitParams
 GstAnalyticsRelationMetaInitParams;
 

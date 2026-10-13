@@ -54,8 +54,11 @@ static GstStaticPadTemplate src_template = GST_STATIC_PAD_TEMPLATE ("src",
     GST_PAD_ALWAYS,
     GST_STATIC_CAPS ("audio/x-wavpack, "
         "depth = (int) [ 1, 32 ], "
-        "channels = (int) [ 1, 8 ], "
-        "rate = (int) [ 6000, 192000 ], " "framed = (boolean) TRUE; "
+        "width = (int) { 8, 16, 24, 32 }, "
+        "channels = (int) [ 1, 4096 ], "
+        "rate = (int) [ 6000, MAX ], "
+        "sample-type = (string) { int, float, dsd }, "
+        "framed = (boolean) TRUE; "
         "audio/x-wavpack-correction, " "framed = (boolean) TRUE")
     );
 
@@ -116,6 +119,8 @@ gst_wavpack_parse_reset (GstWavpackParse * wvparse)
   wvparse->channel_mask = 0;
   wvparse->sample_rate = -1;
   wvparse->width = -1;
+  wvparse->depth = -1;
+  wvparse->sample_type = SAMPLE_TYPE_INT;
   wvparse->total_samples = 0;
   wvparse->sent_codec_tag = FALSE;
 }
@@ -162,10 +167,10 @@ gst_wavpack_parse_stop (GstBaseParse * parse)
   return TRUE;
 }
 
-static gint
+static guint32
 gst_wavpack_get_default_channel_mask (gint nchannels)
 {
-  gint channel_mask = 0;
+  guint32 channel_mask = 0;
 
   /* Set the default channel mask for the given number of channels.
    * It's the same as for WAVE_FORMAT_EXTENDED:
@@ -235,7 +240,7 @@ static const struct
 #define MAX_CHANNEL_POSITIONS G_N_ELEMENTS (layout_mapping)
 
 static gboolean
-gst_wavpack_get_channel_positions (gint num_channels, gint layout,
+gst_wavpack_get_channel_positions (gint num_channels, guint32 layout,
     GstAudioChannelPosition * pos)
 {
   gint i, p;
@@ -248,25 +253,15 @@ gst_wavpack_get_channel_positions (gint num_channels, gint layout,
   p = 0;
   for (i = 0; i < MAX_CHANNEL_POSITIONS; ++i) {
     if ((layout & layout_mapping[i].ms_mask) != 0) {
-      if (p >= num_channels) {
-        GST_WARNING ("More bits set in the channel layout map than there "
-            "are channels! Broken file");
-        return FALSE;
-      }
-      if (layout_mapping[i].gst_pos == GST_AUDIO_CHANNEL_POSITION_INVALID) {
-        GST_WARNING ("Unsupported channel position (mask 0x%08x) in channel "
-            "layout map - ignoring those channels", layout_mapping[i].ms_mask);
-        /* what to do? just ignore it and let downstream deal with a channel
-         * layout that has INVALID positions in it for now ... */
-      }
       pos[p] = layout_mapping[i].gst_pos;
       ++p;
     }
   }
 
+  // Not all channels found, consider it unpositioned
   if (p != num_channels) {
-    GST_WARNING ("Only %d bits set in the channel layout map, but there are "
-        "supposed to be %d channels! Broken file", p, num_channels);
+    for (i = 0; i < MIN (64, num_channels); i++)
+      pos[i] = GST_AUDIO_CHANNEL_POSITION_NONE;
     return FALSE;
   }
 
@@ -303,14 +298,27 @@ gst_wavpack_parse_frame_metadata (GstWavpackParse * parse, GstBuffer * buf,
   gst_byte_reader_skip_unchecked (&br, sizeof (WavpackHeader));
 
   /* get some basics from header */
-  i = (wph->flags >> 23) & 0xF;
+  i = (wph->flags & FLAG_SRATE_MASK) >> FLAG_SRATE_LSB;
   if (!wpi->rate)
     wpi->rate = (i < G_N_ELEMENTS (sample_rates)) ? sample_rates[i] : 44100;
-  wpi->width = ((wph->flags & 0x3) + 1) * 8;
-  if (!wpi->channels)
-    wpi->channels = (wph->flags & 0x4) ? 1 : 2;
-  if (!wpi->channel_mask)
+  wpi->width = ((wph->flags & FLAG_BYTES_STORED) + 1) * 8;
+  if (!wpi->channels) {
+    wpi->channels = (wph->flags & FLAG_MONO_FLAG) ? 1 : 2;
     wpi->channel_mask = 5 - wpi->channels;
+  }
+  if ((wph->flags & FLAG_FLOAT_DATA) != 0)
+    wpi->sample_type = SAMPLE_TYPE_FLOAT;
+  else if ((wph->flags & FLAG_DSD_FLAG) != 0)
+    wpi->sample_type = SAMPLE_TYPE_DSD;
+  else
+    wpi->sample_type = SAMPLE_TYPE_INT;
+
+  if ((wph->flags & FLAG_DSD_FLAG) != 0) {
+    wpi->depth = 8;
+  } else {
+    wpi->depth =
+        wpi->width - ((wph->flags & FLAG_SHIFT_MASK) >> FLAG_SHIFT_LSB);
+  }
 
   /* need to dig metadata blocks for some more */
   while (gst_byte_reader_get_remaining (&br)) {
@@ -339,7 +347,7 @@ gst_wavpack_parse_frame_metadata (GstWavpackParse * parse, GstBuffer * buf,
 
     /* 0x1f is the metadata id mask and 0x20 flag is for later extensions
      * that do not need to be handled by the decoder */
-    switch (id & 0x3f) {
+    switch (id & ID_UNIQUE) {
       case ID_WVC_BITSTREAM:
         GST_LOG_OBJECT (parse, "correction bitstream");
         wpi->correction = TRUE;
@@ -351,7 +359,10 @@ gst_wavpack_parse_frame_metadata (GstWavpackParse * parse, GstBuffer * buf,
       case ID_SAMPLE_RATE:
         if (size == 3) {
           CHECK (gst_byte_reader_get_uint24_le (&mbr, &wpi->rate));
-          GST_LOG_OBJECT (parse, "updated with custom rate %d", wpi->rate);
+          GST_LOG_OBJECT (parse, "updated with custom rate %u", wpi->rate);
+        } else if (size == 4) {
+          CHECK (gst_byte_reader_get_uint32_le (&mbr, &wpi->rate));
+          GST_LOG_OBJECT (parse, "updated with custom rate %u", wpi->rate);
         } else {
           GST_DEBUG_OBJECT (parse, "unexpected size for SAMPLE_RATE metadata");
         }
@@ -361,10 +372,21 @@ gst_wavpack_parse_frame_metadata (GstWavpackParse * parse, GstBuffer * buf,
         guint16 channels;
         guint32 mask = 0;
 
-        if (size == 6) {
-          CHECK (gst_byte_reader_get_uint16_le (&mbr, &channels));
-          channels = channels & 0xFFF;
-          CHECK (gst_byte_reader_get_uint24_le (&mbr, &mask));
+        if (size == 6 || size == 7) {
+          guint8 c0, c1, c2;
+
+          CHECK (gst_byte_reader_get_uint8 (&mbr, &c0));
+          CHECK (gst_byte_reader_get_uint8 (&mbr, &c1));
+          CHECK (gst_byte_reader_get_uint8 (&mbr, &c2));
+
+          channels = (((guint16) c0) | (((guint16) c2 & 0xf) << 8)) + 1;
+          // max_streams = (((guint16) c1) | (((guint16) c2 & 0xf0) << 4)) + 1;
+
+          if (size == 6) {
+            CHECK (gst_byte_reader_get_uint24_le (&mbr, &mask));
+          } else if (size == 7) {
+            CHECK (gst_byte_reader_get_uint32_le (&mbr, &mask));
+          }
         } else if (size) {
           CHECK (gst_byte_reader_get_uint8 (&mbr, &c));
           channels = c;
@@ -379,7 +401,7 @@ gst_wavpack_parse_frame_metadata (GstWavpackParse * parse, GstBuffer * buf,
         break;
       }
       default:
-        GST_LOG_OBJECT (parse, "unparsed ID 0x%x", id);
+        GST_LOG_OBJECT (parse, "unparsed ID 0x%02x", id);
         break;
     }
   }
@@ -433,12 +455,12 @@ gst_wavpack_parse_frame_header (GstWavpackParse * parse, GstBuffer * buf,
 
   /* dump */
   GST_LOG_OBJECT (parse, "size %d", wph.ckSize);
-  GST_LOG_OBJECT (parse, "version 0x%x", wph.version);
+  GST_LOG_OBJECT (parse, "version 0x%04x", wph.version);
   GST_LOG_OBJECT (parse, "total samples %d", wph.total_samples);
   GST_LOG_OBJECT (parse, "block index %d", wph.block_index);
   GST_LOG_OBJECT (parse, "block samples %d", wph.block_samples);
-  GST_LOG_OBJECT (parse, "flags 0x%x", wph.flags);
-  GST_LOG_OBJECT (parse, "crc 0x%x", wph.flags);
+  GST_LOG_OBJECT (parse, "flags 0x%08x", wph.flags);
+  GST_LOG_OBJECT (parse, "crc 0x%08x", wph.flags);
 
   if (!parse->total_samples && wph.block_index == 0 && wph.total_samples != -1) {
     GST_DEBUG_OBJECT (parse, "determined duration of %u samples",
@@ -462,7 +484,8 @@ gst_wavpack_parse_handle_frame (GstBaseParse * parse,
   GstBuffer *buf = frame->buffer;
   GstByteReader reader;
   gint off;
-  guint rate, chans, width, mask;
+  guint rate, chans, width, depth, mask;
+  WavpackSampleType sample_type;
   gboolean lost_sync, draining, final;
   guint frmsize = 0;
   WavpackHeader wph;
@@ -521,7 +544,7 @@ gst_wavpack_parse_handle_frame (GstBaseParse * parse,
       goto more;
     } else {
       if (word != 0x7776706b) {
-        GST_DEBUG_OBJECT (wvparse, "0x%x not OK", word);
+        GST_DEBUG_OBJECT (wvparse, "0x%08x not OK", word);
         *skipsize = off + 2;
         goto skip;
       }
@@ -552,10 +575,13 @@ gst_wavpack_parse_handle_frame (GstBaseParse * parse,
 
   rate = wpi.rate;
   width = wpi.width;
+  depth = wpi.depth;
   chans = wpi.channels;
   mask = wpi.channel_mask;
+  sample_type = wpi.sample_type;
 
-  GST_LOG_OBJECT (parse, "rate: %u, width: %u, chans: %u", rate, width, chans);
+  GST_LOG_OBJECT (parse, "rate: %u, width: %u, chans: %u, sample type: %d",
+      rate, width, chans, sample_type);
 
   GST_BUFFER_PTS (buf) =
       gst_util_uint64_scale_int (wph.block_index, GST_SECOND, rate);
@@ -565,17 +591,39 @@ gst_wavpack_parse_handle_frame (GstBaseParse * parse,
       GST_SECOND, rate) - GST_BUFFER_PTS (buf);
 
   if (G_UNLIKELY (wvparse->sample_rate != rate || wvparse->channels != chans
-          || wvparse->width != width || wvparse->channel_mask != mask)) {
+          || wvparse->width != width || wvparse->depth != depth
+          || wvparse->channel_mask != mask
+          || wvparse->sample_type != sample_type)) {
     GstCaps *caps;
 
     if (wpi.correction) {
       caps = gst_caps_new_simple ("audio/x-wavpack-correction",
           "framed", G_TYPE_BOOLEAN, TRUE, NULL);
     } else {
+      const gchar *sample_type_str;
+
+      switch (wpi.sample_type) {
+        case SAMPLE_TYPE_INT:
+          sample_type_str = "int";
+          break;
+        case SAMPLE_TYPE_FLOAT:
+          sample_type_str = "float";
+          break;
+        case SAMPLE_TYPE_DSD:
+          sample_type_str = "dsd";
+          break;
+        default:
+          sample_type_str = "unknown";
+          g_assert_not_reached ();
+      }
+
       caps = gst_caps_new_simple ("audio/x-wavpack",
           "channels", G_TYPE_INT, chans,
           "rate", G_TYPE_INT, rate,
-          "depth", G_TYPE_INT, width, "framed", G_TYPE_BOOLEAN, TRUE, NULL);
+          "width", G_TYPE_INT, width,
+          "depth", G_TYPE_INT, depth,
+          "sample-type", G_TYPE_STRING, sample_type_str,
+          "framed", G_TYPE_BOOLEAN, TRUE, NULL);
 
       if (!mask)
         mask = gst_wavpack_get_default_channel_mask (wvparse->channels);
@@ -585,7 +633,8 @@ gst_wavpack_parse_handle_frame (GstBaseParse * parse,
         guint64 gmask;
 
         if (!gst_wavpack_get_channel_positions (chans, mask, pos)) {
-          GST_WARNING_OBJECT (wvparse, "Failed to determine channel layout");
+          GST_WARNING_OBJECT (wvparse,
+              "Unsupported channel layout -- mapping to unpositioned channels");
         } else {
           gst_audio_channel_positions_to_mask (pos, chans, FALSE, &gmask);
           if (gmask)
@@ -601,7 +650,9 @@ gst_wavpack_parse_handle_frame (GstBaseParse * parse,
     wvparse->sample_rate = rate;
     wvparse->channels = chans;
     wvparse->width = width;
+    wvparse->depth = depth;
     wvparse->channel_mask = mask;
+    wvparse->sample_type = sample_type;
 
     if (wvparse->total_samples) {
       GST_DEBUG_OBJECT (wvparse, "setting duration");

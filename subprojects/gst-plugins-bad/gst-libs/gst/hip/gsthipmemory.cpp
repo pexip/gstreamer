@@ -23,9 +23,12 @@
 
 #include "gsthip.h"
 #include "gsthip-private.h"
+#include <gst/allocators/gstdmabuf.h>
 #include <mutex>
 #include <condition_variable>
 #include <queue>
+#include <memory>
+#include <unordered_map>
 
 #ifndef GST_DISABLE_GST_DEBUG
 #define GST_CAT_DEFAULT ensure_debug_category()
@@ -46,24 +49,25 @@ ensure_debug_category (void)
 static GstHipAllocator *_hip_memory_allocator = nullptr;
 #define N_TEX_ADDR_MODES 4
 #define N_TEX_FILTER_MODES 2
+
 struct _GstHipMemoryPrivate
 {
   ~_GstHipMemoryPrivate ()
   {
     gst_clear_hip_event (&event);
     gst_clear_hip_stream (&stream);
+    if (external_mem)
+      gst_memory_unref (external_mem);
   }
 
   GstHipVendor vendor;
   void *data = nullptr;
   void *staging = nullptr;
-  gsize pitch = 0;
-  guint width_in_bytes = 0;
-  guint height = 0;
   gboolean texture_support = FALSE;
   hipTextureObject_t texture[4][N_TEX_ADDR_MODES][N_TEX_FILTER_MODES] = { };
   GstHipStream *stream = nullptr;
   GstHipEvent *event = nullptr;
+  GstMemory *external_mem = nullptr;
 
   std::mutex lock;
 };
@@ -121,117 +125,9 @@ gst_hip_allocator_init (GstHipAllocator * allocator)
   GST_OBJECT_FLAG_SET (allocator, GST_ALLOCATOR_FLAG_CUSTOM_ALLOC);
 }
 
-static gboolean
-gst_hip_allocator_update_info (const GstVideoInfo * reference,
-    gsize pitch, gsize alloc_height, GstVideoInfo * aligned)
-{
-  GstVideoInfo ret = *reference;
-  guint height = reference->height;
-
-  ret.size = pitch * alloc_height;
-
-  switch (GST_VIDEO_INFO_FORMAT (reference)) {
-    case GST_VIDEO_FORMAT_I420:
-    case GST_VIDEO_FORMAT_YV12:
-    case GST_VIDEO_FORMAT_I420_10LE:
-    case GST_VIDEO_FORMAT_I420_12LE:
-    {
-      guint chroma_height = GST_ROUND_UP_2 (height) / 2;
-      /* we are wasting space yes, but required so that this memory
-       * can be used in kernel function */
-      ret.stride[0] = pitch;
-      ret.stride[1] = pitch;
-      ret.stride[2] = pitch;
-      ret.offset[0] = 0;
-      ret.offset[1] = ret.stride[0] * height;
-      ret.offset[2] = ret.offset[1] + (ret.stride[1] * chroma_height);
-      break;
-    }
-    case GST_VIDEO_FORMAT_Y42B:
-    case GST_VIDEO_FORMAT_I422_10LE:
-    case GST_VIDEO_FORMAT_I422_12LE:
-      ret.stride[0] = pitch;
-      ret.stride[1] = pitch;
-      ret.stride[2] = pitch;
-      ret.offset[0] = 0;
-      ret.offset[1] = ret.stride[0] * height;
-      ret.offset[2] = ret.offset[1] + (ret.stride[1] * height);
-      break;
-    case GST_VIDEO_FORMAT_NV12:
-    case GST_VIDEO_FORMAT_NV21:
-    case GST_VIDEO_FORMAT_P010_10LE:
-    case GST_VIDEO_FORMAT_P012_LE:
-    case GST_VIDEO_FORMAT_P016_LE:
-      ret.stride[0] = pitch;
-      ret.stride[1] = pitch;
-      ret.offset[0] = 0;
-      ret.offset[1] = ret.stride[0] * height;
-      break;
-    case GST_VIDEO_FORMAT_Y444:
-    case GST_VIDEO_FORMAT_Y444_10LE:
-    case GST_VIDEO_FORMAT_Y444_12LE:
-    case GST_VIDEO_FORMAT_Y444_16LE:
-    case GST_VIDEO_FORMAT_RGBP:
-    case GST_VIDEO_FORMAT_BGRP:
-    case GST_VIDEO_FORMAT_GBR:
-    case GST_VIDEO_FORMAT_GBR_10LE:
-    case GST_VIDEO_FORMAT_GBR_12LE:
-    case GST_VIDEO_FORMAT_GBR_16LE:
-      ret.stride[0] = pitch;
-      ret.stride[1] = pitch;
-      ret.stride[2] = pitch;
-      ret.offset[0] = 0;
-      ret.offset[1] = ret.stride[0] * height;
-      ret.offset[2] = ret.offset[1] * 2;
-      break;
-    case GST_VIDEO_FORMAT_GBRA:
-      ret.stride[0] = pitch;
-      ret.stride[1] = pitch;
-      ret.stride[2] = pitch;
-      ret.stride[3] = pitch;
-      ret.offset[0] = 0;
-      ret.offset[1] = ret.stride[0] * height;
-      ret.offset[2] = ret.offset[1] * 2;
-      ret.offset[3] = ret.offset[1] * 3;
-      break;
-    case GST_VIDEO_FORMAT_BGRA:
-    case GST_VIDEO_FORMAT_RGBA:
-    case GST_VIDEO_FORMAT_RGBx:
-    case GST_VIDEO_FORMAT_BGRx:
-    case GST_VIDEO_FORMAT_ARGB:
-    case GST_VIDEO_FORMAT_ABGR:
-    case GST_VIDEO_FORMAT_RGB:
-    case GST_VIDEO_FORMAT_BGR:
-    case GST_VIDEO_FORMAT_BGR10A2_LE:
-    case GST_VIDEO_FORMAT_RGB10A2_LE:
-    case GST_VIDEO_FORMAT_YUY2:
-    case GST_VIDEO_FORMAT_UYVY:
-    case GST_VIDEO_FORMAT_VUYA:
-      ret.stride[0] = pitch;
-      ret.offset[0] = 0;
-      break;
-    default:
-      return FALSE;
-  }
-
-  *aligned = ret;
-
-  return TRUE;
-}
-
-static size_t
-do_align (size_t value, size_t align)
-{
-  if (align == 0)
-    return value;
-
-  return ((value + align - 1) / align) * align;
-}
-
 static GstMemory *
 gst_hip_allocator_alloc_internal (GstHipAllocator * self,
-    GstHipDevice * device, const GstVideoInfo * info,
-    guint width_in_bytes, guint alloc_height, GstHipStream * stream)
+    GstHipDevice * device, const GstVideoInfo * info, GstHipStream * stream)
 {
   hipError_t hip_ret = hipSuccess;
 
@@ -239,24 +135,18 @@ gst_hip_allocator_alloc_internal (GstHipAllocator * self,
     return nullptr;
 
   auto vendor = gst_hip_device_get_vendor (device);
-  gint texture_align = 0;
-  gst_hip_device_get_attribute (device,
-      hipDeviceAttributeTextureAlignment, &texture_align);
-  if (texture_align <= 0)
-    texture_align = 0;
-  auto pitch = do_align (width_in_bytes, texture_align);
-
-  void *data;
-  hip_ret = HipMalloc (vendor, &data, pitch * alloc_height);
-  if (!gst_hip_result (hip_ret, vendor)) {
-    GST_ERROR_OBJECT (self, "Failed to allocate memory");
+  GstVideoInfo alloc_info;
+  gboolean texture_support = FALSE;
+  if (!gst_hip_device_align_video_info_for_texture (device,
+          info, &alloc_info, &texture_support)) {
+    GST_ERROR_OBJECT (self, "Couldn't calculate aligned info");
     return nullptr;
   }
 
-  GstVideoInfo alloc_info;
-  if (!gst_hip_allocator_update_info (info, pitch, alloc_height, &alloc_info)) {
-    GST_ERROR_OBJECT (self, "Couldn't calculate aligned info");
-    HipFree (vendor, data);
+  void *data;
+  hip_ret = HipMalloc (vendor, &data, alloc_info.size);
+  if (!gst_hip_result (hip_ret, vendor)) {
+    GST_ERROR_OBJECT (self, "Failed to allocate memory");
     return nullptr;
   }
 
@@ -268,15 +158,13 @@ gst_hip_allocator_alloc_internal (GstHipAllocator * self,
   mem->priv = priv;
 
   priv->data = data;
-  priv->pitch = pitch;
-  priv->width_in_bytes = width_in_bytes;
-  priv->height = alloc_height;
   priv->vendor = vendor;
   priv->stream = stream;
   if (stream)
     gst_hip_stream_ref (stream);
 
-  g_object_get (device, "texture2d-support", &priv->texture_support, nullptr);
+  if (texture_support)
+    g_object_get (device, "texture2d-support", &priv->texture_support, nullptr);
 
   gst_memory_init (GST_MEMORY_CAST (mem), (GstMemoryFlags) 0,
       GST_ALLOCATOR_CAST (self), nullptr, alloc_info.size, 0, 0,
@@ -292,6 +180,13 @@ gst_hip_allocator_free (GstAllocator * allocator, GstMemory * mem)
   auto priv = hmem->priv;
 
   gst_hip_device_set_current (hmem->device);
+  if (priv->external_mem && priv->event) {
+    /* Imported memory is not freed by HIP, so there is no implicit
+     * synchronization before returning it to the external owner.
+     * Perform explicit synchronization here */
+    gst_hip_event_synchronize (priv->event);
+    gst_clear_hip_event (&priv->event);
+  }
 
   for (guint i = 0; i < 4; i++) {
     for (guint j = 0; j < N_TEX_ADDR_MODES; j++) {
@@ -303,7 +198,9 @@ gst_hip_allocator_free (GstAllocator * allocator, GstMemory * mem)
     }
   }
 
-  HipFree (priv->vendor, priv->data);
+  /* The mapped pointer is owned by external mem. Don't free it here */
+  if (!priv->external_mem)
+    HipFree (priv->vendor, priv->data);
 
   if (priv->staging)
     HipHostFree (priv->vendor, priv->staging);
@@ -319,7 +216,6 @@ static gboolean
 gst_hip_memory_upload (GstHipAllocator * self, GstHipMemory * mem)
 {
   auto priv = mem->priv;
-  hip_Memcpy2D param = { };
 
   if (!priv->staging ||
       !GST_MEMORY_FLAG_IS_SET (mem, GST_HIP_MEMORY_TRANSFER_NEED_UPLOAD)) {
@@ -331,18 +227,10 @@ gst_hip_memory_upload (GstHipAllocator * self, GstHipMemory * mem)
     return FALSE;
   }
 
-  param.srcMemoryType = hipMemoryTypeHost;
-  param.srcHost = priv->staging;
-  param.srcPitch = priv->pitch;
-
-  param.dstMemoryType = hipMemoryTypeDevice;
-  param.dstDevice = priv->data;
-  param.dstPitch = priv->pitch;
-  param.WidthInBytes = priv->width_in_bytes;
-  param.Height = priv->height;
-
   auto stream = gst_hip_stream_get_handle (priv->stream);
-  auto hip_ret = HipMemcpyParam2DAsync (priv->vendor, &param, stream);
+  auto hip_ret = HipMemcpyHtoDAsync (priv->vendor, priv->data, priv->staging,
+      mem->mem.size, stream);
+
   if (gst_hip_result (hip_ret, priv->vendor))
     hip_ret = HipStreamSynchronize (priv->vendor, stream);
 
@@ -358,7 +246,6 @@ static gboolean
 gst_hip_memory_download (GstHipAllocator * self, GstHipMemory * mem)
 {
   auto priv = mem->priv;
-  hip_Memcpy2D param = { };
 
   if (!GST_MEMORY_FLAG_IS_SET (mem, GST_HIP_MEMORY_TRANSFER_NEED_DOWNLOAD))
     return TRUE;
@@ -378,18 +265,9 @@ gst_hip_memory_download (GstHipAllocator * self, GstHipMemory * mem)
     }
   }
 
-  param.srcMemoryType = hipMemoryTypeDevice;
-  param.srcDevice = priv->data;
-  param.srcPitch = priv->pitch;
-
-  param.dstMemoryType = hipMemoryTypeHost;
-  param.dstHost = priv->staging;
-  param.dstPitch = priv->pitch;
-  param.WidthInBytes = priv->width_in_bytes;
-  param.Height = priv->height;
   auto stream = gst_hip_stream_get_handle (priv->stream);
-
-  auto hip_ret = HipMemcpyParam2DAsync (priv->vendor, &param, stream);
+  auto hip_ret = HipMemcpyDtoHAsync (priv->vendor, priv->staging, priv->data,
+      mem->mem.size, stream);
   if (gst_hip_result (hip_ret, priv->vendor))
     hip_ret = HipStreamSynchronize (priv->vendor, stream);
 
@@ -447,7 +325,6 @@ hip_mem_copy (GstMemory * mem, gssize offset, gssize size)
   auto vendor = src_mem->priv->vendor;
   auto device = src_mem->device;
   GstMapInfo src_info, dst_info;
-  hip_Memcpy2D param = { };
   GstMemory *copy = nullptr;
   auto stream = gst_hip_device_get_stream (device);
 
@@ -463,9 +340,8 @@ hip_mem_copy (GstMemory * mem, gssize offset, gssize size)
   }
 
   if (!copy) {
-    copy = gst_hip_allocator_alloc_internal (self, device,
-        &src_mem->info, src_mem->priv->width_in_bytes, src_mem->priv->height,
-        stream);
+    copy = gst_hip_allocator_alloc_internal (self,
+        device, &src_mem->info, stream);
   }
 
   if (!copy) {
@@ -490,23 +366,14 @@ hip_mem_copy (GstMemory * mem, gssize offset, gssize size)
     GST_ERROR_OBJECT (self, "Failed to set device");
     gst_memory_unmap (mem, &src_info);
     gst_memory_unmap (copy, &dst_info);
+    gst_memory_unref (copy);
 
     return nullptr;
   }
 
-  param.srcMemoryType = hipMemoryTypeDevice;
-  param.srcDevice = src_info.data;
-  param.srcPitch = src_mem->priv->pitch;
-
-  param.dstMemoryType = hipMemoryTypeDevice;
-  param.dstDevice = dst_info.data;
-  param.dstPitch = src_mem->priv->pitch;
-  param.WidthInBytes = src_mem->priv->width_in_bytes;
-  param.Height = src_mem->priv->height;
-
   auto stream_handle = gst_hip_stream_get_handle (stream);
-
-  auto ret = HipMemcpyParam2DAsync (vendor, &param, stream_handle);
+  auto ret = HipMemcpyDtoDAsync (vendor, dst_info.data, src_info.data,
+      src_info.size, stream_handle);
   if (gst_hip_result (ret, vendor))
     ret = HipStreamSynchronize (vendor, stream_handle);
 
@@ -552,71 +419,13 @@ gst_is_hip_memory (GstMemory * mem)
       GST_IS_HIP_ALLOCATOR (mem->allocator);
 }
 
-typedef struct _TextureFormat
-{
-  GstVideoFormat format;
-  hipArray_Format array_format[GST_VIDEO_MAX_COMPONENTS];
-  guint channels[GST_VIDEO_MAX_COMPONENTS];
-} TextureFormat;
-
-#define HIP_AD_FORMAT_NONE ((hipArray_Format) 0)
-#define MAKE_FORMAT_YUV_PLANAR(f,cf) \
-  { GST_VIDEO_FORMAT_ ##f,  { HIP_AD_FORMAT_ ##cf, HIP_AD_FORMAT_ ##cf, \
-      HIP_AD_FORMAT_ ##cf, HIP_AD_FORMAT_NONE },  {1, 1, 1, 0} }
-#define MAKE_FORMAT_YUV_SEMI_PLANAR(f,cf) \
-  { GST_VIDEO_FORMAT_ ##f,  { HIP_AD_FORMAT_ ##cf, HIP_AD_FORMAT_ ##cf, \
-      HIP_AD_FORMAT_NONE, HIP_AD_FORMAT_NONE }, {1, 2, 0, 0} }
-#define MAKE_FORMAT_RGB(f,cf) \
-  { GST_VIDEO_FORMAT_ ##f,  { HIP_AD_FORMAT_ ##cf, HIP_AD_FORMAT_NONE, \
-      HIP_AD_FORMAT_NONE, HIP_AD_FORMAT_NONE }, {4, 0, 0, 0} }
-#define MAKE_FORMAT_RGBP(f,cf) \
-  { GST_VIDEO_FORMAT_ ##f,  { HIP_AD_FORMAT_ ##cf, HIP_AD_FORMAT_ ##cf, \
-      HIP_AD_FORMAT_ ##cf, HIP_AD_FORMAT_NONE }, {1, 1, 1, 0} }
-#define MAKE_FORMAT_RGBAP(f,cf) \
-  { GST_VIDEO_FORMAT_ ##f,  { HIP_AD_FORMAT_ ##cf, HIP_AD_FORMAT_ ##cf, \
-      HIP_AD_FORMAT_ ##cf, HIP_AD_FORMAT_ ##cf }, {1, 1, 1, 1} }
-
-static const TextureFormat format_map[] = {
-  MAKE_FORMAT_YUV_PLANAR (I420, UNSIGNED_INT8),
-  MAKE_FORMAT_YUV_PLANAR (YV12, UNSIGNED_INT8),
-  MAKE_FORMAT_YUV_SEMI_PLANAR (NV12, UNSIGNED_INT8),
-  MAKE_FORMAT_YUV_SEMI_PLANAR (NV21, UNSIGNED_INT8),
-  MAKE_FORMAT_YUV_SEMI_PLANAR (P010_10LE, UNSIGNED_INT16),
-  MAKE_FORMAT_YUV_SEMI_PLANAR (P012_LE, UNSIGNED_INT16),
-  MAKE_FORMAT_YUV_SEMI_PLANAR (P016_LE, UNSIGNED_INT16),
-  MAKE_FORMAT_YUV_PLANAR (I420_10LE, UNSIGNED_INT16),
-  MAKE_FORMAT_YUV_PLANAR (I420_12LE, UNSIGNED_INT16),
-  MAKE_FORMAT_YUV_PLANAR (Y444, UNSIGNED_INT8),
-  MAKE_FORMAT_YUV_PLANAR (Y444_10LE, UNSIGNED_INT16),
-  MAKE_FORMAT_YUV_PLANAR (Y444_12LE, UNSIGNED_INT16),
-  MAKE_FORMAT_YUV_PLANAR (Y444_16LE, UNSIGNED_INT16),
-  MAKE_FORMAT_RGB (RGBA, UNSIGNED_INT8),
-  MAKE_FORMAT_RGB (BGRA, UNSIGNED_INT8),
-  MAKE_FORMAT_RGB (RGBx, UNSIGNED_INT8),
-  MAKE_FORMAT_RGB (BGRx, UNSIGNED_INT8),
-  MAKE_FORMAT_RGB (ARGB, UNSIGNED_INT8),
-  MAKE_FORMAT_RGB (ARGB64, UNSIGNED_INT16),
-  MAKE_FORMAT_RGB (ABGR, UNSIGNED_INT8),
-  MAKE_FORMAT_YUV_PLANAR (Y42B, UNSIGNED_INT8),
-  MAKE_FORMAT_YUV_PLANAR (I422_10LE, UNSIGNED_INT16),
-  MAKE_FORMAT_YUV_PLANAR (I422_12LE, UNSIGNED_INT16),
-  MAKE_FORMAT_RGBP (RGBP, UNSIGNED_INT8),
-  MAKE_FORMAT_RGBP (BGRP, UNSIGNED_INT8),
-  MAKE_FORMAT_RGBP (GBR, UNSIGNED_INT8),
-  MAKE_FORMAT_RGBP (GBR_10LE, UNSIGNED_INT16),
-  MAKE_FORMAT_RGBP (GBR_12LE, UNSIGNED_INT16),
-  MAKE_FORMAT_RGBP (GBR_16LE, UNSIGNED_INT16),
-  MAKE_FORMAT_RGBAP (GBRA, UNSIGNED_INT8),
-  MAKE_FORMAT_RGB (VUYA, UNSIGNED_INT8),
-};
-
 /**
  * gst_hip_memory_get_texture:
  * @mem: a #GstHipMemory
  * @plane: the plane index
- * @filter_mode: filter mode
- * @address_mode: address mode
- * @texture: (out) (transfer none): a pointer to hipTextureObject_t object
+ * @filter_mode: (type gint): filter mode
+ * @address_mode: (type gint): address mode
+ * @texture: (type gpointer) (out) (transfer none): a pointer to hipTextureObject_t object
  *
  * Creates hipTextureObject_t with given parameters
  *
@@ -636,7 +445,7 @@ gst_hip_memory_get_texture (GstHipMemory * mem, guint plane,
   auto priv = mem->priv;
 
   if (!priv->texture_support) {
-    GST_WARNING_OBJECT (mem->device, "Texture not supported");
+    GST_LOG_OBJECT (mem->device, "Texture not supported");
     return FALSE;
   }
 
@@ -646,17 +455,14 @@ gst_hip_memory_get_texture (GstHipMemory * mem, guint plane,
     return TRUE;
   }
 
-  const TextureFormat *format = nullptr;
-  for (guint i = 0; i < G_N_ELEMENTS (format_map); i++) {
-    if (format_map[i].format == GST_VIDEO_INFO_FORMAT (&mem->info)) {
-      format = &format_map[i];
-      break;
-    }
-  }
-
-  if (!format) {
-    GST_WARNING_OBJECT (mem->device, "Not supported format %s",
-        gst_video_format_to_string (GST_VIDEO_INFO_FORMAT (&mem->info)));
+  GstHipFormat hip_format = { };
+  if (!gst_hip_device_get_format (mem->device,
+          GST_VIDEO_INFO_FORMAT (&mem->info), &hip_format)
+      || (hip_format.format_flags & GST_HIP_FORMAT_FLAG_SUPPORT_TEXTURE_2D) !=
+      GST_HIP_FORMAT_FLAG_SUPPORT_TEXTURE_2D) {
+    /* Must be checked during alloc time already */
+    GST_ERROR_OBJECT (mem->device, "Texture not supported");
+    priv->texture_support = FALSE;
     return FALSE;
   }
 
@@ -671,8 +477,8 @@ gst_hip_memory_get_texture (GstHipMemory * mem, guint plane,
   HIP_TEXTURE_DESC tex_desc = { };
 
   res_desc.resType = HIP_RESOURCE_TYPE_PITCH2D;
-  res_desc.res.pitch2D.format = format->array_format[plane];
-  res_desc.res.pitch2D.numChannels = format->channels[plane];
+  res_desc.res.pitch2D.format = hip_format.array_format[plane];
+  res_desc.res.pitch2D.numChannels = hip_format.channels[plane];
   res_desc.res.pitch2D.width = GST_VIDEO_INFO_COMP_WIDTH (&mem->info, plane);
   res_desc.res.pitch2D.height = GST_VIDEO_INFO_COMP_HEIGHT (&mem->info, plane);
   res_desc.res.pitch2D.pitchInBytes =
@@ -768,66 +574,22 @@ gst_hip_memory_sync (GstHipMemory * mem)
   gst_clear_hip_event (&priv->event);
 }
 
-static guint
-gst_hip_allocator_calculate_alloc_height (const GstVideoInfo * info)
+/**
+ * gst_hip_memory_is_imported:
+ * @mem: a #GstHipMemory
+ *
+ * Checks if @mem is imported from external memory
+ *
+ * Returns: %TRUE if @mem is imported, %FALSE otherwise
+ *
+ * Since: 1.30
+ */
+gboolean
+gst_hip_memory_is_imported (GstHipMemory * mem)
 {
-  guint alloc_height;
+  g_return_val_if_fail (gst_is_hip_memory (GST_MEMORY_CAST (mem)), FALSE);
 
-  alloc_height = GST_VIDEO_INFO_HEIGHT (info);
-
-  /* make sure valid height for subsampled formats */
-  switch (GST_VIDEO_INFO_FORMAT (info)) {
-    case GST_VIDEO_FORMAT_I420:
-    case GST_VIDEO_FORMAT_YV12:
-    case GST_VIDEO_FORMAT_NV12:
-    case GST_VIDEO_FORMAT_P010_10LE:
-    case GST_VIDEO_FORMAT_P012_LE:
-    case GST_VIDEO_FORMAT_P016_LE:
-    case GST_VIDEO_FORMAT_I420_10LE:
-    case GST_VIDEO_FORMAT_I420_12LE:
-      alloc_height = GST_ROUND_UP_2 (alloc_height);
-      break;
-    default:
-      break;
-  }
-
-  switch (GST_VIDEO_INFO_FORMAT (info)) {
-    case GST_VIDEO_FORMAT_I420:
-    case GST_VIDEO_FORMAT_YV12:
-    case GST_VIDEO_FORMAT_I420_10LE:
-    case GST_VIDEO_FORMAT_I420_12LE:
-      alloc_height *= 2;
-      break;
-    case GST_VIDEO_FORMAT_NV12:
-    case GST_VIDEO_FORMAT_NV21:
-    case GST_VIDEO_FORMAT_P010_10LE:
-    case GST_VIDEO_FORMAT_P012_LE:
-    case GST_VIDEO_FORMAT_P016_LE:
-      alloc_height += alloc_height / 2;
-      break;
-    case GST_VIDEO_FORMAT_Y42B:
-    case GST_VIDEO_FORMAT_I422_10LE:
-    case GST_VIDEO_FORMAT_I422_12LE:
-    case GST_VIDEO_FORMAT_Y444:
-    case GST_VIDEO_FORMAT_Y444_10LE:
-    case GST_VIDEO_FORMAT_Y444_12LE:
-    case GST_VIDEO_FORMAT_Y444_16LE:
-    case GST_VIDEO_FORMAT_RGBP:
-    case GST_VIDEO_FORMAT_BGRP:
-    case GST_VIDEO_FORMAT_GBR:
-    case GST_VIDEO_FORMAT_GBR_10LE:
-    case GST_VIDEO_FORMAT_GBR_12LE:
-    case GST_VIDEO_FORMAT_GBR_16LE:
-      alloc_height *= 3;
-      break;
-    case GST_VIDEO_FORMAT_GBRA:
-      alloc_height *= 4;
-      break;
-    default:
-      break;
-  }
-
-  return alloc_height;
+  return mem->priv->external_mem != nullptr;
 }
 
 /**
@@ -847,23 +609,19 @@ GstMemory *
 gst_hip_allocator_alloc (GstHipAllocator * allocator,
     GstHipDevice * device, const GstVideoInfo * info)
 {
-  guint alloc_height;
-
   g_return_val_if_fail (GST_IS_HIP_DEVICE (device), nullptr);
   g_return_val_if_fail (info, nullptr);
 
   if (!allocator)
     allocator = (GstHipAllocator *) _hip_memory_allocator;
 
-  alloc_height = gst_hip_allocator_calculate_alloc_height (info);
-
-  return gst_hip_allocator_alloc_internal (allocator, device,
-      info, info->stride[0], alloc_height, gst_hip_device_get_stream (device));
+  return gst_hip_allocator_alloc_internal (allocator, device, info,
+      gst_hip_device_get_stream (device));
 }
 
 /**
  * gst_hip_allocator_set_active:
- * @allocator: a #GstCudaAllocator
+ * @allocator: a #GstHipAllocator
  * @active: the new active state
  *
  * Controls the active state of @allocator.
@@ -884,6 +642,257 @@ gst_hip_allocator_set_active (GstHipAllocator * allocator, gboolean active)
   return TRUE;
 }
 
+#ifndef G_OS_WIN32
+static GQuark
+gst_hip_allocator_quark_dmabuf_import (void)
+{
+  static GQuark quark = 0;
+  static std::once_flag once;
+
+  std::call_once (once,[&] {
+        quark = g_quark_from_static_string ("GstHipQuarkDmaBufImport");
+      });
+
+  return quark;
+}
+#endif
+
+/**
+ * gst_hip_allocator_import_external_memory:
+ * @allocator: (allow-none): a #GstHipAllocator
+ * @device: a #GstHipDevice
+ * @external: external #GstMemory to import
+ * @info: a #GstVideoInfo describing @external
+ *
+ * Imports @external into @device and creates a #GstHipMemory referencing
+ * the imported device memory.
+ *
+ * If @external is already a #GstHipMemory associated with the same physical
+ * device, this function returns a new reference to @external.
+ *
+ * On Linux, DMA-BUF memory can be imported using HIP external memory
+ * interoperability. The imported mapping will be cached for the lifetime of
+ * @external and reused by subsequent calls for the same device.
+ *
+ * Returns: (transfer full) (nullable): a #GstHipMemory, or %NULL if the
+ *    memory cannot be imported
+ *
+ * Since: 1.30
+ */
+GstMemory *
+gst_hip_allocator_import_external_memory (GstHipAllocator * allocator,
+    GstHipDevice * device, GstMemory * external, const GstVideoInfo * info)
+{
+  g_return_val_if_fail (GST_IS_HIP_DEVICE (device), nullptr);
+  g_return_val_if_fail (external, nullptr);
+  g_return_val_if_fail (info, nullptr);
+
+  if (!allocator) {
+    gst_hip_memory_init_once ();
+    allocator = _hip_memory_allocator;
+  }
+
+  if (gst_is_hip_memory (external)) {
+    auto hmem = GST_HIP_MEMORY_CAST (external);
+    auto mem_dev = hmem->device;
+    if (gst_hip_device_is_equal (device, mem_dev))
+      return gst_memory_ref (external);
+
+    /* Cross-device/API copy is not supported.
+     * Caller should fallback to CPU copy */
+    return nullptr;
+  }
+
+  if (gst_is_hip_host_memory (external)) {
+    auto hmem = GST_HIP_HOST_MEMORY_CAST (external);
+    auto mem_dev = hmem->device;
+    if (gst_hip_device_is_equal (device, mem_dev)) {
+      auto device_ptr = gst_hip_host_memory_get_device_pointer (hmem);
+      if (device_ptr) {
+        auto mem = g_new0 (GstHipMemory, 1);
+        mem->device = (GstHipDevice *) gst_object_ref (device);
+        mem->info = *info;
+
+        auto priv = new GstHipMemoryPrivate ();
+        mem->priv = priv;
+
+        priv->external_mem = gst_memory_ref (external);
+        priv->data = device_ptr;
+        priv->vendor = gst_hip_device_get_vendor (device);
+        priv->stream = gst_hip_device_get_stream (device);
+        if (priv->stream)
+          gst_hip_stream_ref (priv->stream);
+        priv->texture_support =
+            gst_hip_device_check_texture_support (device, info);
+
+        gst_memory_init (GST_MEMORY_CAST (mem), (GstMemoryFlags)
+            /* Writability of this wrapper memory does not represent that of
+             * underlying memory. Only read access is safe through the wrapper */
+            GST_MEMORY_FLAG_READONLY,
+            GST_ALLOCATOR_CAST (allocator), nullptr, external->size, 0, 0,
+            external->size);
+
+        return GST_MEMORY_CAST (mem);
+      } else {
+        GST_LOG_OBJECT (device, "Couldn't get device pointer from host memory");
+        return nullptr;
+      }
+    } else {
+      GST_DEBUG_OBJECT (device, "Host memory belongs to different device %"
+          GST_PTR_FORMAT, mem_dev);
+    }
+
+    return nullptr;
+  }
+#ifdef G_OS_WIN32
+  /* TODO: add d3d12 support */
+  return nullptr;
+#else
+  /* *INDENT-OFF* */
+  struct GstHipImportCacheDmaBuf
+  {
+    ~GstHipImportCacheDmaBuf ()
+    {
+      if (device) {
+        auto vendor = gst_hip_device_get_vendor (device);
+
+        gst_hip_device_set_current (device);
+        if (mapped_ptr)
+          HipFree (vendor, mapped_ptr);
+        if (mem_handle)
+          HipDestroyExternalMemory (vendor, mem_handle);
+
+        gst_object_unref (device);
+      }
+    }
+
+    GstHipDevice *device = nullptr;
+    hipExternalMemory_t mem_handle = nullptr;
+    gpointer mapped_ptr = nullptr;
+  };
+
+  struct GstHipMemoryDmabufImportData
+  {
+    std::mutex lock;
+    /* Per-device import cache for the same dmabuf */
+    std::unordered_map<guint, std::shared_ptr<GstHipImportCacheDmaBuf>> amd_cache;
+  };
+  /* *INDENT-ON* */
+
+  if (!gst_is_dmabuf_memory (external)) {
+    GST_DEBUG_OBJECT (allocator, "Non-DMABUF memory");
+    return nullptr;
+  }
+
+  auto vendor = gst_hip_device_get_vendor (device);
+  if (vendor != GST_HIP_VENDOR_AMD) {
+    GST_WARNING_OBJECT (allocator, "Only AMD backend is supported");
+    return nullptr;
+  }
+
+  auto fd = gst_dmabuf_memory_get_fd (external);
+  if (fd < 0) {
+    GST_ERROR_OBJECT (allocator, "Couldn't get fd");
+    return nullptr;
+  }
+
+  std::shared_ptr < GstHipImportCacheDmaBuf > import_cache;
+
+  {
+    auto quark = gst_hip_allocator_quark_dmabuf_import ();
+    GstHipMemoryDmabufImportData *import_data = nullptr;
+
+    {
+      /* Protect qdata */
+      static std::mutex import_lock;
+      std::lock_guard < std::mutex > lk (import_lock);
+
+      import_data = (GstHipMemoryDmabufImportData *)
+          gst_mini_object_get_qdata (GST_MINI_OBJECT_CAST (external), quark);
+      if (!import_data) {
+        import_data = new GstHipMemoryDmabufImportData ();
+        /* *INDENT-OFF* */
+        gst_mini_object_set_qdata (GST_MINI_OBJECT_CAST (external), quark,
+            import_data, [](gpointer user_data)-> void
+            {
+              auto import_data = (GstHipMemoryDmabufImportData *) user_data;
+              if (import_data)
+                delete import_data;
+            }
+        );
+        /* *INDENT-ON* */
+      }
+    }
+
+    std::lock_guard < std::mutex > lk (import_data->lock);
+    auto device_id = gst_hip_device_get_device_id (device);
+    auto cache_iter = import_data->amd_cache.find (device_id);
+    if (cache_iter != import_data->amd_cache.end ()) {
+      import_cache = cache_iter->second;
+      GST_DEBUG_OBJECT (allocator, "Found imported data");
+    } else {
+      hipExternalMemoryHandleDesc mem_desc = { };
+      mem_desc.type = hipExternalMemoryHandleTypeOpaqueFd;
+      mem_desc.handle.fd = fd;
+      mem_desc.size = external->size;
+
+      if (!gst_hip_device_set_current (device)) {
+        GST_ERROR_OBJECT (allocator, "Couldn't set HIP device");
+        return nullptr;
+      }
+
+      hipExternalMemory_t mem_handle = nullptr;
+      auto hip_ret = HipImportExternalMemory (vendor, &mem_handle, &mem_desc);
+      if (!gst_hip_result (hip_ret, vendor)) {
+        GST_WARNING_OBJECT (allocator, "Couldn't import dmabuf");
+        return nullptr;
+      }
+
+      void *mapped_ptr = nullptr;
+      hipExternalMemoryBufferDesc buf_desc = { };
+      buf_desc.size = external->size;
+
+      hip_ret = HipExternalMemoryGetMappedBuffer (vendor,
+          &mapped_ptr, mem_handle, &buf_desc);
+
+      if (!gst_hip_result (hip_ret, vendor)) {
+        GST_WARNING_OBJECT (allocator, "Couldn't map external memory object");
+        HipDestroyExternalMemory (vendor, mem_handle);
+        return nullptr;
+      }
+
+      import_cache = std::make_shared < GstHipImportCacheDmaBuf > ();
+      import_cache->device = (GstHipDevice *) gst_object_ref (device);
+      import_cache->mem_handle = mem_handle;
+      import_cache->mapped_ptr = mapped_ptr;
+
+      import_data->amd_cache[device_id] = import_cache;
+    }
+  }
+
+  auto mem = g_new0 (GstHipMemory, 1);
+  mem->device = (GstHipDevice *) gst_object_ref (device);
+  mem->info = *info;
+
+  auto priv = new GstHipMemoryPrivate ();
+  mem->priv = priv;
+
+  priv->external_mem = gst_memory_ref (external);
+  priv->data = import_cache->mapped_ptr;
+  priv->vendor = vendor;
+  priv->stream = gst_hip_device_get_stream (device);
+  if (priv->stream)
+    gst_hip_stream_ref (priv->stream);
+  priv->texture_support = gst_hip_device_check_texture_support (device, info);
+
+  gst_memory_init (GST_MEMORY_CAST (mem), GST_MEMORY_FLAG_READONLY,
+      GST_ALLOCATOR_CAST (allocator), nullptr, external->size, 0, 0,
+      external->size);
+
+  return GST_MEMORY_CAST (mem);
+#endif
+}
+
 struct _GstHipPoolAllocatorPrivate
 {
   std::queue < GstMemory * >queue;
@@ -895,7 +904,6 @@ struct _GstHipPoolAllocatorPrivate
 
   guint outstanding = 0;
   guint cur_mems = 0;
-  guint alloc_height;
   gboolean flushing = FALSE;
 };
 
@@ -1093,8 +1101,7 @@ gst_hip_pool_allocator_alloc (GstHipPoolAllocator * self, GstMemory ** mem)
   auto priv = self->priv;
 
   auto new_mem = gst_hip_allocator_alloc_internal (_hip_memory_allocator,
-      self->device, &self->info, self->info.stride[0], priv->alloc_height,
-      gst_hip_device_get_stream (self->device));
+      self->device, &self->info, gst_hip_device_get_stream (self->device));
 
   if (!new_mem) {
     GST_ERROR_OBJECT (self, "Failed to allocate new memory");
@@ -1167,8 +1174,6 @@ gst_hip_pool_allocator_new (GstHipDevice * device, const GstVideoInfo * info)
 
   self->device = (GstHipDevice *) gst_object_ref (device);
   self->info = *info;
-
-  self->priv->alloc_height = gst_hip_allocator_calculate_alloc_height (info);
 
   return self;
 }

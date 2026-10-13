@@ -1,0 +1,17 @@
+[modelinfo]
+version=1.1
+group-id=uint8out-group
+
+[input_f32]
+id=input-0
+type=float32
+dims=1,4,4,3
+dir=input
+caps=video/x-raw, format=RGB_F32LE
+ranges=0.0,255.0;0.0,255.0;0.0,255.0
+
+[output_u8]
+id=output-0
+type=uint8
+dims=1,4,4,3
+dir=output

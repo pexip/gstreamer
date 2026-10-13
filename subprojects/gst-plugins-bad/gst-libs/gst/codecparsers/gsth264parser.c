@@ -502,13 +502,25 @@ gst_h264_parse_vui_parameters (GstH264SPS * sps, NalReader * nr)
   if (vui->bitstream_restriction_flag) {
     READ_UINT8 (nr, vui->motion_vectors_over_pic_boundaries_flag, 1);
     READ_UE (nr, vui->max_bytes_per_pic_denom);
-    READ_UE_MAX (nr, vui->max_bits_per_mb_denom, 16);
-    READ_UE_MAX (nr, vui->log2_max_mv_length_horizontal, 16);
-    READ_UE_MAX (nr, vui->log2_max_mv_length_vertical, 16);
+    WARN_UE_MAX (nr, vui->max_bits_per_mb_denom, 16);
+    WARN_UE_MAX (nr, vui->log2_max_mv_length_horizontal, 16);
+    WARN_UE_MAX (nr, vui->log2_max_mv_length_vertical, 16);
     READ_UE (nr, vui->num_reorder_frames);
     READ_UE (nr, vui->max_dec_frame_buffering);
   }
 
+  return TRUE;
+
+warning:
+  GST_WARNING_ONCE ("Error detected, clearing bitstream restriction flag");
+  vui->bitstream_restriction_flag = 0;
+  vui->motion_vectors_over_pic_boundaries_flag = 0;
+  vui->max_bytes_per_pic_denom = 0;
+  vui->max_bits_per_mb_denom = 0;
+  vui->log2_max_mv_length_horizontal = 0;
+  vui->log2_max_mv_length_vertical = 0;
+  vui->num_reorder_frames = 0;
+  vui->max_dec_frame_buffering = 0;
   return TRUE;
 
 error:
@@ -1414,7 +1426,7 @@ error:
 /******** API *************/
 
 /**
- * gst_h264_nal_parser_new:
+ * gst_h264_nal_parser_new: (skip)
  *
  * Creates a new #GstH264NalParser. It should be freed with
  * gst_h264_nal_parser_free after use.
@@ -1650,7 +1662,7 @@ gst_h264_parser_identify_nalu_avc (GstH264NalParser * nalparser,
  * @offset: the offset in @data from which to parse the NAL unit
  * @size: the size of @data
  * @nal_length_size: the size in bytes of the AVC nal length prefix.
- * @nalus: a caller allocated GArray of #GstH264NalUnit where to store parsed nal headers
+ * @nalus: (element-type GstH264NalUnit): a caller allocated GArray of #GstH264NalUnit where to store parsed nal headers
  * @consumed: (out): the size of consumed bytes
  *
  * Parses @data for packetized (e.g., avc/avc3) bitstream and
@@ -2708,7 +2720,7 @@ gst_h264_sei_clear (GstH264SEIMessage * sei)
  * gst_h264_parser_parse_sei:
  * @nalparser: a #GstH264NalParser
  * @nalu: The %GST_H264_NAL_SEI #GstH264NalUnit to parse
- * @messages: The GArray of #GstH264SEIMessage to fill. The caller must free it when done.
+ * @messages: (element-type GstH264SEIMessage): The GArray of #GstH264SEIMessage to fill. The caller must free it when done.
  *
  * Parses @nalu containing one or more Supplementary Enhancement Information messages,
  * and allocates and fills the @messages array.
@@ -2934,6 +2946,11 @@ gst_h264_quant_matrix_4x4_get_raster_from_zigzag (guint8 out_quant[16],
  * Calculate framerate of a video sequence using @sps VUI information,
  * @field_pic_flag from a slice header and @pic_struct from #GstH264PicTiming SEI
  * message.
+ *
+ * **WARNING** This assumes that *all* pictures are identical ! Do not use this
+ * with content on which you are not 100% certain it's not telecine material, or
+ * other types of content which will use different picture types throughout the
+ * stream.
  *
  * If framerate is variable or can't be determined, @fps_num will be set to 0
  * and @fps_den to 1.
@@ -3484,7 +3501,7 @@ error:
 /**
  * gst_h264_create_sei_memory:
  * @start_code_prefix_length: a length of start code prefix, must be 3 or 4
- * @messages: (transfer none): a GArray of #GstH264SEIMessage
+ * @messages: (element-type GstH264SEIMessage) (transfer none): a GArray of #GstH264SEIMessage
  *
  * Creates raw byte-stream format (a.k.a Annex B type) SEI nal unit data
  * from @messages
@@ -3508,7 +3525,7 @@ gst_h264_create_sei_memory (guint8 start_code_prefix_length, GArray * messages)
 /**
  * gst_h264_create_sei_memory_avc:
  * @nal_length_size: a size of nal length field, allowed range is [1, 4]
- * @messages: (transfer none): a GArray of #GstH264SEIMessage
+ * @messages: (element-type GstH264SEIMessage) (transfer none): a GArray of #GstH264SEIMessage
  *
  * Creates raw packetized format SEI nal unit data from @messages
  *
@@ -3912,7 +3929,7 @@ static const H264ProfileMapping h264_profiles[] = {
 
 /**
  * gst_h264_profile_from_string:
- * @string: the descriptive name for #GstH264Profile
+ * @profile: the descriptive name for #GstH264Profile
  *
  * Returns a #GstH264Profile for the @string.
  *

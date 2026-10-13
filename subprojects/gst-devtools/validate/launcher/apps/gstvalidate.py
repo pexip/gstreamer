@@ -28,6 +28,7 @@ import shlex
 import socket
 import subprocess
 import configparser
+import xml.etree.ElementTree as ET
 import json
 import glob
 import math
@@ -516,8 +517,13 @@ class GstValidateCheckAccurateSeekingTestGenerator(GstValidatePipelineTestsGener
     def __new__(cls, name, test_manager, media_infos, extra_data=None):
         pipelines = {}
 
-        for path, reference_frame_dir in media_infos:
-            media_info = GstValidateMediaDescriptor(path)
+        for item in media_infos:
+            if len(item) == 3:
+                path, reference_frame_dir, media_file_path = item
+            else:
+                path, reference_frame_dir = item
+                media_file_path = None
+            media_info = GstValidateMediaDescriptor(path, media_file_path=media_file_path)
             media_info.set_protocol("file")
             if not media_info:
                 error("GstValidateCheckAccurateSeekingTestGenerator",
@@ -1108,13 +1114,14 @@ not been tested and explicitly activated if you set use --wanted-tests ALL""")
 
         return self.tests
 
-    def _add_media(self, media_info, uri=None):
+    def _add_media(self, media_info, uri=None, media_file_path=None):
         self.debug("Checking %s", media_info)
         if isinstance(media_info, GstValidateMediaDescriptor):
             media_descriptor = media_info
             media_info = media_descriptor.get_path()
         else:
-            media_descriptor = GstValidateMediaDescriptor(media_info)
+            media_descriptor = GstValidateMediaDescriptor(media_info,
+                                                          media_file_path=media_file_path)
 
         try:
             # Just testing that the various mandatory infos are present
@@ -1143,7 +1150,16 @@ not been tested and explicitly activated if you set use --wanted-tests ALL""")
         except configparser.NoOptionError as e:
             self.debug("Exception: %s for %s", e, media_info)
 
-    def _discover_file(self, uri, fpath):
+    def _get_override_media_info(self, fpath, ext, media_root):
+        if not self.options.media_info_dir or not media_root:
+            return None
+        rel_path = os.path.relpath(fpath, media_root)
+        override = os.path.join(self.options.media_info_dir, "%s.%s" % (rel_path, ext))
+        if os.path.exists(override):
+            return override
+        return None
+
+    def _discover_file(self, uri, fpath, media_root=None):
         for ext in (GstValidateMediaDescriptor.MEDIA_INFO_EXT,
                 GstValidateMediaDescriptor.PUSH_MEDIA_INFO_EXT,
                 GstValidateMediaDescriptor.SKIPPED_MEDIA_INFO_EXT):
@@ -1151,6 +1167,13 @@ not been tested and explicitly activated if you set use --wanted-tests ALL""")
                 is_push = ext == GstValidateMediaDescriptor.PUSH_MEDIA_INFO_EXT
                 is_skipped = ext == GstValidateMediaDescriptor.SKIPPED_MEDIA_INFO_EXT
                 media_info = "%s.%s" % (fpath, ext)
+                media_file_path = None
+
+                override_path = self._get_override_media_info(fpath, ext, media_root)
+                if override_path:
+                    media_info = override_path
+                    media_file_path = fpath
+
                 if is_push or is_skipped:
                     if not os.path.exists(media_info):
                         continue
@@ -1159,10 +1182,20 @@ not been tested and explicitly activated if you set use --wanted-tests ALL""")
                 args = GstValidateBaseTestManager.MEDIA_CHECK_COMMAND.split(" ")
                 args.append(uri)
                 if os.path.isfile(media_info) and not self.options.update_media_info and not is_skipped:
-                    self._add_media(media_info, uri)
+                    self._add_media(media_info, uri, media_file_path=media_file_path)
                     continue
                 elif fpath.endswith(GstValidateMediaDescriptor.STREAM_INFO_EXT) and not is_skipped:
-                    self._add_media(fpath)
+                    if self.options.update_media_info:
+                        media_xml = ET.parse(fpath).getroot()
+                        stream_uri = media_xml.attrib['uri']
+                        include_frames = bool(int(media_xml.attrib.get("frame-detection", 0)))
+                        stream_args = GstValidateBaseTestManager.MEDIA_CHECK_COMMAND.split(" ")
+                        stream_args.extend([stream_uri, "--output-file", fpath])
+                        if include_frames:
+                            stream_args.append("--full")
+                        subprocess.check_output(stream_args, stderr=open(os.devnull))
+                    else:
+                        self._add_media(fpath)
                     continue
                 elif not self.options.generate_info and not self.options.update_media_info and not self.options.validate_uris:
                     continue
@@ -1182,9 +1215,12 @@ not been tested and explicitly activated if you set use --wanted-tests ALL""")
                     include_frames = 1
 
                 media_descriptor = GstValidateMediaDescriptor.new_from_uri(
-                    uri, True, include_frames, is_push, is_skipped)
+                    uri, True, include_frames, is_push, is_skipped,
+                    media_info_dir=self.options.media_info_dir,
+                    media_root=media_root)
                 if media_descriptor:
-                    self._add_media(media_descriptor, uri)
+                    if not is_skipped:
+                        self._add_media(media_descriptor, uri)
                 else:
                     self.warning("Could not get any descriptor for %s" % uri)
 
@@ -1219,10 +1255,19 @@ not been tested and explicitly activated if you set use --wanted-tests ALL""")
                             fpath = os.path.abspath(os.path.join(root, f))
                             if os.path.isdir(fpath) or \
                                     fpath.endswith(GstValidateMediaDescriptor.MEDIA_INFO_EXT) or\
-                                    fpath.endswith(ScenarioManager.FILE_EXTENSION):
+                                    fpath.endswith(ScenarioManager.FILE_EXTENSION) or \
+                                    (self.options.media_info_dir and fpath.endswith(GstValidateMediaDescriptor.STREAM_INFO_EXT)):
                                 continue
                             else:
-                                self._discover_file(path2url(fpath), fpath)
+                                self._discover_file(path2url(fpath), fpath,
+                                                    media_root=path)
+
+            if self.options.media_info_dir and os.path.isdir(self.options.media_info_dir):
+                for root, dirs, files in os.walk(self.options.media_info_dir):
+                    for f in files:
+                        fpath = os.path.abspath(os.path.join(root, f))
+                        if fpath.endswith(GstValidateMediaDescriptor.STREAM_INFO_EXT):
+                            self._discover_file(path2url(fpath), fpath)
 
         self.debug("Uris found: %s", self._uris)
 

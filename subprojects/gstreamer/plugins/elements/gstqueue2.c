@@ -414,7 +414,8 @@ gst_queue2_class_init (GstQueue2Class * klass)
       "Temporary File Template",
       "File template to store temporary files in, should contain directory "
       "and XXXXXX. (NULL == disabled)",
-      NULL, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS);
+      NULL, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
+      GST_PARAM_UNTRUSTED_SENSITIVE);
 
   obj_props[PROP_TEMP_LOCATION] = g_param_spec_string ("temp-location",
       "Temporary File Location",
@@ -483,6 +484,8 @@ gst_queue2_class_init (GstQueue2Class * klass)
       "Simple data queue",
       "Erik Walthinsen <omega@cse.ogi.edu>, "
       "Wim Taymans <wim.taymans@gmail.com>");
+
+  gst_element_class_mark_as_untrusted_aware (gstelement_class);
 
   gstelement_class->change_state = GST_DEBUG_FUNCPTR (gst_queue2_change_state);
   gstelement_class->query = GST_DEBUG_FUNCPTR (gst_queue2_handle_query);
@@ -2639,7 +2642,7 @@ gst_queue2_handle_sink_event (GstPad * pad, GstObject * parent,
         /* reset rate counters */
         reset_rate_timer (queue);
         gst_pad_start_task (queue->srcpad, (GstTaskFunction) gst_queue2_loop,
-            queue->srcpad, NULL);
+            gst_object_ref (queue->srcpad), gst_object_unref);
         GST_QUEUE2_MUTEX_UNLOCK (queue);
       } else {
         GST_QUEUE2_MUTEX_LOCK (queue);
@@ -2720,7 +2723,8 @@ gst_queue2_handle_sink_event (GstPad * pad, GstObject * parent,
                 /* reset rate counters */
                 reset_rate_timer (queue);
                 gst_pad_start_task (queue->srcpad,
-                    (GstTaskFunction) gst_queue2_loop, queue->srcpad, NULL);
+                    (GstTaskFunction) gst_queue2_loop,
+                    gst_object_ref (queue->srcpad), gst_object_unref);
               } else {
                 queue->is_eos = FALSE;
                 queue->unexpected = FALSE;
@@ -3318,8 +3322,8 @@ gst_queue2_handle_src_event (GstPad * pad, GstObject * parent, GstEvent * event)
         queue->srcresult = GST_FLOW_OK;
         queue->sinkresult = GST_FLOW_OK;
         if (GST_PAD_MODE (pad) == GST_PAD_MODE_PUSH) {
-          gst_pad_start_task (pad, (GstTaskFunction) gst_queue2_loop, pad,
-              NULL);
+          gst_pad_start_task (pad, (GstTaskFunction) gst_queue2_loop,
+              gst_object_ref (pad), gst_object_unref);
         }
 
       }
@@ -3703,7 +3707,8 @@ gst_queue2_src_activate_push (GstPad * pad, GstObject * parent, gboolean active)
     queue->is_eos = FALSE;
     queue->unexpected = FALSE;
     result =
-        gst_pad_start_task (pad, (GstTaskFunction) gst_queue2_loop, pad, NULL);
+        gst_pad_start_task (pad, (GstTaskFunction) gst_queue2_loop,
+        gst_object_ref (pad), gst_object_unref);
     GST_QUEUE2_MUTEX_UNLOCK (queue);
   } else {
     /* unblock loop function */

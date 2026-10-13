@@ -95,6 +95,9 @@ void           gst_hip_memory_set_event (GstHipMemory * mem,
 GST_HIP_API
 void           gst_hip_memory_sync (GstHipMemory * mem);
 
+GST_HIP_API
+gboolean       gst_hip_memory_is_imported (GstHipMemory * mem);
+
 /**
  * GstHipAllocator:
  *
@@ -141,6 +144,12 @@ GstMemory * gst_hip_allocator_alloc (GstHipAllocator * allocator,
 GST_HIP_API
 gboolean    gst_hip_allocator_set_active (GstHipAllocator * allocator,
                                           gboolean active);
+
+GST_HIP_API
+GstMemory * gst_hip_allocator_import_external_memory (GstHipAllocator * allocator,
+                                                      GstHipDevice * device,
+                                                      GstMemory * external,
+                                                      const GstVideoInfo * info);
 
 /**
  * GstHipPoolAllocator:

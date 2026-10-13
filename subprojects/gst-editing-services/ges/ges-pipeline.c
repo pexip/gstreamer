@@ -57,7 +57,6 @@ GST_DEBUG_CATEGORY_STATIC (ges_pipeline_debug);
 
 #define DEFAULT_TIMELINE_MODE  GES_PIPELINE_MODE_PREVIEW
 #define IN_RENDERING_MODE(timeline) ((timeline->priv->mode) & (GES_PIPELINE_MODE_RENDER | GES_PIPELINE_MODE_SMART_RENDER))
-#define CHECK_THREAD(pipeline) g_assert(pipeline->priv->valid_thread == g_thread_self())
 
 /* Structure corresponding to a timeline - sink link */
 
@@ -89,10 +88,7 @@ struct _GESPipelinePrivate
 
   GstEncodingProfile *profile;
 
-  GThread *valid_thread;
-
-  GList *contexts;
-
+  GstTaskPool *shared_pool;
 };
 
 enum
@@ -269,91 +265,83 @@ ges_pipeline_constructed (GObject * object)
 }
 
 static void
-ges_pipeline_update_context (GESPipeline * self, GstContext * context)
-{
-  GList *l;
-  const gchar *context_type;
-
-  GST_OBJECT_LOCK (self);
-  context_type = gst_context_get_context_type (context);
-  for (l = self->priv->contexts; l; l = l->next) {
-    GstContext *tmp = l->data;
-    const gchar *tmp_type = gst_context_get_context_type (tmp);
-
-    /* Always store newest context but never replace
-     * a persistent one by a non-persistent one */
-    if (strcmp (context_type, tmp_type) == 0 &&
-        (gst_context_is_persistent (context) ||
-            !gst_context_is_persistent (tmp))) {
-      gst_context_replace ((GstContext **) & l->data, context);
-      break;
-    }
-  }
-  /* Not found? Add */
-  if (l == NULL) {
-    self->priv->contexts =
-        g_list_prepend (self->priv->contexts, gst_context_ref (context));
-  }
-  GST_OBJECT_UNLOCK (self);
-}
-
-
-static void
 ges_pipeline_handle_message (GstBin * bin, GstMessage * msg)
 {
   GESPipeline *self = GES_PIPELINE (bin);
 
   if (GST_MESSAGE_TYPE (msg) == GST_MESSAGE_NEED_CONTEXT) {
     const gchar *context_type;
-    GList *iter;
 
     gst_message_parse_context_type (msg, &context_type);
-    GST_OBJECT_LOCK (self);
-    for (iter = self->priv->contexts; iter; iter = g_list_next (iter)) {
-      GstContext *tmp = iter->data;
-      const gchar *tmp_type = gst_context_get_context_type (tmp);
+    /* Special handling for task pool context */
+    if (g_strcmp0 (context_type, GST_TASK_POOL_CONTEXT_TYPE) == 0) {
+      GstElement *child = GST_ELEMENT (GST_MESSAGE_SRC (msg));
+      GstContext *pool_context = NULL;
 
-      if (strcmp (context_type, tmp_type) == 0) {
-        GST_DEBUG_OBJECT (msg->src, "Setting context %s %" GST_PTR_FORMAT,
-            tmp_type, tmp);
-        gst_element_set_context (GST_ELEMENT (GST_MESSAGE_SRC (msg)), tmp);
-        break;
+      /* First check if we already have a task pool context */
+      pool_context =
+          gst_element_get_context (GST_ELEMENT_CAST (self),
+          GST_TASK_POOL_CONTEXT_TYPE);
+
+      if (!pool_context) {
+        GstMessage *new_msg;
+
+        new_msg = gst_message_new_need_context (GST_OBJECT_CAST (self),
+            GST_TASK_POOL_CONTEXT_TYPE);
+        gst_element_post_message (GST_ELEMENT_CAST (self), new_msg);
+
+        pool_context =
+            gst_element_get_context (GST_ELEMENT_CAST (self),
+            GST_TASK_POOL_CONTEXT_TYPE);
       }
-    }
-    GST_OBJECT_UNLOCK (self);
 
-    /* don't need to post upward this if it's answered by us */
-    if (iter) {
+      if (!pool_context) {
+        GstTaskPool *pool;
+        GstMessage *have_msg;
+
+        pool = gst_shared_task_pool_new ();
+        gst_shared_task_pool_set_max_threads (GST_SHARED_TASK_POOL (pool),
+            g_get_num_processors ());
+        gst_task_pool_prepare (pool, NULL);
+
+        self->priv->shared_pool = gst_object_ref (pool);
+
+        pool_context = gst_context_new (GST_TASK_POOL_CONTEXT_TYPE, FALSE);
+        gst_context_set_task_pool (pool_context, pool);
+        gst_object_unref (pool);
+
+        /* Store the context on the pipeline itself so that subsequent
+         * NEED_CONTEXT messages from other children will find it via
+         * gst_element_get_context() instead of creating a new pool */
+        gst_element_set_context (GST_ELEMENT_CAST (self), pool_context);
+
+        have_msg =
+            gst_message_new_have_context (GST_OBJECT_CAST (self),
+            gst_context_ref (pool_context));
+        gst_element_post_message (GST_ELEMENT_CAST (self), have_msg);
+      }
+
+      gst_element_set_context (child, pool_context);
+      gst_context_unref (pool_context);
       gst_message_unref (msg);
-      msg = NULL;
+
+      return;
     }
-  } else if (GST_MESSAGE_TYPE (msg) == GST_MESSAGE_HAVE_CONTEXT) {
-    GstContext *context;
-
-    gst_message_parse_have_context (msg, &context);
-    ges_pipeline_update_context (self, context);
-    gst_context_unref (context);
   }
 
-  if (msg) {
-    GST_BIN_CLASS (ges_pipeline_parent_class)->handle_message (bin, msg);
-  }
-}
-
-static void
-ges_pipeline_finalize (GObject * object)
-{
-  GESPipeline *self = GES_PIPELINE (object);
-
-  g_list_free_full (self->priv->contexts, (GDestroyNotify) gst_context_unref);
-
-  G_OBJECT_CLASS (ges_pipeline_parent_class)->finalize (object);
+  GST_BIN_CLASS (ges_pipeline_parent_class)->handle_message (bin, msg);
 }
 
 static void
 ges_pipeline_dispose (GObject * object)
 {
   GESPipeline *self = GES_PIPELINE (object);
+
+  if (self->priv->shared_pool) {
+    gst_task_pool_cleanup (self->priv->shared_pool);
+    gst_object_unref (self->priv->shared_pool);
+    self->priv->shared_pool = NULL;
+  }
 
   if (self->priv->playsink) {
     if (self->priv->mode & (GES_PIPELINE_MODE_PREVIEW))
@@ -403,7 +391,6 @@ ges_pipeline_class_init (GESPipelineClass * klass)
 
   object_class->constructed = ges_pipeline_constructed;
   object_class->dispose = ges_pipeline_dispose;
-  object_class->finalize = ges_pipeline_finalize;
   object_class->get_property = ges_pipeline_get_property;
   object_class->set_property = ges_pipeline_set_property;
 
@@ -495,7 +482,6 @@ ges_pipeline_init (GESPipeline * self)
 {
   GST_INFO_OBJECT (self, "Creating new 'playsink'");
   self->priv = ges_pipeline_get_instance_private (self);
-  self->priv->valid_thread = g_thread_self ();
 
   self->priv->playsink =
       gst_element_factory_make ("playsink", "internal-sinks");
@@ -1129,7 +1115,6 @@ ges_pipeline_set_timeline (GESPipeline * pipeline, GESTimeline * timeline)
   g_return_val_if_fail (GES_IS_PIPELINE (pipeline), FALSE);
   g_return_val_if_fail (GES_IS_TIMELINE (timeline), FALSE);
   g_return_val_if_fail (pipeline->priv->timeline == NULL, FALSE);
-  CHECK_THREAD (pipeline);
 
   GST_DEBUG ("pipeline:%p, timeline:%p", timeline, pipeline);
 
@@ -1173,7 +1158,6 @@ ges_pipeline_set_render_settings (GESPipeline * pipeline,
   guint n_videotracks = 0, n_audiotracks = 0;
 
   g_return_val_if_fail (GES_IS_PIPELINE (pipeline), FALSE);
-  CHECK_THREAD (pipeline);
 
   /*  FIXME Properly handle multi track, for now GESPipeline
    *  only handles single track per type, so we should just set the
@@ -1310,7 +1294,6 @@ ges_pipeline_set_mode (GESPipeline * pipeline, GESPipelineFlags mode)
 
   GList *tmp;
   g_return_val_if_fail (GES_IS_PIPELINE (pipeline), FALSE);
-  CHECK_THREAD (pipeline);
 
   GST_DEBUG_OBJECT (pipeline, "current mode : %d, mode : %d",
       pipeline->priv->mode, mode);
@@ -1445,7 +1428,6 @@ ges_pipeline_get_thumbnail (GESPipeline * self, GstCaps * caps)
   GstElement *sink;
 
   g_return_val_if_fail (GES_IS_PIPELINE (self), FALSE);
-  CHECK_THREAD (self);
 
   sink = self->priv->playsink;
 
@@ -1485,7 +1467,6 @@ ges_pipeline_save_thumbnail (GESPipeline * self, int width, int
   gboolean res = TRUE;
 
   g_return_val_if_fail (GES_IS_PIPELINE (self), FALSE);
-  CHECK_THREAD (self);
 
   caps = gst_caps_from_string (format);
 
@@ -1543,7 +1524,6 @@ ges_pipeline_get_thumbnail_rgb24 (GESPipeline * self, gint width, gint height)
   GstCaps *caps;
 
   g_return_val_if_fail (GES_IS_PIPELINE (self), FALSE);
-  CHECK_THREAD (self);
 
   caps = gst_caps_new_simple ("video/x-raw", "format", G_TYPE_STRING,
       "RGB", NULL);
@@ -1573,7 +1553,6 @@ ges_pipeline_preview_get_video_sink (GESPipeline * self)
   GstElement *sink = NULL;
 
   g_return_val_if_fail (GES_IS_PIPELINE (self), FALSE);
-  CHECK_THREAD (self);
 
   g_object_get (self->priv->playsink, "video-sink", &sink, NULL);
 
@@ -1592,39 +1571,12 @@ activate_sink_bus_handler (GstBus * bus, GstMessage * msg, GESPipeline * self)
       gst_element_post_message (GST_ELEMENT_CAST (self), msg);
     else
       gst_message_unref (msg);
-  } else if (GST_MESSAGE_TYPE (msg) == GST_MESSAGE_NEED_CONTEXT) {
-    const gchar *context_type;
-    GList *l;
-
-    gst_message_parse_context_type (msg, &context_type);
-    GST_OBJECT_LOCK (self);
-    for (l = self->priv->contexts; l; l = l->next) {
-      GstContext *tmp = l->data;
-      const gchar *tmp_type = gst_context_get_context_type (tmp);
-
-      if (strcmp (context_type, tmp_type) == 0) {
-        gst_element_set_context (GST_ELEMENT (GST_MESSAGE_SRC (msg)), l->data);
-        break;
-      }
-    }
-    GST_OBJECT_UNLOCK (self);
-
-    /* Forward if we couldn't answer the message */
-    if (l == NULL) {
-      gst_element_post_message (GST_ELEMENT_CAST (self), msg);
-    } else {
-      gst_message_unref (msg);
-    }
-  } else if (GST_MESSAGE_TYPE (msg) == GST_MESSAGE_HAVE_CONTEXT) {
-    GstContext *context;
-
-    gst_message_parse_have_context (msg, &context);
-    ges_pipeline_update_context (self, context);
-    gst_context_unref (context);
-
-    gst_element_post_message (GST_ELEMENT_CAST (self), msg);
   } else {
-    gst_element_post_message (GST_ELEMENT_CAST (self), msg);
+    GST_DEBUG_OBJECT (self,
+        "Posting %s from %" GST_PTR_FORMAT " directly to our child bus as the"
+        " sink is not in the bin yet but we need to handle its messages still",
+        GST_MESSAGE_TYPE_NAME (msg), msg->src ? msg->src : NULL);
+    gst_bus_post (GST_BIN (self)->child_bus, msg);
   }
 
   /* Doesn't really matter, nothing is using this bus */
@@ -1644,7 +1596,6 @@ ges_pipeline_preview_set_video_sink (GESPipeline * self, GstElement * sink)
   GstStateChangeReturn sret;
 
   g_return_if_fail (GES_IS_PIPELINE (self));
-  CHECK_THREAD (self);
 
   gst_object_replace ((GstObject **) & self->priv->video_sink,
       (GstObject *) sink);
@@ -1690,7 +1641,6 @@ ges_pipeline_preview_get_audio_sink (GESPipeline * self)
   GstElement *sink = NULL;
 
   g_return_val_if_fail (GES_IS_PIPELINE (self), FALSE);
-  CHECK_THREAD (self);
 
   g_object_get (self->priv->playsink, "audio-sink", &sink, NULL);
 
@@ -1710,7 +1660,6 @@ ges_pipeline_preview_set_audio_sink (GESPipeline * self, GstElement * sink)
   GstStateChangeReturn sret;
 
   g_return_if_fail (GES_IS_PIPELINE (self));
-  CHECK_THREAD (self);
 
   gst_object_replace ((GstObject **) & self->priv->audio_sink,
       (GstObject *) sink);

@@ -26,7 +26,6 @@
 
 #include "vacompat.h"
 #include "gstvabase.h"
-#include "gstvacaps.h"
 #include "gstvapluginutils.h"
 
 #define GST_CAT_DEFAULT gst_va_base_enc_debug
@@ -194,6 +193,7 @@ static GstBufferPool *
 _get_sinkpad_pool (GstElement * element, gpointer data)
 {
   GstVaBaseEnc *base = GST_VA_BASE_ENC (element);
+  GstVaBaseEncClass *klass = GST_VA_BASE_ENC_GET_CLASS (element);
   GstAllocator *allocator;
   GstAllocationParams params = { 0, };
   guint usage_hint;
@@ -219,7 +219,7 @@ _get_sinkpad_pool (GstElement * element, gpointer data)
   allocator = gst_va_allocator_new (base->display, surface_formats);
 
   usage_hint = va_get_surface_usage_hint (base->display,
-      VAEntrypointEncSlice, GST_PAD_SINK, FALSE);
+      klass->entrypoint, GST_PAD_SINK, FALSE);
 
   base->priv->raw_pool = gst_va_pool_new_with_config (caps, 1, 0, usage_hint,
       GST_VA_FEATURE_AUTO, allocator, &params);
@@ -264,36 +264,165 @@ gst_va_base_enc_import_input_buffer (GstVaBaseEnc * base,
   return gst_va_buffer_importer_import (&importer, inbuf, buf);
 }
 
+guint
+gst_va_base_enc_adjust_coded_buffer_size (GstVaBaseEnc * base,
+    guint codedbuf_size, guint32 rc_ctrl_mode, guint bitrate_bits)
+{
+  guint64 want = 0;
+
+  /* Underflow is not allowed in CBR mode, so the driver may pad
+   * every frame up to the per-frame budget (bitrate/framerate).
+   * We double that budget to ensure safety. */
+  if (rc_ctrl_mode == VA_RC_CBR && bitrate_bits > 0) {
+    gint fps_n = GST_VIDEO_INFO_FPS_N (&base->in_info);
+    gint fps_d = GST_VIDEO_INFO_FPS_D (&base->in_info);
+
+    /* variable or unknown framerate, assume a default bitrate */
+    if (fps_n <= 0 || fps_d <= 0) {
+      fps_n = 30;
+      fps_d = 1;
+    }
+
+    want = 2 * (gst_util_uint64_scale (bitrate_bits, fps_d, fps_n) / 8);
+    if (codedbuf_size < want) {
+      codedbuf_size = MIN (want, (guint64) G_MAXINT);
+      GST_INFO_OBJECT (base, "Raise codedbuf size to %u", codedbuf_size);
+    }
+  }
+
+  return codedbuf_size;
+}
+
+/* We can not fully trust the segment information reported by the driver.
+ * Some buggy driver may set seg->buf or seg->buf+seg->size outside of our
+ * coded_buffer and cause crash.
+ * Our check policy is making sure each seg->buf and seg->buf+seg->size
+ * inside base_addr to base_addr+codedbuf_size, where most of the time
+ * base_addr is the address of the first seg->buf in seg_list.
+ */
+static guint
+gst_va_base_enc_get_segment_safe_size (GstVaBaseEnc * base,
+    const guint8 * base_addr, VACodedBufferSegment * seg, gboolean * corrupt)
+{
+  const guint8 *buf = seg->buf;
+
+  if (!seg->size)
+    return seg->size;
+
+  if (seg->status & VA_CODED_BUF_STATUS_BAD_BITSTREAM) {
+    GST_WARNING_OBJECT (base, "coded buffer segment flagged as corrupt by the "
+        "driver (status %#x)", seg->status);
+    *corrupt = TRUE;
+    seg->size = 0;
+    return 0;
+  }
+
+  if (seg->status & VA_CODED_BUF_STATUS_SLICE_OVERFLOW_MASK) {
+    GST_WARNING_OBJECT (base, "coded buffer segment flagged as overflow by the "
+        "driver (status %#x)", seg->status);
+    *corrupt = TRUE;
+  }
+
+  if (!buf || buf < base_addr || buf >= base_addr + base->codedbuf_size) {
+    GST_WARNING_OBJECT (base, "coded buffer segment start at (%p, %u bytes) is "
+        "out of range", buf, seg->size);
+    *corrupt = TRUE;
+    seg->size = 0;
+    return 0;
+  }
+
+  /* clamp the reported size to what remains inside the mapping */
+  if (buf + seg->size > base_addr + base->codedbuf_size) {
+    GST_WARNING_OBJECT (base, "coded buffer segment (%p, %u bytes) overflows, "
+        "clamp it", buf, seg->size);
+    *corrupt = TRUE;
+
+    seg->size = base->codedbuf_size - (guint) (buf - base_addr);
+  }
+
+  return seg->size;
+}
+
+static gboolean
+gst_va_base_enc_map_coded_buffer (GstVaBaseEnc * base,
+    GstVaEncodePicture * picture, VACodedBufferSegment ** seg_list)
+{
+  VASurfaceID surface;
+  VACodedBufferSegment *segs = NULL;
+
+  surface = gst_va_encode_picture_get_raw_surface (picture);
+  /* Wait for encoding to finish */
+  if (!va_sync_surface (base->display, surface))
+    return FALSE;
+
+  if (!va_map_buffer (base->display, picture->coded_buffer,
+          GST_MAP_READ, (gpointer *) & segs))
+    return FALSE;
+
+  if (!segs) {
+    va_unmap_buffer (base->display, picture->coded_buffer);
+    GST_WARNING_OBJECT (base, "coded buffer has no segment list");
+    return FALSE;
+  }
+
+  *seg_list = segs;
+  return TRUE;
+}
+
+static gboolean
+gst_va_base_enc_map_and_measure_coded_buffer (GstVaBaseEnc * base,
+    GstVaEncodePicture * picture, VACodedBufferSegment ** seg_list,
+    guint * coded_size)
+{
+  const guint8 *base_addr;
+  VACodedBufferSegment *seg;
+
+  if (!gst_va_base_enc_map_coded_buffer (base, picture, seg_list))
+    return FALSE;
+
+  base_addr = (*seg_list)->buf;
+  *coded_size = 0;
+  for (seg = *seg_list; seg; seg = seg->next)
+    *coded_size += gst_va_base_enc_get_segment_safe_size (base, base_addr, seg,
+        &picture->corrupt);
+
+  return TRUE;
+}
+
+static guint
+gst_va_base_enc_copy_coded_segments (VACodedBufferSegment * seg_list,
+    const guint8 * prefix_data, guint prefix_data_len, guint8 * dst)
+{
+  VACodedBufferSegment *seg;
+  guint offset = 0;
+
+  if (prefix_data) {
+    g_assert (prefix_data_len > 0);
+    memcpy (dst, prefix_data, prefix_data_len);
+    offset = prefix_data_len;
+  }
+
+  for (seg = seg_list; seg; seg = seg->next) {
+    memcpy (dst + offset, seg->buf, seg->size);
+    offset += seg->size;
+  }
+
+  return offset;
+}
+
 GstBuffer *
 gst_va_base_enc_create_output_buffer (GstVaBaseEnc * base,
     GstVaEncodePicture * picture, const guint8 * prefix_data,
     guint prefix_data_len)
 {
   guint coded_size;
-  goffset offset;
   GstBuffer *buf = NULL;
-  VASurfaceID surface;
-  VACodedBufferSegment *seg, *seg_list;
+  GstMapInfo info;
+  VACodedBufferSegment *seg_list = NULL;
 
-  /* Wait for encoding to finish */
-  surface = gst_va_encode_picture_get_raw_surface (picture);
-  if (!va_sync_surface (base->display, surface))
-    goto error;
-
-  seg_list = NULL;
-  if (!va_map_buffer (base->display, picture->coded_buffer,
-          GST_MAP_READ, (gpointer *) & seg_list))
-    goto error;
-
-  if (!seg_list) {
-    va_unmap_buffer (base->display, picture->coded_buffer);
-    GST_WARNING_OBJECT (base, "coded buffer has no segment list");
-    goto error;
-  }
-
-  coded_size = 0;
-  for (seg = seg_list; seg; seg = seg->next)
-    coded_size += seg->size;
+  if (!gst_va_base_enc_map_and_measure_coded_buffer (base, picture, &seg_list,
+          &coded_size))
+    return NULL;
 
   buf = gst_video_encoder_allocate_output_buffer (GST_VIDEO_ENCODER_CAST (base),
       coded_size + prefix_data_len);
@@ -301,35 +430,23 @@ gst_va_base_enc_create_output_buffer (GstVaBaseEnc * base,
     va_unmap_buffer (base->display, picture->coded_buffer);
     GST_ERROR_OBJECT (base, "Failed to allocate output buffer, size %d",
         coded_size);
-    goto error;
+    return NULL;
   }
 
-  offset = 0;
-  if (prefix_data) {
-    g_assert (prefix_data_len > 0);
-    gst_buffer_fill (buf, offset, prefix_data, prefix_data_len);
-    offset += prefix_data_len;
+  if (!gst_buffer_map (buf, &info, GST_MAP_WRITE)) {
+    gst_clear_buffer (&buf);
+    va_unmap_buffer (base->display, picture->coded_buffer);
+    GST_ERROR_OBJECT (base, "Failed to map output buffer");
+    return NULL;
   }
 
-  for (seg = seg_list; seg; seg = seg->next) {
-    gsize write_size;
-
-    write_size = gst_buffer_fill (buf, offset, seg->buf, seg->size);
-    if (write_size != seg->size) {
-      GST_WARNING_OBJECT (base, "Segment size is %d, but copied %"
-          G_GSIZE_FORMAT, seg->size, write_size);
-      break;
-    }
-    offset += seg->size;
-  }
+  gst_va_base_enc_copy_coded_segments (seg_list, prefix_data, prefix_data_len,
+      info.data);
+  gst_buffer_unmap (buf, &info);
 
   va_unmap_buffer (base->display, picture->coded_buffer);
 
   return buf;
-
-error:
-  gst_clear_buffer (&buf);
-  return NULL;
 }
 
 /* Return 0 means error and -1 means not enough data. */
@@ -338,29 +455,12 @@ gst_va_base_enc_copy_output_data (GstVaBaseEnc * base,
     GstVaEncodePicture * picture, guint8 * data, gint size)
 {
   guint coded_size;
-  VASurfaceID surface;
-  VACodedBufferSegment *seg, *seg_list;
+  VACodedBufferSegment *seg_list = NULL;
   gint ret_sz = 0;
 
-  /* Wait for encoding to finish */
-  surface = gst_va_encode_picture_get_raw_surface (picture);
-  if (!va_sync_surface (base->display, surface))
-    goto out;
-
-  seg_list = NULL;
-  if (!va_map_buffer (base->display, picture->coded_buffer,
-          GST_MAP_READ, (gpointer *) & seg_list))
-    goto out;
-
-  if (!seg_list) {
-    va_unmap_buffer (base->display, picture->coded_buffer);
-    GST_WARNING_OBJECT (base, "coded buffer has no segment list");
-    goto out;
-  }
-
-  coded_size = 0;
-  for (seg = seg_list; seg; seg = seg->next)
-    coded_size += seg->size;
+  if (!gst_va_base_enc_map_and_measure_coded_buffer (base, picture, &seg_list,
+          &coded_size))
+    return 0;
 
   if (coded_size > size) {
     GST_DEBUG_OBJECT (base, "Not enough space for coded data");
@@ -368,14 +468,10 @@ gst_va_base_enc_copy_output_data (GstVaBaseEnc * base,
     goto out;
   }
 
-  for (seg = seg_list; seg; seg = seg->next) {
-    memcpy (data + ret_sz, seg->buf, seg->size);
-    ret_sz += seg->size;
-  }
-
-  va_unmap_buffer (base->display, picture->coded_buffer);
+  ret_sz = gst_va_base_enc_copy_coded_segments (seg_list, NULL, 0, data);
 
 out:
+  va_unmap_buffer (base->display, picture->coded_buffer);
   return ret_sz;
 }
 
@@ -384,7 +480,7 @@ _allocator_from_caps (GstVaBaseEnc * base, GstCaps * caps)
 {
   GstAllocator *allocator = NULL;
 
-  if (gst_caps_is_dmabuf (caps)) {
+  if (gst_video_is_dma_drm_caps (caps)) {
     allocator = gst_va_dmabuf_allocator_new (base->display);
   } else {
     GArray *surface_formats =
@@ -462,13 +558,22 @@ _push_buffer_to_downstream (GstVaBaseEnc * base, GstVideoCodecFrame * frame)
     goto error;
   }
 
-  if (frame->output_buffer)
+  if (frame->output_buffer) {
+    GstVaEncFrame *enc_frame = gst_va_get_enc_frame (frame);
+
+    if (enc_frame && enc_frame->picture && enc_frame->picture->corrupt) {
+      GST_WARNING_OBJECT (base, "corrupt coded data in frame %u",
+          frame->system_frame_number);
+      GST_BUFFER_FLAG_SET (frame->output_buffer, GST_BUFFER_FLAG_CORRUPTED);
+    }
+
     GST_LOG_OBJECT (base, "Push to downstream: frame system_frame_number: %u,"
         " pts: %" GST_TIME_FORMAT ", dts: %" GST_TIME_FORMAT
         " duration: %" GST_TIME_FORMAT ", buffer size: %" G_GSIZE_FORMAT,
         frame->system_frame_number, GST_TIME_ARGS (frame->pts),
         GST_TIME_ARGS (frame->dts), GST_TIME_ARGS (frame->duration),
         gst_buffer_get_size (frame->output_buffer));
+  }
 
   if (complete) {
     ret = gst_video_encoder_finish_frame (GST_VIDEO_ENCODER (base), frame);
@@ -697,7 +802,7 @@ gst_va_base_enc_handle_frame (GstVideoEncoder * venc,
         ret = _push_out_one_buffer (base);
 
       if (ret != GST_FLOW_OK)
-        goto error_push_buffer;
+        goto bail;
 
       /* Try to push out all ready frames. */
       do {
@@ -706,7 +811,7 @@ gst_va_base_enc_handle_frame (GstVideoEncoder * venc,
       if (ret == GST_FLOW_OUTPUT_NOT_READY)
         ret = GST_FLOW_OK;
       if (ret != GST_FLOW_OK)
-        goto error_push_buffer;
+        goto bail;
 
       frame_encode = NULL;
       if (!base_class->reorder_frame (base, NULL, FALSE, &frame_encode))
@@ -720,7 +825,7 @@ gst_va_base_enc_handle_frame (GstVideoEncoder * venc,
     if (ret == GST_FLOW_OUTPUT_NOT_READY)
       ret = GST_FLOW_OK;
     if (ret != GST_FLOW_OK)
-      goto error_push_buffer;
+      goto bail;
   }
 
   return ret;
@@ -761,12 +866,8 @@ error_encode:
     gst_video_encoder_finish_frame (venc, frame_encode);
     return ret;
   }
-error_push_buffer:
-  {
-    GST_ELEMENT_ERROR (venc, STREAM, ENCODE,
-        ("Failed to push one frame."), (NULL));
-    return ret;
-  }
+bail:
+  return ret;
 }
 
 static GstFlowReturn

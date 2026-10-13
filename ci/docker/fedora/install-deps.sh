@@ -15,7 +15,7 @@ sudo dnf install -y \
 
 # Enable the debuginfo repos so -debug packages are kept in sync
 sudo dnf install -y dnf-plugins-core
-sudo dnf config-manager --set-enabled '*-debuginfo'
+sudo dnf config-manager setopt '*-debuginfo.enabled=1'
 
 sudo dnf upgrade -y && sudo dnf distro-sync -y
 
@@ -29,8 +29,7 @@ sudo dnf install -y glib2-doc gdk-pixbuf2-devel gtk3-devel-docs gtk4-devel-docs 
 sudo dnf remove -y "gstreamer1*-devel" rust cargo meson 'fdk-aac-free*'
 
 sudo bash ./ci/scripts/create-pip-config.sh
-sudo pip3 install meson==1.9.0 python-gitlab tomli junitparser bs4
-sudo pip3 install git+https://github.com/hotdoc/hotdoc.git@8c1cc997f5bc16e068710a8a8121f79ac25cbcce
+sudo pip3 install meson==1.9.0 python-gitlab tomli junitparser bs4 hotdoc==0.18.2
 
 # Install most debug symbols, except the big ones from things we use
 debug_packages=$(rpm -qa | grep -v -i \

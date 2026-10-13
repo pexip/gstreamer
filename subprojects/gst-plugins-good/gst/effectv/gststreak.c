@@ -245,8 +245,9 @@ gst_streaktv_class_init (GstStreakTVClass * klass)
   gst_element_class_set_static_metadata (gstelement_class, "StreakTV effect",
       "Filter/Effect/Video",
       "StreakTV makes after images of moving objects",
-      "FUKUCHI, Kentarou <fukuchi@users.sourceforge.net>, "
+      "Kentaro Fukuchi <fukuchi@users.sourceforge.net>, "
       "Sebastian Dröge <sebastian.droege@collabora.co.uk>");
+  gst_element_class_mark_as_untrusted_aware (gstelement_class);
 
   gst_element_class_add_static_pad_template (gstelement_class,
       &gst_streaktv_sink_template);

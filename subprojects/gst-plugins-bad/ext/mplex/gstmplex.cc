@@ -533,8 +533,8 @@ gst_mplex_start_task (GstMplex * mplex)
   if (G_UNLIKELY (mplex->srcresult == GST_FLOW_CUSTOM_SUCCESS)
       && mplex->job->video_tracks == mplex->num_vpads
       && mplex->job->audio_tracks == mplex->num_apads) {
-    gst_pad_start_task (mplex->srcpad, (GstTaskFunction) gst_mplex_loop, mplex,
-        NULL);
+    gst_pad_start_task (mplex->srcpad, (GstTaskFunction) gst_mplex_loop, gst_object_ref (mplex),
+        gst_object_unref);
     mplex->srcresult = GST_FLOW_OK;
   }
 }
@@ -819,6 +819,7 @@ mplex_element_init (GstPlugin * plugin)
 static gboolean
 plugin_init (GstPlugin * plugin)
 {
+  gst_plugin_set_static_features_flag(plugin);
   return GST_ELEMENT_REGISTER (mplex, plugin);
 }
 

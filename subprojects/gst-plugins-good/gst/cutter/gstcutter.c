@@ -158,6 +158,7 @@ gst_cutter_class_init (GstCutterClass * klass)
   gst_element_class_set_static_metadata (element_class, "Audio cutter",
       "Filter/Editor/Audio", "Audio Cutter to split audio into non-silent bits",
       "Thomas Vander Stichele <thomas at apestaart dot org>");
+  gst_element_class_mark_as_untrusted_aware (element_class);
   element_class->change_state = gst_cutter_change_state;
 }
 
@@ -553,6 +554,8 @@ gst_cutter_get_property (GObject * object, guint prop_id,
 static gboolean
 plugin_init (GstPlugin * plugin)
 {
+  gst_plugin_set_static_features_flag (plugin);
+
   return GST_ELEMENT_REGISTER (cutter, plugin);
 }
 

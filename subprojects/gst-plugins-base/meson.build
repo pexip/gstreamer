@@ -1,8 +1,9 @@
 project('gst-plugins-base', 'c',
-  version : '1.27.2.1',
+  version : '1.29.2.1',
   meson_version : '>= 1.4',
   default_options : [ 'warning_level=1',
-                      'buildtype=debugoptimized' ])
+                      'buildtype=debugoptimized',
+                      'c_std=gnu11,c11' ])
 
 gst_version = meson.project_version()
 version_arr = gst_version.split('.')
@@ -18,11 +19,19 @@ gst_version_is_stable = gst_version_minor.is_even()
 gst_version_is_dev = gst_version_minor % 2 == 1 and gst_version_micro < 90
 
 host_system = host_machine.system()
+subsystem = ''
+if host_system == 'ios'
+  warning('Setting system = \'ios\' in the cross file is deprecated, please use subsystem names')
+  host_system = 'darwin'
+  subsystem = 'ios'
+elif host_system == 'darwin'
+  subsystem = host_machine.subsystem()
+endif
 
 have_cxx = add_languages('cpp', native: false, required: false)
 
-if host_system in ['ios', 'darwin']
-  have_objc = add_languages('objc', native: false)
+if host_system == 'darwin'
+  have_objc = add_languages('objc', 'objcpp', native: false)
 else
   have_objc = false
 endif
@@ -62,7 +71,10 @@ if cc.get_id() == 'msvc'
       '/wd4146', # unary minus on unsigned (beware INT_MIN)
       '/wd4244', # lossy type conversion (e.g. double -> int)
       '/wd4305', # truncating type conversion (e.g. double -> float)
-      cc.get_supported_arguments(['/utf-8']), # set the input encoding to utf-8
+      cc.get_supported_arguments([
+        '/utf-8', # set the input encoding to utf-8
+        '/Zc:preprocessor', # enable preprocessor conformance mode (disable legacy preprocessor)
+      ]),
   ]
 
   if get_option('glib-checks').enabled()
@@ -163,6 +175,8 @@ host_defines = [
   [ 'hppa', 'HAVE_CPU_HPPA' ],
   [ 'm68k', 'HAVE_CPU_M68K' ],
   [ 's390', 'HAVE_CPU_S390' ],
+  [ 'riscv32', 'HAVE_CPU_RISCV32' ],
+  [ 'riscv64', 'HAVE_CPU_RISCV64' ],
 ]
 foreach h : host_defines
   if h.get(0) == host_machine.cpu_family()
@@ -192,6 +206,7 @@ check_headers = [
   ['HAVE_WINSOCK2_H', 'winsock2.h'],
   ['HAVE_XMMINTRIN_H', 'xmmintrin.h'],
   ['HAVE_LINUX_DMA_BUF_H', 'linux/dma-buf.h'],
+  ['HAVE_LINUX_UDMABUF_H', 'linux/udmabuf.h'],
 ]
 foreach h : check_headers
   if cc.has_header(h.get(1))
@@ -324,8 +339,9 @@ valgrind_dep = dependency('valgrind', required: false)
 core_conf.set('HAVE_VALGRIND', valgrind_dep.found())
 
 libdrm_dep = dependency('libdrm', version : '>= 2.4.98',
+  default_options: {'cairo': 'disabled'},
   required : get_option('drm'),
-  allow_fallback: host_system not in ['darwin', 'ios', 'android', 'windows']
+  allow_fallback: host_system not in ['darwin', 'android', 'windows']
 )
 
 core_conf.set('HAVE_LIBDRM', libdrm_dep.found())
@@ -341,7 +357,7 @@ endif
 gmodule_dep = dependency('gmodule-no-export-2.0')
 
 # some of the examples can use gdk-pixbuf and GTK+3
-gdk_pixbuf_dep = dependency('gdk-pixbuf-2.0', required : get_option('examples'))
+gdk_pixbuf_dep = dependency('gdk-pixbuf-2.0', required : get_option('examples'), default_options: {'man': false, 'tests': false})
 gtk_dep = dependency('gtk+-3.0', version : '>= 3.10', required : get_option('examples'))
 # TODO: https://github.com/mesonbuild/meson/issues/3941
 if not get_option('x11').disabled()
@@ -350,7 +366,7 @@ else
   gtk_x11_dep = dependency('', required : false)
 endif
 # gtk+ quartz backend is only available on macOS
-if host_system == 'darwin'
+if host_system == 'darwin' and subsystem == 'macos'
   gtk_quartz_dep = dependency('gtk+-quartz-3.0', version : '>= 3.10', required : get_option('examples'))
 else
   gtk_quartz_dep = dependency('', required : false)
@@ -395,15 +411,18 @@ have_orcc = false
 orcc_args = []
 orc_targets = []
 # Used by various libraries/elements that use Orc code
-orc_dep = dependency('orc-0.4', version : orc_req, required : get_option('orc'),
-    fallback : ['orc', 'orc_dep'])
-orcc = find_program('orcc', required : get_option('orc'))
-if orc_dep.found() and orcc.found()
-  have_orcc = true
-  orcc_args = [orcc, '--include', 'glib.h']
+orc_dep = dependency('orc-0.4', version: orc_req, required: get_option('orc'), allow_fallback: true)
+orcc = find_program('orcc', required: get_option('orc-compiler'))
+if orc_dep.found()
+  if orcc.found()
+    have_orcc = true
+    orcc_args = [orcc, '--include', 'glib.h']
+  else
+    message('Orc Compiler not found, not regenerating Orc sources')
+  endif
   core_conf.set('HAVE_ORC', 1)
 else
-  message('Orc Compiler not found or disabled, will use backup C code')
+  warning('Orc not found or disabled, will use backup C code')
   core_conf.set('DISABLE_ORC', 1)
 endif
 
@@ -417,13 +436,35 @@ atomic_dep = cc.find_library('atomic', required: false)
 base_platform_dep += [atomic_dep]
 
 # Used to build SSE* things in audio-resampler
-sse_args = '-msse'
-sse2_args = '-msse2'
-sse41_args = '-msse4.1'
+if cc.get_argument_syntax() == 'msvc'
+  if host_machine.cpu_family() == 'x86_64'
+    sse_args = '/arch:SSE2'
+    # x64 msvc supports /arch:SSE4.2 only since Nov 2024
+    # See https://developercommunity.visualstudio.com/t/Add-arch:SSE42-level-to-allow-optimiz/10664771
+    # See also https://learn.microsoft.com/en-us/cpp/intrinsics/check-isa-arch-support?view=msvc-170
+    sse41_args = '/arch:SSE2'
+  else
+    sse_args = '/arch:SSE'
+    sse41_args = '/arch:SSE2'
+  endif
+  sse2_args = '/arch:SSE2'
+  # By default, x86 targets /arch:SSE2. But we should
+  # override that in case someone supplied CFLAGS
+  have_sse = cc.has_argument(sse_args)
+  have_sse2 = cc.has_argument(sse2_args)
+  # audio-resampler-x86-sse41 uses _mm_cvtsi128_si64 which is only available on
+  # x86_64
+  have_sse41 = cc.has_argument(sse41_args) and host_machine.cpu_family() == 'x86_64'
+else
+  sse_args = '-msse'
+  sse2_args = '-msse2'
+  sse41_args = '-msse4.1'
 
-have_sse = cc.has_argument(sse_args)
-have_sse2 = cc.has_argument(sse2_args)
-have_sse41 = cc.has_argument(sse41_args)
+  have_sse = cc.has_argument(sse_args)
+  have_sse2 = cc.has_argument(sse2_args)
+  # _mm_cvtsi128_si64 is only available on x86-64 (see above)
+  have_sse41 = cc.has_argument(sse41_args) and host_machine.cpu_family() == 'x86_64'
+endif
 
 if host_machine.cpu_family() == 'arm'
   if cc.compiles('''
@@ -434,6 +475,25 @@ int32x4_t testfunc(int16_t *a, int16_t *b) {
 }
 ''', name : 'NEON support')
     core_conf.set('HAVE_ARM_NEON', true)
+  endif
+endif
+
+have_rvv = false
+rvv_args = ''
+if host_machine.cpu_family() == 'riscv64'
+  rvv_args = '-march=rv64gcv'
+  have_rvv = cc.compiles('''
+#include <riscv_vector.h>
+int testfunc(int16_t *a, int16_t *b, int n) {
+  size_t vl = __riscv_vsetvl_e16m4(n);
+  vint16m4_t va = __riscv_vle16_v_i16m4(a, vl);
+  vint16m4_t vb = __riscv_vle16_v_i16m4(b, vl);
+  vint32m8_t prod = __riscv_vwmul_vv_i32m8(va, vb, vl);
+  return 0;
+}
+''', args : rvv_args, name : 'RVV support')
+  if have_rvv
+    core_conf.set('HAVE_RISCV_RVV', true)
   endif
 endif
 
@@ -482,7 +542,7 @@ gnome = import('gnome')
 build_gir = gir.found() and (not meson.is_cross_build() or get_option('introspection').enabled())
 gir_init_section = [ '--add-init-section=extern void gst_init(gint*,gchar**);' + \
     'g_setenv("GST_REGISTRY_DISABLE", "yes", TRUE);' + \
-    'g_setenv("GST_REGISTRY_1.0", "@0@", TRUE);'.format(meson.current_build_dir() + '/gir_empty_registry.reg') + \
+    'g_setenv("GST_REGISTRY_1_0", "@0@", TRUE);'.format(meson.current_build_dir() + '/gir_empty_registry.reg') + \
     'g_setenv("GST_PLUGIN_PATH_1_0", "", TRUE);' + \
     'g_setenv("GST_PLUGIN_SYSTEM_PATH_1_0", "", TRUE);' + \
     'g_setenv("GST_TRACERS", "", TRUE);' + \
@@ -592,7 +652,12 @@ endif
 # Use core_conf after all subdirs have set values
 configure_file(output : 'config.h', configuration : core_conf)
 
-meson.add_dist_script('scripts/gen-changelog.py', meson.project_name(), '1.26.0', meson.project_version())
+meson.add_dist_script('scripts/gen-changelog.py', meson.project_name(), '1.28.0', meson.project_version())
+
+# dist common files from monorepo root
+if not meson.is_subproject()
+  meson.add_dist_script('scripts/dist-common-files.py', meson.project_version())
+endif
 
 plugin_names = []
 gst_plugins = []

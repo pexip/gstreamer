@@ -50,9 +50,9 @@ struct _GstWaylandSink
   GMutex display_lock;
   GstWlDisplay *display;
   GstWlWindow *window;
-  GstBufferPool *pool;
 
-  gboolean video_info_changed;
+  gboolean render_info_changed;
+  GstVideoInfo render_info;
   GstVideoInfo video_info;
   GstVideoInfoDmaDrm drm_info;
   GstVideoMasteringDisplayInfo minfo;
@@ -75,7 +75,6 @@ struct _GstWaylandSink
   GstVideoOrientationMethod current_rotate_method;
 
   gchar *drm_device;
-  gboolean skip_dumb_buffer_copy;
   gboolean force_aspect_ratio;
 };
 
@@ -84,7 +83,7 @@ struct _GstWaylandSinkClass
   GstVideoSinkClass parent;
 };
 
-GType gst_wayland_sink_get_type (void) G_GNUC_CONST;
+GType gst_wayland_sink_get_type (void);
 
 GST_ELEMENT_REGISTER_DECLARE (waylandsink);
 

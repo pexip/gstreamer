@@ -21,6 +21,7 @@
 #pragma once
 
 #include <gst/wayland/wayland.h>
+#include <gst/video/video.h>
 
 G_BEGIN_DECLS
 
@@ -36,24 +37,21 @@ struct _GstWlBuffer
 
 GST_WL_API
 GstWlBuffer * gst_buffer_add_wl_buffer (GstBuffer * gstbuffer,
-    struct wl_buffer * wlbuffer, GstWlDisplay * display);
+    struct wl_buffer * wlbuffer, GstWlWindow * window);
 
 GST_WL_API
-GstWlBuffer * gst_buffer_get_wl_buffer (GstWlDisplay * display, GstBuffer * gstbuffer);
-
-GST_WL_API
-void gst_wl_buffer_force_release_and_unref (GstBuffer *buf, GstWlBuffer * self);
+GstWlBuffer * gst_buffer_get_wl_buffer (GstWlWindow * window, GstBuffer * gstbuffer);
 
 GST_WL_API
 void gst_wl_buffer_attach (GstWlBuffer * self, struct wl_surface *surface);
 
 GST_WL_API
-void gst_wl_buffer_ref_gst_buffer(GstWlBuffer * self);
+void gst_wl_buffer_detach (GstWlBuffer * self);
 
 GST_WL_API
-void gst_wl_buffer_unref_buffer(GstWlBuffer * self);
+GstVideoMeta * gst_wl_buffer_get_video_meta (GstWlBuffer * self);
 
 GST_WL_API
-GstWlDisplay *gst_wl_buffer_get_display (GstWlBuffer * self);
+GstVideoCropMeta * gst_wl_buffer_get_video_crop_meta (GstWlBuffer * self);
 
 G_END_DECLS

@@ -246,752 +246,6 @@
         "tracers": {},
         "url": "Unknown package origin"
     },
-    "aasink": {
-        "description": "ASCII Art video sink & filter",
-        "elements": {
-            "aasink": {
-                "author": "Wim Taymans <wim.taymans@chello.be>",
-                "description": "An ASCII art videosink",
-                "hierarchy": [
-                    "GstAASink",
-                    "GstVideoSink",
-                    "GstBaseSink",
-                    "GstElement",
-                    "GstObject",
-                    "GInitiallyUnowned",
-                    "GObject"
-                ],
-                "klass": "Sink/Video",
-                "long-name": "ASCII art video sink",
-                "pad-templates": {
-                    "sink": {
-                        "caps": "video/x-raw:\n         format: I420\n          width: [ 1, 2147483647 ]\n         height: [ 1, 2147483647 ]\n      framerate: [ 0/1, 2147483647/1 ]\n",
-                        "direction": "sink",
-                        "presence": "always"
-                    }
-                },
-                "properties": {
-                    "brightness": {
-                        "blurb": "brightness",
-                        "conditionally-available": false,
-                        "construct": false,
-                        "construct-only": false,
-                        "controllable": false,
-                        "default": "0",
-                        "max": "2147483647",
-                        "min": "-2147483648",
-                        "mutable": "null",
-                        "readable": true,
-                        "type": "gint",
-                        "writable": true
-                    },
-                    "contrast": {
-                        "blurb": "contrast",
-                        "conditionally-available": false,
-                        "construct": false,
-                        "construct-only": false,
-                        "controllable": false,
-                        "default": "16",
-                        "max": "2147483647",
-                        "min": "-2147483648",
-                        "mutable": "null",
-                        "readable": true,
-                        "type": "gint",
-                        "writable": true
-                    },
-                    "dither": {
-                        "blurb": "dither",
-                        "conditionally-available": false,
-                        "construct": false,
-                        "construct-only": false,
-                        "controllable": false,
-                        "default": "no-dithering (0)",
-                        "mutable": "null",
-                        "readable": true,
-                        "type": "GstAASinkDitherers",
-                        "writable": true
-                    },
-                    "driver": {
-                        "blurb": "driver",
-                        "conditionally-available": false,
-                        "construct": false,
-                        "construct-only": false,
-                        "controllable": false,
-                        "default": "x11 (0)",
-                        "mutable": "null",
-                        "readable": true,
-                        "type": "GstAASinkDrivers",
-                        "writable": true
-                    },
-                    "frame-time": {
-                        "blurb": "frame time",
-                        "conditionally-available": false,
-                        "construct": false,
-                        "construct-only": false,
-                        "controllable": false,
-                        "default": "0",
-                        "max": "2147483647",
-                        "min": "-2147483648",
-                        "mutable": "null",
-                        "readable": true,
-                        "type": "gint",
-                        "writable": false
-                    },
-                    "frames-displayed": {
-                        "blurb": "frames displayed",
-                        "conditionally-available": false,
-                        "construct": false,
-                        "construct-only": false,
-                        "controllable": false,
-                        "default": "0",
-                        "max": "2147483647",
-                        "min": "-2147483648",
-                        "mutable": "null",
-                        "readable": true,
-                        "type": "gint",
-                        "writable": false
-                    },
-                    "gamma": {
-                        "blurb": "gamma",
-                        "conditionally-available": false,
-                        "construct": false,
-                        "construct-only": false,
-                        "controllable": false,
-                        "default": "1",
-                        "max": "5",
-                        "min": "0",
-                        "mutable": "null",
-                        "readable": true,
-                        "type": "gfloat",
-                        "writable": true
-                    },
-                    "height": {
-                        "blurb": "height",
-                        "conditionally-available": false,
-                        "construct": false,
-                        "construct-only": false,
-                        "controllable": false,
-                        "default": "0",
-                        "max": "2147483647",
-                        "min": "-2147483648",
-                        "mutable": "null",
-                        "readable": true,
-                        "type": "gint",
-                        "writable": true
-                    },
-                    "inversion": {
-                        "blurb": "inversion",
-                        "conditionally-available": false,
-                        "construct": false,
-                        "construct-only": false,
-                        "controllable": false,
-                        "default": "false",
-                        "mutable": "null",
-                        "readable": true,
-                        "type": "gboolean",
-                        "writable": true
-                    },
-                    "randomval": {
-                        "blurb": "randomval",
-                        "conditionally-available": false,
-                        "construct": false,
-                        "construct-only": false,
-                        "controllable": false,
-                        "default": "0",
-                        "max": "2147483647",
-                        "min": "-2147483648",
-                        "mutable": "null",
-                        "readable": true,
-                        "type": "gint",
-                        "writable": true
-                    },
-                    "width": {
-                        "blurb": "width",
-                        "conditionally-available": false,
-                        "construct": false,
-                        "construct-only": false,
-                        "controllable": false,
-                        "default": "0",
-                        "max": "2147483647",
-                        "min": "-2147483648",
-                        "mutable": "null",
-                        "readable": true,
-                        "type": "gint",
-                        "writable": true
-                    }
-                },
-                "rank": "none"
-            },
-            "aatv": {
-                "author": "Eric Marks <bigmarkslp@gmail.com>",
-                "description": "ASCII art effect",
-                "hierarchy": [
-                    "GstAATv",
-                    "GstVideoFilter",
-                    "GstBaseTransform",
-                    "GstElement",
-                    "GstObject",
-                    "GInitiallyUnowned",
-                    "GObject"
-                ],
-                "klass": "Filter/Effect/Video",
-                "long-name": "aaTV effect",
-                "pad-templates": {
-                    "sink": {
-                        "caps": "video/x-raw:\n         format: { I420 }\n          width: [ 1, 2147483647 ]\n         height: [ 1, 2147483647 ]\n      framerate: [ 0/1, 2147483647/1 ]\n",
-                        "direction": "sink",
-                        "presence": "always"
-                    },
-                    "src": {
-                        "caps": "video/x-raw:\n         format: { RGBA }\n          width: [ 1, 2147483647 ]\n         height: [ 1, 2147483647 ]\n      framerate: [ 0/1, 2147483647/1 ]\n",
-                        "direction": "src",
-                        "presence": "always"
-                    }
-                },
-                "properties": {
-                    "brightness": {
-                        "blurb": "Brightness",
-                        "conditionally-available": false,
-                        "construct": false,
-                        "construct-only": false,
-                        "controllable": false,
-                        "default": "0",
-                        "max": "255",
-                        "min": "-255",
-                        "mutable": "null",
-                        "readable": true,
-                        "type": "gint",
-                        "writable": true
-                    },
-                    "brightness-actual": {
-                        "blurb": "Actual calculated foreground pixel fill percentage",
-                        "conditionally-available": false,
-                        "construct": false,
-                        "construct-only": false,
-                        "controllable": false,
-                        "default": "0.35",
-                        "max": "1",
-                        "min": "0",
-                        "mutable": "null",
-                        "readable": true,
-                        "type": "gfloat",
-                        "writable": false
-                    },
-                    "brightness-auto": {
-                        "blurb": "Automatically adjust brightness based on the previous frame's foreground pixel fill percentage",
-                        "conditionally-available": false,
-                        "construct": false,
-                        "construct-only": false,
-                        "controllable": false,
-                        "default": "true",
-                        "mutable": "null",
-                        "readable": true,
-                        "type": "gboolean",
-                        "writable": true
-                    },
-                    "brightness-max": {
-                        "blurb": "Maximum target foreground pixel fill percentage for automatic brightness control",
-                        "conditionally-available": false,
-                        "construct": false,
-                        "construct-only": false,
-                        "controllable": false,
-                        "default": "0.4",
-                        "max": "1",
-                        "min": "0",
-                        "mutable": "null",
-                        "readable": true,
-                        "type": "gfloat",
-                        "writable": true
-                    },
-                    "brightness-min": {
-                        "blurb": "Minimum target foreground pixel fill percentage for automatic brightness control",
-                        "conditionally-available": false,
-                        "construct": false,
-                        "construct-only": false,
-                        "controllable": false,
-                        "default": "0.3",
-                        "max": "1",
-                        "min": "0",
-                        "mutable": "null",
-                        "readable": true,
-                        "type": "gfloat",
-                        "writable": true
-                    },
-                    "color-background": {
-                        "blurb": "Color to use as the background for the ASCII text (big-endian ARGB).",
-                        "conditionally-available": false,
-                        "construct": false,
-                        "construct-only": false,
-                        "controllable": true,
-                        "default": "-16777216",
-                        "max": "-1",
-                        "min": "0",
-                        "mutable": "null",
-                        "readable": true,
-                        "type": "guint",
-                        "writable": true
-                    },
-                    "color-rain": {
-                        "blurb": "Automatically sets color-rain-bold, color-rain-normal, and color-rain-dim with progressively dimmer values (big-endian ARGB).",
-                        "conditionally-available": false,
-                        "construct": false,
-                        "construct-only": false,
-                        "controllable": true,
-                        "default": "-16711936",
-                        "max": "-1",
-                        "min": "0",
-                        "mutable": "null",
-                        "readable": true,
-                        "type": "guint",
-                        "writable": true
-                    },
-                    "color-rain-bold": {
-                        "blurb": "Sets the brightest color to use for foreground ASCII text rain overlays (big-endian ARGB).",
-                        "conditionally-available": false,
-                        "construct": false,
-                        "construct-only": false,
-                        "controllable": true,
-                        "default": "-16711936",
-                        "max": "-1",
-                        "min": "0",
-                        "mutable": "null",
-                        "readable": true,
-                        "type": "guint",
-                        "writable": true
-                    },
-                    "color-rain-dim": {
-                        "blurb": "Sets the dimmest brightness color to use for foreground ASCII text rain overlays (big-endian ARGB).",
-                        "conditionally-available": false,
-                        "construct": false,
-                        "construct-only": false,
-                        "controllable": true,
-                        "default": "-16761088",
-                        "max": "-1",
-                        "min": "0",
-                        "mutable": "null",
-                        "readable": true,
-                        "type": "guint",
-                        "writable": true
-                    },
-                    "color-rain-normal": {
-                        "blurb": "Sets the normal brightness color to use for foreground ASCII text rain overlays (big-endian ARGB).",
-                        "conditionally-available": false,
-                        "construct": false,
-                        "construct-only": false,
-                        "controllable": true,
-                        "default": "-16744704",
-                        "max": "-1",
-                        "min": "0",
-                        "mutable": "null",
-                        "readable": true,
-                        "type": "guint",
-                        "writable": true
-                    },
-                    "color-text": {
-                        "blurb": "Automatically sets color-test-bold, color-text-normal, and color-text-dim with progressively dimmer values (big-endian ARGB).",
-                        "conditionally-available": false,
-                        "construct": false,
-                        "construct-only": false,
-                        "controllable": true,
-                        "default": "-1",
-                        "max": "-1",
-                        "min": "0",
-                        "mutable": "null",
-                        "readable": true,
-                        "type": "guint",
-                        "writable": true
-                    },
-                    "color-text-bold": {
-                        "blurb": "Sets the brightest color to use for foreground ASCII text (big-endian ARGB).",
-                        "conditionally-available": false,
-                        "construct": false,
-                        "construct-only": false,
-                        "controllable": true,
-                        "default": "-1",
-                        "max": "-1",
-                        "min": "0",
-                        "mutable": "null",
-                        "readable": true,
-                        "type": "guint",
-                        "writable": true
-                    },
-                    "color-text-dim": {
-                        "blurb": "Sets the dimmest brightness color to use for foreground ASCII text (big-endian ARGB).",
-                        "conditionally-available": false,
-                        "construct": false,
-                        "construct-only": false,
-                        "controllable": true,
-                        "default": "-12632257",
-                        "max": "-1",
-                        "min": "0",
-                        "mutable": "null",
-                        "readable": true,
-                        "type": "guint",
-                        "writable": true
-                    },
-                    "color-text-normal": {
-                        "blurb": "Sets the normal brightness color to use for foreground ASCII text (big-endian ARGB).",
-                        "conditionally-available": false,
-                        "construct": false,
-                        "construct-only": false,
-                        "controllable": true,
-                        "default": "-8421505",
-                        "max": "-1",
-                        "min": "0",
-                        "mutable": "null",
-                        "readable": true,
-                        "type": "guint",
-                        "writable": true
-                    },
-                    "contrast": {
-                        "blurb": "Contrast",
-                        "conditionally-available": false,
-                        "construct": false,
-                        "construct-only": false,
-                        "controllable": false,
-                        "default": "0",
-                        "max": "255",
-                        "min": "0",
-                        "mutable": "null",
-                        "readable": true,
-                        "type": "gint",
-                        "writable": true
-                    },
-                    "dither": {
-                        "blurb": "Add noise to more closely approximate gray levels.",
-                        "conditionally-available": false,
-                        "construct": false,
-                        "construct-only": false,
-                        "controllable": false,
-                        "default": "no-dithering (0)",
-                        "mutable": "null",
-                        "readable": true,
-                        "type": "GstAATvDitherers",
-                        "writable": true
-                    },
-                    "font": {
-                        "blurb": "AAlib Font",
-                        "conditionally-available": false,
-                        "construct": false,
-                        "construct-only": false,
-                        "controllable": false,
-                        "default": "Standard-vga-8x8-font (0)",
-                        "mutable": "null",
-                        "readable": true,
-                        "type": "GstAATvFonts",
-                        "writable": true
-                    },
-                    "gamma": {
-                        "blurb": "Gamma correction",
-                        "conditionally-available": false,
-                        "construct": false,
-                        "construct-only": false,
-                        "controllable": false,
-                        "default": "1",
-                        "max": "5",
-                        "min": "0",
-                        "mutable": "null",
-                        "readable": true,
-                        "type": "gfloat",
-                        "writable": true
-                    },
-                    "height": {
-                        "blurb": "Height of the ASCII canvas",
-                        "conditionally-available": false,
-                        "construct": false,
-                        "construct-only": false,
-                        "controllable": false,
-                        "default": "24",
-                        "max": "2147483647",
-                        "min": "0",
-                        "mutable": "null",
-                        "readable": true,
-                        "type": "gint",
-                        "writable": true
-                    },
-                    "rain-delay-max": {
-                        "blurb": "Maximum frame delay between rain motion",
-                        "conditionally-available": false,
-                        "construct": false,
-                        "construct-only": false,
-                        "controllable": false,
-                        "default": "3",
-                        "max": "2147483647",
-                        "min": "0",
-                        "mutable": "null",
-                        "readable": true,
-                        "type": "gint",
-                        "writable": true
-                    },
-                    "rain-delay-min": {
-                        "blurb": "Minimum frame delay between rain motion",
-                        "conditionally-available": false,
-                        "construct": false,
-                        "construct-only": false,
-                        "controllable": false,
-                        "default": "0",
-                        "max": "2147483647",
-                        "min": "0",
-                        "mutable": "null",
-                        "readable": true,
-                        "type": "gint",
-                        "writable": true
-                    },
-                    "rain-length-max": {
-                        "blurb": "Maximum length of a rain",
-                        "conditionally-available": false,
-                        "construct": false,
-                        "construct-only": false,
-                        "controllable": false,
-                        "default": "30",
-                        "max": "2147483647",
-                        "min": "0",
-                        "mutable": "null",
-                        "readable": true,
-                        "type": "gint",
-                        "writable": true
-                    },
-                    "rain-length-min": {
-                        "blurb": "Minimum length of a rain",
-                        "conditionally-available": false,
-                        "construct": false,
-                        "construct-only": false,
-                        "controllable": false,
-                        "default": "4",
-                        "max": "2147483647",
-                        "min": "0",
-                        "mutable": "null",
-                        "readable": true,
-                        "type": "gint",
-                        "writable": true
-                    },
-                    "rain-mode": {
-                        "blurb": "Set the direction of raindrops",
-                        "conditionally-available": false,
-                        "construct": false,
-                        "construct-only": false,
-                        "controllable": false,
-                        "default": "none (0)",
-                        "mutable": "null",
-                        "readable": true,
-                        "type": "GstAATvRainModes",
-                        "writable": true
-                    },
-                    "rain-spawn-rate": {
-                        "blurb": "Percentage chance for a raindrop to spawn",
-                        "conditionally-available": false,
-                        "construct": false,
-                        "construct-only": false,
-                        "controllable": false,
-                        "default": "0.2",
-                        "max": "1",
-                        "min": "0",
-                        "mutable": "null",
-                        "readable": true,
-                        "type": "gfloat",
-                        "writable": true
-                    },
-                    "randomval": {
-                        "blurb": "Adds a random value in the range (-randomval/2,ranomval/2) to each pixel during rendering",
-                        "conditionally-available": false,
-                        "construct": false,
-                        "construct-only": false,
-                        "controllable": false,
-                        "default": "0",
-                        "max": "255",
-                        "min": "0",
-                        "mutable": "null",
-                        "readable": true,
-                        "type": "gint",
-                        "writable": true
-                    },
-                    "width": {
-                        "blurb": "Width of the ASCII canvas",
-                        "conditionally-available": false,
-                        "construct": false,
-                        "construct-only": false,
-                        "controllable": false,
-                        "default": "80",
-                        "max": "2147483647",
-                        "min": "0",
-                        "mutable": "null",
-                        "readable": true,
-                        "type": "gint",
-                        "writable": true
-                    }
-                },
-                "rank": "none"
-            }
-        },
-        "filename": "gstaasink",
-        "license": "LGPL",
-        "other-types": {
-            "GstAASinkDitherers": {
-                "kind": "enum",
-                "values": [
-                    {
-                        "desc": "no dithering",
-                        "name": "no-dithering",
-                        "value": "0"
-                    },
-                    {
-                        "desc": "error-distribution",
-                        "name": "error-distribution",
-                        "value": "1"
-                    },
-                    {
-                        "desc": "floyd-steelberg dithering",
-                        "name": "floyd-steelberg-dithering",
-                        "value": "2"
-                    }
-                ]
-            },
-            "GstAASinkDrivers": {
-                "kind": "enum",
-                "values": [
-                    {
-                        "desc": "X11 driver 1.1",
-                        "name": "x11",
-                        "value": "0"
-                    },
-                    {
-                        "desc": "Linux pc console driver 1.0",
-                        "name": "linux",
-                        "value": "1"
-                    },
-                    {
-                        "desc": "Slang driver 1.0",
-                        "name": "slang",
-                        "value": "2"
-                    },
-                    {
-                        "desc": "Curses driver 1.0",
-                        "name": "curses",
-                        "value": "3"
-                    },
-                    {
-                        "desc": "Standard output driver",
-                        "name": "stdout",
-                        "value": "4"
-                    },
-                    {
-                        "desc": "Standard error driver",
-                        "name": "stderr",
-                        "value": "5"
-                    }
-                ]
-            },
-            "GstAATvDitherers": {
-                "kind": "enum",
-                "values": [
-                    {
-                        "desc": "no dithering",
-                        "name": "no-dithering",
-                        "value": "0"
-                    },
-                    {
-                        "desc": "error-distribution",
-                        "name": "error-distribution",
-                        "value": "1"
-                    },
-                    {
-                        "desc": "floyd-steelberg dithering",
-                        "name": "floyd-steelberg-dithering",
-                        "value": "2"
-                    }
-                ]
-            },
-            "GstAATvFonts": {
-                "kind": "enum",
-                "values": [
-                    {
-                        "desc": "vga8",
-                        "name": "Standard-vga-8x8-font",
-                        "value": "0"
-                    },
-                    {
-                        "desc": "vga9",
-                        "name": "Standard-vga-8x9-font",
-                        "value": "1"
-                    },
-                    {
-                        "desc": "mda14",
-                        "name": "Standard-mda/vga-8x14-font",
-                        "value": "2"
-                    },
-                    {
-                        "desc": "vga16",
-                        "name": "Standard-vga-8x16-font",
-                        "value": "3"
-                    },
-                    {
-                        "desc": "X8x13",
-                        "name": "X-8x13-font",
-                        "value": "4"
-                    },
-                    {
-                        "desc": "X8x13bold",
-                        "name": "X-8x13bold-font",
-                        "value": "5"
-                    },
-                    {
-                        "desc": "X8x16",
-                        "name": "Standard-X-8x16-font",
-                        "value": "6"
-                    },
-                    {
-                        "desc": "line",
-                        "name": "line-Font-8x8",
-                        "value": "7"
-                    },
-                    {
-                        "desc": "vgagl8",
-                        "name": "Font-8x8-from-vgagl",
-                        "value": "8"
-                    },
-                    {
-                        "desc": "courier",
-                        "name": "Adobe-courier",
-                        "value": "9"
-                    }
-                ]
-            },
-            "GstAATvRainModes": {
-                "kind": "enum",
-                "values": [
-                    {
-                        "desc": "No Rain",
-                        "name": "none",
-                        "value": "0"
-                    },
-                    {
-                        "desc": "Rain Down",
-                        "name": "down",
-                        "value": "1"
-                    },
-                    {
-                        "desc": "Rain Up",
-                        "name": "up",
-                        "value": "2"
-                    },
-                    {
-                        "desc": "Rain Left",
-                        "name": "left",
-                        "value": "3"
-                    },
-                    {
-                        "desc": "Rain Right",
-                        "name": "right",
-                        "value": "4"
-                    }
-                ]
-            }
-        },
-        "package": "GStreamer Good Plug-ins",
-        "source": "gst-plugins-good",
-        "tracers": {},
-        "url": "Unknown package origin"
-    },
     "adaptivedemux2": {
         "description": "Adaptive Streaming 2 plugin",
         "elements": {
@@ -1706,7 +960,8 @@
                         "writable": true
                     }
                 },
-                "rank": "none"
+                "rank": "none",
+                "untrusted-aware": "true"
             }
         },
         "filename": "gstalpha",
@@ -1773,7 +1028,8 @@
                     }
                 },
                 "properties": {},
-                "rank": "none"
+                "rank": "none",
+                "untrusted-aware": "true"
             }
         },
         "filename": "gstalphacolor",
@@ -2079,7 +1335,8 @@
                         "writable": true
                     }
                 },
-                "rank": "none"
+                "rank": "none",
+                "untrusted-aware": "true"
             },
             "audiochebband": {
                 "author": "Sebastian Dröge <sebastian.droege@collabora.co.uk>",
@@ -2192,7 +1449,8 @@
                         "writable": true
                     }
                 },
-                "rank": "none"
+                "rank": "none",
+                "untrusted-aware": "true"
             },
             "audiocheblimit": {
                 "author": "Sebastian Dröge <sebastian.droege@collabora.co.uk>",
@@ -2291,7 +1549,8 @@
                         "writable": true
                     }
                 },
-                "rank": "none"
+                "rank": "none",
+                "untrusted-aware": "true"
             },
             "audiodynamic": {
                 "author": "Sebastian Dröge <slomo@circular-chaos.org>",
@@ -2373,7 +1632,8 @@
                         "writable": true
                     }
                 },
-                "rank": "none"
+                "rank": "none",
+                "untrusted-aware": "true"
             },
             "audioecho": {
                 "author": "Sebastian Dröge <sebastian.droege@collabora.co.uk>",
@@ -2485,7 +1745,8 @@
                         "writable": true
                     }
                 },
-                "rank": "none"
+                "rank": "none",
+                "untrusted-aware": "true"
             },
             "audiofirfilter": {
                 "author": "Sebastian Dröge <sebastian.droege@collabora.co.uk>",
@@ -2553,7 +1814,8 @@
                         "return-type": "void",
                         "when": "last"
                     }
-                }
+                },
+                "untrusted-aware": "true"
             },
             "audioiirfilter": {
                 "author": "Sebastian Dröge <sebastian.droege@collabora.co.uk>",
@@ -2618,7 +1880,8 @@
                         "return-type": "void",
                         "when": "last"
                     }
-                }
+                },
+                "untrusted-aware": "true"
             },
             "audioinvert": {
                 "author": "Sebastian Dröge <slomo@circular-chaos.org>",
@@ -2662,7 +1925,8 @@
                         "writable": true
                     }
                 },
-                "rank": "none"
+                "rank": "none",
+                "untrusted-aware": "true"
             },
             "audiokaraoke": {
                 "author": "Wim Taymans <wim.taymans@gmail.com>",
@@ -2748,7 +2012,8 @@
                         "writable": true
                     }
                 },
-                "rank": "none"
+                "rank": "none",
+                "untrusted-aware": "true"
             },
             "audiopanorama": {
                 "author": "Stefan Kost <ensonic@users.sf.net>",
@@ -2803,7 +2068,8 @@
                         "writable": true
                     }
                 },
-                "rank": "none"
+                "rank": "none",
+                "untrusted-aware": "true"
             },
             "audiowsincband": {
                 "author": "Thomas Vander Stichele <thomas at apestaart dot org>, Steven W. Smith, Dreamlab Technologies Ltd. <mathis.hofer@dreamlab.net>, Sebastian Dröge <sebastian.droege@collabora.co.uk>",
@@ -2900,7 +2166,8 @@
                         "writable": true
                     }
                 },
-                "rank": "none"
+                "rank": "none",
+                "untrusted-aware": "true"
             },
             "audiowsinclimit": {
                 "author": "Thomas Vander Stichele <thomas at apestaart dot org>, Steven W. Smith, Dreamlab Technologies Ltd. <mathis.hofer@dreamlab.net>, Sebastian Dröge <sebastian.droege@collabora.co.uk>",
@@ -2983,7 +2250,8 @@
                         "writable": true
                     }
                 },
-                "rank": "none"
+                "rank": "none",
+                "untrusted-aware": "true"
             },
             "scaletempo": {
                 "author": "Rov Juvano <rovjuvano@users.sourceforge.net>",
@@ -3080,7 +2348,8 @@
                         "writable": true
                     }
                 },
-                "rank": "none"
+                "rank": "none",
+                "untrusted-aware": "true"
             },
             "stereo": {
                 "author": "Erik Walthinsen <omega@cse.ogi.edu>",
@@ -3136,7 +2405,8 @@
                         "writable": true
                     }
                 },
-                "rank": "none"
+                "rank": "none",
+                "untrusted-aware": "true"
             }
         },
         "filename": "gstaudiofx",
@@ -3635,7 +2905,7 @@
                         "presence": "always"
                     },
                     "src": {
-                        "caps": "audio/x-wavpack:\n          depth: [ 1, 32 ]\n       channels: [ 1, 8 ]\n           rate: [ 6000, 192000 ]\n         framed: true\naudio/x-wavpack-correction:\n         framed: true\n",
+                        "caps": "audio/x-wavpack:\n          depth: [ 1, 32 ]\n          width: { (int)8, (int)16, (int)24, (int)32 }\n       channels: [ 1, 4096 ]\n           rate: [ 6000, 2147483647 ]\n    sample-type: { (string)int, (string)float, (string)dsd }\n         framed: true\naudio/x-wavpack-correction:\n         framed: true\n",
                         "direction": "src",
                         "presence": "always"
                     }
@@ -4008,268 +3278,6 @@
         "tracers": {},
         "url": "Unknown package origin"
     },
-    "cacasink": {
-        "description": "Colored ASCII Art video sink & filter",
-        "elements": {
-            "cacasink": {
-                "author": "Zeeshan Ali <zak147@yahoo.com>",
-                "description": "A colored ASCII art videosink",
-                "hierarchy": [
-                    "GstCACASink",
-                    "GstBaseSink",
-                    "GstElement",
-                    "GstObject",
-                    "GInitiallyUnowned",
-                    "GObject"
-                ],
-                "klass": "Sink/Video",
-                "long-name": "A colored ASCII art video sink",
-                "pad-templates": {
-                    "sink": {
-                        "caps": "video/x-raw:\n         format: { RGB, BGR, RGBx, xRGB, BGRx, xBGR, RGB16, RGB15 }\n          width: [ 1, 2147483647 ]\n         height: [ 1, 2147483647 ]\n      framerate: [ 0/1, 2147483647/1 ]\n",
-                        "direction": "sink",
-                        "presence": "always"
-                    }
-                },
-                "properties": {
-                    "anti-aliasing": {
-                        "blurb": "Enables Anti-Aliasing",
-                        "conditionally-available": false,
-                        "construct": false,
-                        "construct-only": false,
-                        "controllable": false,
-                        "default": "true",
-                        "mutable": "null",
-                        "readable": true,
-                        "type": "gboolean",
-                        "writable": true
-                    },
-                    "dither": {
-                        "blurb": "Set type of Dither",
-                        "conditionally-available": false,
-                        "construct": false,
-                        "construct-only": false,
-                        "controllable": false,
-                        "default": "none (49)",
-                        "mutable": "null",
-                        "readable": true,
-                        "type": "GstCACASinkDithering",
-                        "writable": true
-                    },
-                    "driver": {
-                        "blurb": "Output driver",
-                        "conditionally-available": false,
-                        "construct": false,
-                        "construct-only": false,
-                        "controllable": false,
-                        "default": "x11 (0)",
-                        "mutable": "null",
-                        "readable": true,
-                        "type": "GstCACASinkDriver",
-                        "writable": true
-                    },
-                    "screen-height": {
-                        "blurb": "The height of the screen",
-                        "conditionally-available": false,
-                        "construct": false,
-                        "construct-only": false,
-                        "controllable": false,
-                        "default": "25",
-                        "max": "2147483647",
-                        "min": "0",
-                        "mutable": "null",
-                        "readable": true,
-                        "type": "gint",
-                        "writable": false
-                    },
-                    "screen-width": {
-                        "blurb": "The width of the screen",
-                        "conditionally-available": false,
-                        "construct": false,
-                        "construct-only": false,
-                        "controllable": false,
-                        "default": "80",
-                        "max": "2147483647",
-                        "min": "0",
-                        "mutable": "null",
-                        "readable": true,
-                        "type": "gint",
-                        "writable": false
-                    }
-                },
-                "rank": "none"
-            },
-            "cacatv": {
-                "author": "Eric Marks <bigmarkslp@gmail.com>",
-                "description": "Colored ASCII art effect",
-                "hierarchy": [
-                    "GstCACATv",
-                    "GstVideoFilter",
-                    "GstBaseTransform",
-                    "GstElement",
-                    "GstObject",
-                    "GInitiallyUnowned",
-                    "GObject"
-                ],
-                "klass": "Filter/Effect/Video",
-                "long-name": "CacaTV effect",
-                "pad-templates": {
-                    "sink": {
-                        "caps": "video/x-raw:\n         format: { RGB, BGR, RGBx, xRGB, BGRx, xBGR, RGBA, RGB16, RGB15 }\n          width: [ 1, 2147483647 ]\n         height: [ 1, 2147483647 ]\n      framerate: [ 0/1, 2147483647/1 ]\n",
-                        "direction": "sink",
-                        "presence": "always"
-                    },
-                    "src": {
-                        "caps": "video/x-raw:\n         format: { ARGB }\n          width: [ 1, 2147483647 ]\n         height: [ 1, 2147483647 ]\n      framerate: [ 0/1, 2147483647/1 ]\n",
-                        "direction": "src",
-                        "presence": "always"
-                    }
-                },
-                "properties": {
-                    "anti-aliasing": {
-                        "blurb": "Enables Anti-Aliasing",
-                        "conditionally-available": false,
-                        "construct": false,
-                        "construct-only": false,
-                        "controllable": false,
-                        "default": "false",
-                        "mutable": "null",
-                        "readable": true,
-                        "type": "gboolean",
-                        "writable": true
-                    },
-                    "canvas-height": {
-                        "blurb": "The height of the canvas in characters",
-                        "conditionally-available": false,
-                        "construct": false,
-                        "construct-only": false,
-                        "controllable": false,
-                        "default": "24",
-                        "max": "2147483647",
-                        "min": "0",
-                        "mutable": "null",
-                        "readable": true,
-                        "type": "gint",
-                        "writable": true
-                    },
-                    "canvas-width": {
-                        "blurb": "The width of the canvas in characters",
-                        "conditionally-available": false,
-                        "construct": false,
-                        "construct-only": false,
-                        "controllable": false,
-                        "default": "80",
-                        "max": "2147483647",
-                        "min": "0",
-                        "mutable": "null",
-                        "readable": true,
-                        "type": "gint",
-                        "writable": true
-                    },
-                    "dither": {
-                        "blurb": "Set type of Dither",
-                        "conditionally-available": false,
-                        "construct": false,
-                        "construct-only": false,
-                        "controllable": false,
-                        "default": " (0)",
-                        "mutable": "null",
-                        "readable": true,
-                        "type": "GstCACATvDithering",
-                        "writable": true
-                    },
-                    "font": {
-                        "blurb": "selected libcaca font",
-                        "conditionally-available": false,
-                        "construct": false,
-                        "construct-only": false,
-                        "controllable": false,
-                        "default": "0",
-                        "max": "2147483647",
-                        "min": "0",
-                        "mutable": "null",
-                        "readable": true,
-                        "type": "gint",
-                        "writable": true
-                    }
-                },
-                "rank": "none"
-            }
-        },
-        "filename": "gstcacasink",
-        "license": "LGPL",
-        "other-types": {
-            "GstCACASinkDithering": {
-                "kind": "enum",
-                "values": [
-                    {
-                        "desc": "No dithering",
-                        "name": "none",
-                        "value": "49"
-                    },
-                    {
-                        "desc": "Ordered 2x2 Bayer dithering",
-                        "name": "2x2",
-                        "value": "50"
-                    },
-                    {
-                        "desc": "Ordered 4x4 Bayer dithering",
-                        "name": "4x4",
-                        "value": "51"
-                    },
-                    {
-                        "desc": "Ordered 8x8 Bayer dithering",
-                        "name": "8x8",
-                        "value": "52"
-                    },
-                    {
-                        "desc": "Random dithering",
-                        "name": "random",
-                        "value": "53"
-                    }
-                ]
-            },
-            "GstCACASinkDriver": {
-                "ignore-enum-members": true,
-                "kind": "enum",
-                "values": []
-            },
-            "GstCACATvDithering": {
-                "kind": "enum",
-                "values": [
-                    {
-                        "desc": "No dither_mode",
-                        "name": "none",
-                        "value": "49"
-                    },
-                    {
-                        "desc": "Ordered 2x2 Bayer dither_mode",
-                        "name": "2x2",
-                        "value": "50"
-                    },
-                    {
-                        "desc": "Ordered 4x4 Bayer dither_mode",
-                        "name": "4x4",
-                        "value": "51"
-                    },
-                    {
-                        "desc": "Ordered 8x8 Bayer dither_mode",
-                        "name": "8x8",
-                        "value": "52"
-                    },
-                    {
-                        "desc": "Random dither_mode",
-                        "name": "random",
-                        "value": "53"
-                    }
-                ]
-            }
-        },
-        "package": "GStreamer Good Plug-ins",
-        "source": "gst-plugins-good",
-        "tracers": {},
-        "url": "Unknown package origin"
-    },
     "cairo": {
         "description": "Cairo-based elements",
         "elements": {
@@ -4340,7 +3348,8 @@
                         ],
                         "return-type": "void"
                     }
-                }
+                },
+                "untrusted-aware": "true"
             }
         },
         "filename": "gstcairo",
@@ -4460,7 +3469,8 @@
                         "writable": true
                     }
                 },
-                "rank": "none"
+                "rank": "none",
+                "untrusted-aware": "true"
             }
         },
         "filename": "gstcutter",
@@ -4475,7 +3485,7 @@
         "description": "elements for testing and debugging",
         "elements": {
             "breakmydata": {
-                "author": "Benjamin Otte <otte@gnome>",
+                "author": "Benjamin Otte <otte@gnome.org>",
                 "description": "randomly change data in the stream",
                 "hierarchy": [
                     "GstBreakMyData",
@@ -4705,7 +3715,8 @@
                         "writable": true
                     }
                 },
-                "rank": "none"
+                "rank": "none",
+                "untrusted-aware": "true"
             },
             "progressreport": {
                 "author": "Jan Schmidt <thaytan@mad.scientist.com>",
@@ -5044,7 +4055,7 @@
                 "rank": "none"
             },
             "testsink": {
-                "author": "Benjamin Otte <otte@gnome>",
+                "author": "Benjamin Otte <otte@gnome.org>",
                 "description": "perform a number of tests",
                 "hierarchy": [
                     "GstTest",
@@ -5201,12 +4212,12 @@
                 "long-name": "Deinterlacer",
                 "pad-templates": {
                     "sink": {
-                        "caps": "video/x-raw:\n         format: { AYUV, ARGB, ABGR, RGBA, BGRA, Y444, xRGB, xBGR, RGBx, BGRx, RGB, BGR, YUY2, YVYU, UYVY, Y42B, I420, YV12, Y41B, NV12, NV21, Y444_16LE, Y444_12LE, Y444_10LE, I422_12LE, I422_10LE, I420_12LE, I420_10LE }\n          width: [ 1, 2147483647 ]\n         height: [ 1, 2147483647 ]\n      framerate: [ 0/1, 2147483647/1 ]\n\nvideo/x-raw(ANY):\n         format: { DMA_DRM, A444_16LE, A444_16BE, Y416_LE, AYUV64, RGBA64_LE, ARGB64, ARGB64_LE, BGRA64_LE, ABGR64_LE, Y416_BE, RGBA64_BE, ARGB64_BE, BGRA64_BE, ABGR64_BE, A422_16LE, A422_16BE, A420_16LE, A420_16BE, A444_12LE, GBRA_12LE, A444_12BE, GBRA_12BE, Y412_LE, Y412_BE, A422_12LE, A422_12BE, A420_12LE, A420_12BE, A444_10LE, GBRA_10LE, A444_10BE, GBRA_10BE, A422_10LE, A422_10BE, A420_10LE, A420_10BE, BGR10A2_LE, RGB10A2_LE, Y410, A444, GBRA, AYUV, VUYA, RGBA, RBGA, ARGB, BGRA, ABGR, A422, A420, AV12, Y444_16LE, GBR_16LE, Y444_16BE, GBR_16BE, Y216_LE, Y216_BE, v216, P016_LE, P016_BE, Y444_12LE, GBR_12LE, Y444_12BE, GBR_12BE, I422_12LE, I422_12BE, Y212_LE, Y212_BE, I420_12LE, I420_12BE, P012_LE, P012_BE, Y444_10LE, GBR_10LE, Y444_10BE, GBR_10BE, BGR10x2_LE, RGB10x2_LE, r210, I422_10LE, I422_10BE, NV16_10LE40, NV16_10LE32, Y210, UYVP, v210, I420_10LE, I420_10BE, P010_10LE, NV12_10LE40, NV12_10LE32, P010_10BE, MT2110R, MT2110T, NV12_10BE_8L128, NV12_10LE40_4L4, Y444, BGRP, GBR, RGBP, NV24, v308, IYU2, RGBx, xRGB, BGRx, xBGR, RGB, BGR, Y42B, NV16, NV61, YUY2, YVYU, UYVY, VYUY, I420, YV12, NV12, NV21, NV12_16L32S, NV12_32L32, NV12_4L4, NV12_64Z32, NV12_8L128, Y41B, IYU1, YUV9, YVU9, BGR16, RGB16, BGR15, RGB15, RGB8P, GRAY16_LE, GRAY16_BE, GRAY10_LE16, GRAY10_LE32, GRAY8 }\n          width: [ 1, 2147483647 ]\n         height: [ 1, 2147483647 ]\n      framerate: [ 0/1, 2147483647/1 ]\n",
+                        "caps": "video/x-raw:\n         format: { AYUV, ARGB, ABGR, RGBA, BGRA, Y444, xRGB, xBGR, RGBx, BGRx, RGB, BGR, YUY2, YVYU, UYVY, Y42B, I420, YV12, Y41B, NV12, NV21, Y444_16LE, Y444_12LE, Y444_10LE, I422_12LE, I422_10LE, I420_12LE, I420_10LE }\n          width: [ 1, 2147483647 ]\n         height: [ 1, 2147483647 ]\n      framerate: [ 0/1, 2147483647/1 ]\n\nvideo/x-raw(ANY):\n         format: { AHARDWARE_BUFFER, DMA_DRM, AYUV_F32, RGBA_F32LE, ARGB_F32, RGBA_F32BE, A444_16LE, A444_16BE, Y416_LE, AYUV64, RGBA64_LE, ARGB64, ARGB64_LE, BGRA64_LE, ABGR64_LE, Y416_BE, RGBA64_BE, ARGB64_BE, BGRA64_BE, ABGR64_BE, A422_16LE, A422_16BE, A420_16LE, A420_16BE, A444_12LE, GBRA_12LE, A444_12BE, GBRA_12BE, Y412_LE, Y412_BE, A422_12LE, A422_12BE, A420_12LE, A420_12BE, RGBA_F16LE, RGBA_F16BE, A444_10LE, GBRA_10LE, A444_10BE, GBRA_10BE, A422_10LE, A422_10BE, A420_10LE, A420_10BE, BGR10A2_LE, RGB10A2_LE, Y410, A444, GBRA, AYUV, VUYA, RGBA, RBGA, ARGB, BGRA, ABGR, A422, A420, AV12, RGBP_F32LE, RGBP_F32BE, RGB_F32LE, RGB_F32BE, Y444_16LE, GBR_16LE, Y444_16BE, GBR_16BE, Y216_LE, Y216_BE, v216, P016_LE, P016_BE, Y444_12LE, GBR_12LE, Y444_12BE, GBR_12BE, I422_12LE, I422_12BE, Y212_LE, Y212_BE, I420_12LE, I420_12BE, P012_LE, P012_BE, RGBP_F16LE, RGBP_F16BE, RGB_F16LE, RGB_F16BE, Y444_10LE, GBR_10LE, Y444_10BE, GBR_10BE, BGR10x2_LE, RGB10x2_LE, r210, I422_10LE, I422_10BE, NV16_10LE40, NV16_10LE32, Y210, UYVP, v210, I420_10LE, I420_10BE, P010_10LE, NV12_10LE40, NV12_10LE32, P010_10BE, MT2110R, MT2110T, NV12_10BE_8L128, NV12_10LE40_4L4, Y444, BGRP, GBR, RGBP, NV24, v308, IYU2, RGBx, xRGB, BGRx, xBGR, RGB, BGR, Y42B, NV16, NV61, YUY2, YVYU, UYVY, VYUY, I420, YV12, NV12, NV21, NV12_16L32S, NV12_32L32, NV12_4L4, NV12_64Z32, NV12_8L128, Y41B, IYU1, YUV9, YVU9, BGR16, RGB16, BGR15, RGB15, RGB8P, GRAY_F32LE, GRAY_F32BE, GRAY16_LE, GRAY16_BE, GRAY_F16LE, GRAY_F16BE, GRAY10_LE16, GRAY10_LE32, GRAY8 }\n          width: [ 1, 2147483647 ]\n         height: [ 1, 2147483647 ]\n      framerate: [ 0/1, 2147483647/1 ]\n",
                         "direction": "sink",
                         "presence": "always"
                     },
                     "src": {
-                        "caps": "video/x-raw:\n         format: { AYUV, ARGB, ABGR, RGBA, BGRA, Y444, xRGB, xBGR, RGBx, BGRx, RGB, BGR, YUY2, YVYU, UYVY, Y42B, I420, YV12, Y41B, NV12, NV21, Y444_16LE, Y444_12LE, Y444_10LE, I422_12LE, I422_10LE, I420_12LE, I420_10LE }\n          width: [ 1, 2147483647 ]\n         height: [ 1, 2147483647 ]\n      framerate: [ 0/1, 2147483647/1 ]\n\nvideo/x-raw(ANY):\n         format: { DMA_DRM, A444_16LE, A444_16BE, Y416_LE, AYUV64, RGBA64_LE, ARGB64, ARGB64_LE, BGRA64_LE, ABGR64_LE, Y416_BE, RGBA64_BE, ARGB64_BE, BGRA64_BE, ABGR64_BE, A422_16LE, A422_16BE, A420_16LE, A420_16BE, A444_12LE, GBRA_12LE, A444_12BE, GBRA_12BE, Y412_LE, Y412_BE, A422_12LE, A422_12BE, A420_12LE, A420_12BE, A444_10LE, GBRA_10LE, A444_10BE, GBRA_10BE, A422_10LE, A422_10BE, A420_10LE, A420_10BE, BGR10A2_LE, RGB10A2_LE, Y410, A444, GBRA, AYUV, VUYA, RGBA, RBGA, ARGB, BGRA, ABGR, A422, A420, AV12, Y444_16LE, GBR_16LE, Y444_16BE, GBR_16BE, Y216_LE, Y216_BE, v216, P016_LE, P016_BE, Y444_12LE, GBR_12LE, Y444_12BE, GBR_12BE, I422_12LE, I422_12BE, Y212_LE, Y212_BE, I420_12LE, I420_12BE, P012_LE, P012_BE, Y444_10LE, GBR_10LE, Y444_10BE, GBR_10BE, BGR10x2_LE, RGB10x2_LE, r210, I422_10LE, I422_10BE, NV16_10LE40, NV16_10LE32, Y210, UYVP, v210, I420_10LE, I420_10BE, P010_10LE, NV12_10LE40, NV12_10LE32, P010_10BE, MT2110R, MT2110T, NV12_10BE_8L128, NV12_10LE40_4L4, Y444, BGRP, GBR, RGBP, NV24, v308, IYU2, RGBx, xRGB, BGRx, xBGR, RGB, BGR, Y42B, NV16, NV61, YUY2, YVYU, UYVY, VYUY, I420, YV12, NV12, NV21, NV12_16L32S, NV12_32L32, NV12_4L4, NV12_64Z32, NV12_8L128, Y41B, IYU1, YUV9, YVU9, BGR16, RGB16, BGR15, RGB15, RGB8P, GRAY16_LE, GRAY16_BE, GRAY10_LE16, GRAY10_LE32, GRAY8 }\n          width: [ 1, 2147483647 ]\n         height: [ 1, 2147483647 ]\n      framerate: [ 0/1, 2147483647/1 ]\n",
+                        "caps": "video/x-raw:\n         format: { AYUV, ARGB, ABGR, RGBA, BGRA, Y444, xRGB, xBGR, RGBx, BGRx, RGB, BGR, YUY2, YVYU, UYVY, Y42B, I420, YV12, Y41B, NV12, NV21, Y444_16LE, Y444_12LE, Y444_10LE, I422_12LE, I422_10LE, I420_12LE, I420_10LE }\n          width: [ 1, 2147483647 ]\n         height: [ 1, 2147483647 ]\n      framerate: [ 0/1, 2147483647/1 ]\n\nvideo/x-raw(ANY):\n         format: { AHARDWARE_BUFFER, DMA_DRM, AYUV_F32, RGBA_F32LE, ARGB_F32, RGBA_F32BE, A444_16LE, A444_16BE, Y416_LE, AYUV64, RGBA64_LE, ARGB64, ARGB64_LE, BGRA64_LE, ABGR64_LE, Y416_BE, RGBA64_BE, ARGB64_BE, BGRA64_BE, ABGR64_BE, A422_16LE, A422_16BE, A420_16LE, A420_16BE, A444_12LE, GBRA_12LE, A444_12BE, GBRA_12BE, Y412_LE, Y412_BE, A422_12LE, A422_12BE, A420_12LE, A420_12BE, RGBA_F16LE, RGBA_F16BE, A444_10LE, GBRA_10LE, A444_10BE, GBRA_10BE, A422_10LE, A422_10BE, A420_10LE, A420_10BE, BGR10A2_LE, RGB10A2_LE, Y410, A444, GBRA, AYUV, VUYA, RGBA, RBGA, ARGB, BGRA, ABGR, A422, A420, AV12, RGBP_F32LE, RGBP_F32BE, RGB_F32LE, RGB_F32BE, Y444_16LE, GBR_16LE, Y444_16BE, GBR_16BE, Y216_LE, Y216_BE, v216, P016_LE, P016_BE, Y444_12LE, GBR_12LE, Y444_12BE, GBR_12BE, I422_12LE, I422_12BE, Y212_LE, Y212_BE, I420_12LE, I420_12BE, P012_LE, P012_BE, RGBP_F16LE, RGBP_F16BE, RGB_F16LE, RGB_F16BE, Y444_10LE, GBR_10LE, Y444_10BE, GBR_10BE, BGR10x2_LE, RGB10x2_LE, r210, I422_10LE, I422_10BE, NV16_10LE40, NV16_10LE32, Y210, UYVP, v210, I420_10LE, I420_10BE, P010_10LE, NV12_10LE40, NV12_10LE32, P010_10BE, MT2110R, MT2110T, NV12_10BE_8L128, NV12_10LE40_4L4, Y444, BGRP, GBR, RGBP, NV24, v308, IYU2, RGBx, xRGB, BGRx, xBGR, RGB, BGR, Y42B, NV16, NV61, YUY2, YVYU, UYVY, VYUY, I420, YV12, NV12, NV21, NV12_16L32S, NV12_32L32, NV12_4L4, NV12_64Z32, NV12_8L128, Y41B, IYU1, YUV9, YVU9, BGR16, RGB16, BGR15, RGB15, RGB8P, GRAY_F32LE, GRAY_F32BE, GRAY16_LE, GRAY16_BE, GRAY_F16LE, GRAY_F16BE, GRAY10_LE16, GRAY10_LE32, GRAY8 }\n          width: [ 1, 2147483647 ]\n         height: [ 1, 2147483647 ]\n      framerate: [ 0/1, 2147483647/1 ]\n",
                         "direction": "src",
                         "presence": "always"
                     }
@@ -5297,7 +4308,8 @@
                         "writable": true
                     }
                 },
-                "rank": "none"
+                "rank": "none",
+                "untrusted-aware": "true"
             }
         },
         "filename": "gstdeinterlace",
@@ -5501,6 +4513,34 @@
                         "readable": true,
                         "type": "guint",
                         "writable": true
+                    },
+                    "min-inter-digit-interval": {
+                        "blurb": "The minimum inter digit arrival, in milliseconds",
+                        "conditionally-available": false,
+                        "construct": false,
+                        "construct-only": false,
+                        "controllable": false,
+                        "default": "100",
+                        "max": "-1",
+                        "min": "1",
+                        "mutable": "null",
+                        "readable": true,
+                        "type": "guint",
+                        "writable": true
+                    },
+                    "min-pulse-duration": {
+                        "blurb": "The minimum pulse duration, in milliseconds",
+                        "conditionally-available": false,
+                        "construct": false,
+                        "construct-only": false,
+                        "controllable": false,
+                        "default": "250",
+                        "max": "-1",
+                        "min": "1",
+                        "mutable": "null",
+                        "readable": true,
+                        "type": "guint",
+                        "writable": true
                     }
                 },
                 "rank": "none"
@@ -5592,6 +4632,34 @@
                         "default": "8000",
                         "max": "-1",
                         "min": "0",
+                        "mutable": "null",
+                        "readable": true,
+                        "type": "guint",
+                        "writable": true
+                    },
+                    "min-inter-digit-interval": {
+                        "blurb": "The minimum inter digit arrival, in milliseconds",
+                        "conditionally-available": false,
+                        "construct": false,
+                        "construct-only": false,
+                        "controllable": false,
+                        "default": "100",
+                        "max": "-1",
+                        "min": "1",
+                        "mutable": "null",
+                        "readable": true,
+                        "type": "guint",
+                        "writable": true
+                    },
+                    "min-pulse-duration": {
+                        "blurb": "The minimum pulse duration, in milliseconds",
+                        "conditionally-available": false,
+                        "construct": false,
+                        "construct-only": false,
+                        "controllable": false,
+                        "default": "250",
+                        "max": "-1",
+                        "min": "1",
                         "mutable": "null",
                         "readable": true,
                         "type": "guint",
@@ -5946,7 +5014,8 @@
                         "writable": true
                     }
                 },
-                "rank": "none"
+                "rank": "none",
+                "untrusted-aware": "true"
             },
             "dicetv": {
                 "author": "Wim Taymans <wim.taymans@gmail.be>",
@@ -5990,7 +5059,8 @@
                         "writable": true
                     }
                 },
-                "rank": "none"
+                "rank": "none",
+                "untrusted-aware": "true"
             },
             "edgetv": {
                 "author": "Wim Taymans <wim.taymans@chello.be>",
@@ -6019,10 +5089,11 @@
                     }
                 },
                 "properties": {},
-                "rank": "none"
+                "rank": "none",
+                "untrusted-aware": "true"
             },
             "optv": {
-                "author": "FUKUCHI, Kentarou <fukuchi@users.sourceforge.net>, Sebastian Dröge <sebastian.droege@collabora.co.uk>",
+                "author": "Kentaro Fukuchi <fukuchi@users.sourceforge.net>, Sebastian Dröge <sebastian.droege@collabora.co.uk>",
                 "description": "Optical art meets real-time video effect",
                 "hierarchy": [
                     "GstOpTV",
@@ -6089,10 +5160,11 @@
                         "writable": true
                     }
                 },
-                "rank": "none"
+                "rank": "none",
+                "untrusted-aware": "true"
             },
             "quarktv": {
-                "author": "FUKUCHI, Kentarou <fukuchi@users.sourceforge.net>",
+                "author": "Kentaro Fukuchi <fukuchi@users.sourceforge.net>",
                 "description": "Motion dissolver",
                 "hierarchy": [
                     "GstQuarkTV",
@@ -6133,10 +5205,11 @@
                         "writable": true
                     }
                 },
-                "rank": "none"
+                "rank": "none",
+                "untrusted-aware": "true"
             },
             "radioactv": {
-                "author": "FUKUCHI, Kentarou <fukuchi@users.sourceforge.net>, Sebastian Dröge <sebastian.droege@collabora.co.uk>",
+                "author": "Kentaro Fukuchi <fukuchi@users.sourceforge.net>, Sebastian Dröge <sebastian.droege@collabora.co.uk>",
                 "description": "motion-enlightment effect",
                 "hierarchy": [
                     "GstRadioacTV",
@@ -6213,7 +5286,8 @@
                         "writable": true
                     }
                 },
-                "rank": "none"
+                "rank": "none",
+                "untrusted-aware": "true"
             },
             "revtv": {
                 "author": "Wim Taymans <wim.taymans@gmail.be>",
@@ -6285,10 +5359,11 @@
                         "writable": true
                     }
                 },
-                "rank": "none"
+                "rank": "none",
+                "untrusted-aware": "true"
             },
             "rippletv": {
-                "author": "FUKUCHI, Kentarou <fukuchi@users.sourceforge.net>, Sebastian Dröge <sebastian.droege@collabora.co.uk>",
+                "author": "Kentaro Fukuchi <fukuchi@users.sourceforge.net>, Sebastian Dröge <sebastian.droege@collabora.co.uk>",
                 "description": "RippleTV does ripple mark effect on the video input",
                 "hierarchy": [
                     "GstRippleTV",
@@ -6339,7 +5414,8 @@
                         "writable": true
                     }
                 },
-                "rank": "none"
+                "rank": "none",
+                "untrusted-aware": "true"
             },
             "shagadelictv": {
                 "author": "Wim Taymans <wim.taymans@chello.be>",
@@ -6368,10 +5444,11 @@
                     }
                 },
                 "properties": {},
-                "rank": "none"
+                "rank": "none",
+                "untrusted-aware": "true"
             },
             "streaktv": {
-                "author": "FUKUCHI, Kentarou <fukuchi@users.sourceforge.net>, Sebastian Dröge <sebastian.droege@collabora.co.uk>",
+                "author": "Kentaro Fukuchi <fukuchi@users.sourceforge.net>, Sebastian Dröge <sebastian.droege@collabora.co.uk>",
                 "description": "StreakTV makes after images of moving objects",
                 "hierarchy": [
                     "GstStreakTV",
@@ -6410,7 +5487,8 @@
                         "writable": true
                     }
                 },
-                "rank": "none"
+                "rank": "none",
+                "untrusted-aware": "true"
             },
             "vertigotv": {
                 "author": "Wim Taymans <wim.taymans@gmail.be>",
@@ -6468,7 +5546,8 @@
                         "writable": true
                     }
                 },
-                "rank": "none"
+                "rank": "none",
+                "untrusted-aware": "true"
             },
             "warptv": {
                 "author": "Sam Lantinga <slouken@devolution.com>",
@@ -6497,7 +5576,8 @@
                     }
                 },
                 "properties": {},
-                "rank": "none"
+                "rank": "none",
+                "untrusted-aware": "true"
             }
         },
         "filename": "gsteffectv",
@@ -6775,7 +5855,8 @@
                         "writable": true
                     }
                 },
-                "rank": "none"
+                "rank": "none",
+                "untrusted-aware": "true"
             },
             "equalizer-3bands": {
                 "author": "Stefan Kost <ensonic@users.sf.net>",
@@ -6852,7 +5933,8 @@
                         "writable": true
                     }
                 },
-                "rank": "none"
+                "rank": "none",
+                "untrusted-aware": "true"
             },
             "equalizer-nbands": {
                 "author": "Benjamin Otte <otte@gnome.org>, Stefan Kost <ensonic@users.sf.net>",
@@ -6901,7 +5983,8 @@
                         "writable": true
                     }
                 },
-                "rank": "none"
+                "rank": "none",
+                "untrusted-aware": "true"
             }
         },
         "filename": "gstequalizer",
@@ -6980,7 +6063,7 @@
                 "long-name": "FLAC audio encoder",
                 "pad-templates": {
                     "sink": {
-                        "caps": "audio/x-raw:\n         format: { S8, S16LE, S24LE, S24_32LE }\n         layout: interleaved\n           rate: [ 1, 655350 ]\n       channels: 1\naudio/x-raw:\n         format: { S8, S16LE, S24LE, S24_32LE }\n         layout: interleaved\n           rate: [ 1, 655350 ]\n       channels: 2\n   channel-mask: 0x0000000000000003\naudio/x-raw:\n         format: { S8, S16LE, S24LE, S24_32LE }\n         layout: interleaved\n           rate: [ 1, 655350 ]\n       channels: 3\n   channel-mask: 0x0000000000000007\naudio/x-raw:\n         format: { S8, S16LE, S24LE, S24_32LE }\n         layout: interleaved\n           rate: [ 1, 655350 ]\n       channels: 4\n   channel-mask: 0x0000000000000033\naudio/x-raw:\n         format: { S8, S16LE, S24LE, S24_32LE }\n         layout: interleaved\n           rate: [ 1, 655350 ]\n       channels: 5\n   channel-mask: 0x0000000000000037\naudio/x-raw:\n         format: { S8, S16LE, S24LE, S24_32LE }\n         layout: interleaved\n           rate: [ 1, 655350 ]\n       channels: 6\n   channel-mask: 0x000000000000003f\naudio/x-raw:\n         format: { S8, S16LE, S24LE, S24_32LE }\n         layout: interleaved\n           rate: [ 1, 655350 ]\n       channels: 7\n   channel-mask: 0x000000000000013f\naudio/x-raw:\n         format: { S8, S16LE, S24LE, S24_32LE }\n         layout: interleaved\n           rate: [ 1, 655350 ]\n       channels: 8\n   channel-mask: 0x0000000000000c3f\n",
+                        "caps": "audio/x-raw:\n         format: { S8, S16LE, S24LE, S24_32LE, S32LE }\n         layout: interleaved\n           rate: [ 1, 655350 ]\n       channels: 1\naudio/x-raw:\n         format: { S8, S16LE, S24LE, S24_32LE, S32LE }\n         layout: interleaved\n           rate: [ 1, 655350 ]\n       channels: 2\n   channel-mask: 0x0000000000000003\naudio/x-raw:\n         format: { S8, S16LE, S24LE, S24_32LE, S32LE }\n         layout: interleaved\n           rate: [ 1, 655350 ]\n       channels: 3\n   channel-mask: 0x0000000000000007\naudio/x-raw:\n         format: { S8, S16LE, S24LE, S24_32LE, S32LE }\n         layout: interleaved\n           rate: [ 1, 655350 ]\n       channels: 4\n   channel-mask: 0x0000000000000033\naudio/x-raw:\n         format: { S8, S16LE, S24LE, S24_32LE, S32LE }\n         layout: interleaved\n           rate: [ 1, 655350 ]\n       channels: 5\n   channel-mask: 0x0000000000000037\naudio/x-raw:\n         format: { S8, S16LE, S24LE, S24_32LE, S32LE }\n         layout: interleaved\n           rate: [ 1, 655350 ]\n       channels: 6\n   channel-mask: 0x000000000000003f\naudio/x-raw:\n         format: { S8, S16LE, S24LE, S24_32LE, S32LE }\n         layout: interleaved\n           rate: [ 1, 655350 ]\n       channels: 7\n   channel-mask: 0x0000000000000d0f\naudio/x-raw:\n         format: { S8, S16LE, S24LE, S24_32LE, S32LE }\n         layout: interleaved\n           rate: [ 1, 655350 ]\n       channels: 8\n   channel-mask: 0x0000000000000c3f\n",
                         "direction": "sink",
                         "presence": "always"
                     },
@@ -7300,6 +6383,7 @@
                     "GObject"
                 ],
                 "interfaces": [
+                    "GstChildProxy",
                     "GstTagSetter"
                 ],
                 "klass": "Codec/Muxer",
@@ -7308,7 +6392,7 @@
                         "caps": "audio/x-adpcm:\n         layout: swf\n       channels: { (int)1, (int)2 }\n           rate: { (int)5512, (int)11025, (int)22050, (int)44100 }\naudio/mpeg:\n    mpegversion: 1\n          layer: 3\n       channels: { (int)1, (int)2 }\n           rate: { (int)5512, (int)8000, (int)11025, (int)22050, (int)44100 }\n         parsed: true\naudio/mpeg:\n    mpegversion: { (int)4, (int)2 }\n  stream-format: raw\naudio/x-nellymoser:\n       channels: { (int)1, (int)2 }\n           rate: { (int)5512, (int)8000, (int)11025, (int)16000, (int)22050, (int)44100 }\naudio/x-raw:\n         format: { U8, S16LE }\n         layout: interleaved\n       channels: { (int)1, (int)2 }\n           rate: { (int)5512, (int)11025, (int)22050, (int)44100 }\naudio/x-alaw:\n       channels: { (int)1, (int)2 }\n           rate: 8000\naudio/x-mulaw:\n       channels: { (int)1, (int)2 }\n           rate: 8000\naudio/x-speex:\n       channels: 1\n           rate: 16000\n",
                         "direction": "sink",
                         "presence": "request",
-                        "type": "GstFlvMuxPad"
+                        "type": "GstEFlvMuxPad"
                     },
                     "audio_%%u": {
                         "caps": "audio/mpeg:\n    mpegversion: 1\n          layer: 3\n       channels: { (int)1, (int)2 }\n           rate: { (int)5512, (int)8000, (int)11025, (int)22050, (int)44100 }\n         parsed: true\naudio/mpeg:\n    mpegversion: { (int)4, (int)2 }\n  stream-format: raw\n",
@@ -7323,7 +6407,13 @@
                         "type": "GstAggregatorPad"
                     },
                     "video": {
-                        "caps": "video/x-flash-video:\nvideo/x-flash-screen:\nvideo/x-vp6-flash:\nvideo/x-vp6-alpha:\nvideo/x-h264:\n  stream-format: avc\n",
+                        "caps": "video/x-flash-video:\nvideo/x-flash-screen:\nvideo/x-vp6-flash:\nvideo/x-vp6-alpha:\nvideo/x-h264:\n  stream-format: avc\nvideo/x-h265:\n  stream-format: hvc1\n      alignment: au\nvideo/x-av1:\n  stream-format: obu-stream\n      alignment: tu\n",
+                        "direction": "sink",
+                        "presence": "request",
+                        "type": "GstEFlvMuxPad"
+                    },
+                    "video_%%u": {
+                        "caps": "video/x-h264:\n  stream-format: avc\nvideo/x-h265:\n  stream-format: hvc1\nvideo/x-av1:\n  stream-format: obu-stream\n      alignment: tu\n",
                         "direction": "sink",
                         "presence": "request",
                         "type": "GstFlvMuxPad"
@@ -7360,9 +6450,30 @@
                         "presence": "always"
                     },
                     "video": {
-                        "caps": "video/x-flash-video:\n     flvversion: 1\nvideo/x-flash-screen:\nvideo/x-vp6-flash:\nvideo/x-vp6-alpha:\nvideo/x-h264:\n  stream-format: avc\n",
+                        "caps": "video/x-flash-video:\n     flvversion: 1\nvideo/x-flash-screen:\nvideo/x-vp6-flash:\nvideo/x-vp6-alpha:\nvideo/x-h264:\n  stream-format: avc\nvideo/x-h265:\n  stream-format: hvc1\n      alignment: au\nvideo/x-av1:\n  stream-format: obu-stream\n      alignment: tu\n",
                         "direction": "src",
                         "presence": "sometimes"
+                    },
+                    "video_%%u": {
+                        "caps": "video/x-flash-video:\n     flvversion: 1\nvideo/x-flash-screen:\nvideo/x-vp6-flash:\nvideo/x-vp6-alpha:\nvideo/x-h264:\n  stream-format: avc\nvideo/x-h265:\n  stream-format: hvc1\n      alignment: au\nvideo/x-av1:\n  stream-format: obu-stream\n      alignment: tu\n",
+                        "direction": "src",
+                        "presence": "sometimes"
+                    }
+                },
+                "properties": {
+                    "no-more-pads-threshold": {
+                        "blurb": "Timeout in nanoseconds to wait before emitting no-more-pads. Only effective in non-streams-aware pipelines",
+                        "conditionally-available": false,
+                        "construct": false,
+                        "construct-only": false,
+                        "controllable": false,
+                        "default": "0",
+                        "max": "18446744073709551614",
+                        "min": "0",
+                        "mutable": "ready",
+                        "readable": true,
+                        "type": "guint64",
+                        "writable": true
                     }
                 },
                 "rank": "primary",
@@ -7380,6 +6491,7 @@
                     "GObject"
                 ],
                 "interfaces": [
+                    "GstChildProxy",
                     "GstTagSetter"
                 ],
                 "klass": "Codec/Muxer",
@@ -7472,6 +6584,32 @@
         "filename": "gstflv",
         "license": "LGPL",
         "other-types": {
+            "GstEFlvMuxPad": {
+                "hierarchy": [
+                    "GstEFlvMuxPad",
+                    "GstFlvMuxPad",
+                    "GstAggregatorPad",
+                    "GstPad",
+                    "GstObject",
+                    "GInitiallyUnowned",
+                    "GObject"
+                ],
+                "kind": "object",
+                "properties": {
+                    "flv-track-mode": {
+                        "blurb": "Determines whether to stream FLV in Enhanced multitrack or non-multitrack or legacy format",
+                        "conditionally-available": false,
+                        "construct": false,
+                        "construct-only": false,
+                        "controllable": false,
+                        "default": "legacy (2)",
+                        "mutable": "null",
+                        "readable": true,
+                        "type": "GstFlvTrackMode",
+                        "writable": true
+                    }
+                }
+            },
             "GstFlvMux": {
                 "hierarchy": [
                     "GstFlvMux",
@@ -7482,6 +6620,7 @@
                     "GObject"
                 ],
                 "interfaces": [
+                    "GstChildProxy",
                     "GstTagSetter"
                 ],
                 "kind": "object",
@@ -7560,6 +6699,26 @@
                 "kind": "object",
                 "properties": {},
                 "signals": {}
+            },
+            "GstFlvTrackMode": {
+                "kind": "enum",
+                "values": [
+                    {
+                        "desc": "Enhanced FLV multitrack type with track ID 0",
+                        "name": "multitrack",
+                        "value": "0"
+                    },
+                    {
+                        "desc": "Enhanced FLV but not multitrack type, i.e., no track ID",
+                        "name": "non-multitrack",
+                        "value": "1"
+                    },
+                    {
+                        "desc": "Legacy FLV",
+                        "name": "legacy",
+                        "value": "2"
+                    }
+                ]
             }
         },
         "package": "GStreamer Good Plug-ins",
@@ -7622,7 +6781,7 @@
                 "long-name": "GdkPixbuf image decoder",
                 "pad-templates": {
                     "sink": {
-                        "caps": "image/png:\nimage/x-icon:\napplication/x-navi-animation:\nimage/x-cmu-raster:\nimage/x-sun-raster:\nimage/x-pixmap:\nimage/tiff:\nimage/x-portable-anymap:\nimage/x-portable-bitmap:\nimage/x-portable-graymap:\nimage/x-portable-pixmap:\nimage/bmp:\nimage/x-bmp:\nimage/x-MS-bmp:\nimage/vnd.wap.wbmp:\nimage/x-bitmap:\nimage/x-tga:\nimage/x-pcx:\nimage/svg:\nimage/svg+xml:\n",
+                        "caps": "image/png:\nimage/x-icon:\napplication/x-navi-animation:\nimage/x-pixmap:\nimage/tiff:\nimage/x-portable-anymap:\nimage/x-portable-bitmap:\nimage/x-portable-graymap:\nimage/x-portable-pixmap:\nimage/bmp:\nimage/x-bmp:\nimage/x-MS-bmp:\nimage/vnd.wap.wbmp:\nimage/x-bitmap:\nimage/x-tga:\nimage/x-pcx:\nimage/svg:\nimage/svg+xml:\n",
                         "direction": "sink",
                         "presence": "always"
                     },
@@ -7632,7 +6791,7 @@
                         "presence": "always"
                     }
                 },
-                "rank": "secondary"
+                "rank": "none"
             },
             "gdkpixbufoverlay": {
                 "author": "Tim-Philipp Müller <tim centricular net>",
@@ -7650,12 +6809,12 @@
                 "long-name": "GdkPixbuf Overlay",
                 "pad-templates": {
                     "sink": {
-                        "caps": "video/x-raw:\n         format: { A444_16LE, A444_16BE, Y416_LE, AYUV64, RGBA64_LE, ARGB64, ARGB64_LE, BGRA64_LE, ABGR64_LE, Y416_BE, RGBA64_BE, ARGB64_BE, BGRA64_BE, ABGR64_BE, A422_16LE, A422_16BE, A420_16LE, A420_16BE, A444_12LE, GBRA_12LE, A444_12BE, GBRA_12BE, Y412_LE, Y412_BE, A422_12LE, A422_12BE, A420_12LE, A420_12BE, A444_10LE, GBRA_10LE, A444_10BE, GBRA_10BE, A422_10LE, A422_10BE, A420_10LE, A420_10BE, BGR10A2_LE, RGB10A2_LE, Y410, A444, GBRA, AYUV, VUYA, RGBA, RBGA, ARGB, BGRA, ABGR, A422, A420, AV12, Y444_16LE, GBR_16LE, Y444_16BE, GBR_16BE, Y216_LE, Y216_BE, v216, P016_LE, P016_BE, Y444_12LE, GBR_12LE, Y444_12BE, GBR_12BE, I422_12LE, I422_12BE, Y212_LE, Y212_BE, I420_12LE, I420_12BE, P012_LE, P012_BE, Y444_10LE, GBR_10LE, Y444_10BE, GBR_10BE, BGR10x2_LE, RGB10x2_LE, r210, I422_10LE, I422_10BE, NV16_10LE40, NV16_10LE32, Y210, UYVP, v210, I420_10LE, I420_10BE, P010_10LE, NV12_10LE40, NV12_10LE32, P010_10BE, MT2110R, MT2110T, NV12_10BE_8L128, NV12_10LE40_4L4, Y444, BGRP, GBR, RGBP, NV24, v308, IYU2, RGBx, xRGB, BGRx, xBGR, RGB, BGR, Y42B, NV16, NV61, YUY2, YVYU, UYVY, VYUY, I420, YV12, NV12, NV21, NV12_16L32S, NV12_32L32, NV12_4L4, NV12_64Z32, NV12_8L128, Y41B, IYU1, YUV9, YVU9, BGR16, RGB16, BGR15, RGB15, RGB8P, GRAY16_LE, GRAY16_BE, GRAY10_LE16, GRAY10_LE32, GRAY8 }\n          width: [ 1, 2147483647 ]\n         height: [ 1, 2147483647 ]\n      framerate: [ 0/1, 2147483647/1 ]\n",
+                        "caps": "video/x-raw:\n         format: { AYUV_F32, RGBA_F32LE, ARGB_F32, RGBA_F32BE, A444_16LE, A444_16BE, Y416_LE, AYUV64, RGBA64_LE, ARGB64, ARGB64_LE, BGRA64_LE, ABGR64_LE, Y416_BE, RGBA64_BE, ARGB64_BE, BGRA64_BE, ABGR64_BE, A422_16LE, A422_16BE, A420_16LE, A420_16BE, A444_12LE, GBRA_12LE, A444_12BE, GBRA_12BE, Y412_LE, Y412_BE, A422_12LE, A422_12BE, A420_12LE, A420_12BE, RGBA_F16LE, RGBA_F16BE, A444_10LE, GBRA_10LE, A444_10BE, GBRA_10BE, A422_10LE, A422_10BE, A420_10LE, A420_10BE, BGR10A2_LE, RGB10A2_LE, Y410, A444, GBRA, AYUV, VUYA, RGBA, RBGA, ARGB, BGRA, ABGR, A422, A420, AV12, RGBP_F32LE, RGBP_F32BE, RGB_F32LE, RGB_F32BE, Y444_16LE, GBR_16LE, Y444_16BE, GBR_16BE, Y216_LE, Y216_BE, v216, P016_LE, P016_BE, Y444_12LE, GBR_12LE, Y444_12BE, GBR_12BE, I422_12LE, I422_12BE, Y212_LE, Y212_BE, I420_12LE, I420_12BE, P012_LE, P012_BE, RGBP_F16LE, RGBP_F16BE, RGB_F16LE, RGB_F16BE, Y444_10LE, GBR_10LE, Y444_10BE, GBR_10BE, BGR10x2_LE, RGB10x2_LE, r210, I422_10LE, I422_10BE, NV16_10LE40, NV16_10LE32, Y210, UYVP, v210, I420_10LE, I420_10BE, P010_10LE, NV12_10LE40, NV12_10LE32, P010_10BE, MT2110R, MT2110T, NV12_10BE_8L128, NV12_10LE40_4L4, Y444, BGRP, GBR, RGBP, NV24, v308, IYU2, RGBx, xRGB, BGRx, xBGR, RGB, BGR, Y42B, NV16, NV61, YUY2, YVYU, UYVY, VYUY, I420, YV12, NV12, NV21, NV12_16L32S, NV12_32L32, NV12_4L4, NV12_64Z32, NV12_8L128, Y41B, IYU1, YUV9, YVU9, BGR16, RGB16, BGR15, RGB15, RGB8P, GRAY_F32LE, GRAY_F32BE, GRAY16_LE, GRAY16_BE, GRAY_F16LE, GRAY_F16BE, GRAY10_LE16, GRAY10_LE32, GRAY8 }\n          width: [ 1, 2147483647 ]\n         height: [ 1, 2147483647 ]\n      framerate: [ 0/1, 2147483647/1 ]\n",
                         "direction": "sink",
                         "presence": "always"
                     },
                     "src": {
-                        "caps": "video/x-raw:\n         format: { A444_16LE, A444_16BE, Y416_LE, AYUV64, RGBA64_LE, ARGB64, ARGB64_LE, BGRA64_LE, ABGR64_LE, Y416_BE, RGBA64_BE, ARGB64_BE, BGRA64_BE, ABGR64_BE, A422_16LE, A422_16BE, A420_16LE, A420_16BE, A444_12LE, GBRA_12LE, A444_12BE, GBRA_12BE, Y412_LE, Y412_BE, A422_12LE, A422_12BE, A420_12LE, A420_12BE, A444_10LE, GBRA_10LE, A444_10BE, GBRA_10BE, A422_10LE, A422_10BE, A420_10LE, A420_10BE, BGR10A2_LE, RGB10A2_LE, Y410, A444, GBRA, AYUV, VUYA, RGBA, RBGA, ARGB, BGRA, ABGR, A422, A420, AV12, Y444_16LE, GBR_16LE, Y444_16BE, GBR_16BE, Y216_LE, Y216_BE, v216, P016_LE, P016_BE, Y444_12LE, GBR_12LE, Y444_12BE, GBR_12BE, I422_12LE, I422_12BE, Y212_LE, Y212_BE, I420_12LE, I420_12BE, P012_LE, P012_BE, Y444_10LE, GBR_10LE, Y444_10BE, GBR_10BE, BGR10x2_LE, RGB10x2_LE, r210, I422_10LE, I422_10BE, NV16_10LE40, NV16_10LE32, Y210, UYVP, v210, I420_10LE, I420_10BE, P010_10LE, NV12_10LE40, NV12_10LE32, P010_10BE, MT2110R, MT2110T, NV12_10BE_8L128, NV12_10LE40_4L4, Y444, BGRP, GBR, RGBP, NV24, v308, IYU2, RGBx, xRGB, BGRx, xBGR, RGB, BGR, Y42B, NV16, NV61, YUY2, YVYU, UYVY, VYUY, I420, YV12, NV12, NV21, NV12_16L32S, NV12_32L32, NV12_4L4, NV12_64Z32, NV12_8L128, Y41B, IYU1, YUV9, YVU9, BGR16, RGB16, BGR15, RGB15, RGB8P, GRAY16_LE, GRAY16_BE, GRAY10_LE16, GRAY10_LE32, GRAY8 }\n          width: [ 1, 2147483647 ]\n         height: [ 1, 2147483647 ]\n      framerate: [ 0/1, 2147483647/1 ]\n",
+                        "caps": "video/x-raw:\n         format: { AYUV_F32, RGBA_F32LE, ARGB_F32, RGBA_F32BE, A444_16LE, A444_16BE, Y416_LE, AYUV64, RGBA64_LE, ARGB64, ARGB64_LE, BGRA64_LE, ABGR64_LE, Y416_BE, RGBA64_BE, ARGB64_BE, BGRA64_BE, ABGR64_BE, A422_16LE, A422_16BE, A420_16LE, A420_16BE, A444_12LE, GBRA_12LE, A444_12BE, GBRA_12BE, Y412_LE, Y412_BE, A422_12LE, A422_12BE, A420_12LE, A420_12BE, RGBA_F16LE, RGBA_F16BE, A444_10LE, GBRA_10LE, A444_10BE, GBRA_10BE, A422_10LE, A422_10BE, A420_10LE, A420_10BE, BGR10A2_LE, RGB10A2_LE, Y410, A444, GBRA, AYUV, VUYA, RGBA, RBGA, ARGB, BGRA, ABGR, A422, A420, AV12, RGBP_F32LE, RGBP_F32BE, RGB_F32LE, RGB_F32BE, Y444_16LE, GBR_16LE, Y444_16BE, GBR_16BE, Y216_LE, Y216_BE, v216, P016_LE, P016_BE, Y444_12LE, GBR_12LE, Y444_12BE, GBR_12BE, I422_12LE, I422_12BE, Y212_LE, Y212_BE, I420_12LE, I420_12BE, P012_LE, P012_BE, RGBP_F16LE, RGBP_F16BE, RGB_F16LE, RGB_F16BE, Y444_10LE, GBR_10LE, Y444_10BE, GBR_10BE, BGR10x2_LE, RGB10x2_LE, r210, I422_10LE, I422_10BE, NV16_10LE40, NV16_10LE32, Y210, UYVP, v210, I420_10LE, I420_10BE, P010_10LE, NV12_10LE40, NV12_10LE32, P010_10BE, MT2110R, MT2110T, NV12_10BE_8L128, NV12_10LE40_4L4, Y444, BGRP, GBR, RGBP, NV24, v308, IYU2, RGBx, xRGB, BGRx, xBGR, RGB, BGR, Y42B, NV16, NV61, YUY2, YVYU, UYVY, VYUY, I420, YV12, NV12, NV21, NV12_16L32S, NV12_32L32, NV12_4L4, NV12_64Z32, NV12_8L128, Y41B, IYU1, YUV9, YVU9, BGR16, RGB16, BGR15, RGB15, RGB8P, GRAY_F32LE, GRAY_F32BE, GRAY16_LE, GRAY16_BE, GRAY_F16LE, GRAY_F16BE, GRAY10_LE16, GRAY10_LE32, GRAY8 }\n          width: [ 1, 2147483647 ]\n         height: [ 1, 2147483647 ]\n      framerate: [ 0/1, 2147483647/1 ]\n",
                         "direction": "src",
                         "presence": "always"
                     }
@@ -7823,7 +6982,8 @@
                         "writable": true
                     }
                 },
-                "rank": "none"
+                "rank": "none",
+                "untrusted-aware": "true"
             },
             "gdkpixbufsink": {
                 "author": "Tim-Philipp Müller <tim centricular net>",
@@ -8325,7 +7485,8 @@
                         "writable": true
                     }
                 },
-                "rank": "none"
+                "rank": "none",
+                "untrusted-aware": "true"
             }
         },
         "filename": "gstimagefreeze",
@@ -8353,12 +7514,12 @@
                 "long-name": "Audio deinterleaver",
                 "pad-templates": {
                     "sink": {
-                        "caps": "audio/x-raw:\n         format: { F64LE, F64BE, F32LE, F32BE, S32LE, S32BE, U32LE, U32BE, S24_32LE, S24_32BE, U24_32LE, U24_32BE, S24LE, S24BE, U24LE, U24BE, S20LE, S20BE, U20LE, U20BE, S18LE, S18BE, U18LE, U18BE, S16LE, S16BE, U16LE, U16BE, S8, U8 }\n           rate: [ 1, 2147483647 ]\n       channels: [ 1, 2147483647 ]\n         layout: interleaved\n",
+                        "caps": "audio/x-raw:\n         format: { F64LE, F64BE, F32LE, F32BE, S32LE, S32BE, U32LE, U32BE, S24_32LE, S24_32BE, U24_32LE, U24_32BE, S24LE, S24BE, U24LE, U24BE, S20_32LE, S20_32BE, U20_32LE, U20_32BE, S20LE, S20BE, U20LE, U20BE, S18LE, S18BE, U18LE, U18BE, S16LE, S16BE, U16LE, U16BE, S8, U8 }\n           rate: [ 1, 2147483647 ]\n       channels: [ 1, 2147483647 ]\n         layout: interleaved\n",
                         "direction": "sink",
                         "presence": "always"
                     },
                     "src_%%u": {
-                        "caps": "audio/x-raw:\n         format: { F64LE, F64BE, F32LE, F32BE, S32LE, S32BE, U32LE, U32BE, S24_32LE, S24_32BE, U24_32LE, U24_32BE, S24LE, S24BE, U24LE, U24BE, S20LE, S20BE, U20LE, U20BE, S18LE, S18BE, U18LE, U18BE, S16LE, S16BE, U16LE, U16BE, S8, U8 }\n           rate: [ 1, 2147483647 ]\n       channels: 1\n         layout: { (string)non-interleaved, (string)interleaved }\n",
+                        "caps": "audio/x-raw:\n         format: { F64LE, F64BE, F32LE, F32BE, S32LE, S32BE, U32LE, U32BE, S24_32LE, S24_32BE, U24_32LE, U24_32BE, S24LE, S24BE, U24LE, U24BE, S20_32LE, S20_32BE, U20_32LE, U20_32BE, S20LE, S20BE, U20LE, U20BE, S18LE, S18BE, U18LE, U18BE, S16LE, S16BE, U16LE, U16BE, S8, U8 }\n           rate: [ 1, 2147483647 ]\n       channels: 1\n         layout: { (string)non-interleaved, (string)interleaved }\n",
                         "direction": "src",
                         "presence": "sometimes"
                     }
@@ -8378,7 +7539,8 @@
                     }
                 },
                 "rank": "none",
-                "signals": {}
+                "signals": {},
+                "untrusted-aware": "true"
             },
             "interleave": {
                 "author": "Andy Wingo <wingo at pobox.com>, Sebastian Dröge <slomo@circular-chaos.org>",
@@ -8394,12 +7556,12 @@
                 "long-name": "Audio interleaver",
                 "pad-templates": {
                     "sink_%%u": {
-                        "caps": "audio/x-raw:\n           rate: [ 1, 2147483647 ]\n       channels: 1\n         format: { F64LE, F64BE, F32LE, F32BE, S32LE, S32BE, U32LE, U32BE, S24_32LE, S24_32BE, U24_32LE, U24_32BE, S24LE, S24BE, U24LE, U24BE, S20LE, S20BE, U20LE, U20BE, S18LE, S18BE, U18LE, U18BE, S16LE, S16BE, U16LE, U16BE, S8, U8 }\n         layout: { (string)non-interleaved, (string)interleaved }\n",
+                        "caps": "audio/x-raw:\n           rate: [ 1, 2147483647 ]\n       channels: 1\n         format: { F64LE, F64BE, F32LE, F32BE, S32LE, S32BE, U32LE, U32BE, S24_32LE, S24_32BE, U24_32LE, U24_32BE, S24LE, S24BE, U24LE, U24BE, S20_32LE, S20_32BE, U20_32LE, U20_32BE, S20LE, S20BE, U20LE, U20BE, S18LE, S18BE, U18LE, U18BE, S16LE, S16BE, U16LE, U16BE, S8, U8 }\n         layout: { (string)non-interleaved, (string)interleaved }\n",
                         "direction": "sink",
                         "presence": "request"
                     },
                     "src": {
-                        "caps": "audio/x-raw:\n           rate: [ 1, 2147483647 ]\n       channels: [ 1, 2147483647 ]\n         format: { F64LE, F64BE, F32LE, F32BE, S32LE, S32BE, U32LE, U32BE, S24_32LE, S24_32BE, U24_32LE, U24_32BE, S24LE, S24BE, U24LE, U24BE, S20LE, S20BE, U20LE, U20BE, S18LE, S18BE, U18LE, U18BE, S16LE, S16BE, U16LE, U16BE, S8, U8 }\n         layout: interleaved\n",
+                        "caps": "audio/x-raw:\n           rate: [ 1, 2147483647 ]\n       channels: [ 1, 2147483647 ]\n         format: { F64LE, F64BE, F32LE, F32BE, S32LE, S32BE, U32LE, U32BE, S24_32LE, S24_32BE, U24_32LE, U24_32BE, S24LE, S24BE, U24LE, U24BE, S20_32LE, S20_32BE, U20_32LE, U20_32BE, S20LE, S20BE, U20LE, U20BE, S18LE, S18BE, U18LE, U18BE, S16LE, S16BE, U16LE, U16BE, S8, U8 }\n         layout: interleaved\n",
                         "direction": "src",
                         "presence": "always"
                     }
@@ -8429,7 +7591,8 @@
                         "writable": true
                     }
                 },
-                "rank": "none"
+                "rank": "none",
+                "untrusted-aware": "true"
             }
         },
         "filename": "gstinterleave",
@@ -8635,7 +7798,7 @@
                 "long-name": "MP4 Muxer",
                 "pad-templates": {
                     "audio_%%u": {
-                        "caps": "audio/mpeg:\n    mpegversion: 1\n          layer: [ 1, 3 ]\n       channels: [ 1, 2 ]\n           rate: [ 1, 2147483647 ]\naudio/mpeg:\n    mpegversion: 4\n  stream-format: raw\n       channels: [ 1, 8 ]\n           rate: [ 1, 2147483647 ]\naudio/x-ac3:\n       channels: [ 1, 6 ]\n           rate: [ 1, 2147483647 ]\naudio/x-alac:\n       channels: [ 1, 2 ]\n           rate: [ 1, 2147483647 ]\naudio/x-opus:\nchannel-mapping-family: [ 0, 255 ]\n       channels: [ 1, 8 ]\n           rate: [ 1, 2147483647 ]\n",
+                        "caps": "audio/mpeg:\n    mpegversion: 1\n          layer: [ 1, 3 ]\n       channels: [ 1, 2 ]\n           rate: [ 1, 2147483647 ]\naudio/mpeg:\n    mpegversion: 4\n  stream-format: raw\n       channels: [ 1, 8 ]\n           rate: [ 1, 2147483647 ]\naudio/x-ac3:\n       channels: [ 1, 6 ]\n           rate: [ 1, 2147483647 ]\naudio/x-eac3:\n      alignment: iec61937\n         framed: true\n       channels: [ 1, 16 ]\n           rate: [ 1, 2147483647 ]\naudio/x-alac:\n       channels: [ 1, 2 ]\n           rate: [ 1, 2147483647 ]\naudio/x-opus:\nchannel-mapping-family: [ 0, 255 ]\n       channels: [ 1, 8 ]\n           rate: [ 1, 2147483647 ]\n",
                         "direction": "sink",
                         "presence": "request",
                         "type": "GstQTMuxPad"
@@ -8707,6 +7870,22 @@
                         "caps": "ANY",
                         "direction": "src",
                         "presence": "sometimes"
+                    }
+                },
+                "properties": {
+                    "max-atom-size": {
+                        "blurb": "Maximum allowed size, in bytes, for non-mdat atoms. Encountering an atom with a higher size will raise a fatal error.",
+                        "conditionally-available": false,
+                        "construct": false,
+                        "construct-only": false,
+                        "controllable": false,
+                        "default": "33554432",
+                        "max": "18446744073709551615",
+                        "min": "0",
+                        "mutable": "playing",
+                        "readable": true,
+                        "type": "guint64",
+                        "writable": true
                     }
                 },
                 "rank": "primary",
@@ -9845,6 +9024,7 @@
                 "description": "RMS/Peak/Decaying Peak Level messager for audio/raw",
                 "hierarchy": [
                     "GstLevel",
+                    "GstAudioFilter",
                     "GstBaseTransform",
                     "GstElement",
                     "GstObject",
@@ -9945,7 +9125,8 @@
                         "writable": true
                     }
                 },
-                "rank": "none"
+                "rank": "none",
+                "untrusted-aware": "true"
             }
         },
         "filename": "gstlevel",
@@ -9995,7 +9176,7 @@
                 },
                 "properties": {
                     "max-backtrack-distance": {
-                        "blurb": "Maximum backtrack distance in seconds when seeking without and index in pull mode and search for a keyframe (0 = disable backtracking).",
+                        "blurb": "Maximum backtrack distance in seconds when seeking without an index in pull mode and search for a keyframe (0 = disable backtracking).",
                         "conditionally-available": false,
                         "construct": false,
                         "construct-only": false,
@@ -10015,6 +9196,20 @@
                         "construct-only": false,
                         "controllable": false,
                         "default": "2000000000",
+                        "max": "18446744073709551615",
+                        "min": "0",
+                        "mutable": "null",
+                        "readable": true,
+                        "type": "guint64",
+                        "writable": true
+                    },
+                    "min-index-interval": {
+                        "blurb": "Minimum interval between index entries (in nanoseconds) when building a dynamic seek table",
+                        "conditionally-available": false,
+                        "construct": false,
+                        "construct-only": false,
+                        "controllable": false,
+                        "default": "500000000",
                         "max": "18446744073709551615",
                         "min": "0",
                         "mutable": "null",
@@ -10045,7 +9240,7 @@
                 "long-name": "Matroska muxer",
                 "pad-templates": {
                     "audio_%%u": {
-                        "caps": "audio/mpeg:\n    mpegversion: 1\n          layer: [ 1, 3 ]\n       channels: [ 1, 2147483647 ]\n           rate: [ 1, 2147483647 ]\naudio/mpeg:\n    mpegversion: { (int)2, (int)4 }\n  stream-format: raw\n       channels: [ 1, 2147483647 ]\n           rate: [ 1, 2147483647 ]\naudio/x-ac3:\n       channels: [ 1, 2147483647 ]\n           rate: [ 1, 2147483647 ]\naudio/x-eac3:\n       channels: [ 1, 2147483647 ]\n           rate: [ 1, 2147483647 ]\naudio/x-dts:\n       channels: [ 1, 2147483647 ]\n           rate: [ 1, 2147483647 ]\naudio/x-vorbis:\n       channels: [ 1, 2147483647 ]\n           rate: [ 1, 2147483647 ]\naudio/x-flac:\n       channels: [ 1, 2147483647 ]\n           rate: [ 1, 2147483647 ]\naudio/x-opus:\n       channels: [ 1, 8 ]\n           rate: { (int)8000, (int)16000, (int)24000, (int)32000, (int)48000 }\naudio/x-speex:\n       channels: [ 1, 2147483647 ]\n           rate: [ 1, 2147483647 ]\naudio/x-raw:\n         format: { U8, S16BE, S16LE, S24BE, S24LE, S32BE, S32LE, F32LE, F64LE }\n         layout: interleaved\n       channels: [ 1, 2147483647 ]\n           rate: [ 1, 2147483647 ]\naudio/x-tta:\n          width: { (int)8, (int)16, (int)24 }\n       channels: { (int)1, (int)2 }\n           rate: [ 8000, 96000 ]\naudio/x-pn-realaudio:\n      raversion: { (int)1, (int)2, (int)8 }\n       channels: [ 1, 2147483647 ]\n           rate: [ 1, 2147483647 ]\naudio/x-wma:\n     wmaversion: [ 1, 3 ]\n    block_align: [ 0, 65535 ]\n        bitrate: [ 0, 524288 ]\n       channels: [ 1, 2147483647 ]\n           rate: [ 1, 2147483647 ]\naudio/x-alaw:\n       channels: { (int)1, (int)2 }\n           rate: [ 8000, 192000 ]\naudio/x-mulaw:\n       channels: { (int)1, (int)2 }\n           rate: [ 8000, 192000 ]\naudio/x-adpcm:\n         layout: dvi\n    block_align: [ 64, 8192 ]\n       channels: { (int)1, (int)2 }\n           rate: [ 8000, 96000 ]\naudio/G722:\n       channels: 1\n           rate: 16000\naudio/x-adpcm:\n         layout: g726\n       channels: 1\n           rate: 8000\n",
+                        "caps": "audio/mpeg:\n    mpegversion: 1\n          layer: [ 1, 3 ]\n       channels: [ 1, 2147483647 ]\n           rate: [ 1, 2147483647 ]\naudio/mpeg:\n    mpegversion: { (int)2, (int)4 }\n  stream-format: raw\n       channels: [ 1, 2147483647 ]\n           rate: [ 1, 2147483647 ]\naudio/x-ac3:\n       channels: [ 1, 2147483647 ]\n           rate: [ 1, 2147483647 ]\naudio/x-eac3:\n       channels: [ 1, 2147483647 ]\n           rate: [ 1, 2147483647 ]\naudio/x-true-hd:\n       channels: [ 1, 2147483647 ]\n           rate: [ 1, 2147483647 ]\naudio/x-dts:\n       channels: [ 1, 2147483647 ]\n           rate: [ 1, 2147483647 ]\naudio/x-vorbis:\n       channels: [ 1, 2147483647 ]\n           rate: [ 1, 2147483647 ]\naudio/x-flac:\n       channels: [ 1, 2147483647 ]\n           rate: [ 1, 2147483647 ]\naudio/x-opus:\n       channels: [ 1, 8 ]\n           rate: { (int)8000, (int)16000, (int)24000, (int)32000, (int)48000 }\naudio/x-speex:\n       channels: [ 1, 2147483647 ]\n           rate: [ 1, 2147483647 ]\naudio/x-raw:\n         format: { U8, S16BE, S16LE, S24BE, S24LE, S32BE, S32LE, F32LE, F64LE }\n         layout: interleaved\n       channels: [ 1, 2147483647 ]\n           rate: [ 1, 2147483647 ]\naudio/x-tta:\n          width: { (int)8, (int)16, (int)24 }\n       channels: { (int)1, (int)2 }\n           rate: [ 8000, 96000 ]\naudio/x-pn-realaudio:\n      raversion: { (int)1, (int)2, (int)8 }\n       channels: [ 1, 2147483647 ]\n           rate: [ 1, 2147483647 ]\naudio/x-wma:\n     wmaversion: [ 1, 3 ]\n    block_align: [ 0, 65535 ]\n        bitrate: [ 0, 524288 ]\n       channels: [ 1, 2147483647 ]\n           rate: [ 1, 2147483647 ]\naudio/x-alaw:\n       channels: { (int)1, (int)2 }\n           rate: [ 8000, 192000 ]\naudio/x-mulaw:\n       channels: { (int)1, (int)2 }\n           rate: [ 8000, 192000 ]\naudio/x-adpcm:\n         layout: dvi\n    block_align: [ 64, 8192 ]\n       channels: { (int)1, (int)2 }\n           rate: [ 8000, 96000 ]\naudio/G722:\n       channels: 1\n           rate: 16000\naudio/x-adpcm:\n         layout: g726\n       channels: 1\n           rate: 8000\n",
                         "direction": "sink",
                         "presence": "request",
                         "type": "GstMatroskaMuxPad"
@@ -10056,13 +9251,13 @@
                         "presence": "always"
                     },
                     "subtitle_%%u": {
-                        "caps": "subtitle/x-kate:\ntext/x-raw:\n         format: utf8\napplication/x-ssa:\napplication/x-ass:\napplication/x-usf:\nsubpicture/x-dvd:\napplication/x-subtitle-unknown:\n",
+                        "caps": "subtitle/x-kate:\ntext/x-raw:\n         format: utf8\napplication/x-ssa:\napplication/x-ass:\napplication/x-usf:\nsubpicture/x-dvd:\nsubpicture/x-pgs:\napplication/x-subtitle-unknown:\n",
                         "direction": "sink",
                         "presence": "request",
                         "type": "GstMatroskaMuxPad"
                     },
                     "video_%%u": {
-                        "caps": "video/mpeg:\n    mpegversion: { (int)1, (int)2, (int)4 }\n   systemstream: false\n          width: [ 1, 2147483647 ]\n         height: [ 1, 2147483647 ]\nvideo/x-h264:\n  stream-format: { (string)avc, (string)avc3 }\n      alignment: au\n          width: [ 1, 2147483647 ]\n         height: [ 1, 2147483647 ]\nvideo/x-h265:\n  stream-format: { (string)hvc1, (string)hev1 }\n      alignment: au\n          width: [ 1, 2147483647 ]\n         height: [ 1, 2147483647 ]\nvideo/x-h266:\n  stream-format: { (string)vvc1, (string)vvi1 }\n      alignment: au\n          width: [ 1, 2147483647 ]\n         height: [ 1, 2147483647 ]\nvideo/x-divx:\n          width: [ 1, 2147483647 ]\n         height: [ 1, 2147483647 ]\nvideo/x-huffyuv:\n          width: [ 1, 2147483647 ]\n         height: [ 1, 2147483647 ]\nvideo/x-dv:\n          width: [ 1, 2147483647 ]\n         height: [ 1, 2147483647 ]\nvideo/x-h263:\n          width: [ 1, 2147483647 ]\n         height: [ 1, 2147483647 ]\nvideo/x-msmpeg:\n          width: [ 1, 2147483647 ]\n         height: [ 1, 2147483647 ]\nimage/jpeg:\n          width: [ 1, 2147483647 ]\n         height: [ 1, 2147483647 ]\nvideo/x-theora:\nvideo/x-dirac:\n          width: [ 1, 2147483647 ]\n         height: [ 1, 2147483647 ]\nvideo/x-pn-realvideo:\n      rmversion: [ 1, 4 ]\n          width: [ 1, 2147483647 ]\n         height: [ 1, 2147483647 ]\nvideo/x-vp8:\n          width: [ 1, 2147483647 ]\n         height: [ 1, 2147483647 ]\nvideo/x-vp9:\n          width: [ 1, 2147483647 ]\n         height: [ 1, 2147483647 ]\nvideo/x-raw:\n         format: { YUY2, I420, YV12, UYVY, AYUV, GRAY8, GRAY10_LE32, GRAY16_LE, BGR, RGB, RGBA64_LE, BGRA64_LE }\n          width: [ 1, 2147483647 ]\n         height: [ 1, 2147483647 ]\nvideo/x-prores:\n          width: [ 1, 2147483647 ]\n         height: [ 1, 2147483647 ]\nvideo/x-wmv:\n     wmvversion: [ 1, 3 ]\n          width: [ 1, 2147483647 ]\n         height: [ 1, 2147483647 ]\nvideo/x-av1:\n  stream-format: obu-stream\n      alignment: tu\n          width: [ 1, 2147483647 ]\n         height: [ 1, 2147483647 ]\nvideo/x-ffv:\n      ffversion: 1\n          width: [ 1, 2147483647 ]\n         height: [ 1, 2147483647 ]\n",
+                        "caps": "video/mpeg:\n    mpegversion: { (int)1, (int)2, (int)4 }\n   systemstream: false\n          width: [ 1, 2147483647 ]\n         height: [ 1, 2147483647 ]\nvideo/x-h264:\n  stream-format: { (string)avc, (string)avc3 }\n      alignment: au\n          width: [ 1, 2147483647 ]\n         height: [ 1, 2147483647 ]\nvideo/x-h265:\n  stream-format: { (string)hvc1, (string)hev1 }\n      alignment: au\n          width: [ 1, 2147483647 ]\n         height: [ 1, 2147483647 ]\nvideo/x-h266:\n  stream-format: { (string)vvc1, (string)vvi1 }\n      alignment: au\n          width: [ 1, 2147483647 ]\n         height: [ 1, 2147483647 ]\nvideo/x-divx:\n          width: [ 1, 2147483647 ]\n         height: [ 1, 2147483647 ]\nvideo/x-huffyuv:\n          width: [ 1, 2147483647 ]\n         height: [ 1, 2147483647 ]\nvideo/x-ffvhuff:\n          width: [ 1, 2147483647 ]\n         height: [ 1, 2147483647 ]\nvideo/x-dv:\n          width: [ 1, 2147483647 ]\n         height: [ 1, 2147483647 ]\nvideo/x-h263:\n          width: [ 1, 2147483647 ]\n         height: [ 1, 2147483647 ]\nvideo/x-msmpeg:\n          width: [ 1, 2147483647 ]\n         height: [ 1, 2147483647 ]\nimage/jpeg:\n          width: [ 1, 2147483647 ]\n         height: [ 1, 2147483647 ]\nvideo/x-theora:\nvideo/x-dirac:\n          width: [ 1, 2147483647 ]\n         height: [ 1, 2147483647 ]\nvideo/x-pn-realvideo:\n      rmversion: [ 1, 4 ]\n          width: [ 1, 2147483647 ]\n         height: [ 1, 2147483647 ]\nvideo/x-vp8:\n          width: [ 1, 2147483647 ]\n         height: [ 1, 2147483647 ]\nvideo/x-vp9:\n          width: [ 1, 2147483647 ]\n         height: [ 1, 2147483647 ]\nvideo/x-raw:\n         format: { YUY2, I420, YV12, UYVY, AYUV, GRAY8, GRAY10_LE32, GRAY16_LE, BGR, RGB, RGBA64_LE, BGRA64_LE }\n          width: [ 1, 2147483647 ]\n         height: [ 1, 2147483647 ]\nvideo/x-prores:\n          width: [ 1, 2147483647 ]\n         height: [ 1, 2147483647 ]\nvideo/x-wmv:\n     wmvversion: [ 1, 3 ]\n          width: [ 1, 2147483647 ]\n         height: [ 1, 2147483647 ]\nvideo/x-av1:\n  stream-format: obu-stream\n      alignment: tu\n          width: [ 1, 2147483647 ]\n         height: [ 1, 2147483647 ]\nvideo/x-ffv:\n      ffversion: 1\n          width: [ 1, 2147483647 ]\n         height: [ 1, 2147483647 ]\n",
                         "direction": "sink",
                         "presence": "request",
                         "type": "GstMatroskaMuxPad"
@@ -10260,7 +9455,7 @@
                         "presence": "always"
                     },
                     "subtitle_%%u": {
-                        "caps": "subtitle/x-kate:\ntext/x-raw:\n         format: utf8\napplication/x-ssa:\napplication/x-ass:\napplication/x-usf:\nsubpicture/x-dvd:\napplication/x-subtitle-unknown:\n",
+                        "caps": "subtitle/x-kate:\ntext/x-raw:\n         format: utf8\napplication/x-ssa:\napplication/x-ass:\napplication/x-usf:\nsubpicture/x-dvd:\nsubpicture/x-pgs:\napplication/x-subtitle-unknown:\n",
                         "direction": "sink",
                         "presence": "request",
                         "type": "GstMatroskaMuxPad"
@@ -11519,7 +10714,8 @@
                         "writable": true
                     }
                 },
-                "rank": "none"
+                "rank": "none",
+                "untrusted-aware": "true"
             }
         },
         "filename": "gstnavigationtest",
@@ -12223,7 +11419,7 @@
                 "long-name": "PulseAudio Audio Sink",
                 "pad-templates": {
                     "sink": {
-                        "caps": "audio/x-raw:\n         format: { S16LE, S16BE, F32LE, F32BE, S32LE, S32BE, S24LE, S24BE, S24_32LE, S24_32BE, U8 }\n         layout: interleaved\n           rate: [ 1, 384000 ]\n       channels: [ 1, 32 ]\naudio/x-alaw:\n           rate: [ 1, 384000 ]\n       channels: [ 1, 32 ]\naudio/x-mulaw:\n           rate: [ 1, 384000 ]\n       channels: [ 1, 32 ]\naudio/x-ac3:\n         framed: true\naudio/x-eac3:\n         framed: true\naudio/x-dts:\n         framed: true\n     block-size: { (int)512, (int)1024, (int)2048 }\naudio/mpeg:\n    mpegversion: 1\nmpegaudioversion: [ 1, 3 ]\n         parsed: true\naudio/mpeg:\n    mpegversion: { (int)2, (int)4 }\n         framed: true\n  stream-format: adts\n",
+                        "caps": "audio/x-raw:\n         format: { S16LE, S16BE, F32LE, F32BE, S32LE, S32BE, S24LE, S24BE, S24_32LE, S24_32BE, U8 }\n         layout: interleaved\n           rate: [ 1, 768000 ]\n       channels: [ 1, 32 ]\naudio/x-alaw:\n           rate: [ 1, 768000 ]\n       channels: [ 1, 32 ]\naudio/x-mulaw:\n           rate: [ 1, 768000 ]\n       channels: [ 1, 32 ]\naudio/x-ac3:\n         framed: true\naudio/x-eac3:\n         framed: true\naudio/x-dts:\n         framed: true\n     block-size: { (int)512, (int)1024, (int)2048 }\naudio/mpeg:\n    mpegversion: 1\nmpegaudioversion: [ 1, 3 ]\n         parsed: true\naudio/mpeg:\n    mpegversion: { (int)2, (int)4 }\n         framed: true\n  stream-format: adts\n",
                         "direction": "sink",
                         "presence": "always"
                     }
@@ -12350,7 +11546,7 @@
                 "long-name": "PulseAudio Audio Source",
                 "pad-templates": {
                     "src": {
-                        "caps": "audio/x-raw:\n         format: { S16LE, S16BE, F32LE, F32BE, S32LE, S32BE, S24LE, S24BE, S24_32LE, S24_32BE, U8 }\n         layout: interleaved\n           rate: [ 1, 384000 ]\n       channels: [ 1, 32 ]\naudio/x-alaw:\n           rate: [ 1, 384000 ]\n       channels: [ 1, 32 ]\naudio/x-mulaw:\n           rate: [ 1, 384000 ]\n       channels: [ 1, 32 ]\n",
+                        "caps": "audio/x-raw:\n         format: { S16LE, S16BE, F32LE, F32BE, S32LE, S32BE, S24LE, S24BE, S24_32LE, S24_32BE, U8 }\n         layout: interleaved\n           rate: [ 1, 768000 ]\n       channels: [ 1, 32 ]\naudio/x-alaw:\n           rate: [ 1, 768000 ]\n       channels: [ 1, 32 ]\naudio/x-mulaw:\n           rate: [ 1, 768000 ]\n       channels: [ 1, 32 ]\n",
                         "direction": "src",
                         "presence": "always"
                     }
@@ -12624,6 +11820,81 @@
                         "return-type": "void",
                         "when": "last"
                     }
+                },
+                "untrusted-aware": "true"
+            },
+            "qml6glrendersrc": {
+                "author": "Matthew Waters <matthew@centricular.com>",
+                "description": "A video src that renders a QML scene",
+                "hierarchy": [
+                    "GstQml6GLRenderSrc",
+                    "GstGLBaseSrc",
+                    "GstPushSrc",
+                    "GstBaseSrc",
+                    "GstElement",
+                    "GstObject",
+                    "GInitiallyUnowned",
+                    "GObject"
+                ],
+                "klass": "Source/Video",
+                "pad-templates": {
+                    "src": {
+                        "caps": "video/x-raw(memory:GLMemory):\n         format: RGBA\n          width: [ 1, 2147483647 ]\n         height: [ 1, 2147483647 ]\n      framerate: [ 0/1, 2147483647/1 ]\n texture-target: 2D\n",
+                        "direction": "src",
+                        "presence": "always"
+                    }
+                },
+                "properties": {
+                    "max-framerate": {
+                        "blurb": "The maximum framerate to render when running with a variable framerate",
+                        "conditionally-available": false,
+                        "construct": false,
+                        "construct-only": false,
+                        "controllable": false,
+                        "default": "25/1",
+                        "max": "2147483647/1",
+                        "min": "0/2147483647",
+                        "mutable": "null",
+                        "readable": true,
+                        "type": "GstFraction",
+                        "writable": true
+                    },
+                    "qml-scene": {
+                        "blurb": "The contents of the QML scene",
+                        "conditionally-available": false,
+                        "construct": false,
+                        "construct-only": false,
+                        "controllable": false,
+                        "default": "NULL",
+                        "mutable": "null",
+                        "readable": true,
+                        "type": "gchararray",
+                        "writable": true
+                    },
+                    "root-item": {
+                        "blurb": "Provides the 'QQuickItem *' to render.",
+                        "conditionally-available": false,
+                        "construct": false,
+                        "construct-only": false,
+                        "controllable": false,
+                        "mutable": "null",
+                        "readable": true,
+                        "type": "gpointer",
+                        "writable": true
+                    }
+                },
+                "rank": "none",
+                "signals": {
+                    "qml-scene-destroyed": {
+                        "args": [],
+                        "return-type": "void",
+                        "when": "last"
+                    },
+                    "qml-scene-initialized": {
+                        "args": [],
+                        "return-type": "void",
+                        "when": "last"
+                    }
                 }
             },
             "qml6glsink": {
@@ -12718,6 +11989,18 @@
                         "construct-only": false,
                         "controllable": false,
                         "default": "false",
+                        "mutable": "null",
+                        "readable": true,
+                        "type": "gboolean",
+                        "writable": true
+                    },
+                    "view-only": {
+                        "blurb": "When set no navigation input is forwarded to the QQuickWindow",
+                        "conditionally-available": false,
+                        "construct": false,
+                        "construct-only": false,
+                        "controllable": false,
+                        "default": "true",
                         "mutable": "null",
                         "readable": true,
                         "type": "gboolean",
@@ -12887,7 +12170,8 @@
                         "return-type": "void",
                         "when": "last"
                     }
-                }
+                },
+                "untrusted-aware": "true"
             },
             "qmlglsink": {
                 "author": "Matthew Waters <matthew@centricular.com>",
@@ -13326,7 +12610,8 @@
                         "writable": true
                     }
                 },
-                "rank": "none"
+                "rank": "none",
+                "untrusted-aware": "true"
             },
             "rglimiter": {
                 "author": "René Stadler <mail@renestadler.de>",
@@ -13367,7 +12652,8 @@
                         "writable": true
                     }
                 },
-                "rank": "none"
+                "rank": "none",
+                "untrusted-aware": "true"
             },
             "rgvolume": {
                 "author": "René Stadler <mail@renestadler.de>",
@@ -13481,7 +12767,8 @@
                         "writable": false
                     }
                 },
-                "rank": "none"
+                "rank": "none",
+                "untrusted-aware": "true"
             }
         },
         "filename": "gstreplaygain",
@@ -14902,62 +14189,6 @@
                 "properties": {},
                 "rank": "secondary"
             },
-            "rtpceltdepay": {
-                "author": "Wim Taymans <wim.taymans@gmail.com>",
-                "description": "Extracts CELT audio from RTP packets",
-                "hierarchy": [
-                    "GstRtpCELTDepay",
-                    "GstRTPBaseDepayload",
-                    "GstElement",
-                    "GstObject",
-                    "GInitiallyUnowned",
-                    "GObject"
-                ],
-                "klass": "Codec/Depayloader/Network/RTP",
-                "long-name": "RTP CELT depayloader",
-                "pad-templates": {
-                    "sink": {
-                        "caps": "application/x-rtp:\n          media: audio\n     clock-rate: [ 32000, 48000 ]\n  encoding-name: CELT\n",
-                        "direction": "sink",
-                        "presence": "always"
-                    },
-                    "src": {
-                        "caps": "audio/x-celt:\n",
-                        "direction": "src",
-                        "presence": "always"
-                    }
-                },
-                "properties": {},
-                "rank": "secondary"
-            },
-            "rtpceltpay": {
-                "author": "Wim Taymans <wim.taymans@gmail.com>",
-                "description": "Payload-encodes CELT audio into a RTP packet",
-                "hierarchy": [
-                    "GstRtpCELTPay",
-                    "GstRTPBasePayload",
-                    "GstElement",
-                    "GstObject",
-                    "GInitiallyUnowned",
-                    "GObject"
-                ],
-                "klass": "Codec/Payloader/Network/RTP",
-                "long-name": "RTP CELT payloader",
-                "pad-templates": {
-                    "sink": {
-                        "caps": "audio/x-celt:\n           rate: [ 32000, 64000 ]\n       channels: [ 1, 2 ]\n     frame-size: [ 64, 512 ]\n",
-                        "direction": "sink",
-                        "presence": "always"
-                    },
-                    "src": {
-                        "caps": "application/x-rtp:\n          media: audio\n        payload: [ 96, 127 ]\n     clock-rate: [ 32000, 48000 ]\n  encoding-name: CELT\n",
-                        "direction": "src",
-                        "presence": "always"
-                    }
-                },
-                "properties": {},
-                "rank": "secondary"
-            },
             "rtpdvdepay": {
                 "author": "Marcel Moreaux <marcelm@spacelabs.nl>, Wim Taymans <wim.taymans@gmail.com>",
                 "description": "Depayloads DV from RTP packets (RFC 3189)",
@@ -15491,7 +14722,7 @@
                 "rank": "secondary"
             },
             "rtph263pay": {
-                "author": "Neil Stratford <neils@vipadia.com>Dejan Sakelsak <dejan.sakelsak@marand.si>",
+                "author": "Neil Stratford <neils@vipadia.com>, Dejan Sakelsak <dejan.sakelsak@marand.si>",
                 "description": "Payload-encodes H263 video in RTP packets (RFC 2190)",
                 "hierarchy": [
                     "GstRtpH263Pay",
@@ -15626,6 +14857,20 @@
                     }
                 },
                 "properties": {
+                    "max-fragmentation-unit-size": {
+                        "blurb": "Maximum size in bytes for a fragmentation unit (0 = auto)",
+                        "conditionally-available": false,
+                        "construct": false,
+                        "construct-only": false,
+                        "controllable": false,
+                        "default": "33554432",
+                        "max": "-1",
+                        "min": "0",
+                        "mutable": "null",
+                        "readable": true,
+                        "type": "guint",
+                        "writable": true
+                    },
                     "request-keyframe": {
                         "blurb": "Request new keyframe when packet loss is detected",
                         "conditionally-available": false,
@@ -15746,6 +14991,20 @@
                     }
                 },
                 "properties": {
+                    "max-fragmentation-unit-size": {
+                        "blurb": "Maximum size in bytes for a fragmentation unit (0 = auto)",
+                        "conditionally-available": false,
+                        "construct": false,
+                        "construct-only": false,
+                        "controllable": false,
+                        "default": "33554432",
+                        "max": "-1",
+                        "min": "0",
+                        "mutable": "null",
+                        "readable": true,
+                        "type": "guint",
+                        "writable": true
+                    },
                     "request-keyframe": {
                         "blurb": "Request new keyframe when packet loss is detected",
                         "conditionally-available": false,
@@ -16601,7 +15860,7 @@
                 "long-name": "RTP MPEG2 ES video payloader",
                 "pad-templates": {
                     "sink": {
-                        "caps": "video/mpeg:\n    mpegversion: 2\n   systemstream: false\n",
+                        "caps": "video/mpeg:\n    mpegversion: { (int)1, (int)2 }\n   systemstream: false\n",
                         "direction": "sink",
                         "presence": "always"
                     },
@@ -16640,7 +15899,7 @@
                     }
                 },
                 "properties": {},
-                "rank": "primary"
+                "rank": "secondary"
             },
             "rtpopuspay": {
                 "author": "Danilo Cesar Lemes de Paula <danilo.cesar@collabora.co.uk>",
@@ -16681,7 +15940,7 @@
                         "writable": true
                     }
                 },
-                "rank": "primary"
+                "rank": "secondary"
             },
             "rtppassthroughpay": {
                 "author": "Sebastian Dröge <sebastian@centricular.com>, Jonas Danielsson <jonas.danielsson@spiideo.com>",
@@ -16953,34 +16212,6 @@
                     },
                     "src": {
                         "caps": "audio/qcelp:\n       channels: 1\n           rate: 8000\n",
-                        "direction": "src",
-                        "presence": "always"
-                    }
-                },
-                "properties": {},
-                "rank": "secondary"
-            },
-            "rtpqdm2depay": {
-                "author": "Edward Hervey <bilboed@bilboed.com>",
-                "description": "Extracts QDM2 audio from RTP packets (no RFC)",
-                "hierarchy": [
-                    "GstRtpQDM2Depay",
-                    "GstRTPBaseDepayload",
-                    "GstElement",
-                    "GstObject",
-                    "GInitiallyUnowned",
-                    "GObject"
-                ],
-                "klass": "Codec/Depayloader/Network/RTP",
-                "long-name": "RTP QDM2 depayloader",
-                "pad-templates": {
-                    "sink": {
-                        "caps": "application/x-rtp:\n          media: audio\n  encoding-name: X-QDM\n",
-                        "direction": "sink",
-                        "presence": "always"
-                    },
-                    "src": {
-                        "caps": "audio/x-qdm2:\n",
                         "direction": "src",
                         "presence": "always"
                     }
@@ -19993,7 +19224,7 @@
                     "GInitiallyUnowned",
                     "GObject"
                 ],
-                "klass": "Demux/Network/RTP",
+                "klass": "Demuxer/Network/RTP",
                 "long-name": "RTP Demux",
                 "pad-templates": {
                     "sink": {
@@ -20688,6 +19919,20 @@
                         "type": "GstRTPProfile",
                         "writable": true
                     },
+                    "rtx-percentage": {
+                        "blurb": "The maximum amount of RTX as a percentage of the overall bitrate (-1 = no throttling)",
+                        "conditionally-available": false,
+                        "construct": false,
+                        "construct-only": false,
+                        "controllable": false,
+                        "default": "-1",
+                        "max": "2147483647",
+                        "min": "-1",
+                        "mutable": "null",
+                        "readable": true,
+                        "type": "gint",
+                        "writable": true
+                    },
                     "sdes": {
                         "blurb": "The SDES items of this session",
                         "conditionally-available": false,
@@ -20899,7 +20144,7 @@
                     "GInitiallyUnowned",
                     "GObject"
                 ],
-                "klass": "Demux/Network/RTP",
+                "klass": "Demuxer/Network/RTP",
                 "long-name": "RTP SSRC Demux",
                 "pad-templates": {
                     "rtcp_sink": {
@@ -21350,6 +20595,20 @@
                         "type": "guint",
                         "writable": true
                     },
+                    "max-csrcs": {
+                        "blurb": "How many contributing sources to track per SSRC. After the limit is reached the oldest CSRC is timed out. Only applies to receiver sources.",
+                        "conditionally-available": false,
+                        "construct": false,
+                        "construct-only": false,
+                        "controllable": false,
+                        "default": "15",
+                        "max": "-1",
+                        "min": "0",
+                        "mutable": "ready",
+                        "readable": true,
+                        "type": "guint",
+                        "writable": true
+                    },
                     "max-dropout-time": {
                         "blurb": "The maximum time (milliseconds) of missing packets tolerated.",
                         "conditionally-available": false,
@@ -21374,6 +20633,20 @@
                         "max": "-1",
                         "min": "0",
                         "mutable": "null",
+                        "readable": true,
+                        "type": "guint",
+                        "writable": true
+                    },
+                    "max-sources": {
+                        "blurb": "How many sources to track. After the limit is reached the oldest SSRC / CSRC is timed out. Only applies to receiver sources, and acts as a global limit to the number of tracked sources.",
+                        "conditionally-available": false,
+                        "construct": false,
+                        "construct-only": false,
+                        "controllable": false,
+                        "default": "150",
+                        "max": "-1",
+                        "min": "0",
+                        "mutable": "ready",
                         "readable": true,
                         "type": "guint",
                         "writable": true
@@ -21540,6 +20813,20 @@
                         "mutable": "null",
                         "readable": true,
                         "type": "GstRTPProfile",
+                        "writable": true
+                    },
+                    "rtx-percentage": {
+                        "blurb": "The maximum amount of RTX as a percentage of the overall bitrate (-1 = no throttling)",
+                        "conditionally-available": false,
+                        "construct": false,
+                        "construct-only": false,
+                        "controllable": false,
+                        "default": "-1",
+                        "max": "2147483647",
+                        "min": "-1",
+                        "mutable": "null",
+                        "readable": true,
+                        "type": "gint",
                         "writable": true
                     },
                     "sdes": {
@@ -22207,6 +21494,18 @@
                         "type": "GstRTSPBackchannel",
                         "writable": true
                     },
+                    "backchannel-http-method": {
+                        "blurb": "HTTP method for sending backchannel data in tunnel mode",
+                        "conditionally-available": false,
+                        "construct": false,
+                        "construct-only": false,
+                        "controllable": false,
+                        "default": "post (0)",
+                        "mutable": "null",
+                        "readable": true,
+                        "type": "GstRTSPBackchannelHttpMethod",
+                        "writable": true
+                    },
                     "buffer-mode": {
                         "blurb": "Control the buffering algorithm in use",
                         "conditionally-available": false,
@@ -22696,6 +21995,30 @@
                         "type": "guint64",
                         "writable": true
                     },
+                    "tls-client-certificate": {
+                        "blurb": "Path to a PEM-encoded TLS client certificate file for mTLS",
+                        "conditionally-available": false,
+                        "construct": false,
+                        "construct-only": false,
+                        "controllable": false,
+                        "default": "NULL",
+                        "mutable": "null",
+                        "readable": true,
+                        "type": "gchararray",
+                        "writable": true
+                    },
+                    "tls-client-key": {
+                        "blurb": "Path to a PEM-encoded private key file for the TLS client certificate",
+                        "conditionally-available": false,
+                        "construct": false,
+                        "construct-only": false,
+                        "controllable": false,
+                        "default": "NULL",
+                        "mutable": "null",
+                        "readable": true,
+                        "type": "gchararray",
+                        "writable": true
+                    },
                     "tls-database": {
                         "blurb": "TLS database with anchor certificate authorities used to validate the server certificate",
                         "conditionally-available": false,
@@ -22894,6 +22217,17 @@
                             }
                         ],
                         "return-type": "void",
+                        "when": "last"
+                    },
+                    "invalidate-key": {
+                        "action": true,
+                        "args": [
+                            {
+                                "name": "arg0",
+                                "type": "guint"
+                            }
+                        ],
+                        "return-type": "gboolean",
                         "when": "last"
                     },
                     "new-manager": {
@@ -23200,7 +22534,8 @@
                         "writable": true
                     }
                 },
-                "rank": "none"
+                "rank": "none",
+                "untrusted-aware": "true"
             }
         },
         "filename": "gstshapewipe",
@@ -23555,7 +22890,8 @@
                         "writable": true
                     }
                 },
-                "rank": "none"
+                "rank": "none",
+                "untrusted-aware": "true"
             },
             "smptealpha": {
                 "author": "Wim Taymans <wim.taymans@gmail.com>",
@@ -23651,7 +22987,8 @@
                         "writable": true
                     }
                 },
-                "rank": "none"
+                "rank": "none",
+                "untrusted-aware": "true"
             }
         },
         "filename": "gstsmpte",
@@ -24689,6 +24026,18 @@
                         "type": "gchararray",
                         "writable": true
                     },
+                    "location-trusted": {
+                        "blurb": "Whether the original location is trusted (preserve headers/cookies/auth on cross-origin redirects)",
+                        "conditionally-available": false,
+                        "construct": false,
+                        "construct-only": false,
+                        "controllable": false,
+                        "default": "false",
+                        "mutable": "null",
+                        "readable": true,
+                        "type": "gboolean",
+                        "writable": true
+                    },
                     "method": {
                         "blurb": "The HTTP method to use (GET, HEAD, OPTIONS, etc)",
                         "conditionally-available": false,
@@ -25036,7 +24385,8 @@
                         "writable": true
                     }
                 },
-                "rank": "none"
+                "rank": "none",
+                "untrusted-aware": "true"
             }
         },
         "filename": "gstspectrum",
@@ -26523,7 +25873,7 @@
                 "long-name": "Video (video4linux2) Sink",
                 "pad-templates": {
                     "sink": {
-                        "caps": "video/x-raw(memory:DMABuf):\n         format: DMA_DRM\n     drm-format: { (string)RGB8, (string)AR15, (string)XR15_BE, (string)AR15_BE, (string)RG16, (string)RG16_BE, (string)RG24, (string)BG24, (string)AR24, (string)RA24, (string)RX24, (string)AB24, (string)XB24, (string)BA24, (string)AR30, (string)\"R8\\ \\ \", (string)\"R4\\ \\ \", (string)\"R10\\ \", (string)\"R12\\ \", (string)\"R16\\ \", (string)\"R16\\ _BE\", (string)GR88, (string)YUV9, (string)YVU9, (string)YUYV, (string)UYVY, (string)VYUY, (string)YU11, (string)NV12:0x0400000000000001, (string)NV24, (string)NV42, (string)NV12:0x0b00000000000001, (string)P010, (string)NV61, (string)NV16, (string)NV21, (string)NV12:0x0400000000000002, (string)NV12, (string)YU16, (string)YVYU, (string)YV12, (string)YU12, (string)BX24, (string)XR24, (string)XR15 }\n          width: [ 1, 32768 ]\n         height: [ 1, 32768 ]\n      framerate: [ 0/1, 2147483647/1 ]\n\nvideo/x-raw(memory:DMABuf, format:Interlaced):\n         format: DMA_DRM\n     drm-format: { (string)RGB8, (string)AR15, (string)XR15_BE, (string)AR15_BE, (string)RG16, (string)RG16_BE, (string)RG24, (string)BG24, (string)AR24, (string)RA24, (string)RX24, (string)AB24, (string)XB24, (string)BA24, (string)AR30, (string)\"R8\\ \\ \", (string)\"R4\\ \\ \", (string)\"R10\\ \", (string)\"R12\\ \", (string)\"R16\\ \", (string)\"R16\\ _BE\", (string)GR88, (string)YUV9, (string)YVU9, (string)YUYV, (string)UYVY, (string)VYUY, (string)YU11, (string)NV12:0x0400000000000001, (string)NV24, (string)NV42, (string)NV12:0x0b00000000000001, (string)P010, (string)NV61, (string)NV16, (string)NV21, (string)NV12:0x0400000000000002, (string)NV12, (string)YU16, (string)YVYU, (string)YV12, (string)YU12, (string)BX24, (string)XR24, (string)XR15 }\n          width: [ 1, 32768 ]\n         height: [ 1, 32768 ]\n      framerate: [ 0/1, 2147483647/1 ]\n interlace-mode: alternate\nimage/jpeg:\n         parsed: true\nvideo/mpeg:\n    mpegversion: 4\n   systemstream: false\nvideo/mpeg:\n    mpegversion: { (int)1, (int)2 }\nvideo/mpegts:\n   systemstream: true\nvideo/x-bayer:\n         format: { bggr, gbrg, grbg, rggb, bggr10le, gbrg10le, grbg10le, rggb10le, bggr12le, gbrg12le, grbg12le, rggb12le, bggr14le, gbrg14le, grbg14le, rggb14le, bggr16le, gbrg16le, grbg16le, rggb16le }\n          width: [ 1, 32768 ]\n         height: [ 1, 32768 ]\n      framerate: [ 0/1, 2147483647/1 ]\nvideo/x-dv:\n   systemstream: true\nvideo/x-fwht:\nvideo/x-h263:\n        variant: itu\nvideo/x-h264:\n  stream-format: { (string)byte-stream, (string)avc }\n      alignment: au\nvideo/x-h265:\n  stream-format: byte-stream\n      alignment: au\nvideo/x-pwc1:\n          width: [ 1, 32768 ]\n         height: [ 1, 32768 ]\n      framerate: [ 0/1, 2147483647/1 ]\nvideo/x-pwc2:\n          width: [ 1, 32768 ]\n         height: [ 1, 32768 ]\n      framerate: [ 0/1, 2147483647/1 ]\nvideo/x-raw:\n         format: { RGB16, BGR, RGB, ABGR, xBGR, RGBA, RGBx, BGR10A2_LE, BGR15, GRAY8, GRAY16_LE, GRAY16_BE, YUV9, YVU9, YUY2, YVYU, UYVY, Y41B, NV12_64Z32, NV12_8L128, NV12_10BE_8L128, NV24, NV12_16L32S, P010_10LE, NV61, NV16, NV21, NV12, Y42B, YV12, I420, ARGB, xRGB, BGRA, BGRx, RGB15 }\n          width: [ 1, 32768 ]\n         height: [ 1, 32768 ]\n      framerate: [ 0/1, 2147483647/1 ]\nvideo/x-sonix:\n          width: [ 1, 32768 ]\n         height: [ 1, 32768 ]\n      framerate: [ 0/1, 2147483647/1 ]\nvideo/x-vp8:\nvideo/x-vp9:\nvideo/x-wmv:\n     wmvversion: 3\n         format: { WVC1, WMV3 }\n\nvideo/x-raw(format:Interlaced):\n         format: { RGB16, BGR, RGB, ABGR, xBGR, RGBA, RGBx, BGR10A2_LE, BGR15, GRAY8, GRAY16_LE, GRAY16_BE, YUV9, YVU9, YUY2, YVYU, UYVY, Y41B, NV12_64Z32, NV12_8L128, NV12_10BE_8L128, NV24, NV12_16L32S, P010_10LE, NV61, NV16, NV21, NV12, Y42B, YV12, I420, ARGB, xRGB, BGRA, BGRx, RGB15 }\n          width: [ 1, 32768 ]\n         height: [ 1, 32768 ]\n      framerate: [ 0/1, 2147483647/1 ]\n interlace-mode: alternate\n",
+                        "caps": "video/x-raw(memory:DMABuf):\n         format: DMA_DRM\n     drm-format: { (string)RGB8, (string)AR15, (string)XR15_BE, (string)AR15_BE, (string)RG16, (string)RG16_BE, (string)RG24, (string)BG24, (string)AR24, (string)RA24, (string)RX24, (string)AB24, (string)XB24, (string)BA24, (string)AR30, (string)\"R8\\ \\ \", (string)\"R4\\ \\ \", (string)\"R10\\ \", (string)\"R12\\ \", (string)\"R16\\ \", (string)\"R16\\ _BE\", (string)GR88, (string)YUV9, (string)YVU9, (string)YUYV, (string)UYVY, (string)VYUY, (string)YU11, (string)NV12:0x0400000000000001, (string)NV24, (string)NV42, (string)NV12:0x0b00000000000001, (string)P010, (string)NV61, (string)NV16, (string)NV21, (string)NV12:0x0400000000000002, (string)NV12, (string)YU16, (string)YVYU, (string)YV12, (string)YU12, (string)BX24, (string)XR24, (string)XR15 }\n          width: [ 1, 32768 ]\n         height: [ 1, 32768 ]\n      framerate: [ 0/1, 2147483647/1 ]\n\nvideo/x-raw(memory:DMABuf, format:Interlaced):\n         format: DMA_DRM\n     drm-format: { (string)RGB8, (string)AR15, (string)XR15_BE, (string)AR15_BE, (string)RG16, (string)RG16_BE, (string)RG24, (string)BG24, (string)AR24, (string)RA24, (string)RX24, (string)AB24, (string)XB24, (string)BA24, (string)AR30, (string)\"R8\\ \\ \", (string)\"R4\\ \\ \", (string)\"R10\\ \", (string)\"R12\\ \", (string)\"R16\\ \", (string)\"R16\\ _BE\", (string)GR88, (string)YUV9, (string)YVU9, (string)YUYV, (string)UYVY, (string)VYUY, (string)YU11, (string)NV12:0x0400000000000001, (string)NV24, (string)NV42, (string)NV12:0x0b00000000000001, (string)P010, (string)NV61, (string)NV16, (string)NV21, (string)NV12:0x0400000000000002, (string)NV12, (string)YU16, (string)YVYU, (string)YV12, (string)YU12, (string)BX24, (string)XR24, (string)XR15 }\n          width: [ 1, 32768 ]\n         height: [ 1, 32768 ]\n      framerate: [ 0/1, 2147483647/1 ]\n interlace-mode: alternate\nimage/jpeg:\n         parsed: true\nvideo/mpeg:\n    mpegversion: 4\n   systemstream: false\nvideo/mpeg:\n    mpegversion: { (int)1, (int)2 }\nvideo/mpegts:\n   systemstream: true\nvideo/x-av1:\n  stream-format: obu-stream\n      alignment: tu\nvideo/x-bayer:\n         format: { bggr, gbrg, grbg, rggb, bggr10le, gbrg10le, grbg10le, rggb10le, bggr12le, gbrg12le, grbg12le, rggb12le, bggr14le, gbrg14le, grbg14le, rggb14le, bggr16le, gbrg16le, grbg16le, rggb16le }\n          width: [ 1, 32768 ]\n         height: [ 1, 32768 ]\n      framerate: [ 0/1, 2147483647/1 ]\nvideo/x-dv:\n   systemstream: true\nvideo/x-fwht:\nvideo/x-h263:\n        variant: itu\nvideo/x-h264:\n  stream-format: { (string)byte-stream, (string)avc }\n      alignment: au\nvideo/x-h265:\n  stream-format: byte-stream\n      alignment: au\nvideo/x-pwc1:\n          width: [ 1, 32768 ]\n         height: [ 1, 32768 ]\n      framerate: [ 0/1, 2147483647/1 ]\nvideo/x-pwc2:\n          width: [ 1, 32768 ]\n         height: [ 1, 32768 ]\n      framerate: [ 0/1, 2147483647/1 ]\nvideo/x-raw:\n         format: { RGB16, BGR, RGB, ABGR, xBGR, RGBA, RGBx, BGR10A2_LE, BGR15, GRAY8, GRAY16_LE, GRAY16_BE, YUV9, YVU9, YUY2, YVYU, UYVY, VYUY, Y41B, NV12_64Z32, NV12_8L128, NV12_10BE_8L128, NV24, NV12_16L32S, P010_10LE, NV61, NV16, NV21, NV12, Y42B, YV12, I420, ARGB, xRGB, BGRA, BGRx, RGB15 }\n          width: [ 1, 32768 ]\n         height: [ 1, 32768 ]\n      framerate: [ 0/1, 2147483647/1 ]\nvideo/x-sonix:\n          width: [ 1, 32768 ]\n         height: [ 1, 32768 ]\n      framerate: [ 0/1, 2147483647/1 ]\nvideo/x-vp8:\nvideo/x-vp9:\nvideo/x-wmv:\n     wmvversion: 3\n         format: { WVC1, WMV3 }\n\nvideo/x-raw(format:Interlaced):\n         format: { RGB16, BGR, RGB, ABGR, xBGR, RGBA, RGBx, BGR10A2_LE, BGR15, GRAY8, GRAY16_LE, GRAY16_BE, YUV9, YVU9, YUY2, YVYU, UYVY, VYUY, Y41B, NV12_64Z32, NV12_8L128, NV12_10BE_8L128, NV24, NV12_16L32S, P010_10LE, NV61, NV16, NV21, NV12, Y42B, YV12, I420, ARGB, xRGB, BGRA, BGRx, RGB15 }\n          width: [ 1, 32768 ]\n         height: [ 1, 32768 ]\n      framerate: [ 0/1, 2147483647/1 ]\n interlace-mode: alternate\n",
                         "direction": "sink",
                         "presence": "always"
                     }
@@ -26831,7 +26181,7 @@
                 "long-name": "Video (video4linux2) Source",
                 "pad-templates": {
                     "src": {
-                        "caps": "video/x-raw(memory:DMABuf):\n         format: DMA_DRM\n     drm-format: { (string)RGB8, (string)AR15, (string)XR15_BE, (string)AR15_BE, (string)RG16, (string)RG16_BE, (string)RG24, (string)BG24, (string)AR24, (string)RA24, (string)RX24, (string)AB24, (string)XB24, (string)BA24, (string)AR30, (string)\"R8\\ \\ \", (string)\"R4\\ \\ \", (string)\"R10\\ \", (string)\"R12\\ \", (string)\"R16\\ \", (string)\"R16\\ _BE\", (string)GR88, (string)YUV9, (string)YVU9, (string)YUYV, (string)UYVY, (string)VYUY, (string)YU11, (string)NV12:0x0400000000000001, (string)NV24, (string)NV42, (string)NV12:0x0b00000000000001, (string)P010, (string)NV61, (string)NV16, (string)NV21, (string)NV12:0x0400000000000002, (string)NV12, (string)YU16, (string)YVYU, (string)YV12, (string)YU12, (string)BX24, (string)XR24, (string)XR15 }\n          width: [ 1, 32768 ]\n         height: [ 1, 32768 ]\n      framerate: [ 0/1, 2147483647/1 ]\n\nvideo/x-raw(memory:DMABuf, format:Interlaced):\n         format: DMA_DRM\n     drm-format: { (string)RGB8, (string)AR15, (string)XR15_BE, (string)AR15_BE, (string)RG16, (string)RG16_BE, (string)RG24, (string)BG24, (string)AR24, (string)RA24, (string)RX24, (string)AB24, (string)XB24, (string)BA24, (string)AR30, (string)\"R8\\ \\ \", (string)\"R4\\ \\ \", (string)\"R10\\ \", (string)\"R12\\ \", (string)\"R16\\ \", (string)\"R16\\ _BE\", (string)GR88, (string)YUV9, (string)YVU9, (string)YUYV, (string)UYVY, (string)VYUY, (string)YU11, (string)NV12:0x0400000000000001, (string)NV24, (string)NV42, (string)NV12:0x0b00000000000001, (string)P010, (string)NV61, (string)NV16, (string)NV21, (string)NV12:0x0400000000000002, (string)NV12, (string)YU16, (string)YVYU, (string)YV12, (string)YU12, (string)BX24, (string)XR24, (string)XR15 }\n          width: [ 1, 32768 ]\n         height: [ 1, 32768 ]\n      framerate: [ 0/1, 2147483647/1 ]\n interlace-mode: alternate\nimage/jpeg:\n         parsed: true\nvideo/mpeg:\n    mpegversion: 4\n   systemstream: false\nvideo/mpeg:\n    mpegversion: { (int)1, (int)2 }\nvideo/mpegts:\n   systemstream: true\nvideo/x-bayer:\n         format: { bggr, gbrg, grbg, rggb, bggr10le, gbrg10le, grbg10le, rggb10le, bggr12le, gbrg12le, grbg12le, rggb12le, bggr14le, gbrg14le, grbg14le, rggb14le, bggr16le, gbrg16le, grbg16le, rggb16le }\n          width: [ 1, 32768 ]\n         height: [ 1, 32768 ]\n      framerate: [ 0/1, 2147483647/1 ]\nvideo/x-dv:\n   systemstream: true\nvideo/x-fwht:\nvideo/x-h263:\n        variant: itu\nvideo/x-h264:\n  stream-format: { (string)byte-stream, (string)avc }\n      alignment: au\nvideo/x-h265:\n  stream-format: byte-stream\n      alignment: au\nvideo/x-pwc1:\n          width: [ 1, 32768 ]\n         height: [ 1, 32768 ]\n      framerate: [ 0/1, 2147483647/1 ]\nvideo/x-pwc2:\n          width: [ 1, 32768 ]\n         height: [ 1, 32768 ]\n      framerate: [ 0/1, 2147483647/1 ]\nvideo/x-raw:\n         format: { RGB16, BGR, RGB, ABGR, xBGR, RGBA, RGBx, BGR10A2_LE, BGR15, GRAY8, GRAY16_LE, GRAY16_BE, YUV9, YVU9, YUY2, YVYU, UYVY, Y41B, NV12_64Z32, NV12_8L128, NV12_10BE_8L128, NV24, NV12_16L32S, P010_10LE, NV61, NV16, NV21, NV12, Y42B, YV12, I420, ARGB, xRGB, BGRA, BGRx, RGB15 }\n          width: [ 1, 32768 ]\n         height: [ 1, 32768 ]\n      framerate: [ 0/1, 2147483647/1 ]\nvideo/x-sonix:\n          width: [ 1, 32768 ]\n         height: [ 1, 32768 ]\n      framerate: [ 0/1, 2147483647/1 ]\nvideo/x-vp8:\nvideo/x-vp9:\nvideo/x-wmv:\n     wmvversion: 3\n         format: { WVC1, WMV3 }\n\nvideo/x-raw(format:Interlaced):\n         format: { RGB16, BGR, RGB, ABGR, xBGR, RGBA, RGBx, BGR10A2_LE, BGR15, GRAY8, GRAY16_LE, GRAY16_BE, YUV9, YVU9, YUY2, YVYU, UYVY, Y41B, NV12_64Z32, NV12_8L128, NV12_10BE_8L128, NV24, NV12_16L32S, P010_10LE, NV61, NV16, NV21, NV12, Y42B, YV12, I420, ARGB, xRGB, BGRA, BGRx, RGB15 }\n          width: [ 1, 32768 ]\n         height: [ 1, 32768 ]\n      framerate: [ 0/1, 2147483647/1 ]\n interlace-mode: alternate\n",
+                        "caps": "video/x-raw(memory:DMABuf):\n         format: DMA_DRM\n     drm-format: { (string)RGB8, (string)AR15, (string)XR15_BE, (string)AR15_BE, (string)RG16, (string)RG16_BE, (string)RG24, (string)BG24, (string)AR24, (string)RA24, (string)RX24, (string)AB24, (string)XB24, (string)BA24, (string)AR30, (string)\"R8\\ \\ \", (string)\"R4\\ \\ \", (string)\"R10\\ \", (string)\"R12\\ \", (string)\"R16\\ \", (string)\"R16\\ _BE\", (string)GR88, (string)YUV9, (string)YVU9, (string)YUYV, (string)UYVY, (string)VYUY, (string)YU11, (string)NV12:0x0400000000000001, (string)NV24, (string)NV42, (string)NV12:0x0b00000000000001, (string)P010, (string)NV61, (string)NV16, (string)NV21, (string)NV12:0x0400000000000002, (string)NV12, (string)YU16, (string)YVYU, (string)YV12, (string)YU12, (string)BX24, (string)XR24, (string)XR15 }\n          width: [ 1, 32768 ]\n         height: [ 1, 32768 ]\n      framerate: [ 0/1, 2147483647/1 ]\n\nvideo/x-raw(memory:DMABuf, format:Interlaced):\n         format: DMA_DRM\n     drm-format: { (string)RGB8, (string)AR15, (string)XR15_BE, (string)AR15_BE, (string)RG16, (string)RG16_BE, (string)RG24, (string)BG24, (string)AR24, (string)RA24, (string)RX24, (string)AB24, (string)XB24, (string)BA24, (string)AR30, (string)\"R8\\ \\ \", (string)\"R4\\ \\ \", (string)\"R10\\ \", (string)\"R12\\ \", (string)\"R16\\ \", (string)\"R16\\ _BE\", (string)GR88, (string)YUV9, (string)YVU9, (string)YUYV, (string)UYVY, (string)VYUY, (string)YU11, (string)NV12:0x0400000000000001, (string)NV24, (string)NV42, (string)NV12:0x0b00000000000001, (string)P010, (string)NV61, (string)NV16, (string)NV21, (string)NV12:0x0400000000000002, (string)NV12, (string)YU16, (string)YVYU, (string)YV12, (string)YU12, (string)BX24, (string)XR24, (string)XR15 }\n          width: [ 1, 32768 ]\n         height: [ 1, 32768 ]\n      framerate: [ 0/1, 2147483647/1 ]\n interlace-mode: alternate\nimage/jpeg:\n         parsed: true\nvideo/mpeg:\n    mpegversion: 4\n   systemstream: false\nvideo/mpeg:\n    mpegversion: { (int)1, (int)2 }\nvideo/mpegts:\n   systemstream: true\nvideo/x-av1:\n  stream-format: obu-stream\n      alignment: tu\nvideo/x-bayer:\n         format: { bggr, gbrg, grbg, rggb, bggr10le, gbrg10le, grbg10le, rggb10le, bggr12le, gbrg12le, grbg12le, rggb12le, bggr14le, gbrg14le, grbg14le, rggb14le, bggr16le, gbrg16le, grbg16le, rggb16le }\n          width: [ 1, 32768 ]\n         height: [ 1, 32768 ]\n      framerate: [ 0/1, 2147483647/1 ]\nvideo/x-dv:\n   systemstream: true\nvideo/x-fwht:\nvideo/x-h263:\n        variant: itu\nvideo/x-h264:\n  stream-format: { (string)byte-stream, (string)avc }\n      alignment: au\nvideo/x-h265:\n  stream-format: byte-stream\n      alignment: au\nvideo/x-pwc1:\n          width: [ 1, 32768 ]\n         height: [ 1, 32768 ]\n      framerate: [ 0/1, 2147483647/1 ]\nvideo/x-pwc2:\n          width: [ 1, 32768 ]\n         height: [ 1, 32768 ]\n      framerate: [ 0/1, 2147483647/1 ]\nvideo/x-raw:\n         format: { RGB16, BGR, RGB, ABGR, xBGR, RGBA, RGBx, BGR10A2_LE, BGR15, GRAY8, GRAY16_LE, GRAY16_BE, YUV9, YVU9, YUY2, YVYU, UYVY, VYUY, Y41B, NV12_64Z32, NV12_8L128, NV12_10BE_8L128, NV24, NV12_16L32S, P010_10LE, NV61, NV16, NV21, NV12, Y42B, YV12, I420, ARGB, xRGB, BGRA, BGRx, RGB15 }\n          width: [ 1, 32768 ]\n         height: [ 1, 32768 ]\n      framerate: [ 0/1, 2147483647/1 ]\nvideo/x-sonix:\n          width: [ 1, 32768 ]\n         height: [ 1, 32768 ]\n      framerate: [ 0/1, 2147483647/1 ]\nvideo/x-vp8:\nvideo/x-vp9:\nvideo/x-wmv:\n     wmvversion: 3\n         format: { WVC1, WMV3 }\n\nvideo/x-raw(format:Interlaced):\n         format: { RGB16, BGR, RGB, ABGR, xBGR, RGBA, RGBx, BGR10A2_LE, BGR15, GRAY8, GRAY16_LE, GRAY16_BE, YUV9, YVU9, YUY2, YVYU, UYVY, VYUY, Y41B, NV12_64Z32, NV12_8L128, NV12_10BE_8L128, NV24, NV12_16L32S, P010_10LE, NV61, NV16, NV21, NV12, Y42B, YV12, I420, ARGB, xRGB, BGRA, BGRx, RGB15 }\n          width: [ 1, 32768 ]\n         height: [ 1, 32768 ]\n      framerate: [ 0/1, 2147483647/1 ]\n interlace-mode: alternate\n",
                         "direction": "src",
                         "presence": "always"
                     }
@@ -27565,7 +26915,8 @@
                         "writable": true
                     }
                 },
-                "rank": "none"
+                "rank": "none",
+                "untrusted-aware": "true"
             }
         },
         "filename": "gstvideobox",
@@ -27659,7 +27010,8 @@
                         "writable": true
                     }
                 },
-                "rank": "none"
+                "rank": "none",
+                "untrusted-aware": "true"
             },
             "videocrop": {
                 "author": "Tim-Philipp Müller <tim centricular net>",
@@ -27745,7 +27097,8 @@
                         "writable": true
                     }
                 },
-                "rank": "none"
+                "rank": "none",
+                "untrusted-aware": "true"
             }
         },
         "filename": "gstvideocrop",
@@ -27760,7 +27113,7 @@
         "description": "Video filters plugin",
         "elements": {
             "gamma": {
-                "author": "Arwed v. Merkatz <v.merkatz@gmx.net",
+                "author": "Arwed v. Merkatz <v.merkatz@gmx.net>",
                 "description": "Adjusts gamma on a video stream",
                 "hierarchy": [
                     "GstGamma",
@@ -27801,7 +27154,8 @@
                         "writable": true
                     }
                 },
-                "rank": "none"
+                "rank": "none",
+                "untrusted-aware": "true"
             },
             "videobalance": {
                 "author": "David Schleef <ds@schleef.org>",
@@ -27890,7 +27244,8 @@
                         "writable": true
                     }
                 },
-                "rank": "none"
+                "rank": "none",
+                "untrusted-aware": "true"
             },
             "videoflip": {
                 "author": "David Schleef <ds@schleef.org>",
@@ -27935,7 +27290,8 @@
                         "writable": true
                     }
                 },
-                "rank": "none"
+                "rank": "none",
+                "untrusted-aware": "true"
             },
             "videomedian": {
                 "author": "Wim Taymans <wim.taymans@gmail.com>",
@@ -27989,7 +27345,8 @@
                         "writable": true
                     }
                 },
-                "rank": "none"
+                "rank": "none",
+                "untrusted-aware": "true"
             }
         },
         "filename": "gstvideofilter",
@@ -28110,7 +27467,8 @@
                         "writable": true
                     }
                 },
-                "rank": "primary"
+                "rank": "primary",
+                "untrusted-aware": "true"
             }
         },
         "filename": "gstvideomixer",
@@ -29333,12 +28691,12 @@
                 "long-name": "Wavpack audio decoder",
                 "pad-templates": {
                     "sink": {
-                        "caps": "audio/x-wavpack:\n          depth: [ 1, 32 ]\n       channels: [ 1, 8 ]\n           rate: [ 6000, 192000 ]\n         framed: true\n",
+                        "caps": "audio/x-wavpack:\n          depth: [ 1, 32 ]\n       channels: [ 1, 4096 ]\n           rate: [ 6000, 2147483647 ]\n         framed: true\n",
                         "direction": "sink",
                         "presence": "always"
                     },
                     "src": {
-                        "caps": "audio/x-raw:\n         format: S8\n         layout: interleaved\n       channels: [ 1, 8 ]\n           rate: [ 6000, 192000 ]\naudio/x-raw:\n         format: S16LE\n         layout: interleaved\n       channels: [ 1, 8 ]\n           rate: [ 6000, 192000 ]\naudio/x-raw:\n         format: S32LE\n         layout: interleaved\n       channels: [ 1, 8 ]\n           rate: [ 6000, 192000 ]\naudio/x-raw:\n         format: F32LE\n         layout: interleaved\n       channels: [ 1, 8 ]\n           rate: [ 6000, 192000 ]\n",
+                        "caps": "audio/x-raw:\n         format: { S8, S16LE, S18LE, S20LE, S24LE, S32LE }\n         layout: interleaved\n       channels: [ 1, 4096 ]\n           rate: [ 6000, 2147483647 ]\naudio/x-raw:\n         format: F32LE\n         layout: interleaved\n       channels: [ 1, 4096 ]\n           rate: [ 6000, 2147483647 ]\n",
                         "direction": "src",
                         "presence": "always"
                     }
@@ -29364,12 +28722,12 @@
                 "long-name": "Wavpack audio encoder",
                 "pad-templates": {
                     "sink": {
-                        "caps": "audio/x-raw:\n         format: S32LE\n         layout: interleaved\n       channels: [ 1, 8 ]\n           rate: [ 6000, 192000 ]\n",
+                        "caps": "audio/x-raw:\n         format: { S8, S16LE, S18LE, S20LE, S24LE, S32LE }\n         layout: interleaved\n       channels: [ 1, 4096 ]\n           rate: [ 6000, 2147483647 ]\naudio/x-raw:\n         format: F32LE\n         layout: interleaved\n       channels: [ 1, 4096 ]\n           rate: [ 6000, 2147483647 ]\n",
                         "direction": "sink",
                         "presence": "always"
                     },
                     "src": {
-                        "caps": "audio/x-wavpack:\n          depth: [ 1, 32 ]\n       channels: [ 1, 8 ]\n           rate: [ 6000, 192000 ]\n         framed: true\n",
+                        "caps": "audio/x-wavpack:\n          depth: [ 1, 32 ]\n          width: { (int)8, (int)16, (int)24, (int)32 }\n    sample-type: { (string)int, (string)float }\n       channels: [ 1, 4096 ]\n           rate: [ 6000, 2147483647 ]\n         framed: true\n",
                         "direction": "src",
                         "presence": "always"
                     },

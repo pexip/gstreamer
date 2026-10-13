@@ -46,6 +46,7 @@ from fractions import Fraction
 from pathlib import Path
 
 from .utils import GstCaps, which
+from . import config
 from . import reporters
 from . import loggable
 from .loggable import Loggable
@@ -295,7 +296,7 @@ class Test(Loggable):
                     res += " "
                 value = self.proc_env.get(var, None)
                 if value is not None:
-                    res += "%s='%s'" % (var, value)
+                    res += '%s="%s"' % (var, value)
         else:
             res += "[Not displaying environment variables, rerun with -vv for the full command]"
 
@@ -728,6 +729,16 @@ class Test(Loggable):
             shlex.quote(arg) for arg in self.command))
         if self.server_command:
             message = "%s & %s" % (self.server_command, message)
+
+        # Under CI, substitute the build and source roots with shell-style
+        # placeholders so the printed command can be reproduced locally by
+        # setting BUILD_ROOT / SOURCE_ROOT to the local checkout. BUILDDIR is
+        # usually nested inside SRCDIR, so it must be replaced first.
+        if 'CI' in os.environ:
+            if config.BUILDDIR:
+                message = message.replace(config.BUILDDIR, '${BUILD_ROOT}')
+            if config.SRCDIR:
+                message = message.replace(config.SRCDIR, '${SOURCE_ROOT}')
 
         return message
 
@@ -2054,9 +2065,14 @@ class _TestsLauncher(Loggable):
         if self.options.check_bugs_status:
             printc("OK", Colors.OKGREEN)
 
-        if self.needs_http_server() or options.httponly is True:
+        if options.update_media_info or options.generate_info:
             self.httpsrv = HTTPServer(options)
             self.httpsrv.start()
+
+        if self.needs_http_server() or options.httponly is True:
+            if not self.httpsrv:
+                self.httpsrv = HTTPServer(options)
+                self.httpsrv.start()
             configsdir = Path(options.logsdir) / "_validate_test_extra_configs"
             os.makedirs(configsdir, exist_ok=True)
             with open(configsdir / "http_server_port.var", "w") as f:
@@ -2135,6 +2151,27 @@ class _TestsLauncher(Loggable):
         return testlist_changed
 
     def _split_tests(self, num_groups):
+        dedicated_pattern = None
+        if self.options.dedicated_part:
+            dedicated_pattern = re.compile(self.options.dedicated_part)
+
+        if dedicated_pattern and num_groups > 1:
+            dedicated = []
+            rest = []
+            for test in self.tests:
+                if dedicated_pattern.findall(test.classname):
+                    dedicated.append(test)
+                else:
+                    rest.append(test)
+
+            # Distribute non-dedicated tests across parts 1..N-1
+            groups = [[] for _ in range(num_groups)]
+            group = cycle(groups[:-1])
+            for test in rest:
+                next(group).append(test)
+            groups[-1] = dedicated
+            return groups
+
         groups = [[] for x in range(num_groups)]
         group = cycle(groups)
         for test in self.tests:
@@ -2811,10 +2848,10 @@ class GstValidateMediaDescriptor(MediaDescriptor):
             return cls.__all_descriptors[xml_path]
         return GstValidateMediaDescriptor(xml_path)
 
-    def __init__(self, xml_path):
+    def __init__(self, xml_path, media_file_path=None):
         super(GstValidateMediaDescriptor, self).__init__()
 
-        self._media_file_path = None
+        self._media_file_path = media_file_path
         main_descriptor = self.__all_descriptors.get(xml_path)
         if main_descriptor:
             self._copy_data_from_main(main_descriptor)
@@ -2865,8 +2902,12 @@ class GstValidateMediaDescriptor(MediaDescriptor):
             if not os.path.exists(parsed_uri.path) and os.path.exists(self.get_media_filepath()):
                 self._uri = "file://" + self.get_media_filepath()
         elif parsed_uri.scheme == Protocols.IMAGESEQUENCE:
-            self._media_file_path = os.path.join(os.path.dirname(self.__cleanup_media_info_ext()), os.path.basename(parsed_uri.path))
-            self._uri = parsed_uri._replace(path=os.path.join(os.path.dirname(self.__cleanup_media_info_ext()), os.path.basename(self._media_file_path))).geturl()
+            if self._media_file_path is None:
+                media_dir = os.path.dirname(self.__cleanup_media_info_ext())
+            else:
+                media_dir = os.path.dirname(self._media_file_path)
+            self._media_file_path = os.path.join(media_dir, os.path.basename(parsed_uri.path))
+            self._uri = parsed_uri._replace(path=self._media_file_path).geturl()
         self._is_seekable = media_xml.attrib["seekable"].lower() == "true"
         self._is_live = media_xml.get("live", "false").lower() == "true"
         self._is_image = False
@@ -2886,7 +2927,8 @@ class GstValidateMediaDescriptor(MediaDescriptor):
         assert "Not reached" == None  # noqa
 
     @staticmethod
-    def new_from_uri(uri, verbose=False, include_frames=False, is_push=False, is_skipped=False):
+    def new_from_uri(uri, verbose=False, include_frames=False, is_push=False, is_skipped=False,
+                     media_info_dir=None, media_root=None):
         """
             include_frames = 0 # Never
             include_frames = 1 # always
@@ -2900,7 +2942,13 @@ class GstValidateMediaDescriptor(MediaDescriptor):
             ext = GstValidateMediaDescriptor.PUSH_MEDIA_INFO_EXT
         elif is_skipped:
             ext = GstValidateMediaDescriptor.SKIPPED_MEDIA_INFO_EXT
-        descriptor_path = "%s.%s" % (media_path, ext)
+
+        if media_info_dir and media_root:
+            rel_path = os.path.relpath(media_path, media_root)
+            descriptor_path = os.path.join(media_info_dir, "%s.%s" % (rel_path, ext))
+            os.makedirs(os.path.dirname(descriptor_path), exist_ok=True)
+        else:
+            descriptor_path = "%s.%s" % (media_path, ext)
         args = GstValidateBaseTestManager.MEDIA_CHECK_COMMAND.split(" ")
         if include_frames == 2:
             try:
@@ -2941,7 +2989,8 @@ class GstValidateMediaDescriptor(MediaDescriptor):
             printc("Result: Passed", Colors.OKGREEN)
 
         try:
-            return GstValidateMediaDescriptor(descriptor_path)
+            return GstValidateMediaDescriptor(descriptor_path,
+                                              media_file_path=media_path if media_info_dir else None)
         except (IOError, xml.etree.ElementTree.ParseError):
             return None
 

@@ -1,13 +1,15 @@
 tflite_sources = [
   'gsttflite.c',
   'gsttfliteinference.c',
-  'modelinfo.c',
+  'gsttfliteexternalinference.c'
 ]
 
 tflite_headers = [
   'gsttfliteinference.h',
   'gsttfliteedgetpuinference.h',
   'gsttflitevsiinference.h',
+  'gsttflitexnnpackinference.h',
+  'gsttfliteexternalinference.h'
 ]
 
 edgetpu_sources = [
@@ -17,6 +19,10 @@ edgetpu_sources = [
 vsi_sources = [
   'gsttflitevsiinference.c',
   'VX/vsi_npu_custom_op.cc'
+]
+
+xnnpack_sources = [
+  'gsttflitexnnpackinference.c',
 ]
 
 doc_sources = []
@@ -51,7 +57,7 @@ tensorflow_lite_header_found = cc.has_header('tensorflow/lite/c/c_api.h',
 
 if tensorflow_lite_dep.found() and tensorflow_lite_header_found
   tflite_extra_dep = []
-  tflite_c_args = []
+  tflite_c_args = ['-Wno-aggregate-return']
 
   if cc.has_header_symbol('tensorflow/lite/c/c_api.h', 'kTfLiteBFloat16',
 			   dependencies: tensorflow_lite_dep)
@@ -72,7 +78,15 @@ if tensorflow_lite_dep.found() and tensorflow_lite_header_found
 
   if get_option('tflite-vsi').allowed()
     tflite_sources += vsi_sources
-    tflite_c_args += ['-Wno-aggregate-return', '-DTFLITE_VSI']
+    tflite_c_args += ['-DTFLITE_VSI']
+  endif
+
+  if cc.has_header_symbol('tensorflow/lite/delegates/xnnpack/xnnpack_delegate.h',
+			   'TfLiteXNNPackDelegateCreate',
+			   dependencies: tensorflow_lite_dep,
+         required: get_option('tflite-xnnpack'))
+    tflite_sources += xnnpack_sources
+    tflite_c_args += ['-DTFLITE_HAS_XNNPACK_DELEGATE']
   endif
 
   gsttflite = library('gsttflite',

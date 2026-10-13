@@ -83,6 +83,9 @@
  * up to this size */
 #define MAX_PES_PAYLOAD (32 * 1024 * 1024)
 
+/* enable ignore-pcr if no PCR is seen within this milliseconds interval */
+#define IGNORE_PCR_THRESHOLD (1000 * GST_MSECOND)
+
 GST_DEBUG_CATEGORY_STATIC (ts_demux_debug);
 #define GST_CAT_DEFAULT ts_demux_debug
 
@@ -94,10 +97,8 @@ typedef enum
                                  * Push incoming buffers to the array */
   PENDING_PACKET_HEADER,        /* PES header needs to be parsed
                                  * Push incoming buffers to the array */
-  PENDING_PACKET_BUFFER,        /* Currently filling up output buffer
+  PENDING_PACKET_BUFFER         /* Currently filling up output buffer
                                  * Push incoming buffers to the bufferlist */
-  PENDING_PACKET_DISCONT        /* Discontinuity in incoming packets
-                                 * Drop all incoming buffers */
 } PendingPacketState;
 
 /* Pending buffer */
@@ -301,6 +302,7 @@ enum
   PROP_EMIT_STATS,
   PROP_LATENCY,
   PROP_SEND_SCTE35_EVENTS,
+  PROP_IGNORE_CONTINUITY_COUNTER,
   /* FILL ME */
 };
 
@@ -424,6 +426,28 @@ gst_ts_demux_class_init (GstTSDemuxClass * klass)
           G_MAXINT, DEFAULT_LATENCY,
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 
+  /**
+   * tsdemux:ignore-continuity-counter:
+   *
+   * Ignoring discontinuities in the stream continuity counters
+   *
+   * Some streams (HLS) are poorly generated and reset the continuity
+   * counter at fragment boundaries when there is no packet loss. The
+   * only way to handle those streams properly is to ignore the mismatch
+   * by setting this property to TRUE. In general, this property should
+   * not be otherwise used.
+   *
+   * Since: 1.30
+   */
+  g_object_class_install_property (gobject_class,
+      PROP_IGNORE_CONTINUITY_COUNTER,
+      g_param_spec_boolean ("ignore-continuity-counter",
+          "Ignore continuity counter",
+          "Ignore mismatched stream continuity counters in badly constructed streams",
+          FALSE,
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
+          GST_PARAM_MUTABLE_PLAYING));
+
   element_class = GST_ELEMENT_CLASS (klass);
   gst_element_class_add_pad_template (element_class,
       gst_static_pad_template_get (&video_template));
@@ -492,6 +516,8 @@ gst_ts_demux_init (GstTSDemux * demux)
 {
   MpegTSBase *base = (MpegTSBase *) demux;
 
+  demux->ignore_continuity_counter = FALSE;
+
   base->stream_size = sizeof (TSDemuxStream);
   base->parse_private_sections = TRUE;
   /* We are not interested in sections (all handled by mpegtsbase) */
@@ -528,6 +554,12 @@ gst_ts_demux_set_property (GObject * object, guint prop_id,
     case PROP_LATENCY:
       demux->latency = g_value_get_int (value);
       break;
+    case PROP_IGNORE_CONTINUITY_COUNTER:{
+      MpegTSBase *base = (MpegTSBase *) demux;
+      base->packetizer->ignore_continuity_counter =
+          demux->ignore_continuity_counter = g_value_get_boolean (value);
+      break;
+    }
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
   }
@@ -551,6 +583,9 @@ gst_ts_demux_get_property (GObject * object, guint prop_id,
       break;
     case PROP_LATENCY:
       g_value_set_int (value, demux->latency);
+      break;
+    case PROP_IGNORE_CONTINUITY_COUNTER:
+      g_value_set_boolean (value, demux->ignore_continuity_counter);
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
@@ -1123,7 +1158,7 @@ handle_psi (MpegTSBase * base, GstMpegtsSection * section)
     GList *tmp;
     gboolean forward = FALSE;
 
-    if (demux->send_scte35_events) {
+    if (demux->send_scte35_events && demux->program) {
       for (tmp = demux->program->stream_list; tmp; tmp = tmp->next) {
         TSDemuxStream *stream = (TSDemuxStream *) tmp->data;
 
@@ -1351,7 +1386,7 @@ create_pad_for_stream (MpegTSBase * base, MpegTSBaseStream * bstream,
   GstPad *pad = NULL;
   gboolean sparse = FALSE;
   gboolean is_audio = FALSE, is_video = FALSE, is_subpicture = FALSE,
-      is_private = FALSE;
+      is_private = FALSE, is_metadata = FALSE;
 
   gst_ts_demux_create_tags (stream);
 
@@ -1456,7 +1491,8 @@ create_pad_for_stream (MpegTSBase * base, MpegTSBaseStream * bstream,
       if (desc) {
         GST_LOG_OBJECT (demux, "ac4 audio");
         is_audio = TRUE;
-        caps = gst_caps_new_empty_simple ("audio/x-ac4");
+        caps = gst_caps_new_simple ("audio/x-ac4",
+            "stream-format", G_TYPE_STRING, "syncframe", NULL);
         break;
       }
 
@@ -1503,7 +1539,7 @@ create_pad_for_stream (MpegTSBase * base, MpegTSBaseStream * bstream,
         case DRF_ID_DTS2:
         case DRF_ID_DTS3:
           /* SMPTE registered DTS */
-          is_private = TRUE;
+          is_audio = TRUE;
           caps = gst_caps_new_empty_simple ("audio/x-dts");
           break;
         case DRF_ID_S302M:
@@ -1698,18 +1734,21 @@ create_pad_for_stream (MpegTSBase * base, MpegTSBaseStream * bstream,
         case DRF_ID_KLVA:
           sparse = TRUE;
           is_private = TRUE;
+          is_metadata = TRUE;
           caps = gst_caps_new_simple ("meta/x-klv",
               "parsed", G_TYPE_BOOLEAN, TRUE, NULL);
           break;
         case DRF_ID_ID3:
           sparse = TRUE;
           is_private = TRUE;
+          is_metadata = TRUE;
           caps = gst_caps_new_simple ("meta/x-id3",
               "parsed", G_TYPE_BOOLEAN, FALSE, NULL);
           break;
         case DRF_ID_AC4:
           is_audio = TRUE;
-          caps = gst_caps_new_empty_simple ("audio/x-ac4");
+          caps = gst_caps_new_simple ("audio/x-ac4",
+              "stream-format", G_TYPE_STRING, "syncframe", NULL);
           break;
         case DRF_ID_VP09:
           is_video = TRUE;
@@ -1717,6 +1756,7 @@ create_pad_for_stream (MpegTSBase * base, MpegTSBaseStream * bstream,
           break;
         case DRF_ID_VANC:
           is_private = TRUE;
+          is_metadata = TRUE;
           caps =
               gst_caps_new_simple ("meta/x-st-2038", "alignment", G_TYPE_STRING,
               "line", NULL);
@@ -1779,6 +1819,7 @@ create_pad_for_stream (MpegTSBase * base, MpegTSBaseStream * bstream,
               case DRF_ID_KLVA:
                 sparse = TRUE;
                 is_private = TRUE;
+                is_metadata = TRUE;
                 /* registration_id is not correctly set or parsed for some streams */
                 bstream->registration_id = DRF_ID_KLVA;
 
@@ -1789,6 +1830,7 @@ create_pad_for_stream (MpegTSBase * base, MpegTSBaseStream * bstream,
               case DRF_ID_ID3:
                 sparse = TRUE;
                 is_private = TRUE;
+                is_metadata = TRUE;
                 bstream->registration_id = DRF_ID_ID3;
 
                 caps = gst_caps_new_simple ("meta/x-id3",
@@ -2121,6 +2163,9 @@ done:
       name =
           g_strdup_printf ("private_%01x_%04x", demux->program_generation,
           bstream->pid);
+      if (is_metadata)
+        gst_stream_set_stream_type (bstream->stream_object,
+            GST_STREAM_TYPE_METADATA);
     } else if (is_subpicture) {
       template = gst_static_pad_template_get (&subpicture_template);
       name =
@@ -2647,7 +2692,7 @@ check_pending_buffers (GstTSDemux * demux)
         dur = MPEGTIME_TO_GSTTIME (lastval - firstval);
         GST_DEBUG_OBJECT (tmpstream->pad,
             "Pending content duration: %" GST_TIME_FORMAT, GST_TIME_ARGS (dur));
-        if (dur > 500 * GST_MSECOND) {
+        if (dur > IGNORE_PCR_THRESHOLD) {
           exceeded_threshold = TRUE;
           break;
         }
@@ -2663,7 +2708,8 @@ check_pending_buffers (GstTSDemux * demux)
     /* Except if we've exceed the maximum amount of pending buffers, in which
      * case we ignore PCR from now on */
     GST_DEBUG_OBJECT (demux,
-        "Saw more than 500ms of data without PCR. Ignoring PCR from now on");
+        "Saw more than %" GST_TIME_FORMAT " of data without PCR. "
+        "Ignoring PCR from now on", GST_TIME_ARGS (IGNORE_PCR_THRESHOLD));
     GST_MPEGTS_BASE (demux)->ignore_pcr = TRUE;
     demux->program->pcr_pid = 0x1fff;
     g_object_notify (G_OBJECT (demux), "ignore-pcr");
@@ -2873,7 +2919,13 @@ discont:
     stream->pending_header_data = NULL;
     stream->pending_header_size = 0;
   }
-  stream->state = PENDING_PACKET_DISCONT;
+  if (stream->data) {
+    g_free (stream->data);
+    stream->data = NULL;
+    stream->current_size = 0;
+  }
+  /* We need a new PUSI */
+  stream->state = PENDING_PACKET_EMPTY;
   return;
 }
 
@@ -2887,60 +2939,15 @@ gst_ts_demux_queue_data (GstTSDemux * demux, TSDemuxStream * stream,
 {
   guint8 *data;
   guint size;
-  guint8 cc = FLAGS_CONTINUITY_COUNTER (packet->scram_afc_cc);
 
   GST_LOG_OBJECT (demux, "pid: 0x%04x state:%d", stream->stream.pid,
       stream->state);
 
-  /* Handle expected discontinuity */
-  if (G_UNLIKELY (packet->afc_flags & MPEGTS_AFC_DISCONTINUITY_FLAG)) {
-    GST_LOG_OBJECT (demux, "pid: 0x%04x discontinuity flag, resetting counter",
-        stream->stream.pid);
-    stream->continuity_counter = CONTINUITY_UNSET;
-  }
-
   size = packet->data_end - packet->payload;
   data = packet->payload;
 
-  if (stream->continuity_counter == CONTINUITY_UNSET) {
-    GST_DEBUG_OBJECT (demux, "CONTINUITY: Initialize to %d", cc);
-  } else if ((cc == stream->continuity_counter + 1 ||
-          (stream->continuity_counter == MAX_CONTINUITY && cc == 0))) {
-    GST_LOG_OBJECT (demux, "CONTINUITY: Got expected %d", cc);
-  } else {
-    if (stream->state != PENDING_PACKET_EMPTY) {
-      if (packet->payload_unit_start_indicator) {
-        /* A mismatch is fatal, except if this is the beginning of a new
-         * frame (from which we can recover) */
-        if (G_UNLIKELY (stream->data)) {
-          g_free (stream->data);
-          stream->data = NULL;
-        }
-        if (G_UNLIKELY (stream->pending_header_data)) {
-          g_free (stream->pending_header_data);
-          stream->pending_header_data = NULL;
-        }
-        stream->state = PENDING_PACKET_HEADER;
-      } else {
-        gchar *pad_name = gst_pad_get_name (stream->pad);
-        GST_ELEMENT_WARNING_WITH_DETAILS (demux, STREAM, DEMUX,
-            ("CONTINUITY: Mismatch packet %d, stream %d (pid 0x%04x)", cc,
-                stream->continuity_counter, stream->stream.pid), (NULL),
-            ("warning-type", G_TYPE_STRING, "continuity-mismatch",
-                "packet", G_TYPE_INT, cc,
-                "stream", G_TYPE_INT, stream->continuity_counter,
-                "pid", G_TYPE_UINT, stream->stream.pid,
-                "pad-name", G_TYPE_STRING, pad_name, NULL));
-        g_free (pad_name);
-        stream->state = PENDING_PACKET_DISCONT;
-      }
-    }
-  }
-  stream->continuity_counter = cc;
-
   if (stream->state == PENDING_PACKET_EMPTY) {
     if (G_UNLIKELY (!packet->payload_unit_start_indicator)) {
-      stream->state = PENDING_PACKET_DISCONT;
       GST_DEBUG_OBJECT (demux, "Didn't get the first packet of this PES");
     } else {
       GST_LOG_OBJECT (demux, "EMPTY=>HEADER");
@@ -2969,20 +2976,6 @@ gst_ts_demux_queue_data (GstTSDemux * demux, TSDemuxStream * stream,
       }
       memcpy (stream->data + stream->current_size, data, size);
       stream->current_size += size;
-      break;
-    }
-    case PENDING_PACKET_DISCONT:
-    {
-      GST_LOG_OBJECT (demux, "DISCONT: not storing/pushing");
-      if (G_UNLIKELY (stream->data)) {
-        g_free (stream->data);
-        stream->data = NULL;
-      }
-      if (G_UNLIKELY (stream->pending_header_data)) {
-        g_free (stream->pending_header_data);
-        stream->pending_header_data = NULL;
-      }
-      stream->continuity_counter = CONTINUITY_UNSET;
       break;
     }
     default:
@@ -3948,19 +3941,60 @@ beach:
   return res;
 }
 
+/* packet is guaranteed to have a payload */
 static GstFlowReturn
 gst_ts_demux_handle_packet (GstTSDemux * demux, TSDemuxStream * stream,
-    MpegTSPacketizerPacket * packet, GstMpegtsSection * section)
+    MpegTSPacketizerPacket * packet, GstMpegtsSection * section G_GNUC_UNUSED)
 {
   GstFlowReturn res = GST_FLOW_OK;
+  guint8 cc = FLAGS_CONTINUITY_COUNTER (packet->scram_afc_cc);
 
-  GST_LOG_OBJECT (demux, "pid 0x%04x pusi:%d, afc:%d, cont:%d, payload:%p",
+  GST_LOG_OBJECT (demux, "pid 0x%04x pusi:%d, afc:%d, cc:%d, payload:%p",
       packet->pid, packet->payload_unit_start_indicator,
-      packet->scram_afc_cc & 0x30,
-      FLAGS_CONTINUITY_COUNTER (packet->scram_afc_cc), packet->payload);
+      packet->scram_afc_cc & 0x30, cc, packet->payload);
 
-  if (G_UNLIKELY (packet->payload_unit_start_indicator) &&
-      FLAGS_HAS_PAYLOAD (packet->scram_afc_cc)) {
+  /* Check continuity */
+  if (!demux->ignore_continuity_counter
+      && stream->continuity_counter != CONTINUITY_UNSET) {
+    if (((stream->continuity_counter + 1) % 16) != cc) {
+      if (stream->state != PENDING_PACKET_EMPTY) {
+#ifndef GST_DISABLE_GST_DEBUG
+        gchar *pad_name = NULL;
+
+        if (stream->pad)
+          pad_name = gst_pad_get_name (stream->pad);
+
+        GST_ELEMENT_WARNING_WITH_DETAILS (demux, STREAM, DEMUX,
+            ("CONTINUITY: Mismatch packet %d, stream %d (pid 0x%04x)", cc,
+                stream->continuity_counter, stream->stream.pid),
+            (NULL),
+            ("warning-type", G_TYPE_STRING, "continuity-mismatch", "packet",
+                G_TYPE_INT, cc, "stream", G_TYPE_INT,
+                stream->continuity_counter, "pid", G_TYPE_UINT,
+                stream->stream.pid, "pad-name", G_TYPE_STRING, pad_name, NULL));
+
+        g_free (pad_name);
+#endif
+        /* Clear pending state and don't process packet */
+        stream->continuity_counter = cc;
+        if (G_UNLIKELY (stream->data)) {
+          g_free (stream->data);
+          stream->data = NULL;
+          stream->current_size = 0;
+        }
+        if (G_UNLIKELY (stream->pending_header_data)) {
+          g_free (stream->pending_header_data);
+          stream->pending_header_data = NULL;
+        }
+        stream->state = PENDING_PACKET_EMPTY;
+
+        return GST_FLOW_OK;
+      }
+    }
+  }
+  stream->continuity_counter = cc;
+
+  if (G_UNLIKELY (packet->payload_unit_start_indicator)) {
     /* Flush previous data */
     res = gst_ts_demux_push_pending_data (demux, stream, NULL);
     if (res != GST_FLOW_REWINDING) {
@@ -3968,9 +4002,13 @@ gst_ts_demux_handle_packet (GstTSDemux * demux, TSDemuxStream * stream,
        * rewinding since the states will have been resetted accordingly */
       stream->state = PENDING_PACKET_HEADER;
     }
+  } else if (stream->state == PENDING_PACKET_EMPTY) {
+    GST_LOG_OBJECT (demux, "pid: 0x%04x waiting for packet start",
+        stream->stream.pid);
+    return GST_FLOW_OK;
   }
 
-  if (packet->payload && (res == GST_FLOW_OK || res == GST_FLOW_NOT_LINKED)
+  if ((res == GST_FLOW_OK || res == GST_FLOW_NOT_LINKED)
       && stream->pad) {
     gst_ts_demux_queue_data (demux, stream, packet);
     GST_LOG_OBJECT (demux, "current_size:%d, expected_size:%d",
@@ -4044,7 +4082,7 @@ gst_ts_demux_push (MpegTSBase * base, MpegTSPacketizerPacket * packet,
   TSDemuxStream *stream = NULL;
   GstFlowReturn res = GST_FLOW_OK;
 
-  if (G_LIKELY (demux->program)) {
+  if (G_LIKELY (packet->payload && demux->program)) {
     stream = (TSDemuxStream *) demux->program->streams[packet->pid];
 
     if (stream) {

@@ -163,6 +163,7 @@ ges_demux_get_extension (GstStructure * _struct)
       }
     }
     g_strfreev (extensions_a);
+    gst_caps_unref (caps);
   }
 done:
   g_list_free (formatters);
@@ -411,7 +412,7 @@ ges_demux_create_timeline (GESDemux * self, gchar * uri, GError ** error)
   G_GNUC_UNUSED void *unused;
   TimelineConstructionData data = { 0, };
   GMainContext *ctx = g_main_context_new ();
-  GstQuery *query;
+  GstQuery *query = NULL;
 
   g_main_context_push_thread_default (ctx);
   data.ml = g_main_loop_new (ctx, TRUE);
@@ -481,6 +482,7 @@ ges_demux_create_timeline (GESDemux * self, gchar * uri, GError ** error)
     GST_OBJECT_UNLOCK (self);
     g_list_free_full (assets, g_object_unref);
   }
+  g_clear_pointer (&query, gst_query_unref);
 
 done:
   if (data.loaded_sigid)
@@ -574,6 +576,9 @@ ges_demux_sink_event (GstPad * pad, GstObject * parent, GstEvent * event)
           goto error;
 
       done:
+        gst_buffer_unmap (xges_buffer, &map);
+        gst_buffer_unref (xges_buffer);
+        gst_event_unref (event);
         g_free (filename);
         g_free (uri);
         g_close (f, NULL);
@@ -591,6 +596,7 @@ ges_demux_sink_event (GstPad * pad, GstObject * parent, GstEvent * event)
         GST_ELEMENT_ERROR (self, RESOURCE, READ,
             ("Could not map buffer containing timeline description"),
             ("Not info"));
+        gst_buffer_unref (xges_buffer);
       }
     }
     default:

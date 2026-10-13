@@ -1030,12 +1030,15 @@ gst_ffmpegvidenc_register (GstPlugin * plugin)
     }
 
     /* no quasi codecs, please */
-    if (in_plugin->id == AV_CODEC_ID_RAWVIDEO ||
-        in_plugin->id == AV_CODEC_ID_V210 ||
-        in_plugin->id == AV_CODEC_ID_V210X ||
-        in_plugin->id == AV_CODEC_ID_V308 ||
-        in_plugin->id == AV_CODEC_ID_V408 ||
-        in_plugin->id == AV_CODEC_ID_V410 || in_plugin->id == AV_CODEC_ID_R210
+    if (in_plugin->id == AV_CODEC_ID_RAWVIDEO
+        || in_plugin->id == AV_CODEC_ID_V210
+        || in_plugin->id == AV_CODEC_ID_V210X
+        || in_plugin->id == AV_CODEC_ID_R210
+#if LIBAVCODEC_VERSION_MAJOR < 63
+        || in_plugin->id == AV_CODEC_ID_V308
+        || in_plugin->id == AV_CODEC_ID_V408
+        || in_plugin->id == AV_CODEC_ID_V410
+#endif
 #if LIBAVCODEC_VERSION_MAJOR < 61
         || in_plugin->id == AV_CODEC_ID_AYUV
 #endif
@@ -1087,7 +1090,8 @@ gst_ffmpegvidenc_register (GstPlugin * plugin)
     GST_DEBUG ("Trying plugin %s [%s]", in_plugin->name, in_plugin->long_name);
 
     /* no codecs for which we're GUARANTEED to have better alternatives */
-    if (!strcmp (in_plugin->name, "gif")) {
+    if (!strcmp (in_plugin->name, "gif")
+        || g_str_has_suffix (in_plugin->name, "_omx")) {
       GST_LOG ("Ignoring encoder %s", in_plugin->name);
       continue;
     }

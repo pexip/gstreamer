@@ -283,8 +283,12 @@ static void
 gst_mpeg_audio_parse_reset (GstMpegAudioParse * mp3parse)
 {
   mp3parse->upstream_format = GST_FORMAT_UNDEFINED;
-  mp3parse->channels = -1;
   mp3parse->rate = -1;
+  mp3parse->channels = -1;
+  mp3parse->mode = -1;
+  mp3parse->layer = -1;
+  mp3parse->version = -1;
+  mp3parse->crc = -1;
   mp3parse->sent_codec_tag = FALSE;
   mp3parse->last_posted_crc = CRC_UNKNOWN;
   mp3parse->last_posted_channel_mode = MPEG_AUDIO_CHANNEL_MODE_UNKNOWN;
@@ -760,7 +764,8 @@ gst_mpeg_audio_parse_handle_frame (GstBaseParse * parse,
       &version, &layer, &channels, &bitrate, &rate, &mode, &crc);
 
   if (channels != mp3parse->channels || rate != mp3parse->rate ||
-      layer != mp3parse->layer || version != mp3parse->version)
+      layer != mp3parse->layer || version != mp3parse->version ||
+      mode != mp3parse->mode)
     caps_change = TRUE;
   else
     caps_change = FALSE;
@@ -813,7 +818,8 @@ gst_mpeg_audio_parse_handle_frame (GstBaseParse * parse,
   /* restore default minimum */
   gst_base_parse_set_min_frame_size (parse, MIN_FRAME_SIZE);
 
-  res = TRUE;
+  /* output one frame if we have enough data */
+  res = bpf <= map.size;
 
   /* metadata handling */
   if (G_UNLIKELY (caps_change)) {
@@ -823,20 +829,40 @@ gst_mpeg_audio_parse_handle_frame (GstBaseParse * parse,
         "layer", G_TYPE_INT, layer,
         "rate", G_TYPE_INT, rate,
         "channels", G_TYPE_INT, channels, "parsed", G_TYPE_BOOLEAN, TRUE, NULL);
+
+    switch (mode) {
+      case MPEG_AUDIO_CHANNEL_MODE_MONO:
+        /* No mask */
+        break;
+
+      case MPEG_AUDIO_CHANNEL_MODE_DUAL_CHANNEL:
+        gst_caps_set_simple (caps, "channel-mask", GST_TYPE_BITMASK,
+            G_GUINT64_CONSTANT (0), NULL);
+        break;
+
+      default:
+        gst_caps_set_simple (caps, "channel-mask", GST_TYPE_BITMASK,
+            (GST_AUDIO_CHANNEL_POSITION_MASK (FRONT_LEFT) |
+                GST_AUDIO_CHANNEL_POSITION_MASK (FRONT_RIGHT)), NULL);
+        break;
+    }
+
     gst_pad_set_caps (GST_BASE_PARSE_SRC_PAD (parse), caps);
     gst_caps_unref (caps);
 
     mp3parse->rate = rate;
     mp3parse->channels = channels;
+    mp3parse->mode = mode;
     mp3parse->layer = layer;
     mp3parse->version = version;
+    mp3parse->crc = crc;
 
     /* see http://www.codeproject.com/audio/MPEGAudioInfo.asp */
-    if (mp3parse->layer == 1)
+    if (layer == 1)
       mp3parse->spf = 384;
-    else if (mp3parse->layer == 2)
+    else if (layer == 2)
       mp3parse->spf = 1152;
-    else if (mp3parse->version == 1) {
+    else if (version == 1) {
       mp3parse->spf = 1152;
     } else {
       /* MPEG-2 or "2.5" */
@@ -885,10 +911,6 @@ gst_mpeg_audio_parse_handle_frame (GstBaseParse * parse,
   /* For first frame; check for seek tables and output a codec tag */
   gst_mpeg_audio_parse_handle_first_frame (mp3parse, buf);
 
-  /* store some frame info for later processing */
-  mp3parse->last_crc = crc;
-  mp3parse->last_mode = mode;
-
 cleanup:
   gst_buffer_unmap (buf, &map);
 
@@ -903,7 +925,7 @@ cleanup:
     GST_BUFFER_DURATION (frame->buffer) = 0;
   }
 
-  if (res && bpf <= map.size) {
+  if (res) {
     return gst_base_parse_finish_frame (parse, frame, bpf);
   }
 
@@ -1676,13 +1698,13 @@ gst_mpeg_audio_parse_pre_push_frame (GstBaseParse * parse,
 
   /* we will create a taglist (if any of the parameters has changed)
    * to add the tags that changed */
-  if (mp3parse->last_posted_crc != mp3parse->last_crc) {
+  if (mp3parse->last_posted_crc != mp3parse->crc) {
     gboolean using_crc;
 
     if (!taglist)
       taglist = gst_tag_list_new_empty ();
 
-    mp3parse->last_posted_crc = mp3parse->last_crc;
+    mp3parse->last_posted_crc = mp3parse->crc;
     if (mp3parse->last_posted_crc == CRC_PROTECTED) {
       using_crc = TRUE;
     } else {
@@ -1692,14 +1714,14 @@ gst_mpeg_audio_parse_pre_push_frame (GstBaseParse * parse,
         using_crc, NULL);
   }
 
-  if (mp3parse->last_posted_channel_mode != mp3parse->last_mode) {
+  if (mp3parse->last_posted_channel_mode != mp3parse->mode) {
     if (!taglist)
       taglist = gst_tag_list_new_empty ();
 
-    mp3parse->last_posted_channel_mode = mp3parse->last_mode;
+    mp3parse->last_posted_channel_mode = mp3parse->mode;
 
     gst_tag_list_add (taglist, GST_TAG_MERGE_REPLACE, GST_TAG_MODE,
-        gst_mpeg_audio_channel_mode_get_nick (mp3parse->last_mode), NULL);
+        gst_mpeg_audio_channel_mode_get_nick (mp3parse->mode), NULL);
   }
 
   /* tag sending done late enough in hook to ensure pending events

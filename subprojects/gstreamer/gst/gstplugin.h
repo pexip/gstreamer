@@ -77,13 +77,25 @@ typedef enum
  * GstPluginFlags:
  * @GST_PLUGIN_FLAG_CACHED: Temporarily loaded plugins
  * @GST_PLUGIN_FLAG_BLACKLISTED: The plugin won't be scanned (again)
+ * @GST_PLUGIN_FLAG_STATIC_FEATURES: The plugin has no external dependencies
+ *                     and a static set of features, rendering it suitable for storing
+ *                     in a static build-time registry. (Since: 1.30)
  *
- * The plugin loading state
+ * The plugin loading state and registry flags.
  */
 typedef enum
 {
   GST_PLUGIN_FLAG_CACHED      = (GST_OBJECT_FLAG_LAST << 0),
-  GST_PLUGIN_FLAG_BLACKLISTED = (GST_OBJECT_FLAG_LAST << 1)
+  GST_PLUGIN_FLAG_BLACKLISTED = (GST_OBJECT_FLAG_LAST << 1),
+  /**
+   * GST_PLUGIN_FLAG_STATIC_FEATURES:
+   *
+   * The plugin has no external dependencies and a static set of features,
+   * rendering it suitable for storing in a static build-time registry.
+   *
+   * Since: 1.30
+   */
+  GST_PLUGIN_FLAG_STATIC_FEATURES = (GST_OBJECT_FLAG_LAST << 2)
 } GstPluginFlags;
 
 /**
@@ -231,7 +243,8 @@ struct _GstPluginDesc {
  * GST_PLUGIN_DEFINE:
  * @major: major version number of the gstreamer-core that plugin was compiled for
  * @minor: minor version number of the gstreamer-core that plugin was compiled for
- * @name: short, but unique name of the plugin
+ * @name: short, but unique name of the plugin. It must match the basename of
+ *     the plugin's shared library (see below).
  * @description: information about the purpose of the plugin
  * @init: function pointer to the plugin_init method with the signature of <code>static gboolean plugin_init (GstPlugin * plugin)</code>.
  * @version: full version string (e.g. VERSION from config.h)
@@ -242,6 +255,12 @@ struct _GstPluginDesc {
  * This macro needs to be used to define the entry point and meta data of a
  * plugin. One would use this macro to export a plugin, so that it can be used
  * by other applications.
+ *
+ * Since GStreamer 1.14, the @name must match the basename of the shared library
+ * the plugin ships as: the dynamic loader derives the plugin name from the
+ * library file name, so a plugin installed as `libgst<name>.so` must pass that
+ * same name here. A mismatch makes GStreamer silently fail to recognise the
+ * file as a plugin.
  *
  * The macro uses a define named PACKAGE for the #GstPluginDesc,source field.
  * When using autoconf, this is usually set automatically via the AC_INIT
@@ -379,6 +398,9 @@ GstPlugin *             gst_plugin_load                 (GstPlugin *plugin) G_GN
 
 GST_API
 GstPlugin *             gst_plugin_load_by_name         (const gchar *name);
+
+GST_API
+void                    gst_plugin_set_static_features_flag (GstPlugin    * plugin);
 
 GST_API
 void                    gst_plugin_add_dependency        (GstPlugin    * plugin,

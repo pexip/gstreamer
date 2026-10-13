@@ -139,10 +139,12 @@ gst_hip_color_range_adjust_matrix_unorm (const GstVideoInfo * in_info,
     const GstVideoInfo * out_info, GstHipColorMatrix * matrix)
 {
   gboolean in_rgb, out_rgb;
-  gint in_offset[GST_VIDEO_MAX_COMPONENTS];
-  gint in_scale[GST_VIDEO_MAX_COMPONENTS];
-  gint out_offset[GST_VIDEO_MAX_COMPONENTS];
-  gint out_scale[GST_VIDEO_MAX_COMPONENTS];
+  gdouble in_offset[GST_VIDEO_MAX_COMPONENTS];
+  gdouble in_scale[GST_VIDEO_MAX_COMPONENTS];
+  gdouble out_offset[GST_VIDEO_MAX_COMPONENTS];
+  gdouble out_scale[GST_VIDEO_MAX_COMPONENTS];
+  gdouble in_depth[GST_VIDEO_MAX_COMPONENTS];
+  gdouble out_depth[GST_VIDEO_MAX_COMPONENTS];
   GstVideoColorRange in_range;
   GstVideoColorRange out_range;
   gdouble src_fullscale, dst_fullscale;
@@ -182,12 +184,13 @@ gst_hip_color_range_adjust_matrix_unorm (const GstVideoInfo * in_info,
       out_range = GST_VIDEO_COLOR_RANGE_16_235;
   }
 
-  src_fullscale = (gdouble) ((1 << in_info->finfo->depth[0]) - 1);
-  dst_fullscale = (gdouble) ((1 << out_info->finfo->depth[0]) - 1);
+  gst_video_color_range_offsets_full (in_range,
+      in_info->finfo, in_offset, in_scale, in_depth);
+  gst_video_color_range_offsets_full (out_range,
+      out_info->finfo, out_offset, out_scale, out_depth);
 
-  gst_video_color_range_offsets (in_range, in_info->finfo, in_offset, in_scale);
-  gst_video_color_range_offsets (out_range,
-      out_info->finfo, out_offset, out_scale);
+  src_fullscale = in_depth[0];
+  dst_fullscale = out_depth[0];
 
   matrix->min[0] = matrix->min[1] = matrix->min[2] =
       (gdouble) out_offset[0] / dst_fullscale;
@@ -239,7 +242,7 @@ static gboolean
 gst_hip_yuv_to_rgb_matrix_unorm (const GstVideoInfo * in_yuv_info,
     const GstVideoInfo * out_rgb_info, GstHipColorMatrix * matrix)
 {
-  gint offset[4], scale[4];
+  gdouble offset[4], scale[4], depth[4];
   gdouble Kr, Kb, Kg;
 
   /*
@@ -326,12 +329,12 @@ gst_hip_yuv_to_rgb_matrix_unorm (const GstVideoInfo * in_yuv_info,
   for (guint i = 0; i < 3; i++)
     matrix->max[i] = 1.0;
 
-  gst_video_color_range_offsets (in_yuv_info->colorimetry.range,
-      in_yuv_info->finfo, offset, scale);
+  gst_video_color_range_offsets_full (in_yuv_info->colorimetry.range,
+      in_yuv_info->finfo, offset, scale, depth);
 
   if (gst_video_color_matrix_get_Kr_Kb (in_yuv_info->colorimetry.matrix,
           &Kr, &Kb)) {
-    guint S;
+    gdouble S;
     gdouble Sy, Suv;
     gdouble Oy, Ouv;
     gdouble vecR[3], vecG[3], vecB[3];
@@ -351,7 +354,7 @@ gst_hip_yuv_to_rgb_matrix_unorm (const GstVideoInfo * in_yuv_info,
     vecB[2] = 0;
 
     /* Assume all components has the same bitdepth */
-    S = (1 << in_yuv_info->finfo->depth[0]) - 1;
+    S = depth[0];
     Sy = (gdouble) S / scale[0];
     Suv = (gdouble) S / scale[1];
     Oy = -((gdouble) offset[0] / scale[0]);
@@ -419,7 +422,7 @@ static gboolean
 gst_hip_rgb_to_yuv_matrix_unorm (const GstVideoInfo * in_rgb_info,
     const GstVideoInfo * out_yuv_info, GstHipColorMatrix * matrix)
 {
-  gint offset[4], scale[4];
+  gdouble offset[4], scale[4], depth[4];
   gdouble Kr, Kb, Kg;
 
   /*
@@ -484,12 +487,12 @@ gst_hip_rgb_to_yuv_matrix_unorm (const GstVideoInfo * in_rgb_info,
   for (guint i = 0; i < 3; i++)
     matrix->max[i] = 1.0;
 
-  gst_video_color_range_offsets (out_yuv_info->colorimetry.range,
-      out_yuv_info->finfo, offset, scale);
+  gst_video_color_range_offsets_full (out_yuv_info->colorimetry.range,
+      out_yuv_info->finfo, offset, scale, depth);
 
   if (gst_video_color_matrix_get_Kr_Kb (out_yuv_info->colorimetry.matrix,
           &Kr, &Kb)) {
-    guint S;
+    gdouble S;
     gdouble Sy, Suv;
     gdouble Oy, Ouv;
     gdouble vecY[3], vecU[3], vecV[3];
@@ -509,7 +512,7 @@ gst_hip_rgb_to_yuv_matrix_unorm (const GstVideoInfo * in_rgb_info,
     vecV[2] = -0.5 * Kb / (1 - Kr);
 
     /* Assume all components has the same bitdepth */
-    S = (1 << out_yuv_info->finfo->depth[0]) - 1;
+    S = depth[0];
     Sy = (gdouble) scale[0] / S;
     Suv = (gdouble) scale[1] / S;
     Oy = (gdouble) offset[0] / S;
@@ -653,6 +656,9 @@ typedef struct _TextureFormat
 #define MAKE_FORMAT_RGBAP(f,cf,sample_func) \
   { GST_VIDEO_FORMAT_ ##f,  { HIP_AD_FORMAT_ ##cf, HIP_AD_FORMAT_ ##cf, \
       HIP_AD_FORMAT_ ##cf, HIP_AD_FORMAT_ ##cf }, {1, 1, 1, 1}, sample_func }
+#define MAKE_FORMAT_GRAY(f,cf) \
+  { GST_VIDEO_FORMAT_ ##f,  { HIP_AD_FORMAT_ ##cf, HIP_AD_FORMAT_NONE, \
+      HIP_AD_FORMAT_NONE, HIP_AD_FORMAT_NONE },  {1, 0, 0, 0}, "GRAY" }
 
 static const TextureFormat format_map[] = {
   MAKE_FORMAT_YUV_PLANAR (I420, UNSIGNED_INT8, SAMPLE_YUV_PLANAR),
@@ -686,6 +692,14 @@ static const TextureFormat format_map[] = {
   MAKE_FORMAT_RGBP (GBR_16LE, UNSIGNED_INT16, SAMPLE_GBR),
   MAKE_FORMAT_RGBAP (GBRA, UNSIGNED_INT8, SAMPLE_GBRA),
   MAKE_FORMAT_RGB (VUYA, UNSIGNED_INT8, SAMPLE_VUYA),
+  MAKE_FORMAT_RGB (RGBA_F16LE, HALF, SAMPLE_RGBA),
+  MAKE_FORMAT_RGB (RGBA_F32LE, FLOAT, SAMPLE_RGBA),
+  MAKE_FORMAT_RGBP (RGBP_F16LE, HALF, SAMPLE_RGBP),
+  MAKE_FORMAT_RGBP (RGBP_F32LE, FLOAT, SAMPLE_RGBP),
+  MAKE_FORMAT_GRAY (GRAY8, UNSIGNED_INT8),
+  MAKE_FORMAT_GRAY (GRAY16_LE, UNSIGNED_INT16),
+  MAKE_FORMAT_GRAY (GRAY_F16LE, HALF),
+  MAKE_FORMAT_GRAY (GRAY_F32LE, FLOAT),
 };
 
 struct TextureBuffer
@@ -1035,6 +1049,43 @@ do_align (size_t value, size_t align)
   return ((value + align - 1) / align) * align;
 }
 
+static void
+convert_info_gray_to_yuv (const GstVideoInfo * gray, GstVideoInfo * yuv)
+{
+  GstVideoInfo tmp;
+
+  if (!GST_VIDEO_INFO_IS_GRAY (gray)) {
+    *yuv = *gray;
+    return;
+  }
+
+  if (gray->finfo->depth[0] == 8) {
+    gst_video_info_set_format (&tmp,
+        GST_VIDEO_FORMAT_Y444, gray->width, gray->height);
+  } else {
+    gst_video_info_set_format (&tmp,
+        GST_VIDEO_FORMAT_Y444_16LE, gray->width, gray->height);
+  }
+
+  tmp.colorimetry.range = gray->colorimetry.range;
+  if (tmp.colorimetry.range == GST_VIDEO_COLOR_RANGE_UNKNOWN)
+    tmp.colorimetry.range = GST_VIDEO_COLOR_RANGE_0_255;
+
+  tmp.colorimetry.primaries = gray->colorimetry.primaries;
+  if (tmp.colorimetry.primaries == GST_VIDEO_COLOR_PRIMARIES_UNKNOWN)
+    tmp.colorimetry.primaries = GST_VIDEO_COLOR_PRIMARIES_BT709;
+
+  tmp.colorimetry.transfer = gray->colorimetry.transfer;
+  if (tmp.colorimetry.transfer == GST_VIDEO_TRANSFER_UNKNOWN)
+    tmp.colorimetry.transfer = GST_VIDEO_TRANSFER_BT709;
+
+  tmp.colorimetry.matrix = gray->colorimetry.matrix;
+  if (tmp.colorimetry.matrix == GST_VIDEO_COLOR_MATRIX_UNKNOWN)
+    tmp.colorimetry.matrix = GST_VIDEO_COLOR_MATRIX_BT709;
+
+  *yuv = tmp;
+}
+
 static gboolean
 gst_hip_converter_setup (GstHipConverter * self)
 {
@@ -1052,12 +1103,20 @@ gst_hip_converter_setup (GstHipConverter * self)
   hipError_t ret;
   std::string output_name;
   std::string unpack_name;
+  GstVideoInfo matrix_in_info;
+  GstVideoInfo matrix_out_info;
 
   in_info = &priv->in_info;
   out_info = &priv->out_info;
   texture_info = &priv->texture_info;
   in_color = &in_info->colorimetry;
   out_color = &out_info->colorimetry;
+
+  convert_info_gray_to_yuv (in_info, &matrix_in_info);
+  convert_info_gray_to_yuv (out_info, &matrix_out_info);
+
+  const GstVideoInfo *matrix_in = &matrix_in_info;
+  const GstVideoInfo *matrix_out = &matrix_out_info;
 
   memset (&convert_matrix, 0, sizeof (GstHipColorMatrix));
   color_matrix_identity (&convert_matrix);
@@ -1161,6 +1220,39 @@ gst_hip_converter_setup (GstHipConverter * self)
     case GST_VIDEO_FORMAT_VUYA:
       output_name = "VUYA";
       break;
+    case GST_VIDEO_FORMAT_YUY2:
+      output_name = "YUY2";
+      break;
+    case GST_VIDEO_FORMAT_RGBA_F32LE:
+      output_name = "RGBA_F32";
+      break;
+    case GST_VIDEO_FORMAT_RGBA_F16LE:
+      output_name = "RGBA_F16";
+      break;
+    case GST_VIDEO_FORMAT_RGBP_F32LE:
+      output_name = "RGBP_F32";
+      break;
+    case GST_VIDEO_FORMAT_RGBP_F16LE:
+      output_name = "RGBP_F16";
+      break;
+    case GST_VIDEO_FORMAT_RGB_F32LE:
+      output_name = "RGB_F32";
+      break;
+    case GST_VIDEO_FORMAT_RGB_F16LE:
+      output_name = "RGB_F16";
+      break;
+    case GST_VIDEO_FORMAT_GRAY8:
+      output_name = "GRAY8";
+      break;
+    case GST_VIDEO_FORMAT_GRAY16_LE:
+      output_name = "GRAY16";
+      break;
+    case GST_VIDEO_FORMAT_GRAY_F32LE:
+      output_name = "GRAY_F32";
+      break;
+    case GST_VIDEO_FORMAT_GRAY_F16LE:
+      output_name = "GRAY_F16";
+      break;
     default:
       break;
   }
@@ -1198,6 +1290,24 @@ gst_hip_converter_setup (GstHipConverter * self)
           GST_VIDEO_FORMAT_ARGB64, GST_VIDEO_INFO_WIDTH (in_info),
           GST_VIDEO_INFO_HEIGHT (in_info));
       unpack_name = "GstHipConverterUnpack_BGR10A2_ARGB64";
+      break;
+    case GST_VIDEO_FORMAT_YUY2:
+      gst_video_info_set_format (&priv->texture_info,
+          GST_VIDEO_FORMAT_VUYA, GST_VIDEO_INFO_WIDTH (in_info),
+          GST_VIDEO_INFO_HEIGHT (in_info));
+      unpack_name = "GstHipConverterUnpack_YUY2_VUYA";
+      break;
+    case GST_VIDEO_FORMAT_RGB_F32LE:
+      gst_video_info_set_format (&priv->texture_info,
+          GST_VIDEO_FORMAT_RGBA_F32LE, GST_VIDEO_INFO_WIDTH (in_info),
+          GST_VIDEO_INFO_HEIGHT (in_info));
+      unpack_name = "GstHipConverterUnpack_RGB_F32_RGBA_F32";
+      break;
+    case GST_VIDEO_FORMAT_RGB_F16LE:
+      gst_video_info_set_format (&priv->texture_info,
+          GST_VIDEO_FORMAT_RGBA_F16LE, GST_VIDEO_INFO_WIDTH (in_info),
+          GST_VIDEO_INFO_HEIGHT (in_info));
+      unpack_name = "GstHipConverterUnpack_RGB_F16_RGBA_F16";
       break;
     default:
       break;
@@ -1252,7 +1362,7 @@ gst_hip_converter_setup (GstHipConverter * self)
       if (in_color->range == out_color->range) {
         GST_DEBUG_OBJECT (self, "RGB -> RGB conversion without matrix");
       } else {
-        if (!gst_hip_color_range_adjust_matrix_unorm (in_info, out_info,
+        if (!gst_hip_color_range_adjust_matrix_unorm (matrix_in, matrix_out,
                 &convert_matrix)) {
           GST_ERROR_OBJECT (self, "Failed to get RGB range adjust matrix");
           return FALSE;
@@ -1267,8 +1377,9 @@ gst_hip_converter_setup (GstHipConverter * self)
         priv->const_buf->do_convert = 1;
       }
     } else {
-      /* RGB -> YUV */
-      if (!gst_hip_rgb_to_yuv_matrix_unorm (in_info, out_info, &convert_matrix)) {
+      /* RGB -> YUV/GRAY */
+      if (!gst_hip_rgb_to_yuv_matrix_unorm (matrix_in,
+              matrix_out, &convert_matrix)) {
         GST_ERROR_OBJECT (self, "Failed to get RGB -> YUV transform matrix");
         return FALSE;
       }
@@ -1281,8 +1392,9 @@ gst_hip_converter_setup (GstHipConverter * self)
     }
   } else {
     if (GST_VIDEO_INFO_IS_RGB (out_info)) {
-      /* YUV -> RGB */
-      if (!gst_hip_yuv_to_rgb_matrix_unorm (in_info, out_info, &convert_matrix)) {
+      /* YUV/GRAY -> RGB */
+      if (!gst_hip_yuv_to_rgb_matrix_unorm (matrix_in,
+              matrix_out, &convert_matrix)) {
         GST_ERROR_OBJECT (self, "Failed to get YUV -> RGB transform matrix");
         return FALSE;
       }
@@ -1293,11 +1405,11 @@ gst_hip_converter_setup (GstHipConverter * self)
 
       priv->const_buf->do_convert = 1;
     } else {
-      /* YUV -> YUV */
+      /* YUV/GRAY -> YUV/GRAY */
       if (in_color->range == out_color->range) {
-        GST_DEBUG_OBJECT (self, "YUV -> YU conversion without matrix");
+        GST_DEBUG_OBJECT (self, "YUV conversion without matrix");
       } else {
-        if (!gst_hip_color_range_adjust_matrix_unorm (in_info, out_info,
+        if (!gst_hip_color_range_adjust_matrix_unorm (matrix_in, matrix_out,
                 &convert_matrix)) {
           GST_ERROR_OBJECT (self, "Failed to get GRAY range adjust matrix");
           return FALSE;
@@ -1774,7 +1886,7 @@ gst_hip_converter_convert_frame (GstHipConverter * converter,
   const TextureFormat *format;
   hipTextureObject_t texture[GST_VIDEO_MAX_COMPONENTS] = { };
   guint8 *dst[GST_VIDEO_MAX_COMPONENTS] = { };
-  gint stride[2] = { 0, };
+  gint stride[4] = { 0, };
   gint width, height;
   gint off_x = 0;
   gint off_y = 0;
@@ -1815,7 +1927,11 @@ gst_hip_converter_convert_frame (GstHipConverter * converter,
   priv->stream = gst_hip_stream_get_handle (out_stream);
   if (in_stream != out_stream) {
     gst_hip_memory_sync (in_hmem);
-  } else {
+  } else if (!gst_hip_memory_is_imported (in_hmem)) {
+    /* Imported input cannot use lazy synchronization even if in/out use the
+     * same stream. Unlike GstHip-owned memory, imported memory has no implicit
+     * synchronization point on free(), and the completion event is stored
+     * only in output memory */
     set_event = TRUE;
   }
 
@@ -1827,8 +1943,8 @@ gst_hip_converter_convert_frame (GstHipConverter * converter,
     return TRUE;
 
   gpointer args[] = { &texture[0], &texture[1], &texture[2], &texture[3],
-    &dst[0], &dst[1], &dst[2], &dst[3], &stride[0], &stride[1],
-    priv->const_buf, &off_x, &off_y
+    &dst[0], &dst[1], &dst[2], &dst[3], &stride[0], &stride[1], &stride[2],
+    &stride[3], priv->const_buf, &off_x, &off_y
   };
 
   auto cmem = (GstHipMemory *) gst_buffer_peek_memory (in_buf, 0);
@@ -1883,12 +1999,10 @@ gst_hip_converter_convert_frame (GstHipConverter * converter,
     }
   }
 
-  for (guint i = 0; i < GST_VIDEO_FRAME_N_PLANES (&out_frame); i++)
+  for (guint i = 0; i < GST_VIDEO_FRAME_N_PLANES (&out_frame); i++) {
     dst[i] = (guint8 *) GST_VIDEO_FRAME_PLANE_DATA (&out_frame, i);
-
-  stride[0] = stride[1] = GST_VIDEO_FRAME_PLANE_STRIDE (&out_frame, 0);
-  if (GST_VIDEO_FRAME_N_PLANES (&out_frame) > 1)
-    stride[1] = GST_VIDEO_FRAME_PLANE_STRIDE (&out_frame, 1);
+    stride[i] = GST_VIDEO_FRAME_PLANE_STRIDE (&out_frame, i);
+  }
 
   auto hip_ret = HipModuleLaunchKernel (priv->vendor, priv->main_func,
       DIV_UP (width, HIP_BLOCK_X), DIV_UP (height, HIP_BLOCK_Y), 1,

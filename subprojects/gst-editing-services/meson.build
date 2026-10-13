@@ -1,8 +1,9 @@
 project('gst-editing-services', 'c',
-  version : '1.27.2.1',
+  version : '1.29.2.1',
   meson_version : '>= 1.4',
   default_options : [ 'warning_level=1',
-                      'buildtype=debugoptimized' ])
+                      'buildtype=debugoptimized',
+                      'c_std=gnu11,c11' ])
 
 gst_version = meson.project_version()
 version_arr = gst_version.split('.')
@@ -54,7 +55,10 @@ if cc.get_id() == 'msvc'
       '/wd4146', # unary minus on unsigned (beware INT_MIN)
       '/wd4244', # lossy type conversion (e.g. double -> int)
       '/wd4305', # truncating type conversion (e.g. double -> float)
-      cc.get_supported_arguments(['/utf-8']), # set the input encoding to utf-8
+      cc.get_supported_arguments([
+        '/utf-8', # set the input encoding to utf-8
+        '/Zc:preprocessor', # enable preprocessor conformance mode (disable legacy preprocessor)
+      ]),
 
       # Enable some warnings on MSVC to match GCC/Clang behaviour
       '/w14062', # enumerator 'identifier' in switch of enum 'enumeration' is not handled
@@ -113,9 +117,7 @@ gstvalidate_dep = dependency('gstreamer-validate-1.0', version : gst_req, requir
   fallback : ['gst-devtools', 'validate_dep'])
 
 gio_dep = dependency('gio-2.0', version: glib_req)
-gmodule_dep = dependency('gmodule-no-export-2.0')
-libdl = cc.find_library('dl', required: false)
-libxml_dep = dependency('libxml-2.0', required: get_option('xptv'), default_options: {'python': false})
+libxml_dep = dependency('libxml-2.0', required: get_option('xptv'), default_options: {'python': 'disabled'})
 cdata.set('DISABLE_XPTV', not libxml_dep.found())
 
 # TODO Properly port to Gtk 3
@@ -137,7 +139,8 @@ build_gir = gir.found() and (not meson.is_cross_build() or get_option('introspec
 gir_init_section = [ '--add-init-section=' + \
     'extern void gst_init(gint*,gchar**);' + \
     'extern void ges_init(void);' + \
-    'g_setenv("GST_REGISTRY_1.0", "/no/way/this/exists.reg", TRUE);' + \
+    'g_setenv("GST_REGISTRY_DISABLE", "yes", TRUE);' + \
+    'g_setenv("GST_REGISTRY_1_0", "@0@", TRUE);'.format(meson.current_build_dir() + '/gir_empty_registry.reg') + \
     'g_setenv("GST_PLUGIN_PATH_1_0", "", TRUE);' + \
     'g_setenv("GST_PLUGIN_SYSTEM_PATH_1_0", "", TRUE);' + \
     'g_setenv("GST_DEBUG", "0", TRUE);' + \
@@ -148,92 +151,12 @@ gir_init_section = [ '--add-init-section=' + \
 pymod = import('python')
 python_opt = get_option('python')
 python = pymod.find_installation(get_option('python-exe'), required: python_opt)
-has_python = false
 static_build = get_option('default_library') == 'static'
 if static_build
   if python_opt.enabled()
     error('Want to build python based modules but it is not supported while static building')
   else
     message('Disabling python support as it is not supported on static builds')
-  endif
-elif build_gir and python.found()
-  python_dep = python.dependency(required : python_opt, embed: true,
-                                 include_type: 'system')
-  if python_dep.found()
-    python_abi_flags = python.get_variable('ABIFLAGS', '')
-    message(f'python_abi_flags = @python_abi_flags@')
-    pylib_loc = get_option('libpython-dir')
-
-    error_msg = ''
-    if not cc.compiles('#include <Python.h>', dependencies: [python_dep])
-      error_msg = 'Could not compile a simple program against python'
-      if python_opt.enabled()
-        error(error_msg)
-      else
-        message(error_msg)
-      endif
-    endif
-    fsmod = import('fs')
-    pylib_prefix = 'lib'
-    pylib_suffix = 'so'
-    pylib_ver = python_dep.version()
-    pylib_locs = []
-    if host_system == 'windows'
-      if cc.get_argument_syntax() == 'msvc'
-        pylib_prefix = ''
-      endif
-      pylib_suffix = 'dll'
-      pylib_ver = pylib_ver.replace('.', '')
-    elif host_system == 'darwin'
-      pylib_suffix = 'dylib'
-    endif
-    pylib_fnames = []
-    if host_system != 'darwin' # Ignore system Python (INSTSONAME points to the Python3 executable and not libpython3.9.dylib)
-      # Library name with soversion, non-devel package
-      if python.has_variable('INSTSONAME')
-        pylib_fnames += python.get_variable('INSTSONAME')
-      endif
-      # Library name without soversion, devel package, framework, etc.
-      if python.has_variable('LDLIBRARY')
-        pylib_fnames += python.get_variable('LDLIBRARY')
-      endif
-    endif
-    # Manually construct name as a fallback
-    pylib_fnames += [
-      pylib_prefix + 'python' + pylib_ver + python_abi_flags + '.' + pylib_suffix
-    ]
-    if pylib_loc != ''
-      pylib_locs = [pylib_loc]
-    else
-      if python.has_variable('LIBDIR')
-        pylib_locs += python.get_variable('LIBDIR')
-      endif
-      if python.has_variable('LIBPL')
-        pylib_locs += python.get_variable('LIBPL')
-      endif
-      # On Windows, python312.dll is in the rootdir where Python is installed,
-      # which is configured as the "prefix" in sysconfig.
-      if host_system == 'windows'
-        pylib_locs += python.get_variable('prefix')
-      endif
-    endif
-    foreach loc: pylib_locs
-      foreach fname: pylib_fnames
-        fpath = loc / fname
-        debug(f'Looking for Python library at: @fpath@')
-        if fsmod.exists(fpath)
-          libges_deps = libges_deps + [python_dep, gmodule_dep, libdl]
-          has_python = true
-          cdata.set('HAS_PYTHON', true)
-          cdata.set_quoted('PY_LIB_FNAME', fname)
-          message(f'PY_LIB_FNAME = @fname@ (@loc@)')
-          break
-        endif
-      endforeach
-    endforeach
-    if not has_python
-      message('Could not find python library to load, will try loading at runtime')
-    endif
   endif
 endif
 
@@ -353,7 +276,12 @@ endif
 
 configure_file(output: 'config.h', configuration: cdata)
 
-meson.add_dist_script('scripts/gen-changelog.py', meson.project_name(), '1.26.0', meson.project_version())
+meson.add_dist_script('scripts/gen-changelog.py', meson.project_name(), '1.28.0', meson.project_version())
+
+# dist common files from monorepo root
+if not meson.is_subproject()
+  meson.add_dist_script('scripts/dist-common-files.py', meson.project_version())
+endif
 
 plugin_names = []
 gst_plugins = []

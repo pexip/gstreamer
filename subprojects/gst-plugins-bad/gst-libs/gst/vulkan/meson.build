@@ -8,6 +8,8 @@ if vulkan_opt.disabled()
 endif
 
 vulkan_sources = files(
+  'gstvkbarrier.c',
+  'gstvkbarrierstate.c',
   'gstvkbuffermemory.c',
   'gstvkbufferpool.c',
   'gstvkcommandbuffer.c',
@@ -33,8 +35,10 @@ vulkan_sources = files(
   'gstvkphysicaldevice.c',
   'gstvkqueue.c',
   'gstvkswapper.c',
+  'gstvktimelinesemaphore.c',
   'gstvktrash.c',
   'gstvkvideofilter.c',
+  'gstvkrequestedextensions.c',
   'gstvkutils.c',
   'gstvkwindow.c',
 )
@@ -42,6 +46,7 @@ vulkan_sources = files(
 vulkan_headers = files(
   'gstvkapi.h',
   'gstvkbarrier.h',
+  'gstvkbarrierstate.h',
   'gstvkbuffermemory.h',
   'gstvkbufferpool.h',
   'gstvkcommandbuffer.h',
@@ -67,7 +72,9 @@ vulkan_headers = files(
   'gstvkphysicaldevice.h',
   'gstvkqueue.h',
   'gstvkswapper.h',
+  'gstvktimelinesemaphore.h',
   'gstvktrash.h',
+  'gstvkrequestedextensions.h',
   'gstvkutils.h',
   'gstvkvideofilter.h',
   'gstvkwindow.h',
@@ -98,7 +105,6 @@ has_vulkan_header = false
 vulkan_dep = dependency('', required: false)
 vulkan_inc_dir = ''
 enabled_vulkan_winsys = []
-is_ios_simulator = host_system == 'ios' and meson.get_external_property('needs_exe_wrapper', false)
 
 vulkan_conf = configuration_data()
 vulkan_conf_options = [
@@ -115,42 +121,17 @@ foreach option : vulkan_conf_options
   vulkan_conf.set(option, 0)
 endforeach
 
-if ['ios', 'darwin'].contains(host_system)
-  # - ios does not support the loader/validation layers
-  # - We need to link directly to MoltenVK to be able to use
-  #   MoltenVK-specific functions that use dispatchable handles (like
-  #   retrieving the metal device from the VkDevice) which is currently waiting
-  #   on implementing a proper Metal extension for Vulkan
-  #   https://github.com/KhronosGroup/MoltenVK/issues/492
-
-  # 1. Download and install the Vulkan SDK for macOS:
-  #   https://vulkan.lunarg.com/sdk/home#mac
-  # 2. Set a shell environment variable to point to the SDK:
-  #   `export VK_SDK_PATH="/path/to/VulkanSDK/1.3.231.1"`
-  vulkan_root = run_command(python3, '-c', 'import os; print(os.environ.get("VK_SDK_PATH"))', check: false).stdout().strip()
-
-  if vulkan_root != '' and vulkan_root != 'None'
-    molten_vk_root = join_paths(vulkan_root, 'MoltenVK')
-
-    if is_ios_simulator
-      platform_dir = 'ios-arm64_x86_64-simulator'
-    elif host_system == 'ios'
-      platform_dir = 'ios-arm64'
-    else
-      platform_dir = 'macos-arm64_x86_64'
-    endif
-
-    vulkan_lib_dir = join_paths(molten_vk_root, 'MoltenVK.xcframework', platform_dir)
-    vulkan_inc_dir = join_paths(molten_vk_root, 'include')
-    vulkan_lib = cc.find_library('MoltenVK', dirs: vulkan_lib_dir,
-                                 required : get_option('vulkan'))
-    has_vulkan_header = cc.has_header('vulkan/vulkan_core.h',
-                                      include_directories: include_directories(vulkan_inc_dir))
-    vulkan_dep = declare_dependency(include_directories: include_directories(vulkan_inc_dir),
-                                    dependencies: vulkan_lib,
-                                    link_args: ['-lc++'])
-  else
-    subdir_done()
+vulkan_plugin_kwargs = {}
+if host_system == 'darwin'
+  # Prefer direct MoltenVK linkage on Darwin instead of the Vulkan loader.
+  # This matches the framework packaging model and avoids depending on local
+  # ICD/loader setup when running the Vulkan plugin.
+  objcpp = meson.get_compiler('objcpp')
+  vulkan_dep = objcpp.find_library('MoltenVK', required: false)
+  if not vulkan_dep.found()
+    vulkan_dep = dependency('MoltenVK', fallback: 'moltenvk', required: vulkan_opt)
+    # We need this to find libMoltenVK.dylib when installed
+    vulkan_plugin_kwargs += {'install_rpath': '@loader_path/..'}
   endif
 elif host_system == 'windows'
   vulkan_root = run_command(python3, '-c', 'import os; print(os.environ.get("VK_SDK_PATH"))', check: false).stdout().strip()
@@ -182,7 +163,7 @@ else
   endif
 endif
 
-if not ['ios', 'darwin', 'windows'].contains(host_system)
+if host_system != 'windows'
   has_vulkan_header = cc.has_header('vulkan/vulkan_core.h', dependencies: vulkan_dep, required: vulkan_opt)
 endif
 
@@ -259,7 +240,7 @@ if 'wayland' in vulkan_windowing_opt or 'auto' in vulkan_windowing_opt
   endif
 endif
 
-if ['darwin', 'ios'].contains(host_system)
+if host_system == 'darwin'
   objc = meson.get_compiler('objc')
   if not objc.has_argument('-fobjc-arc')
     error('ARC is required for building')
@@ -282,10 +263,10 @@ if ['darwin', 'ios'].contains(host_system)
   endforeach
 endif
 
-if host_system == 'darwin'
+if subsystem == 'macos'
   cocoa_dep = dependency('appleframeworks', modules : ['Cocoa'], required : vulkan_opt)
 
-  if cocoa_dep.found() and cc.has_header('vulkan/vulkan_macos.h', include_directories: include_directories(vulkan_inc_dir), dependencies: vulkan_dep, required: vulkan_opt)
+  if cocoa_dep.found() and cc.has_header('vulkan/vulkan_macos.h', dependencies: vulkan_dep, required: vulkan_opt)
     vulkan_priv_sources += files(
       'cocoa/gstvkdisplay_cocoa.m',
       'cocoa/gstvkwindow_cocoa.m',
@@ -301,12 +282,10 @@ if host_system == 'darwin'
 
     optional_deps += [cocoa_dep]
   endif
-endif
-
-if host_system == 'ios'
+elif host_system == 'darwin'
   uikit_dep = dependency('appleframeworks', modules : ['UIKit', 'IOSurface', 'CoreGraphics', 'Metal'], required : vulkan_opt)
 
-  if uikit_dep.found() and cc.has_header('vulkan/vulkan_ios.h', include_directories: include_directories(vulkan_inc_dir), dependencies : vulkan_dep, required: vulkan_opt)
+  if uikit_dep.found() and cc.has_header('vulkan/vulkan_ios.h', dependencies : vulkan_dep, required: vulkan_opt)
     vulkan_priv_sources += files(
       'ios/gstvkdisplay_ios.m',
       'ios/gstvkwindow_ios.m',

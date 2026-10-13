@@ -152,6 +152,19 @@ adpcmenc_setup (ADPCMEnc * enc)
   switch (enc->layout) {
     case LAYOUT_ADPCM_DVI:
       layout = "dvi";
+      /* The encode loop writes 4 bytes per channel (8 samples) per
+       * iteration, so the block must hold the per-channel header plus a
+       * whole number of those chunks. Non-aligned block sizes would leave a
+       * partial, uninitialized chunk and do not correspond to any real
+       * ADPCM stream. */
+      if (enc->blocksize <= DVI_IMA_HEADER_SIZE * enc->channels
+          || (enc->blocksize - DVI_IMA_HEADER_SIZE * enc->channels)
+          % (4 * enc->channels) != 0) {
+        GST_WARNING_OBJECT (enc,
+            "block size %d is not valid for %d channel(s)", enc->blocksize,
+            enc->channels);
+        return FALSE;
+      }
       /* IMA ADPCM includes a 4-byte header per channel, */
       sample_bytes = enc->blocksize - (DVI_IMA_HEADER_SIZE * enc->channels);
       /* two samples per byte, plus a single sample in the header. */
@@ -304,7 +317,14 @@ adpcmenc_encode_ima_block (ADPCMEnc * enc, const gint16 * samples,
    */
   write_pos = HEADER_SIZE * enc->channels;
   read_pos = enc->channels;     /* the first sample is in the header. */
-  while (write_pos < enc->blocksize) {
+  /* Each iteration below consumes 8 * channels input samples
+   * (CHANNEL_CHUNK_SIZE == 8). Stop before an iteration that would read
+   * past the samples_per_block * channels samples the base class
+   * provides; otherwise block sizes whose data area is not a multiple
+   * of the chunk size cause an out-of-bounds read on the input. */
+  while (write_pos < enc->blocksize
+      && read_pos + 8 * enc->channels <=
+      enc->samples_per_block * enc->channels) {
     gint8 CHANNEL_CHUNK_SIZE = 8;
     for (channel = 0; channel < enc->channels; channel++) {
       /* convert eight samples (four bytes) per channel, then swap */
@@ -475,6 +495,7 @@ adpcmenc_class_init (ADPCMEncClass * klass)
 static gboolean
 plugin_init (GstPlugin * plugin)
 {
+  gst_plugin_set_static_features_flag (plugin);
   return GST_ELEMENT_REGISTER (adpcmenc, plugin);
 }
 

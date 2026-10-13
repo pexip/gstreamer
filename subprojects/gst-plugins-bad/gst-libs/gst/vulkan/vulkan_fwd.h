@@ -118,6 +118,11 @@ typedef struct _GstVulkanOperationClass GstVulkanOperationClass;
 typedef struct _GstVulkanOperationPrivate GstVulkanOperationPrivate;
 typedef struct _GstVulkanEncodeQueryResult GstVulkanEncodeQueryResult;
 
+typedef struct _GstVulkanTimelineSemaphore GstVulkanTimelineSemaphore;
+
+typedef struct _GstVulkanBarrierState GstVulkanBarrierState;
+typedef struct _GstVulkanBarrierStateClass GstVulkanBarrierStateClass;
+
 G_END_DECLS
 
 #endif /* __GST_VULKAN_FWD_H__ */

@@ -87,10 +87,9 @@ gstaudio_h = audio_enums[1]
 
 audio_gen_sources = [gstaudio_h]
 
-gstaudio_deps = [tag_dep, gst_base_dep, libm]
+gstaudio_deps = [tag_dep, gst_base_dep, orc_dep, libm]
 orcsrc = 'gstaudiopack'
 if have_orcc
-  gstaudio_deps += [orc_dep]
   orc_h = custom_target(orcsrc + '.h',
     input : orcsrc + '.orc',
     output : orcsrc + '.h',
@@ -153,6 +152,20 @@ if have_sse41
   simd_dependencies += audio_resampler_sse41
 endif
 
+if have_rvv
+  audio_resampler_rvv = static_library('audio_resampler_rvv',
+    ['audio-resampler-rvv.c', gstaudio_h],
+    c_args : gst_plugins_base_args + [rvv_args],
+    include_directories : [configinc, libsinc],
+    dependencies : [gst_base_dep],
+    pic : true,
+    install : false
+  )
+
+  simd_cargs += ['-DHAVE_RISCV_RVV']
+  simd_dependencies += audio_resampler_rvv
+endif
+
 gstaudio = library('gstaudio-@0@'.format(api_version),
   audio_src, gstaudio_h, gstaudio_c, orc_c, orc_h,
   c_args : gst_plugins_base_args + simd_cargs + ['-DBUILDING_GST_AUDIO', '-DG_LOG_DOMAIN="GStreamer-Audio"'],
@@ -162,7 +175,7 @@ gstaudio = library('gstaudio-@0@'.format(api_version),
   soversion : soversion,
   darwin_versions : osxversion,
   install : true,
-  dependencies : [ gstaudio_deps, base_platform_dep ],
+  dependencies : [ gst_dep, gstaudio_deps, base_platform_dep ],
 )
 pkg_name = 'gstreamer-audio-1.0'
 pkgconfig.generate(gstaudio,

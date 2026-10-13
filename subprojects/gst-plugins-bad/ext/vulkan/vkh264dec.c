@@ -240,8 +240,13 @@ gst_vulkan_h264_decoder_set_context (GstElement * element, GstContext * context)
 }
 
 static gboolean
-_query_context (GstVulkanH264Decoder * self, GstQuery * query)
+_query_context (GstVulkanH264Decoder * self, GstQuery * query,
+    GstPadDirection continue_direction)
 {
+  if (gst_vulkan_requested_extensions_handle_context_query (GST_ELEMENT
+          (self), query, continue_direction, self->instance))
+    return TRUE;
+
   if (gst_vulkan_handle_context_query (GST_ELEMENT (self), query, NULL,
           self->instance, self->device))
     return TRUE;
@@ -260,7 +265,9 @@ gst_vulkan_h264_decoder_src_query (GstVideoDecoder * decoder, GstQuery * query)
 
   switch (GST_QUERY_TYPE (query)) {
     case GST_QUERY_CONTEXT:
-      ret = _query_context (GST_VULKAN_H264_DECODER (decoder), query);
+      ret =
+          _query_context (GST_VULKAN_H264_DECODER (decoder), query,
+          GST_PAD_SINK);
       break;
     default:
       ret = GST_VIDEO_DECODER_CLASS (parent_class)->src_query (decoder, query);
@@ -277,7 +284,9 @@ gst_vulkan_h264_decoder_sink_query (GstVideoDecoder * decoder, GstQuery * query)
 
   switch (GST_QUERY_TYPE (query)) {
     case GST_QUERY_CONTEXT:
-      ret = _query_context (GST_VULKAN_H264_DECODER (decoder), query);
+      ret =
+          _query_context (GST_VULKAN_H264_DECODER (decoder), query,
+          GST_PAD_SRC);
       break;
     default:
       ret = GST_VIDEO_DECODER_CLASS (parent_class)->sink_query (decoder, query);
@@ -344,6 +353,12 @@ gst_vulkan_h264_decoder_decide_allocation (GstVideoDecoder * decoder,
   VkImageUsageFlags usage;
   GstVulkanVideoCapabilities vk_caps;
 
+  if (self->dpb_size == 0) {
+    return
+        GST_VIDEO_DECODER_CLASS (parent_class)->decide_allocation (decoder,
+        query);
+  }
+
   gst_query_parse_allocation (query, &caps, NULL);
   if (!caps)
     return FALSE;
@@ -368,8 +383,7 @@ gst_vulkan_h264_decoder_decide_allocation (GstVideoDecoder * decoder,
     pool = gst_vulkan_image_buffer_pool_new (self->device);
   }
 
-  usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_SAMPLED_BIT
-      | VK_IMAGE_USAGE_VIDEO_DECODE_DST_BIT_KHR;
+  usage = gst_vulkan_decoder_output_usage (pool);
 
   if (!self->decoder->dedicated_dpb) {
     min = MAX (min, MIN (self->dpb_size, vk_caps.caps.maxDpbSlots));
@@ -506,44 +520,45 @@ static StdVideoH264LevelIdc
 _get_h264_level_idc (int level_idc)
 {
   switch (level_idc) {
-    case 10:
+    case GST_H264_LEVEL_L1:
+    case GST_H264_LEVEL_L1B:
       return STD_VIDEO_H264_LEVEL_IDC_1_0;
-    case 11:
+    case GST_H264_LEVEL_L1_1:
       return STD_VIDEO_H264_LEVEL_IDC_1_1;
-    case 12:
+    case GST_H264_LEVEL_L1_2:
       return STD_VIDEO_H264_LEVEL_IDC_1_2;
-    case 13:
+    case GST_H264_LEVEL_L1_3:
       return STD_VIDEO_H264_LEVEL_IDC_1_3;
-    case 20:
+    case GST_H264_LEVEL_L2:
       return STD_VIDEO_H264_LEVEL_IDC_2_0;
-    case 21:
+    case GST_H264_LEVEL_L2_1:
       return STD_VIDEO_H264_LEVEL_IDC_2_1;
-    case 22:
+    case GST_H264_LEVEL_L2_2:
       return STD_VIDEO_H264_LEVEL_IDC_2_2;
-    case 30:
+    case GST_H264_LEVEL_L3:
       return STD_VIDEO_H264_LEVEL_IDC_3_0;
-    case 31:
+    case GST_H264_LEVEL_L3_1:
       return STD_VIDEO_H264_LEVEL_IDC_3_1;
-    case 32:
+    case GST_H264_LEVEL_L3_2:
       return STD_VIDEO_H264_LEVEL_IDC_3_2;
-    case 40:
+    case GST_H264_LEVEL_L4:
       return STD_VIDEO_H264_LEVEL_IDC_4_0;
-    case 41:
+    case GST_H264_LEVEL_L4_1:
       return STD_VIDEO_H264_LEVEL_IDC_4_1;
-    case 42:
+    case GST_H264_LEVEL_L4_2:
       return STD_VIDEO_H264_LEVEL_IDC_4_2;
-    case 50:
+    case GST_H264_LEVEL_L5:
       return STD_VIDEO_H264_LEVEL_IDC_5_0;
-    case 51:
+    case GST_H264_LEVEL_L5_1:
       return STD_VIDEO_H264_LEVEL_IDC_5_1;
-    case 52:
+    case GST_H264_LEVEL_L5_2:
       return STD_VIDEO_H264_LEVEL_IDC_5_2;
-    case 60:
+    case GST_H264_LEVEL_L6:
       return STD_VIDEO_H264_LEVEL_IDC_6_0;
-    case 61:
+    case GST_H264_LEVEL_L6_1:
       return STD_VIDEO_H264_LEVEL_IDC_6_1;
     default:
-    case 62:
+    case GST_H264_LEVEL_L6_2:
       return STD_VIDEO_H264_LEVEL_IDC_6_2;
   }
 }
@@ -1492,7 +1507,7 @@ gst_vulkan_h264_decoder_register (GstPlugin * plugin, GstVulkanDevice * device,
   type = g_type_register_static (GST_TYPE_H264_DECODER,
       type_name, &type_info, 0);
 
-  ret = gst_element_register (plugin, feature_name, rank, type);
+  ret = gst_vulkan_register_feature (plugin, device, type, feature_name, rank);
 
   g_free (type_name);
   g_free (feature_name);

@@ -290,6 +290,7 @@ gst_interlace_class_init (GstInterlaceClass * klass)
       "Interlace filter", "Filter/Video",
       "Creates an interlaced video from progressive frames",
       "David Schleef <ds@schleef.org>");
+  gst_element_class_mark_as_untrusted_aware (element_class);
 
   gst_element_class_add_static_pad_template (element_class,
       &gst_interlace_sink_template);
@@ -1005,24 +1006,17 @@ gst_interlace_getcaps (GstPad * pad, GstInterlace * interlace, GstCaps * filter)
     icaps = gst_caps_merge (icaps, alternate);
   }
 
-  /* Drop framerate for sinkpad */
-  if (pad == interlace->sinkpad) {
+  if (pattern == GST_INTERLACE_PATTERN_1_1) {
+    icaps =
+        gst_interlace_caps_double_framerate (icaps, (pad == interlace->srcpad),
+        FALSE);
+  } else if (pattern != GST_INTERLACE_PATTERN_2_2) {
+    GST_FIXME_OBJECT (interlace,
+        "Add calculations for telecine framerate conversions");
     for (i = 0; i < gst_caps_get_size (icaps); ++i) {
       GstStructure *s = gst_caps_get_structure (icaps, i);
 
       gst_structure_remove_field (s, "framerate");
-    }
-  } else {
-    if (pattern == GST_INTERLACE_PATTERN_1_1) {
-      icaps = gst_interlace_caps_double_framerate (icaps, TRUE, FALSE);
-    } else if (pattern != GST_INTERLACE_PATTERN_2_2) {
-      GST_FIXME_OBJECT (interlace,
-          "Add calculations for telecine framerate conversions");
-      for (i = 0; i < gst_caps_get_size (icaps); ++i) {
-        GstStructure *s = gst_caps_get_structure (icaps, i);
-
-        gst_structure_remove_field (s, "framerate");
-      }
     }
   }
 
@@ -1237,6 +1231,7 @@ gst_interlace_chain (GstPad * pad, GstObject * parent, GstBuffer * buffer)
   const PulldownFormat *format;
   GstClockTime timestamp;
   gboolean allow_rff, top_field_first, alternate;
+  GstInterlacePattern pattern;
 
   timestamp = GST_BUFFER_TIMESTAMP (buffer);
 
@@ -1255,7 +1250,8 @@ gst_interlace_chain (GstPad * pad, GstObject * parent, GstBuffer * buffer)
   }
 
   GST_OBJECT_LOCK (interlace);
-  format = &formats[interlace->pattern];
+  pattern = interlace->pattern;
+  format = &formats[pattern];
   allow_rff = interlace->allow_rff;
   pattern_offset = interlace->pattern_offset;
   top_field_first = interlace->top_field_first;
@@ -1439,6 +1435,103 @@ gst_interlace_chain (GstPad * pad, GstObject * parent, GstBuffer * buffer)
     interlace->fields_since_timebase += n_output_fields;
     interlace->field_index ^= (n_output_fields & 1);
 
+    /* timecode meta forwarding */
+    switch (pattern) {
+      case GST_INTERLACE_PATTERN_1_1:
+      {
+        GstVideoTimeCodeMeta *tc_meta_first = NULL;
+        GstVideoTimeCodeMeta *tc_meta_second = NULL;
+        GstVideoTimeCodeMeta *tc_meta = NULL;
+
+        if (interlace->stored_frame) {
+          tc_meta_first =
+              gst_buffer_get_video_time_code_meta (interlace->stored_frame);
+        }
+
+        tc_meta_second = gst_buffer_get_video_time_code_meta (buffer);
+
+        if (tc_meta_first && tc_meta_second) {
+          /* prefer 1st field's timecode */
+          tc_meta = tc_meta_first;
+
+          /* use 2nd one if it's marked discont so that following timecode
+           * remains contiguous */
+          if (tc_meta_second->tc.config.flags &
+              GST_VIDEO_TIME_CODE_FLAGS_DISCONT) {
+            tc_meta = tc_meta_second;
+          }
+        } else if (tc_meta_first) {
+          tc_meta = tc_meta_first;
+        } else {
+          tc_meta = tc_meta_second;
+        }
+
+        if (tc_meta) {
+          const GstVideoTimeCode *tc = &tc_meta->tc;
+          GstVideoTimeCode *out_tc;
+          GstVideoTimeCodeFlags tc_flags = GST_VIDEO_TIME_CODE_FLAGS_INTERLACED;
+          guint64 n_frames = gst_video_time_code_frames_since_daily_jam (tc);
+
+          if (tc->config.flags & GST_VIDEO_TIME_CODE_FLAGS_DROP_FRAME) {
+            /* drop frame requires special framerate. Preserve it only if
+             * it's valid for output framerate too */
+            if (interlace->out_info.fps_d == 1001 &&
+                interlace->out_info.fps_n % 30000 == 0) {
+              tc_flags |= GST_VIDEO_TIME_CODE_FLAGS_DROP_FRAME;
+            }
+          }
+
+          if (tc->config.flags & GST_VIDEO_TIME_CODE_FLAGS_DISCONT)
+            tc_flags |= GST_VIDEO_TIME_CODE_FLAGS_DISCONT;
+
+          out_tc = gst_video_time_code_new (interlace->out_info.fps_n,
+              interlace->out_info.fps_d, tc->config.latest_daily_jam,
+              tc_flags, 0, 0, 0, 0, 1);
+
+          if (gst_video_time_code_is_valid (out_tc)) {
+            /* half framerate in case of 1:1 conversion */
+            gst_video_time_code_add_frames (out_tc, n_frames / 2);
+
+            gst_buffer_add_video_time_code_meta (output_buffer, out_tc);
+            if (output_buffer2) {
+              /* alternate output */
+              out_tc->field_count = 2;
+              gst_buffer_add_video_time_code_meta (output_buffer2, out_tc);
+            }
+          }
+
+          gst_video_time_code_free (out_tc);
+        }
+        break;
+      }
+      case GST_INTERLACE_PATTERN_2_2:
+      {
+        GstVideoTimeCodeMeta *tc_meta =
+            gst_buffer_get_video_time_code_meta (buffer);
+        if (tc_meta) {
+          const GstVideoTimeCode *tc = &tc_meta->tc;
+          /* input and output is 1:1, copy timecode with updated flag */
+          gst_buffer_add_video_time_code_meta_full (output_buffer,
+              tc->config.fps_n, tc->config.fps_d, tc->config.latest_daily_jam,
+              tc->config.flags | GST_VIDEO_TIME_CODE_FLAGS_INTERLACED,
+              tc->hours, tc->minutes, tc->seconds, tc->frames, 1);
+
+          if (output_buffer2) {
+            /* alternate output */
+            gst_buffer_add_video_time_code_meta_full (output_buffer2,
+                tc->config.fps_n, tc->config.fps_d,
+                tc->config.latest_daily_jam,
+                tc->config.flags | GST_VIDEO_TIME_CODE_FLAGS_INTERLACED,
+                tc->hours, tc->minutes, tc->seconds, tc->frames, 2);
+          }
+        }
+        break;
+      }
+      default:
+        /* TODO: add other field pattern support */
+        break;
+    }
+
     ret = gst_interlace_push_buffer (interlace, output_buffer);
     if (ret != GST_FLOW_OK) {
       GST_DEBUG_OBJECT (interlace, "Failed to push buffer %p", output_buffer);
@@ -1576,6 +1669,7 @@ gst_interlace_change_state (GstElement * element, GstStateChange transition)
 static gboolean
 plugin_init (GstPlugin * plugin)
 {
+  gst_plugin_set_static_features_flag (plugin);
   return GST_ELEMENT_REGISTER (interlace, plugin);
 }
 

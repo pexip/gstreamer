@@ -183,6 +183,7 @@ struct _GstRTSPConnection
   gchar tunnelid[TUNNELID_LEN];
   gboolean tunneled;
   gboolean ignore_x_server_reply;
+  GstRTSPBackchannelHttpMethod backchannel_method;
   GstRTSPTunnelState tstate;
 
   /* the remote and local ip */
@@ -1154,7 +1155,8 @@ gst_rtsp_connection_connect_with_response_usec (GstRTSPConnection * conn,
   GSocketConnection *connection;
   GSocket *socket;
   GError *error = NULL;
-  gchar *connection_uri, *request_uri, *remote_ip, *query = NULL, *path = NULL;
+  gchar *connection_uri, *request_uri = NULL, *remote_ip, *query = NULL, *path =
+      NULL;
   GstClockTime to;
   guint16 url_port;
   GstRTSPUrl *url;
@@ -1182,6 +1184,9 @@ gst_rtsp_connection_connect_with_response_usec (GstRTSPConnection * conn,
 
   while (res == GST_RTSP_OK) {
     cancellable = get_cancellable (conn);
+
+    g_free (request_uri);
+    request_uri = NULL;
 
     if (conn->proxy_host) {
       connection = g_socket_client_connect_to_host (conn->client,
@@ -1247,7 +1252,11 @@ gst_rtsp_connection_connect_with_response_usec (GstRTSPConnection * conn,
           GST_LOG ("redirect from %s to %s.", connection_uri, request_uri);
 
           stream0_reset (conn);
+
+          g_free (connection_uri);
           connection_uri = request_uri;
+          request_uri = NULL;
+
           gst_uri_unref (uri);
 
           uri = gst_uri_from_string (connection_uri);
@@ -1943,13 +1952,19 @@ serialize_message (GstRTSPConnection * conn, GstRTSPMessage * message,
     case GST_RTSP_MESSAGE_REQUEST:
       str = g_string_new ("");
 
-      /* create request string, add CSeq */
-      g_string_append_printf (str, "%s %s RTSP/%s\r\n"
-          "CSeq: %d\r\n",
+      /* create request line */
+      g_string_append_printf (str, "%s %s RTSP/%s\r\n",
           gst_rtsp_method_as_text (message->type_data.request.method),
           message->type_data.request.uri,
-          gst_rtsp_version_as_text (message->type_data.request.version),
-          conn->cseq++);
+          gst_rtsp_version_as_text (message->type_data.request.version));
+      /* add CSeq header; also exposes the assigned value on the message so
+       * callers can read it back via gst_rtsp_message_get_header() */
+      {
+        gchar cseq_str[16];
+        g_snprintf (cseq_str, sizeof (cseq_str), "%d", conn->cseq++);
+        gst_rtsp_message_remove_header (message, GST_RTSP_HDR_CSEQ, -1);
+        gst_rtsp_message_add_header (message, GST_RTSP_HDR_CSEQ, cseq_str);
+      }
       /* add session id if we have one */
       if (conn->session_id[0] != '\0') {
         gst_rtsp_message_remove_header (message, GST_RTSP_HDR_SESSION, -1);
@@ -2129,7 +2144,9 @@ gst_rtsp_connection_send_messages_usec (GstRTSPConnection * conn,
                 &serialized_messages[i])))
       goto no_message;
 
-    if (conn->tunneled) {
+    if (conn->tunneled
+        && !(conn->backchannel_method == GST_RTSP_BACKCHANNEL_HTTP_METHOD_GET
+            && serialized_messages[i].data_is_data_header)) {
       gint state = 0, save = 0;
       gchar *base64_buffer, *out_buffer;
       gsize written = 0;
@@ -2232,9 +2249,20 @@ gst_rtsp_connection_send_messages_usec (GstRTSPConnection * conn,
   set_write_socket_timeout (conn, timeout);
 
   cancellable = get_cancellable (conn);
-  res =
-      writev_bytes (conn->output_stream, vectors, n_vectors, &bytes_written,
-      TRUE, cancellable);
+
+  {
+    GOutputStream *target_stream = conn->output_stream;
+
+    if (conn->tunneled
+        && conn->backchannel_method == GST_RTSP_BACKCHANNEL_HTTP_METHOD_GET
+        && n_messages == 1 && messages[0].type == GST_RTSP_MESSAGE_DATA) {
+      target_stream = g_io_stream_get_output_stream (conn->stream0);
+    }
+
+    res =
+        writev_bytes (target_stream, vectors, n_vectors, &bytes_written,
+        TRUE, cancellable);
+  }
   g_clear_object (&cancellable);
 
   clear_write_socket_timeout (conn);
@@ -3781,6 +3809,51 @@ gst_rtsp_connection_get_ignore_x_server_reply (const GstRTSPConnection * conn)
   g_return_val_if_fail (conn != NULL, FALSE);
 
   return conn->ignore_x_server_reply;
+}
+
+/**
+ * gst_rtsp_connection_set_backchannel_method:
+ * @conn: a #GstRTSPConnection
+ * @method: the #GstRTSPBackchannelHttpMethod to use
+ *
+ * Set the HTTP method for sending backchannel interleaved data in tunnel mode.
+ *
+ * %GST_RTSP_BACKCHANNEL_HTTP_METHOD_POST sends data base64-encoded via the POST
+ * connection (default). %GST_RTSP_BACKCHANNEL_HTTP_METHOD_GET sends data as raw
+ * binary on the GET connection, which is required for compatibility with
+ * some servers that only parse RTSP text commands from POST and cannot
+ * process interleaved RTP data there.
+ *
+ * This has no effect when not using HTTP tunneling.
+ *
+ * Since: 1.30
+ */
+void
+gst_rtsp_connection_set_backchannel_method (GstRTSPConnection * conn,
+    GstRTSPBackchannelHttpMethod method)
+{
+  g_return_if_fail (conn != NULL);
+
+  conn->backchannel_method = method;
+}
+
+/**
+ * gst_rtsp_connection_get_backchannel_method:
+ * @conn: a #GstRTSPConnection
+ *
+ * Get the HTTP method used for sending backchannel interleaved data in
+ * tunnel mode.
+ *
+ * Returns: the #GstRTSPBackchannelHttpMethod currently set.
+ *
+ * Since: 1.30
+ */
+GstRTSPBackchannelHttpMethod
+gst_rtsp_connection_get_backchannel_method (const GstRTSPConnection * conn)
+{
+  g_return_val_if_fail (conn != NULL, GST_RTSP_BACKCHANNEL_HTTP_METHOD_POST);
+
+  return conn->backchannel_method;
 }
 
 /**

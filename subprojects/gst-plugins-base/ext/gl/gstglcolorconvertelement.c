@@ -116,9 +116,10 @@ gst_gl_color_convert_element_class_init (GstGLColorConvertElementClass * klass)
       &gst_gl_color_convert_element_sink_pad_template);
 
   gst_element_class_set_static_metadata (element_class,
-      "OpenGL color converter", "Filter/Converter/Video",
+      "OpenGL color converter", "Filter/Converter/Video/Colorspace",
       "Converts between color spaces using OpenGL shaders",
       "Matthew Waters <matthew@centricular.com>");
+  gst_element_class_mark_as_untrusted_aware (element_class);
 
   filter_class->gl_stop = gst_gl_color_convert_element_gl_stop;
   filter_class->gl_set_caps = gst_gl_color_convert_element_gl_set_caps;

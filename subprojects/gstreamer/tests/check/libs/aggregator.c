@@ -106,14 +106,18 @@ gst_test_aggregator_aggregate (GstAggregator * aggregator, gboolean timeout)
 
         if (testagg->do_flush_on_aggregate) {
           GstBuffer *popped_buf;
+
           buf = gst_aggregator_pad_peek_buffer (pad);
 
           GST_DEBUG_OBJECT (pad, "Flushing on aggregate");
 
           gst_pad_send_event (GST_PAD (pad), gst_event_new_flush_start ());
+          gst_pad_send_event (GST_PAD (pad), gst_event_new_flush_stop (FALSE));
+
           popped_buf = gst_aggregator_pad_pop_buffer (pad);
 
           fail_unless (buf == popped_buf);
+
           gst_buffer_unref (buf);
           gst_buffer_unref (popped_buf);
         } else if (testagg->do_remove_pad_on_aggregate) {
@@ -676,6 +680,8 @@ GST_START_TEST (test_aggregate_queries_robustness)
   gst_aggregator_test_slow_down_sink_query = TRUE;
 
   _test_data_init (&test, FALSE);
+  /* This test does not run the main loop, so it does not use the timeout. */
+  g_source_remove (test.timeout_id);
 
   caps = gst_caps_new_empty_simple ("foo/x-bar");
   _chain_data_init (&data1, test.aggregator,
@@ -982,8 +988,7 @@ GST_START_TEST (test_flushing_seek)
   gst_event_set_seqnum (event, seqnum);
   gst_pad_push_event (data2.srcpad, event);
 
-  /* and the last FLUSH_STOP is forwarded downstream */
-  fail_unless_equals_int (test.flush_stop_events, 1);
+  /* and the last FLUSH_STOP is forwarded downstream asynchronously */
 
   /*  Check collected */
   gst_pad_add_probe (test.srcpad, GST_PAD_PROBE_TYPE_BUFFER,
@@ -995,6 +1000,7 @@ GST_START_TEST (test_flushing_seek)
   g_main_loop_run (test.ml);
   g_source_remove (test.timeout_id);
 
+  /* FLUSH_STOP should have been forwarded by now */
   fail_unless_equals_int (test.flush_stop_events, 1);
 
   /* these will return immediately as at this point the threads have been
@@ -1250,7 +1256,7 @@ GST_START_TEST (test_add_remove)
       gst_message_unref (message);
     } while (carry_on);
 
-    GST_INFO ("Seeking");
+    GST_INFO ("Seeking count %d", count);
     fail_unless (gst_element_seek_simple (pipeline, GST_FORMAT_TIME,
             GST_SEEK_FLAG_FLUSH | GST_SEEK_FLAG_ACCURATE, 0));
 

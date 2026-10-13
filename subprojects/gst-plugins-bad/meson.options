@@ -16,8 +16,8 @@ option('autoconvert', type : 'feature', value : 'auto')
 option('bayer', type : 'feature', value : 'auto')
 option('camerabin', type : 'feature', value : 'auto')
 option('camerabin2', type : 'feature', value : 'auto')
+option('closedcaption', type : 'feature', value : 'auto')
 option('codecalpha', type : 'feature', value : 'auto')
-option('codectimestamper', type : 'feature', value : 'auto')
 option('coloreffects', type : 'feature', value : 'auto')
 option('debugutils', type : 'feature', value : 'auto')
 option('dvbsubenc', type : 'feature', value : 'auto')
@@ -99,7 +99,6 @@ option('bluez', type : 'feature', value : 'auto', description : 'Bluetooth audio
 option('bs2b', type : 'feature', value : 'auto', description : 'Bauer stereophonic-to-binaural audio plugin')
 option('bz2', type : 'feature', value : 'auto', description : 'bz2 stream encoder and decoder plugin')
 option('chromaprint', type : 'feature', value : 'auto', description : 'Chromaprint fingerprint audio plugin')
-option('closedcaption', type : 'feature', value : 'auto', description : 'Closed caption extractor, decoder, and overlay plugin')
 option('codec2json', type : 'feature', value : 'auto')
 option('colormanagement', type : 'feature', value : 'auto', description : 'Color management correction plugin')
 option('curl', type : 'feature', value : 'auto', description : 'cURL network source and sink plugin')
@@ -117,6 +116,7 @@ option('dtls', type : 'feature', value : 'auto', description : 'DTLS encoder and
 option('dts', type : 'feature', value : 'auto', description : 'DTS audio decoder plugin (GPL - only built if gpl option is also enabled!)')
 option('dvb', type : 'feature', value : 'auto', description : 'DVB video bin and source plugin')
 option('dwrite', type : 'feature', value : 'auto', description : 'DirectWrite plugin')
+option('executorch', type : 'feature', value : 'auto', description : 'Enable ExecuTorch plugin')
 option('faac', type : 'feature', value : 'auto', description : 'Free AAC audio encoder plugin')
 option('faad', type : 'feature', value : 'auto', description : 'Free AAC audio decoder plugin (GPL - only built if gpl option is also enabled!)')
 option('fbdev', type : 'feature', value : 'auto', description : 'Framebuffer video sink plugin')
@@ -143,6 +143,7 @@ option('mediafoundation', type : 'feature', value : 'auto', description : 'Micro
 option('microdns', type : 'feature', value : 'auto', description : 'libmicrodns-based device provider')
 option('modplug', type : 'feature', value : 'auto', description : 'ModPlug audio decoder plugin')
 option('mpeg2enc', type : 'feature', value : 'auto', description : 'mpeg2enc video encoder plugin (GPL - only built if gpl option is also enabled!)')
+option('mpeghdec', type : 'feature', value : 'auto', description : 'MPEG-H audio decoder plugin')
 option('mplex', type : 'feature', value : 'auto', description : 'mplex audio/video multiplexer plugin (GPL - only built if gpl option is also enabled!)')
 option('msdk', type : 'feature', value : 'auto', description : 'Intel Media SDK video encoder/decoder plugin')
 option('musepack', type : 'feature', value : 'auto', description : 'libmpcdec Musepack decoder plugin')
@@ -180,11 +181,13 @@ option('teletext', type : 'feature', value : 'auto', description : 'Teletext plu
 option('tflite', type : 'feature', value : 'auto', description : 'TensorFlow Lite (LiteRT) plugin')
 option('tflite-edgetpu', type : 'feature', value : 'auto', description : 'TensorFlow Lite (LiteRT) EdgeTPU (Coral) support')
 option('tflite-vsi', type : 'feature', value : 'disabled', description : 'TensorFlow Lite (LiteRT) Verisilicon support')
+option('tflite-xnnpack', type : 'feature', value : 'auto', description : 'TensorFlow Lite (LiteRT) XNNPACK support')
 option('tinyalsa', type : 'feature', value : 'auto', description : 'TinyALSA plugin')
 option('transcode', type : 'feature', value : 'auto', description : 'Transcode plugin')
 option('ttml', type : 'feature', value : 'auto', description : 'TTML subtitle parser and renderer plugin')
 option('uvch264', type : 'feature', value : 'auto', description : 'UVC compliant H.264 camera source plugin')
 option('va', type : 'feature', value : 'auto', description: 'VA-API new plugin')
+option('vmaf', type : 'feature', value : 'auto', description : 'Netflix VMAF image quality assessment plugin')
 option('voaacenc', type : 'feature', value : 'auto', description : 'AAC audio encoder plugin')
 option('voamrwbenc', type : 'feature', value : 'auto', description : 'AMR-WB audio encoder plugin')
 option('wasapi', type : 'feature', value : 'auto', description : 'Windows Audio Session API source/sink plugin')
@@ -260,6 +263,11 @@ option('nvds-include-path', type: 'string', value : '',
 option('nvds-lib-path', type: 'string', value : '',
        description : 'DeepStream SDK library directory')
 
+# onnx plugin options
+option('onnx-winml', type : 'feature', value : 'disabled', description : 'Use Microsoft.Windows.AI.MachineLearning package')
+option('onnx-require-eps', type : 'array', choices: ['none', 'cuda', 'hip', 'migraphx', 'vitisai', 'vsi'], value : ['none'],
+       description : 'HW-specific ONNX Execution Providers to require at build-time. By default, runtime auto-detection is used.')
+
 # QSV plugin options
 option('mfx-modules-dir', type: 'string', value : '',
        description : 'libmfx runtime module dir, linux only')
@@ -293,6 +301,7 @@ option('tests', type : 'feature', value : 'auto', yield : true)
 option('introspection', type : 'feature', value : 'auto', yield : true, description : 'Generate gobject-introspection bindings')
 option('nls', type : 'feature', value : 'auto', yield: true, description : 'Enable native language support (translations)')
 option('orc', type : 'feature', value : 'auto', yield : true)
+option('orc-compiler', type : 'feature', value : 'auto', yield: true, description : 'Enable targets to allow regeneration of disted orc files')
 option('extra-checks', type : 'feature', value : 'enabled', yield : true, description : 'Enable extra runtime checks')
 
 # Common options

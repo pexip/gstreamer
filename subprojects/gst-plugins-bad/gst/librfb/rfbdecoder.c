@@ -45,6 +45,10 @@ static gboolean rfb_decoder_corre_encoding (RfbDecoder * decoder, gint start_x,
     gint start_y, gint rect_w, gint rect_h);
 static gboolean rfb_decoder_hextile_encoding (RfbDecoder * decoder,
     gint start_x, gint start_y, gint rect_w, gint rect_h);
+static gboolean rfb_decoder_clip_rectangle (RfbDecoder * decoder, gint * x,
+    gint * y, gint * w, gint * h, gint * skip_x, gint * skip_y);
+static gboolean rfb_decoder_clip_copyrect (RfbDecoder * decoder, gint * dst_x,
+    gint * dst_y, gint * src_x, gint * src_y, gint * w, gint * h);
 
 RfbDecoder *
 rfb_decoder_new (void)
@@ -802,22 +806,19 @@ rfb_decoder_state_framebuffer_update_rectangle (RfbDecoder * decoder)
   if (!rfb_decoder_read (decoder, 12))
     return FALSE;
 
-  x = RFB_GET_UINT16 (decoder->data + 0) - decoder->offset_x;
-  y = RFB_GET_UINT16 (decoder->data + 2) - decoder->offset_y;
+  x = RFB_GET_UINT16 (decoder->data + 0);
+  y = RFB_GET_UINT16 (decoder->data + 2);
   w = RFB_GET_UINT16 (decoder->data + 4);
   h = RFB_GET_UINT16 (decoder->data + 6);
   encoding = RFB_GET_UINT32 (decoder->data + 8);
+
+  x -= (gint) decoder->offset_x;
+  y -= (gint) decoder->offset_y;
 
   GST_DEBUG ("update received");
   GST_DEBUG ("x:%d y:%d", x, y);
   GST_DEBUG ("w:%d h:%d", w, h);
   GST_DEBUG ("encoding: %d", encoding);
-
-  if (((w * h) + (x * y)) > (decoder->width * decoder->height)) {
-    GST_ERROR ("Desktop resize is unsupported.");
-    decoder->state = NULL;
-    return TRUE;
-  }
 
   switch (encoding) {
     case ENCODING_TYPE_RAW:
@@ -857,11 +858,20 @@ static gboolean
 rfb_decoder_raw_encoding (RfbDecoder * decoder, gint start_x, gint start_y,
     gint rect_w, gint rect_h)
 {
-  gint size;
+  gint copy_x, copy_y, copy_w, copy_h;
+  gint skip_x = 0, skip_y = 0;
+  guint32 size;
   guint8 *frame, *p;
   guint32 raw_line_size;
+  guint32 copy_line_size;
+
+  if (rect_w <= 0 || rect_h <= 0)
+    return TRUE;
 
   raw_line_size = rect_w * decoder->bytespp;
+  if (rect_h > 0 && raw_line_size > G_MAXUINT32 / rect_h)
+    return FALSE;
+
   size = rect_h * raw_line_size;
 
   GST_DEBUG ("Reading %d bytes (%dx%d)", size, rect_w, rect_h);
@@ -869,13 +879,23 @@ rfb_decoder_raw_encoding (RfbDecoder * decoder, gint start_x, gint start_y,
   if (!rfb_decoder_read (decoder, size))
     return FALSE;
 
-  frame =
-      decoder->frame + (((start_y * decoder->rect_width) +
-          start_x) * decoder->bytespp);
-  p = decoder->data;
+  copy_x = start_x;
+  copy_y = start_y;
+  copy_w = rect_w;
+  copy_h = rect_h;
 
-  while (rect_h--) {
-    memcpy (frame, p, raw_line_size);
+  if (!rfb_decoder_clip_rectangle (decoder, &copy_x, &copy_y, &copy_w, &copy_h,
+          &skip_x, &skip_y))
+    return TRUE;
+
+  frame =
+      decoder->frame + (((copy_y * decoder->rect_width) +
+          copy_x) * decoder->bytespp);
+  p = decoder->data + (skip_y * raw_line_size) + (skip_x * decoder->bytespp);
+  copy_line_size = copy_w * decoder->bytespp;
+
+  while (copy_h--) {
+    memcpy (frame, p, copy_line_size);
     p += raw_line_size;
     frame += decoder->line_size;
   }
@@ -887,7 +907,8 @@ static gboolean
 rfb_decoder_copyrect_encoding (RfbDecoder * decoder, gint start_x, gint start_y,
     gint rect_w, gint rect_h)
 {
-  guint16 src_x, src_y;
+  gint src_x, src_y;
+  gint copy_x, copy_y, copy_w, copy_h;
   gint line_width, copyrect_width;
   guint8 *src, *dst;
 
@@ -895,20 +916,28 @@ rfb_decoder_copyrect_encoding (RfbDecoder * decoder, gint start_x, gint start_y,
     return FALSE;
 
   /* don't forget the offset */
-  src_x = RFB_GET_UINT16 (decoder->data) - decoder->offset_x;
-  src_y = RFB_GET_UINT16 (decoder->data + 2) - decoder->offset_y;
+  src_x = RFB_GET_UINT16 (decoder->data) - (gint) decoder->offset_x;
+  src_y = RFB_GET_UINT16 (decoder->data + 2) - (gint) decoder->offset_y;
   GST_DEBUG ("Copyrect from %d %d", src_x, src_y);
 
-  copyrect_width = rect_w * decoder->bytespp;
+  copy_x = start_x;
+  copy_y = start_y;
+  copy_w = rect_w;
+  copy_h = rect_h;
+  if (!rfb_decoder_clip_copyrect (decoder, &copy_x, &copy_y, &src_x, &src_y,
+          &copy_w, &copy_h))
+    return TRUE;
+
+  copyrect_width = copy_w * decoder->bytespp;
   line_width = decoder->line_size;
   src =
       decoder->prev_frame + ((src_y * decoder->rect_width) +
       src_x) * decoder->bytespp;
   dst =
-      decoder->frame + ((start_y * decoder->rect_width) +
-      start_x) * decoder->bytespp;
+      decoder->frame + ((copy_y * decoder->rect_width) +
+      copy_x) * decoder->bytespp;
 
-  while (rect_h--) {
+  while (copy_h--) {
     memcpy (dst, src, copyrect_width);
     src += line_width;
     dst += line_width;
@@ -923,16 +952,48 @@ rfb_decoder_fill_rectangle (RfbDecoder * decoder, gint x, gint y, gint w,
 {
   /* fill the whole region with the same color */
 
-  guint32 *offset;
   gint i, j;
 
+  if (!rfb_decoder_clip_rectangle (decoder, &x, &y, &w, &h, NULL, NULL))
+    return;
+
   for (i = 0; i < h; i++) {
-    offset =
-        (guint32 *) (decoder->frame + ((x + (y +
-                    i) * decoder->rect_width)) * decoder->bytespp);
+    guint8 *offset =
+        decoder->frame + ((x + (y +
+                i) * decoder->rect_width)) * decoder->bytespp;
+
     for (j = 0; j < w; j++) {
-      *(offset++) = color;
+      switch (decoder->bytespp) {
+        case 1:
+          *(guint8 *) offset = (guint8) color;
+          break;
+        case 2:
+          *(guint16 *) offset = (guint16) color;
+          break;
+        case 4:
+          *(guint32 *) offset = color;
+          break;
+        default:
+          /* reject unsupported format */
+          return;
+      }
+      offset += decoder->bytespp;
     }
+  }
+}
+
+static inline guint32
+rfb_decoder_get_pixel (RfbDecoder * decoder, const guint8 * data)
+{
+  switch (decoder->bytespp) {
+    case 1:
+      return RFB_GET_UINT8 (data);
+    case 2:
+      return GUINT16_SWAP_LE_BE (RFB_GET_UINT16 (data));
+    case 4:
+      return GUINT32_SWAP_LE_BE (RFB_GET_UINT32 (data));
+    default:
+      return 0;
   }
 }
 
@@ -947,7 +1008,7 @@ rfb_decoder_rre_encoding (RfbDecoder * decoder, gint start_x, gint start_y,
     return FALSE;
 
   number_of_rectangles = RFB_GET_UINT32 (decoder->data);
-  color = GUINT32_SWAP_LE_BE ((RFB_GET_UINT32 (decoder->data + 4)));
+  color = rfb_decoder_get_pixel (decoder, decoder->data + 4);
 
   GST_DEBUG ("number of rectangles :%d", number_of_rectangles);
 
@@ -959,7 +1020,7 @@ rfb_decoder_rre_encoding (RfbDecoder * decoder, gint start_x, gint start_y,
     if (!rfb_decoder_read (decoder, decoder->bytespp + 8))
       return FALSE;
 
-    color = GUINT32_SWAP_LE_BE ((RFB_GET_UINT32 (decoder->data)));
+    color = rfb_decoder_get_pixel (decoder, decoder->data);
     x = RFB_GET_UINT16 (decoder->data + decoder->bytespp);
     y = RFB_GET_UINT16 (decoder->data + decoder->bytespp + 2);
     w = RFB_GET_UINT16 (decoder->data + decoder->bytespp + 4);
@@ -983,7 +1044,7 @@ rfb_decoder_corre_encoding (RfbDecoder * decoder, gint start_x, gint start_y,
     return FALSE;
 
   number_of_rectangles = RFB_GET_UINT32 (decoder->data);
-  color = GUINT32_SWAP_LE_BE ((RFB_GET_UINT32 (decoder->data + 4)));
+  color = rfb_decoder_get_pixel (decoder, decoder->data + 4);
 
   GST_DEBUG ("number of rectangles :%d", number_of_rectangles);
 
@@ -995,7 +1056,7 @@ rfb_decoder_corre_encoding (RfbDecoder * decoder, gint start_x, gint start_y,
     if (!rfb_decoder_read (decoder, decoder->bytespp + 4))
       return FALSE;
 
-    color = GUINT32_SWAP_LE_BE ((RFB_GET_UINT32 (decoder->data)));
+    color = rfb_decoder_get_pixel (decoder, decoder->data);
     x = RFB_GET_UINT8 (decoder->data + decoder->bytespp);
     y = RFB_GET_UINT8 (decoder->data + decoder->bytespp + 1);
     w = RFB_GET_UINT8 (decoder->data + decoder->bytespp + 2);
@@ -1045,7 +1106,7 @@ rfb_decoder_hextile_encoding (RfbDecoder * decoder, gint start_x, gint start_y,
         if (!rfb_decoder_read (decoder, decoder->bytespp))
           return FALSE;
 
-        background = GUINT32_SWAP_LE_BE ((RFB_GET_UINT32 (decoder->data)));
+        background = rfb_decoder_get_pixel (decoder, decoder->data);
       }
       rfb_decoder_fill_rectangle (decoder, x, y,
           (x <= x_max_16 ? 16 : x_end), (y <= y_max_16 ? 16 : y_end),
@@ -1055,7 +1116,7 @@ rfb_decoder_hextile_encoding (RfbDecoder * decoder, gint start_x, gint start_y,
         if (!rfb_decoder_read (decoder, decoder->bytespp))
           return FALSE;
 
-        foreground = GUINT32_SWAP_LE_BE ((RFB_GET_UINT32 (decoder->data)));
+        foreground = rfb_decoder_get_pixel (decoder, decoder->data);
       }
 
       if (subencoding & SUBENCODING_ANYSUBRECTS) {
@@ -1074,8 +1135,7 @@ rfb_decoder_hextile_encoding (RfbDecoder * decoder, gint start_x, gint start_y,
           return FALSE;
 
         while (nr_subrect--) {
-          foreground =
-              GUINT32_SWAP_LE_BE ((RFB_GET_UINT32 (decoder->data + offset)));
+          foreground = rfb_decoder_get_pixel (decoder, decoder->data + offset);
           offset += decoder->bytespp;
           xy = RFB_GET_UINT8 (decoder->data + offset++);
           wh = RFB_GET_UINT8 (decoder->data + offset++);
@@ -1097,6 +1157,68 @@ rfb_decoder_hextile_encoding (RfbDecoder * decoder, gint start_x, gint start_y,
       }
     }
   }
+
+  return TRUE;
+}
+
+static gboolean
+rfb_decoder_clip_rectangle (RfbDecoder * decoder, gint * x, gint * y, gint * w,
+    gint * h, gint * skip_x, gint * skip_y)
+{
+  gint x1, y1, x2, y2;
+  gint orig_x, orig_y;
+
+  if (*w <= 0 || *h <= 0)
+    return FALSE;
+
+  orig_x = *x;
+  orig_y = *y;
+  x1 = MAX (orig_x, 0);
+  y1 = MAX (orig_y, 0);
+  x2 = MIN (orig_x + *w, (gint) decoder->rect_width);
+  y2 = MIN (orig_y + *h, (gint) decoder->rect_height);
+
+  if (x2 <= x1 || y2 <= y1)
+    return FALSE;
+
+  *x = x1;
+  *y = y1;
+  *w = x2 - x1;
+  *h = y2 - y1;
+
+  if (skip_x)
+    *skip_x = x1 - orig_x;
+  if (skip_y)
+    *skip_y = y1 - orig_y;
+
+  return TRUE;
+}
+
+static gboolean
+rfb_decoder_clip_copyrect (RfbDecoder * decoder, gint * dst_x, gint * dst_y,
+    gint * src_x, gint * src_y, gint * w, gint * h)
+{
+  gint left, top, right, bottom;
+
+  if (*w <= 0 || *h <= 0)
+    return FALSE;
+
+  left = MAX (0, MAX (-*dst_x, -*src_x));
+  top = MAX (0, MAX (-*dst_y, -*src_y));
+  right = MIN (*w, MIN ((gint) decoder->rect_width - *dst_x,
+          (gint) decoder->rect_width - *src_x));
+  bottom = MIN (*h, MIN ((gint) decoder->rect_height - *dst_y,
+          (gint) decoder->rect_height - *src_y));
+
+  if (right <= left || bottom <= top)
+    return FALSE;
+
+  *dst_x += left;
+  *dst_y += top;
+  *src_x += left;
+  *src_y += top;
+  *w = right - left;
+  *h = bottom - top;
 
   return TRUE;
 }

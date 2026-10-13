@@ -68,6 +68,9 @@
 GST_DEBUG_CATEGORY_STATIC (videobox_debug);
 #define GST_CAT_DEFAULT videobox_debug
 
+static GQuark _size_quark;
+static GQuark _colorspace_quark;
+
 /* From videotestsrc.c */
 static const guint8 yuv_sdtv_colors_Y[VIDEO_BOX_FILL_LAST] =
     { 16, 145, 41, 81, 210, 235 };
@@ -2430,6 +2433,9 @@ static gboolean gst_video_box_set_info (GstVideoFilter * vfilter, GstCaps * in,
     GstVideoInfo * in_info, GstCaps * out, GstVideoInfo * out_info);
 static GstFlowReturn gst_video_box_transform_frame (GstVideoFilter * vfilter,
     GstVideoFrame * in_frame, GstVideoFrame * out_frame);
+static gboolean gst_video_box_transform_meta (GstBaseTransform * trans,
+    GstBuffer * outbuf, GstMeta * meta, GstBuffer * inbuf);
+
 
 #define GST_TYPE_VIDEO_BOX_FILL (gst_video_box_fill_get_type())
 static GType
@@ -2517,11 +2523,18 @@ gst_video_box_class_init (GstVideoBoxClass * klass)
       g_param_spec_boolean ("autocrop", "Auto crop",
           "Auto crop", FALSE, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 
+
+  _size_quark = g_quark_from_static_string (GST_META_TAG_VIDEO_SIZE_STR);
+  _colorspace_quark =
+      g_quark_from_static_string (GST_META_TAG_VIDEO_COLORSPACE_STR);
+
   trans_class->before_transform =
       GST_DEBUG_FUNCPTR (gst_video_box_before_transform);
   trans_class->transform_caps =
       GST_DEBUG_FUNCPTR (gst_video_box_transform_caps);
   trans_class->src_event = GST_DEBUG_FUNCPTR (gst_video_box_src_event);
+  trans_class->transform_meta =
+      GST_DEBUG_FUNCPTR (gst_video_box_transform_meta);
 
   vfilter_class->set_info = GST_DEBUG_FUNCPTR (gst_video_box_set_info);
   vfilter_class->transform_frame =
@@ -2531,6 +2544,7 @@ gst_video_box_class_init (GstVideoBoxClass * klass)
       "Filter/Effect/Video",
       "Resizes a video by adding borders or cropping",
       "Wim Taymans <wim@fluendo.com>");
+  gst_element_class_mark_as_untrusted_aware (element_class);
 
   gst_element_class_add_static_pad_template (element_class,
       &gst_video_box_sink_template);
@@ -2547,10 +2561,6 @@ gst_video_box_init (GstVideoBox * video_box)
   video_box->box_left = DEFAULT_LEFT;
   video_box->box_top = DEFAULT_TOP;
   video_box->box_bottom = DEFAULT_BOTTOM;
-  video_box->crop_right = 0;
-  video_box->crop_left = 0;
-  video_box->crop_top = 0;
-  video_box->crop_bottom = 0;
   video_box->fill_type = DEFAULT_FILL_TYPE;
   video_box->alpha = DEFAULT_ALPHA;
   video_box->border_alpha = DEFAULT_BORDER_ALPHA;
@@ -2569,43 +2579,15 @@ gst_video_box_set_property (GObject * object, guint prop_id,
   switch (prop_id) {
     case PROP_LEFT:
       video_box->box_left = g_value_get_int (value);
-      if (video_box->box_left < 0) {
-        video_box->border_left = -video_box->box_left;
-        video_box->crop_left = 0;
-      } else {
-        video_box->border_left = 0;
-        video_box->crop_left = video_box->box_left;
-      }
       break;
     case PROP_RIGHT:
       video_box->box_right = g_value_get_int (value);
-      if (video_box->box_right < 0) {
-        video_box->border_right = -video_box->box_right;
-        video_box->crop_right = 0;
-      } else {
-        video_box->border_right = 0;
-        video_box->crop_right = video_box->box_right;
-      }
       break;
     case PROP_TOP:
       video_box->box_top = g_value_get_int (value);
-      if (video_box->box_top < 0) {
-        video_box->border_top = -video_box->box_top;
-        video_box->crop_top = 0;
-      } else {
-        video_box->border_top = 0;
-        video_box->crop_top = video_box->box_top;
-      }
       break;
     case PROP_BOTTOM:
       video_box->box_bottom = g_value_get_int (value);
-      if (video_box->box_bottom < 0) {
-        video_box->border_bottom = -video_box->box_bottom;
-        video_box->crop_bottom = 0;
-      } else {
-        video_box->border_bottom = 0;
-        video_box->crop_bottom = video_box->box_bottom;
-      }
       break;
     case PROP_FILL_TYPE:
       video_box->fill_type = g_value_get_enum (value);
@@ -2638,13 +2620,6 @@ gst_video_box_autocrop (GstVideoBox * video_box)
   gint crop_h = video_box->in_height - video_box->out_height;
 
   video_box->box_left = crop_w / 2;
-  if (video_box->box_left < 0) {
-    video_box->border_left = -video_box->box_left;
-    video_box->crop_left = 0;
-  } else {
-    video_box->border_left = 0;
-    video_box->crop_left = video_box->box_left;
-  }
 
   /* Round down/up for odd width differences */
   if (crop_w < 0)
@@ -2653,22 +2628,7 @@ gst_video_box_autocrop (GstVideoBox * video_box)
     crop_w += 1;
 
   video_box->box_right = crop_w / 2;
-  if (video_box->box_right < 0) {
-    video_box->border_right = -video_box->box_right;
-    video_box->crop_right = 0;
-  } else {
-    video_box->border_right = 0;
-    video_box->crop_right = video_box->box_right;
-  }
-
   video_box->box_top = crop_h / 2;
-  if (video_box->box_top < 0) {
-    video_box->border_top = -video_box->box_top;
-    video_box->crop_top = 0;
-  } else {
-    video_box->border_top = 0;
-    video_box->crop_top = video_box->box_top;
-  }
 
   /* Round down/up for odd height differences */
   if (crop_h < 0)
@@ -2676,14 +2636,6 @@ gst_video_box_autocrop (GstVideoBox * video_box)
   else
     crop_h += 1;
   video_box->box_bottom = crop_h / 2;
-
-  if (video_box->box_bottom < 0) {
-    video_box->border_bottom = -video_box->box_bottom;
-    video_box->crop_bottom = 0;
-  } else {
-    video_box->border_bottom = 0;
-    video_box->crop_bottom = video_box->box_bottom;
-  }
 }
 
 static void
@@ -2995,6 +2947,7 @@ bail:
 static gboolean
 gst_video_box_recalc_transform (GstVideoBox * video_box)
 {
+  gint br, bl, bt, bb;
   gboolean res = TRUE;
 
   /* if we have the same format in and out and we don't need to perform any
@@ -3012,6 +2965,56 @@ gst_video_box_recalc_transform (GstVideoBox * video_box)
     gst_base_transform_set_passthrough (GST_BASE_TRANSFORM_CAST (video_box),
         FALSE);
   }
+
+
+  video_box->crop_h = 0;
+  video_box->crop_w = 0;
+
+  br = video_box->box_right;
+  bl = video_box->box_left;
+  bt = video_box->box_top;
+  bb = video_box->box_bottom;
+
+  if (br >= 0 && bl >= 0) {
+    video_box->crop_w = video_box->in_width - (br + bl);
+  } else if (br >= 0 && bl < 0) {
+    video_box->crop_w = video_box->in_width - (br);
+  } else if (br < 0 && bl >= 0) {
+    video_box->crop_w = video_box->in_width - (bl);
+  } else if (br < 0 && bl < 0) {
+    video_box->crop_w = video_box->in_width;
+  }
+
+  if (bb >= 0 && bt >= 0) {
+    video_box->crop_h = video_box->in_height - (bb + bt);
+  } else if (bb >= 0 && bt < 0) {
+    video_box->crop_h = video_box->in_height - (bb);
+  } else if (bb < 0 && bt >= 0) {
+    video_box->crop_h = video_box->in_height - (bt);
+  } else if (bb < 0 && bt < 0) {
+    video_box->crop_h = video_box->in_height;
+  }
+
+  GST_DEBUG_OBJECT (video_box, "Borders are: L:%d, R:%d, T:%d, B:%d", bl, br,
+      bt, bb);
+
+  video_box->dest_x = video_box->src_x = 0;
+  video_box->dest_y = video_box->src_y = 0;
+
+  /* Top border */
+  if (bt < 0) {
+    video_box->dest_y = -bt;
+  } else {
+    video_box->src_y = bt;
+  }
+
+  /* Left border */
+  if (bl < 0) {
+    video_box->dest_x = -bl;
+  } else {
+    video_box->src_x = bl;
+  }
+
   return res;
 }
 
@@ -3221,71 +3224,30 @@ gst_video_box_process (GstVideoBox * video_box, GstVideoFrame * in,
   guint b_alpha = CLAMP (video_box->border_alpha * 256, 0, 255);
   guint i_alpha = CLAMP (video_box->alpha * 256, 0, 255);
   GstVideoBoxFill fill_type = video_box->fill_type;
-  gint br, bl, bt, bb, crop_w, crop_h;
+  gint br, bl, bt, bb;
 
-  crop_h = 0;
-  crop_w = 0;
+  GST_LOG_OBJECT (video_box, "Alpha value is: %u (frame) %u (border)",
+      i_alpha, b_alpha);
 
   br = video_box->box_right;
   bl = video_box->box_left;
   bt = video_box->box_top;
   bb = video_box->box_bottom;
 
-  if (br >= 0 && bl >= 0) {
-    crop_w = video_box->in_width - (br + bl);
-  } else if (br >= 0 && bl < 0) {
-    crop_w = video_box->in_width - (br);
-  } else if (br < 0 && bl >= 0) {
-    crop_w = video_box->in_width - (bl);
-  } else if (br < 0 && bl < 0) {
-    crop_w = video_box->in_width;
-  }
-
-  if (bb >= 0 && bt >= 0) {
-    crop_h = video_box->in_height - (bb + bt);
-  } else if (bb >= 0 && bt < 0) {
-    crop_h = video_box->in_height - (bb);
-  } else if (bb < 0 && bt >= 0) {
-    crop_h = video_box->in_height - (bt);
-  } else if (bb < 0 && bt < 0) {
-    crop_h = video_box->in_height;
-  }
-
-  GST_DEBUG_OBJECT (video_box, "Borders are: L:%d, R:%d, T:%d, B:%d", bl, br,
-      bt, bb);
-  GST_DEBUG_OBJECT (video_box, "Alpha value is: %u (frame) %u (border)",
-      i_alpha, b_alpha);
-
-  if (crop_h < 0 || crop_w < 0) {
+  if (video_box->crop_h < 0 || video_box->crop_w < 0) {
     video_box->fill (fill_type, b_alpha, out, video_box->out_sdtv);
   } else if (bb == 0 && bt == 0 && br == 0 && bl == 0) {
     video_box->copy (i_alpha, out, video_box->out_sdtv, 0, 0, in,
-        video_box->in_sdtv, 0, 0, crop_w, crop_h);
+        video_box->in_sdtv, 0, 0, video_box->crop_w, video_box->crop_h);
   } else {
-    gint src_x = 0, src_y = 0;
-    gint dest_x = 0, dest_y = 0;
-
     /* Fill everything if a border should be added somewhere */
     if (bt < 0 || bb < 0 || br < 0 || bl < 0)
       video_box->fill (fill_type, b_alpha, out, video_box->out_sdtv);
 
-    /* Top border */
-    if (bt < 0) {
-      dest_y += -bt;
-    } else {
-      src_y += bt;
-    }
-
-    /* Left border */
-    if (bl < 0) {
-      dest_x += -bl;
-    } else {
-      src_x += bl;
-    }
-
     /* Frame */
-    video_box->copy (i_alpha, out, video_box->out_sdtv, dest_x, dest_y,
-        in, video_box->in_sdtv, src_x, src_y, crop_w, crop_h);
+    video_box->copy (i_alpha, out, video_box->out_sdtv, video_box->dest_x,
+        video_box->dest_y, in, video_box->in_sdtv, video_box->src_x,
+        video_box->src_y, video_box->crop_w, video_box->crop_h);
   }
 
   GST_LOG_OBJECT (video_box, "image created");
@@ -3320,10 +3282,87 @@ gst_video_box_transform_frame (GstVideoFilter * vfilter,
   return GST_FLOW_OK;
 }
 
+static gboolean
+gst_video_box_transform_meta (GstBaseTransform * trans,
+    GstBuffer * outbuf, GstMeta * meta, GstBuffer * inbuf)
+{
+  GstVideoBox *video_box = GST_VIDEO_BOX (trans);
+  GstVideoFilter *video_filter = GST_VIDEO_FILTER (trans);
+  const GstMetaInfo *info = meta->info;
+  const gchar *const *tags;
+  const gchar *const *curr = NULL;
+  gboolean should_copy = TRUE;
+  const gchar *const valid_tags[] = {
+    GST_META_TAG_VIDEO_STR,
+    GST_META_TAG_VIDEO_ORIENTATION_STR,
+    GST_META_TAG_VIDEO_SIZE_STR,
+    NULL
+  };
+
+  tags = gst_meta_api_type_get_tags (info->api);
+
+  /* No specific tags, we are good to copy */
+  if (!tags) {
+    return TRUE;
+  }
+
+  if (video_box->in_format != video_box->out_format &&
+      gst_meta_api_type_has_tag (info->api, _colorspace_quark)) {
+    /* don't copy colorspace specific metadata, FIXME, we need a MetaTransform
+     * for the colorspace metadata. */
+    return FALSE;
+  }
+
+  /* We are only changing size, we can preserve other metas tagged as
+     orientation and colorspace */
+  for (curr = tags; *curr; ++curr) {
+
+    /* We dont handle any other tag */
+    if (!g_strv_contains (valid_tags, *curr)) {
+      should_copy = FALSE;
+      break;
+    }
+  }
+
+  /* Cant handle the tags in this meta, let the parent class handle it */
+  if (!should_copy) {
+    return GST_BASE_TRANSFORM_CLASS (parent_class)->transform_meta (trans,
+        outbuf, meta, inbuf);
+  }
+
+  /* This meta is size sensitive, try to transform it accordingly */
+  if (gst_meta_api_type_has_tag (info->api, _size_quark)) {
+    if (info->transform_func) {
+      GstVideoMetaTransformMatrix trans_matrix;
+      const GstVideoRectangle in_rectangle = { video_box->src_x,
+        video_box->src_y, video_box->crop_w, video_box->crop_h
+      };
+      const GstVideoRectangle out_rectangle =
+          { video_box->dest_x, video_box->dest_y,
+        video_box->crop_w, video_box->crop_h
+      };
+
+      gst_video_meta_transform_matrix_init (&trans_matrix,
+          &video_filter->in_info, &in_rectangle, &video_filter->out_info,
+          &out_rectangle);
+
+      info->transform_func (outbuf, meta, inbuf,
+          gst_video_meta_transform_matrix_get_quark (), &trans_matrix);
+    }
+    return FALSE;
+  }
+
+  /* No need to transform, we can safely copy this meta */
+  return TRUE;
+}
+
+
 /* FIXME: 0.11 merge with videocrop plugin */
 static gboolean
 plugin_init (GstPlugin * plugin)
 {
+  gst_plugin_set_static_features_flag (plugin);
+
   return GST_ELEMENT_REGISTER (videobox, plugin);
 }
 

@@ -1,0 +1,17 @@
+[modelinfo]
+version=1.1
+group-id=invalid_dims_5d-group
+
+[input_5d]
+id=input-0
+type=float32
+dims=1,2,2,2,3
+dir=input
+caps=video/x-raw, format=RGB_F32LE
+ranges=0.0,255.0;0.0,255.0;0.0,255.0
+
+[output_5d]
+id=output-0
+type=float32
+dims=1,2,2,2,3
+dir=output

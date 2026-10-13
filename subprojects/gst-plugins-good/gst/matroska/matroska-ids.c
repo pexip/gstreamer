@@ -27,6 +27,8 @@
 #include "matroska-ids.h"
 
 #include <string.h>
+#include <gst/base/gstbytereader.h>
+#include <gst/pbutils/codec-utils.h>
 
 gboolean
 gst_matroska_track_init_video_context (GstMatroskaTrackContext ** p_context)
@@ -53,6 +55,7 @@ gst_matroska_track_init_video_context (GstMatroskaTrackContext ** p_context)
   (*p_context)->type = GST_MATROSKA_TRACK_TYPE_VIDEO;
   video_context->display_width = 0;
   video_context->display_height = 0;
+  video_context->display_unit = GST_MATROSKA_VIDEO_DISPLAY_UNIT_PIXELS;
   video_context->pixel_width = 0;
   video_context->pixel_height = 0;
   video_context->asr_mode = 0;
@@ -127,7 +130,6 @@ gst_matroska_track_init_subtitle_context (GstMatroskaTrackContext ** p_context)
   *p_context = (GstMatroskaTrackContext *) subtitle_context;
 
   (*p_context)->type = GST_MATROSKA_TRACK_TYPE_SUBTITLE;
-  subtitle_context->check_utf8 = TRUE;
   subtitle_context->invalid_utf8 = FALSE;
   subtitle_context->check_markup = TRUE;
   subtitle_context->seen_markup_tag = FALSE;
@@ -147,7 +149,7 @@ gst_matroska_parse_xiph_stream_headers (gpointer codec_data,
   GstBufferList *list = NULL;
   guint8 *p = codec_data;
   gint i, offset, num_packets;
-  guint *length, last;
+  gsize *length, last;
 
   GST_MEMDUMP ("xiph codec data", codec_data, codec_data_size);
 
@@ -160,7 +162,7 @@ gst_matroska_parse_xiph_stream_headers (gpointer codec_data,
   GST_DEBUG ("%u stream headers, total length=%" G_GSIZE_FORMAT " bytes",
       (guint) num_packets, codec_data_size);
 
-  length = g_alloca (num_packets * sizeof (guint));
+  length = g_alloca (num_packets * sizeof (gsize));
   last = 0;
   offset = 1;
 
@@ -168,6 +170,12 @@ gst_matroska_parse_xiph_stream_headers (gpointer codec_data,
   for (i = 0; i < num_packets - 1; i++) {
     length[i] = 0;
     while (offset < codec_data_size) {
+      if (last + length[i] > codec_data_size - offset) {
+        GST_ERROR ("Bogus xiph packet length for packet %d @ offset %u, "
+            "lengths > %zu, but codec_data_size = %zu", i, offset,
+            last + length[i], codec_data_size);
+        goto error;
+      }
       length[i] += p[offset];
       if (p[offset++] != 0xff)
         break;
@@ -276,8 +284,9 @@ gst_matroska_parse_flac_stream_headers (gpointer codec_data,
 {
   GstBufferList *list = NULL;
   GstBuffer *hdr;
-  guint8 *pdata = codec_data;
-  guint len, off;
+  const guint8 *pdata = codec_data;
+  gsize off;
+  guint len;
 
   GST_MEMDUMP ("flac codec data", codec_data, codec_data_size);
 
@@ -300,14 +309,14 @@ gst_matroska_parse_flac_stream_headers (gpointer codec_data,
   /* skip fLaC marker */
   off = 4;
 
-  while (off < codec_data_size - 3) {
+  while (off < codec_data_size - 4) {
     len = GST_READ_UINT8 (pdata + off + 1) << 16;
     len |= GST_READ_UINT8 (pdata + off + 2) << 8;
     len |= GST_READ_UINT8 (pdata + off + 3);
 
     GST_DEBUG ("header packet: len=%u bytes, flags=0x%02x", len, pdata[off]);
 
-    if (off + len > codec_data_size) {
+    if (len > codec_data_size - 4 || off + len > codec_data_size - 4) {
       gst_buffer_list_unref (list);
       return NULL;
     }
@@ -318,6 +327,94 @@ gst_matroska_parse_flac_stream_headers (gpointer codec_data,
     off += 4 + len;
   }
   return list;
+}
+
+gboolean
+gst_matroska_get_vpx_config_from_codec_private (const guint8 * data,
+    gsize size, guint8 * profile, guint8 * level, guint8 * bit_depth,
+    guint8 * chroma_subsampling)
+{
+  GstByteReader br;
+  guint8 local_profile = G_MAXUINT8, local_level = G_MAXUINT8;
+  guint8 local_bit_depth = G_MAXUINT8;
+  guint8 local_chroma_subsampling = G_MAXUINT8;
+
+  g_return_val_if_fail (data != NULL, FALSE);
+  g_return_val_if_fail (size > 0, FALSE);
+
+  gst_byte_reader_init (&br, data, size);
+
+  while (gst_byte_reader_get_remaining (&br) > 0) {
+    guint8 feature_id;
+    guint8 feature_size;
+    guint8 value;
+
+    if (gst_byte_reader_get_remaining (&br) < 2)
+      return FALSE;
+
+    feature_id = gst_byte_reader_get_uint8_unchecked (&br);
+    feature_size = gst_byte_reader_get_uint8_unchecked (&br);
+
+    /* X bit shall be set to 0 according to the WebM VP9 metadata format */
+    if (feature_id & 0x80)
+      return FALSE;
+
+    if (gst_byte_reader_get_remaining (&br) < feature_size)
+      return FALSE;
+
+    if (feature_id == GST_MATROSKA_VP9_FEATURE_PROFILE_ID ||
+        feature_id == GST_MATROSKA_VP9_FEATURE_LEVEL_ID ||
+        feature_id == GST_MATROSKA_VP9_FEATURE_BIT_DEPTH_ID ||
+        feature_id == GST_MATROSKA_VP9_FEATURE_CHROMA_SUBSAMPLING_ID) {
+      if (feature_size != 1)
+        return FALSE;
+      if (!gst_byte_reader_get_uint8 (&br, &value))
+        return FALSE;
+    } else {
+      /* Unknown feature: skip and keep parsing known ones. */
+      if (!gst_byte_reader_skip (&br, feature_size))
+        return FALSE;
+      continue;
+    }
+
+    switch (feature_id) {
+      case GST_MATROSKA_VP9_FEATURE_PROFILE_ID:
+        if (local_profile != G_MAXUINT8 || value > 3)
+          return FALSE;
+        local_profile = value;
+        break;
+      case GST_MATROSKA_VP9_FEATURE_LEVEL_ID:
+        if (local_level != G_MAXUINT8
+            || gst_codec_utils_vp9_get_level (value) == NULL)
+          return FALSE;
+        local_level = value;
+        break;
+      case GST_MATROSKA_VP9_FEATURE_BIT_DEPTH_ID:
+        if (local_bit_depth != G_MAXUINT8
+            || (value != 8 && value != 10 && value != 12))
+          return FALSE;
+        local_bit_depth = value;
+        break;
+      case GST_MATROSKA_VP9_FEATURE_CHROMA_SUBSAMPLING_ID:
+        if (local_chroma_subsampling != G_MAXUINT8 || value > 3)
+          return FALSE;
+        local_chroma_subsampling = value;
+        break;
+      default:
+        break;
+    }
+  }
+
+  if (profile)
+    *profile = local_profile;
+  if (level)
+    *level = local_level;
+  if (bit_depth)
+    *bit_depth = local_bit_depth;
+  if (chroma_subsampling)
+    *chroma_subsampling = local_chroma_subsampling;
+
+  return TRUE;
 }
 
 GstClockTime

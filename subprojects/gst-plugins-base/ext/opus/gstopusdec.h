@@ -58,6 +58,7 @@ struct _GstOpusDec {
   gint16 r128_gain;
 
   GstAudioChannelPosition opus_pos[64];
+  gboolean needs_reorder;
   GstAudioInfo info;
 
   guint8 n_streams;
@@ -77,6 +78,7 @@ struct _GstOpusDec {
   GstClockTime last_known_buffer_duration;
 
   gboolean phase_inversion;
+  gboolean ignore_extensions;
 
   /* Used to generate the 'stats' property. Protected by object lock */
   guint64 num_pushed;

@@ -64,6 +64,13 @@ struct _GstV4l2VideoEnc
   GstVideoCodecState *input_state;
   gboolean active;
   GstFlowReturn output_flow;
+  gint v4l2_profile;
+  GstVideoInfo pending_info;
+  gboolean have_pending_info;
+
+  /* Rate control */
+  gint bitrate;
+  gint gop_size;
 
 };
 

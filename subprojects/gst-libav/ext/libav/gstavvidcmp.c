@@ -211,7 +211,7 @@ gst_ffmpegvidcmp_class_init (GstFFMpegVidCmpClass * klass)
       g_param_spec_string ("stats-file", "Stats File Location",
           "Set file where to store per-frame difference information"
           ", '-' for stdout", DEFAULT_STATS_FILE, G_PARAM_READWRITE |
-          G_PARAM_STATIC_STRINGS));
+          G_PARAM_STATIC_STRINGS | GST_PARAM_UNTRUSTED_SENSITIVE));
   g_object_class_install_property (gobject_class, PROP_METHOD,
       g_param_spec_enum ("method", "Method", "Method to compare video frames",
           GST_FFMPEGVIDCMP_METHOD_TYPE, DEFAULT_METHOD,
@@ -230,7 +230,8 @@ gst_ffmpegvidcmp_class_init (GstFFMpegVidCmpClass * klass)
       &gst_ffmpegvidcmp_src_tmpl);
   gst_element_class_set_static_metadata (gstelement_class,
       "A libav video compare element", "Filter/Compare/Video",
-      "Compare Video", "U. Artie Eoff <ullysses.a.eoff@intel.com");
+      "Compare Video", "U. Artie Eoff <ullysses.a.eoff@intel.com>");
+  gst_element_class_mark_as_untrusted_aware (gstelement_class);
 }
 
 static void
@@ -619,6 +620,26 @@ _fill_avpicture (GstFFMpegVidCmp * self, AVFrame * picture,
   picture->width = GST_VIDEO_FRAME_WIDTH (vframe);
   picture->height = GST_VIDEO_FRAME_HEIGHT (vframe);
   picture->format = self->pixfmt;
+
+  picture->color_primaries =
+      gst_video_color_primaries_to_iso (vframe->info.colorimetry.primaries);
+  picture->color_trc =
+      gst_video_transfer_function_to_iso (vframe->info.colorimetry.transfer);
+  picture->colorspace =
+      gst_video_color_matrix_to_iso (vframe->info.colorimetry.matrix);
+
+  switch (vframe->info.colorimetry.range) {
+    case GST_VIDEO_COLOR_RANGE_0_255:
+    case GST_VIDEO_COLOR_RANGE_0_1:
+      picture->color_range = AVCOL_RANGE_JPEG;
+      break;
+    case GST_VIDEO_COLOR_RANGE_16_235:
+      picture->color_range = AVCOL_RANGE_MPEG;
+      break;
+    case GST_VIDEO_COLOR_RANGE_UNKNOWN:
+      picture->color_range = AVCOL_RANGE_UNSPECIFIED;
+      break;
+  }
 }
 
 static GstFlowReturn

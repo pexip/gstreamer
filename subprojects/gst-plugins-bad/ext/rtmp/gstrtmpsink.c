@@ -153,6 +153,9 @@ gst_rtmp_sink_init (GstRTMPSink * sink)
   }
 #endif
 
+  GST_WARNING_OBJECT (sink, "rtmpsink is deprecated, please move to "
+      "rtmp2sink");
+
   g_mutex_init (&sink->rtmp_lock);
 }
 

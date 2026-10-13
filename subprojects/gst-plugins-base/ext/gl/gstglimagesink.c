@@ -1566,6 +1566,11 @@ update_output_format (GstGLImageSink * glimage_sink)
   *out_info = glimage_sink->in_info;
   previous_target = glimage_sink->texture_target;
 
+  /* Reset the padded information, this will allow dectecting any difference
+   * between the texture allocated size and the display size. */
+  glimage_sink->padded_width = GST_VIDEO_INFO_WIDTH (out_info);
+  glimage_sink->padded_height = GST_VIDEO_INFO_HEIGHT (out_info);
+
   mv_mode = GST_VIDEO_INFO_MULTIVIEW_MODE (&glimage_sink->in_info);
 
   if (!_mview_modes_are_equal (glimage_sink->mview_output_mode, mv_mode)) {
@@ -2475,6 +2480,34 @@ gst_glimage_sink_on_draw (GstGLImageSink * gl_sink)
     gl->ActiveTexture (GL_TEXTURE0);
     gl->BindTexture (gl_target, gl_sink->redisplay_texture);
     gst_gl_shader_set_uniform_1i (gl_sink->redisplay_shader, "tex", 0);
+
+    GstVideoMeta *v_meta =
+        gst_buffer_get_video_meta (gl_sink->stored_buffer[0]);
+    if (v_meta && (v_meta->width != gl_sink->padded_width
+            || v_meta->height != gl_sink->padded_height)) {
+      gdouble padded_width = v_meta->width;
+      gdouble padded_height = v_meta->height;
+      gdouble display_width = GST_VIDEO_INFO_WIDTH (&gl_sink->out_info);
+      gdouble display_height = GST_VIDEO_INFO_HEIGHT (&gl_sink->out_info);
+
+      float scale_x = display_width / padded_width;
+      float scale_y = display_height / padded_height;
+
+      GLfloat crop_vertices[20];
+      memcpy (crop_vertices, vertices, sizeof (crop_vertices));
+
+      for (int i = 0; i < 4; i++) {
+        crop_vertices[i * 5 + 3] *= scale_x;    // U
+        crop_vertices[i * 5 + 4] *= scale_y;    // V
+      }
+
+      gl->BufferData (GL_ARRAY_BUFFER, 4 * 5 * sizeof (GLfloat),
+          crop_vertices, GL_STATIC_DRAW);
+
+      gl_sink->padded_width = v_meta->width;
+      gl_sink->padded_height = v_meta->height;
+    }
+
     {
       GstVideoAffineTransformationMeta *af_meta;
       gfloat matrix[16];
@@ -2483,14 +2516,10 @@ gst_glimage_sink_on_draw (GstGLImageSink * gl_sink)
           gst_buffer_get_video_affine_transformation_meta
           (gl_sink->stored_buffer[0]);
 
-      if (gl_sink->transform_matrix) {
-        gfloat tmp[16];
+      gst_gl_get_affine_transformation_meta_as_ndc (af_meta, matrix);
 
-        gst_gl_get_affine_transformation_meta_as_ndc (af_meta, tmp);
-        gst_gl_multiply_matrix4 (tmp, gl_sink->transform_matrix, matrix);
-      } else {
-        gst_gl_get_affine_transformation_meta_as_ndc (af_meta, matrix);
-      }
+      if (gl_sink->transform_matrix)
+        gst_gl_multiply_matrix4 (matrix, gl_sink->transform_matrix, matrix);
 
       gst_gl_shader_set_uniform_matrix_4fv (gl_sink->redisplay_shader,
           "u_transformation", 1, FALSE, matrix);

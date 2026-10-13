@@ -260,7 +260,7 @@ output_overlap_s16 (GstScaletempo * st, gpointer buf_out, guint bytes_off)
   gint16 *pin = (gint16 *) (st->buf_queue + bytes_off);
   gint i;
   for (i = 0; i < st->samples_overlap; i++) {
-    *pout++ = *po - ((*pb++ * (*po - *pin++)) >> 16);
+    *pout++ = *po - (gint32) (((gint64) (*pb++) * (*po - *pin++)) >> 16);
     po++;
   }
 }
@@ -1052,6 +1052,7 @@ gst_scaletempo_class_init (GstScaletempoClass * klass)
       "Filter/Effect/Rate/Audio",
       "Sync audio tempo with playback rate",
       "Rov Juvano <rovjuvano@users.sourceforge.net>");
+  gst_element_class_mark_as_untrusted_aware (gstelement_class);
 
   basetransform_class->sink_event =
       GST_DEBUG_FUNCPTR (gst_scaletempo_sink_event);

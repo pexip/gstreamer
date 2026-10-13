@@ -1,8 +1,9 @@
 project('gst-plugins-bad', 'c', 'cpp',
-  version : '1.27.2.1',
+  version : '1.29.2.1',
   meson_version : '>= 1.4',
   default_options : [ 'warning_level=1',
-                      'buildtype=debugoptimized' ])
+                      'buildtype=debugoptimized',
+                      'c_std=gnu11,c11' ])
 
 gst_version = meson.project_version()
 version_arr = gst_version.split('.')
@@ -43,8 +44,16 @@ gst_libraries = []
 cc = meson.get_compiler('c')
 cxx = meson.get_compiler('cpp')
 host_system = host_machine.system()
+subsystem = ''
+if host_system == 'ios'
+  warning('Setting system = \'ios\' in the cross file is deprecated, please use subsystem names')
+  host_system = 'darwin'
+  subsystem = 'ios'
+elif host_system == 'darwin'
+  subsystem = host_machine.subsystem()
+endif
 
-if host_system in ['ios', 'darwin']
+if host_system == 'darwin'
   have_objc = add_languages('objc', native: false)
   have_objcpp = add_languages('objcpp', native: false)
 else
@@ -65,7 +74,10 @@ if cc.get_id() == 'msvc'
       '/wd4244', # lossy type conversion (e.g. double -> int)
       '/wd4305', # truncating type conversion (e.g. double -> float)
       '/wd5051', # attribute 'attribute-name' requires at least 'standard-level'; ignored
-      cc.get_supported_arguments(['/utf-8']), # set the input encoding to utf-8
+      cc.get_supported_arguments([
+        '/utf-8', # set the input encoding to utf-8
+        '/Zc:preprocessor', # enable preprocessor conformance mode (disable legacy preprocessor)
+      ]),
   ]
 
   if gst_version_is_dev
@@ -297,11 +309,8 @@ cdata.set_quoted('GST_PACKAGE_ORIGIN', get_option('package-origin'))
 # FIXME: This should be exposed as a configuration option
 if host_system == 'linux'
   cdata.set_quoted('DEFAULT_VIDEOSRC', 'v4l2src')
-elif ['darwin', 'ios'].contains(host_system)
+elif host_system == 'darwin'
   cdata.set_quoted('DEFAULT_VIDEOSRC', 'avfvideosrc')
-  cdata.set_quoted('GST_EXTRA_MODULE_SUFFIX', '.dylib')
-  # Yes, we set this for iOS too. Same as Autotools.
-  cdata.set('HAVE_OSX', 1)
 else
   cdata.set_quoted('DEFAULT_VIDEOSRC', 'videotestsrc')
 endif
@@ -416,7 +425,7 @@ if x11_dep.found()
 endif
 
 # Optional dep of msdk and va
-if host_system not in ['darwin', 'ios', 'android', 'windows', 'gnu']
+if host_system not in ['darwin', 'android', 'windows', 'gnu']
   libdrm_dep = dependency('libdrm', version : '>=2.4.50',
     required : get_option('drm').enabled() or get_option('msdk').enabled(),
   )
@@ -465,44 +474,31 @@ else
   winsock2 = []
 endif
 
-if ['darwin', 'ios'].contains(host_system)
+if host_system == 'darwin'
   if not have_objc
     error('Building on MacOS/iOS/etc requires an ObjC compiler')
   endif
-  if host_system == 'ios'
-    cdata.set('HAVE_IOS', 1)
-  endif
-
-  avfoundation_dep = dependency('AVFoundation', required : false)
-  if avfoundation_dep.found()
-      cdata.set('HAVE_AVFOUNDATION', 1)
-  endif
-
-  videotoolbox_dep = dependency('VideoToolbox', required : false)
-  if videotoolbox_dep.found()
-      cdata.set('HAVE_VIDEOTOOLBOX', 1)
-  endif
-
-#  FIXME: framework.version() returns 'unknown'
-#  if videotoolbox_dep.version().version_compare('>=10.9.6')
-#    cdata.set('HAVE_VIDEOTOOLBOX_10_9_6', 1)
-#  endif
 endif
 
 have_orcc = false
 orcc_args = []
 orc_targets = []
 # Used by various libraries/elements that use Orc code
-orc_dep = dependency('orc-0.4', version : orc_req, required : get_option('orc'), allow_fallback: true)
-orcc = find_program('orcc', required : get_option('orc'))
-if orc_dep.found() and orcc.found()
-  have_orcc = true
-  orcc_args = [orcc, '--include', 'glib.h']
+orc_dep = dependency('orc-0.4', version: orc_req, required: get_option('orc'), allow_fallback: true)
+orcc = find_program('orcc', required: get_option('orc-compiler'))
+if orc_dep.found()
+  if orcc.found()
+    have_orcc = true
+    orcc_args = [orcc, '--include', 'glib.h']
+  else
+    message('Orc Compiler not found, not regenerating Orc sources')
+  endif
   cdata.set('HAVE_ORC', 1)
 else
-  message('Orc Compiler not found or disabled, will use backup C code')
+  warning('Orc not found or disabled, will use backup C code')
   cdata.set('DISABLE_ORC', 1)
 endif
+
 cdata.set('GST_ENABLE_EXTRA_CHECKS', not get_option('extra-checks').disabled())
 
 # Disable compiler warnings for unused variables and args if gst debug system is disabled
@@ -551,7 +547,8 @@ gir = find_program('g-ir-scanner', required : get_option('introspection'))
 gnome = import('gnome')
 build_gir = gir.found() and (not meson.is_cross_build() or get_option('introspection').enabled())
 gir_init_section = [ '--add-init-section=extern void gst_init(gint*,gchar**);' + \
-    'g_setenv("GST_REGISTRY_1.0", "@0@", TRUE);'.format(meson.current_build_dir() + '/gir_empty_registry.reg') + \
+    'g_setenv("GST_REGISTRY_DISABLE", "yes", TRUE);' + \
+    'g_setenv("GST_REGISTRY_1_0", "@0@", TRUE);'.format(meson.current_build_dir() + '/gir_empty_registry.reg') + \
     'g_setenv("GST_PLUGIN_PATH_1_0", "", TRUE);' + \
     'g_setenv("GST_PLUGIN_SYSTEM_PATH_1_0", "", TRUE);' + \
     'g_setenv("GST_TRACERS", "", TRUE);' + \
@@ -645,7 +642,17 @@ endif
 
 configure_file(output : 'config.h', configuration : cdata)
 
-meson.add_dist_script('scripts/gen-changelog.py', meson.project_name(), '1.26.0', meson.project_version())
+meson.add_dist_script('scripts/gen-changelog.py', meson.project_name(), '1.28.0', meson.project_version())
+
+# dist common files from monorepo root
+if not meson.is_subproject()
+  meson.add_dist_script('scripts/dist-common-files.py', meson.project_version())
+endif
+
+# dist common files from monorepo root
+if not meson.is_subproject()
+  meson.add_dist_script('scripts/dist-common-files.py', meson.project_version())
+endif
 
 subdir('docs')
 

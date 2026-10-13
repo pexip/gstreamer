@@ -192,6 +192,7 @@ gst_audio_resample_class_init (GstAudioResampleClass * klass)
   gst_element_class_set_static_metadata (gstelement_class, "Audio resampler",
       "Filter/Converter/Audio", "Resamples audio",
       "Sebastian Dröge <sebastian.droege@collabora.co.uk>");
+  gst_element_class_mark_as_untrusted_aware (gstelement_class);
 
   GST_BASE_TRANSFORM_CLASS (klass)->start =
       GST_DEBUG_FUNCPTR (gst_audio_resample_start);
@@ -783,7 +784,7 @@ gst_audio_resample_process (GstAudioResample * resample, GstBuffer * inbuf,
       else
         zeros_to_push = in_len;
 
-      gst_audio_resample_push_drain (resample, zeros_to_push);
+      gst_audio_resample_dump_drain (resample, zeros_to_push);
       in_len -= zeros_to_push;
       resample->num_gap_samples += zeros_to_push;
     }
@@ -1134,6 +1135,8 @@ gst_audio_resample_get_property (GObject * object, guint prop_id,
 static gboolean
 plugin_init (GstPlugin * plugin)
 {
+  gst_plugin_set_static_features_flag (plugin);
+
   return GST_ELEMENT_REGISTER (audioresample, plugin);
 }
 

@@ -1858,7 +1858,16 @@ gst_videomixer2_sink_event (GstCollectPads * pads, GstCollectData * cdata,
       GstSegment seg;
       gst_event_copy_segment (event, &seg);
 
-      g_assert (seg.format == GST_FORMAT_TIME);
+      if (seg.format != GST_FORMAT_TIME) {
+        GST_ERROR_OBJECT (pad, "Segment of type %s are not supported, "
+            "only TIME segments are supported",
+            gst_format_get_name (seg.format));
+        gst_event_unref (event);
+        event = NULL;
+        ret = FALSE;
+        break;
+      }
+
       gst_videomixer2_reset_qos (mix);
       break;
     }
@@ -2237,6 +2246,7 @@ gst_videomixer2_class_init (GstVideoMixer2Class * klass)
       "Deprecated by compositor. Mix multiple video streams",
       "Wim Taymans <wim@fluendo.com>, "
       "Sebastian Dröge <sebastian.droege@collabora.co.uk>");
+  gst_element_class_mark_as_untrusted_aware (gstelement_class);
 
   /* Register the pad class */
   g_type_class_ref (GST_TYPE_VIDEO_MIXER2_PAD);
@@ -2285,6 +2295,8 @@ gst_videomixer2_init (GstVideoMixer2 * mix)
 static gboolean
 plugin_init (GstPlugin * plugin)
 {
+  gst_plugin_set_static_features_flag (plugin);
+
   GST_DEBUG_CATEGORY_INIT (gst_videomixer2_debug, "videomixer", 0,
       "video mixer");
 

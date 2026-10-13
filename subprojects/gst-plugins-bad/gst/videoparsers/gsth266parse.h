@@ -104,6 +104,9 @@ struct _GstH266Parse
   GstBuffer *sps_nals[GST_H266_MAX_SPS_COUNT];
   GstBuffer *pps_nals[GST_H266_MAX_PPS_COUNT];
 
+  GstH266OPI opi;
+  gboolean have_opi;
+
   /* FFI SEI Info we need to keep track of */
   GstH266FrameFieldInfo sei_frame_field;
   guint interlaced_mode;
@@ -120,13 +123,18 @@ struct _GstH266Parse
   gboolean predicted;
   gboolean bidirectional;
   gboolean header;
-  gboolean framerate_from_caps;
   /* AU state */
   gboolean picture_start;
   guint last_nuh_layer_id;
 
   GstVideoParseUserData user_data;
   GstVideoParseUserDataUnregistered user_data_unregistered;
+  GstH274DigitallySignedContentInitialization dsc_initialization;
+  guint dsc_initialization_state;
+  GstH274DigitallySignedContentSelection dsc_selection;
+  guint dsc_selection_state;
+  GstH274DigitallySignedContentVerification dsc_verification;
+  guint dsc_verification_state;
 
   /* props */
   gint interval;

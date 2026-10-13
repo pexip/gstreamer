@@ -134,12 +134,32 @@ struct _GESExtractableInterface
                                          GObjectClass *klass,
                                          GESAsset *asset);
 
-  gpointer _ges_reserved[GES_PADDING];
+  /**
+   * GESExtractableInterface::check_id_full:
+   * @type: The #GESExtractable type
+   * @id: The id to check
+   * @flags: The #GESAssetRequestFlags of the request
+   * @error: An error to be set if the id is not usable
+   *
+   * Same as #GESExtractableInterface.check_id, for implementations that need
+   * to know how the id was obtained, see ges_asset_request_full(). Takes
+   * precedence over #GESExtractableInterface.check_id when set.
+   *
+   * Since: 1.30
+   */
+  gchar * (*check_id_full)           (GType type,
+                                      const gchar *id,
+                                      GESAssetRequestFlags flags,
+                                      GError **error);
+
+  gpointer _ges_reserved[GES_PADDING - 1];
 };
 G_GNUC_END_IGNORE_DEPRECATIONS
 
+GES_DEPRECATED_FOR(ges_extractable_get_asset_full)
+GESAsset* ges_extractable_get_asset              (GESExtractable *self);
 GES_API
-GESAsset* ges_extractable_get_asset      (GESExtractable *self);
+GESAsset* ges_extractable_get_asset_full         (GESExtractable *self) G_GNUC_WARN_UNUSED_RESULT;
 GES_API
 gboolean ges_extractable_set_asset              (GESExtractable *self,
                                                 GESAsset *asset);

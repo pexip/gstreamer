@@ -34,10 +34,15 @@ G_BEGIN_DECLS
  * @GST_DEBUG_GRAPH_SHOW_MEDIA_TYPE: show caps-name on edges
  * @GST_DEBUG_GRAPH_SHOW_CAPS_DETAILS: show caps-details on edges
  * @GST_DEBUG_GRAPH_SHOW_NON_DEFAULT_PARAMS: show modified parameters on
- *                                           elements
+ *                                           elements. When this flag is set
+ *                                           without GST_DEBUG_GRAPH_SHOW_FULL_PARAMS,
+ *                                           a tooltip with full parameter values
+ *                                           is added to each element.
  * @GST_DEBUG_GRAPH_SHOW_STATES: show element states
  * @GST_DEBUG_GRAPH_SHOW_FULL_PARAMS: show full element parameter values even
- *                                    if they are very long
+ *                                    if they are very long. When this flag is
+ *                                    set, no tooltip is added since the full
+ *                                    values are already visible in the label.
  * @GST_DEBUG_GRAPH_SHOW_ALL: show all the typical details that one might want
  * @GST_DEBUG_GRAPH_SHOW_VERBOSE: show all details regardless of how large or
  *                                verbose they make the resulting output
@@ -81,20 +86,11 @@ void gst_debug_bin_to_dot_file_with_ts (GstBin *bin, GstDebugGraphDetails detail
  *
  * To aid debugging applications one can use this method to write out the whole
  * network of gstreamer elements that form the pipeline into a dot file.
- * This file can be processed with graphviz to get an image, like this:
  *
- * ``` shell
- * dot -Tpng -oimage.png graph_lowlevel.dot
- * ```
+ * The macro is only active if the GStreamer debugging subsystem is
+ * enabled (i.e., no use of `meson setup -Dgst_debug=false`)
  *
- * There is also a utility called [xdot] which allows you to view the dot file
- * directly without converting it first.
- *
- * The macro is only active if the environment variable `GST_DEBUG_DUMP_DOT_DIR`
- * is set to a basepath (e.g. `/tmp`), and the GStreamer debugging subsystem is
- * enabled (i.e., no use of `./configure --disable-gst-debug`)
- *
- * [xdot]: https://pypi.org/project/xdot/
+ * See gst_debug_bin_to_dot_file() for more details.
  */
 #define GST_DEBUG_BIN_TO_DOT_FILE(bin, details, file_name) gst_debug_bin_to_dot_file (bin, details, file_name)
 

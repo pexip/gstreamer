@@ -21,9 +21,8 @@
 #include "config.h"
 #endif
 
-#include "gstcudamemory.h"
-#include "gstcudautils.h"
-#include "gstcuda-private.h"
+#include <gst/cuda/gstcuda.h>
+#include <gst/cuda/gstcuda-private.h>
 
 #include <string.h>
 #include <map>
@@ -348,9 +347,9 @@ gst_cuda_allocator_alloc_internal (GstCudaAllocator * self,
     gst_cuda_context_push (context);
 
     if (stream_ordered)
-      CuMemFreeAsync (data, stream_handle);
+      gst_cuda_result (CuMemFreeAsync (data, stream_handle));
     else
-      CuMemFree (data);
+      gst_cuda_result (CuMemFree (data));
 
     gst_cuda_context_pop (nullptr);
     return nullptr;

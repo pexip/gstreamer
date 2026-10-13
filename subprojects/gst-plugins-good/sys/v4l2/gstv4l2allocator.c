@@ -934,7 +934,8 @@ gst_v4l2_allocator_alloc_dmabuf (GstV4l2Allocator * allocator,
     mem = (GstV4l2Memory *) group->mem[i];
 
     dma_mem = gst_fd_allocator_alloc (dmabuf_allocator, mem->dmafd,
-        group->planes[i].length, GST_FD_MEMORY_FLAG_DONT_CLOSE);
+        group->planes[i].length,
+        GST_FD_MEMORY_FLAG_DONT_CLOSE | GST_FD_MEMORY_FLAG_KEEP_MAPPED);
     gst_memory_resize (dma_mem, group->planes[i].data_offset,
         group->planes[i].length - group->planes[i].data_offset);
 
@@ -1264,11 +1265,17 @@ gst_v4l2_allocator_qbuf (GstV4l2Allocator * allocator,
 
   /* update sizes */
   if (V4L2_TYPE_IS_MULTIPLANAR (obj->type)) {
-    for (i = 0; i < group->n_mem; i++)
+    for (i = 0; i < group->n_mem; i++) {
+      gsize offset;
+
       group->planes[i].bytesused =
-          gst_memory_get_sizes (group->mem[i], NULL, NULL);
+          gst_memory_get_sizes (group->mem[i], &offset, NULL) + offset;
+    }
   } else {
-    group->buffer.bytesused = gst_memory_get_sizes (group->mem[0], NULL, NULL);
+    gsize offset;
+
+    group->buffer.bytesused =
+        gst_memory_get_sizes (group->mem[0], &offset, NULL) + offset;
   }
 
   /* Ensure the memory will stay around and is RO */

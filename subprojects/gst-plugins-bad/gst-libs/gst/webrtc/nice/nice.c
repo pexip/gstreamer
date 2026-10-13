@@ -28,6 +28,15 @@
 #include <agent.h>
 
 #define HTTP_PROXY_PORT_DEFAULT 3128
+#define MAX_CLOSING_TIME_MILLI_SECONDS 2 * 1000 /* limit closing procedure to 2s */
+
+typedef struct
+{
+  GMutex mutex;                 /* Mutex for guarding count */
+  GCond cond;                   /* Condition for signaling that all resolves have finished */
+  guint count;
+  gboolean cancelled;
+} OutstandingResolves;
 
 /* XXX:
  *
@@ -74,6 +83,9 @@ struct _GstWebRTCNicePrivate
 
   gchar *remote_ufrag;
   gchar *remote_pwd;
+
+  GCancellable *resolve_cancellable;
+  OutstandingResolves *outstanding_resolves;    /* keeps track of uncompleted resolve tasks */
 };
 
 #define gst_webrtc_nice_parent_class parent_class
@@ -81,6 +93,59 @@ G_DEFINE_TYPE_WITH_CODE (GstWebRTCNice, gst_webrtc_nice,
     GST_TYPE_WEBRTC_ICE, G_ADD_PRIVATE (GstWebRTCNice)
     GST_DEBUG_CATEGORY_INIT (gst_webrtc_nice_debug, "webrtcnice", 0,
         "webrtcnice"););
+
+static OutstandingResolves *
+outstanding_resolves_ref (OutstandingResolves * r)
+{
+  return g_atomic_rc_box_acquire (r);
+}
+
+static void
+outstanding_resolves_free (OutstandingResolves * r)
+{
+  g_cond_clear (&r->cond);
+  g_mutex_clear (&r->mutex);
+}
+
+static void
+outstanding_resolves_unref (OutstandingResolves * r)
+{
+  g_atomic_rc_box_release_full (r, (GDestroyNotify) outstanding_resolves_free);
+}
+
+static void
+outstanding_resolves_dec (OutstandingResolves * r)
+{
+  g_mutex_lock (&r->mutex);
+  r->count--;
+  if (r->count == 0)
+    g_cond_signal (&r->cond);
+  g_mutex_unlock (&r->mutex);
+}
+
+static gboolean
+outstanding_resolves_try_inc (OutstandingResolves * r)
+{
+  gboolean ret = FALSE;
+  g_mutex_lock (&r->mutex);
+  if (!r->cancelled) {
+    r->count++;
+    ret = TRUE;
+  }
+  g_mutex_unlock (&r->mutex);
+
+  return ret;
+}
+
+static void
+outstanding_resolves_wait (OutstandingResolves * r)
+{
+  g_mutex_lock (&r->mutex);
+  r->cancelled = TRUE;
+  while (r->count != 0)
+    g_cond_wait (&r->cond, &r->mutex);
+  g_mutex_unlock (&r->mutex);
+}
 
 static gboolean
 _unlock_pc_thread (GMutex * lock)
@@ -137,6 +202,7 @@ _stop_thread (GstWebRTCNice * ice)
   g_mutex_unlock (&ice->priv->lock);
 
   g_thread_unref (ice->priv->thread);
+  ice->priv->thread = NULL;
 }
 
 struct NiceStreamItem
@@ -288,6 +354,7 @@ struct resolve_host_data
   GstResolvedCallback resolved_callback;
   gpointer user_data;
   GDestroyNotify notify;
+  OutstandingResolves *outstanding_resolves;
 };
 
 static struct resolve_host_data *
@@ -334,6 +401,9 @@ on_resolve_host (GResolver * resolver, GAsyncResult * res, gpointer user_data)
   GError *error = NULL;
   GList *addresses;
 
+  outstanding_resolves_dec (rh->outstanding_resolves);
+  outstanding_resolves_unref (rh->outstanding_resolves);
+
   if (!nice) {
     error = g_error_new_literal (G_IO_ERROR, G_IO_ERROR_CANCELLED, "Cancelled");
     rh->resolved_callback (NULL, NULL, error, rh->user_data);
@@ -370,15 +440,18 @@ resolve_host_main_cb (gpointer user_data)
   struct resolve_host_data *rh = user_data;
   GstWebRTCNice *nice = g_weak_ref_get (&rh->nice_weak);
 
-  if (nice) {
+  if (nice && outstanding_resolves_try_inc (rh->outstanding_resolves)) {
     /* no need to error anymore if the main context disappears and this task is
      * not run */
     rh->main_context_handled = TRUE;
 
     GST_DEBUG_OBJECT (nice, "Resolving host %s", rh->host);
-    g_resolver_lookup_by_name_async (resolver, rh->host, NULL,
-        (GAsyncReadyCallback) on_resolve_host, resolve_host_data_ref (rh));
+    g_resolver_lookup_by_name_async (resolver, rh->host,
+        nice->priv->resolve_cancellable, (GAsyncReadyCallback) on_resolve_host,
+        resolve_host_data_ref (rh));
     gst_object_unref (nice);
+  } else {
+    outstanding_resolves_unref (rh->outstanding_resolves);
   }
 
   return G_SOURCE_REMOVE;
@@ -419,6 +492,8 @@ resolve_host_async (GstWebRTCNice * nice, const gchar * host,
   rh->resolved_callback = resolved_callback;
   rh->user_data = user_data;
   rh->notify = notify;
+  rh->outstanding_resolves =
+      outstanding_resolves_ref (nice->priv->outstanding_resolves);
 
   GST_TRACE_OBJECT (nice, "invoking main context for resolving host %s "
       "with data %p", host, rh);
@@ -551,21 +626,24 @@ gst_webrtc_nice_add_stream (GstWebRTCICE * ice, guint session_id)
   g_hash_table_foreach (nice->priv->turn_servers,
       (GHFunc) _add_turn_server_func, &add_data);
 
+  gst_object_ref (item->stream);
   return item->stream;
 }
 
-static void
-_fill_local_candidate_credentials (NiceAgent * agent, NiceCandidate * candidate)
+void
+gst_webrtc_nice_fill_local_candidate_credentials (NiceAgent * agent,
+    NiceCandidate * candidate)
 {
 
   if (!candidate->username || !candidate->password) {
-    gboolean got_credentials;
-    gchar *ufrag, *password;
+    gchar *ufrag = NULL, *password = NULL;
 
-    got_credentials =
-        nice_agent_get_local_credentials (agent, candidate->stream_id, &ufrag,
-        &password);
-    g_warn_if_fail (got_credentials);
+    if (!nice_agent_get_local_credentials (agent, candidate->stream_id, &ufrag,
+            &password)) {
+      g_warning ("Failed to get local credentials for stream %u",
+          candidate->stream_id);
+      return;
+    }
 
     if (!candidate->username)
       candidate->username = ufrag;
@@ -579,8 +657,8 @@ _fill_local_candidate_credentials (NiceAgent * agent, NiceCandidate * candidate)
   }
 }
 
-static void
-_fill_remote_candidate_credentials (GstWebRTCNice * nice,
+void
+gst_webrtc_nice_fill_remote_candidate_credentials (GstWebRTCNice * nice,
     NiceCandidate * candidate)
 {
   if (!candidate->username)
@@ -595,7 +673,6 @@ _on_new_candidate (NiceAgent * agent, NiceCandidate * candidate,
     GstWebRTCNice * ice)
 {
   struct NiceStreamItem *item;
-  NiceCandidate *c;
   gchar *attr;
 
   item = _find_item (ice, -1, candidate->stream_id, NULL);
@@ -605,12 +682,7 @@ _on_new_candidate (NiceAgent * agent, NiceCandidate * candidate,
     return;
   }
 
-  c = nice_candidate_copy (candidate);
-  _fill_local_candidate_credentials (agent, c);
-
-  attr = nice_agent_generate_local_candidate_sdp (agent, c);
-
-  nice_candidate_free (c);
+  attr = nice_agent_generate_local_candidate_sdp (agent, candidate);
 
   if (ice->priv->on_candidate)
     ice->priv->on_candidate (GST_WEBRTC_ICE (ice), item->session_id, attr,
@@ -1115,7 +1187,7 @@ gst_webrtc_nice_get_candidate_server_url (GstWebRTCNice * ice,
 static void
 _populate_candidate_stats (GstWebRTCNice * ice, NiceCandidate * cand,
     GstWebRTCICEStream * stream, GstWebRTCICECandidateStats * stats,
-    gboolean is_local)
+    GstWebRTCNiceCandidateOrigin origin)
 {
   gchar ipaddr[INET6_ADDRSTRLEN];
 
@@ -1131,7 +1203,7 @@ _populate_candidate_stats (GstWebRTCNice * ice, NiceCandidate * cand,
   GST_WEBRTC_ICE_CANDIDATE_STATS_PRIORITY (stats) = cand->priority;
   GST_WEBRTC_ICE_CANDIDATE_STATS_PROTOCOL (stats) =
       cand->transport == NICE_CANDIDATE_TRANSPORT_UDP ? "udp" : "tcp";
-  if (is_local) {
+  if (origin == GST_WEBRTC_NICE_CANDIDATE_ORIGIN_LOCAL) {
     if (cand->type == NICE_CANDIDATE_TYPE_RELAYED) {
       NiceAddress relay_address;
       nice_candidate_relay_address (cand, &relay_address);
@@ -1176,7 +1248,8 @@ _populate_candidate_stats (GstWebRTCNice * ice, NiceCandidate * cand,
 
 static void
 _populate_candidate_list_stats (GstWebRTCNice * ice, GSList * cands,
-    GstWebRTCICEStream * stream, GPtrArray * result, gboolean is_local)
+    GstWebRTCICEStream * stream, GPtrArray * result,
+    GstWebRTCNiceCandidateOrigin origin)
 {
   GSList *item;
 
@@ -1184,7 +1257,7 @@ _populate_candidate_list_stats (GstWebRTCNice * ice, GSList * cands,
     GstWebRTCICECandidateStats *stats =
         g_malloc0 (sizeof (GstWebRTCICECandidateStats));
     NiceCandidate *c = item->data;
-    _populate_candidate_stats (ice, c, stream, stats, is_local);
+    _populate_candidate_stats (ice, c, stream, stats, origin);
     g_ptr_array_add (result, stats);
   }
 
@@ -1204,7 +1277,8 @@ gst_webrtc_nice_get_local_candidates (GstWebRTCICE * ice,
   cands = nice_agent_get_local_candidates (nice->priv->nice_agent,
       stream->stream_id, NICE_COMPONENT_TYPE_RTP);
 
-  _populate_candidate_list_stats (nice, cands, stream, result, TRUE);
+  _populate_candidate_list_stats (nice, cands, stream, result,
+      GST_WEBRTC_NICE_CANDIDATE_ORIGIN_LOCAL);
   g_slist_free_full (cands, (GDestroyNotify) nice_candidate_free);
 
   return (GstWebRTCICECandidateStats **) g_ptr_array_free (result, FALSE);
@@ -1223,40 +1297,11 @@ gst_webrtc_nice_get_remote_candidates (GstWebRTCICE * ice,
   cands = nice_agent_get_remote_candidates (nice->priv->nice_agent,
       stream->stream_id, NICE_COMPONENT_TYPE_RTP);
 
-  _populate_candidate_list_stats (nice, cands, stream, result, FALSE);
+  _populate_candidate_list_stats (nice, cands, stream, result,
+      GST_WEBRTC_NICE_CANDIDATE_ORIGIN_REMOTE);
   g_slist_free_full (cands, (GDestroyNotify) nice_candidate_free);
 
   return (GstWebRTCICECandidateStats **) g_ptr_array_free (result, FALSE);
-}
-
-static gboolean
-gst_webrtc_nice_get_selected_pair (GstWebRTCICE * ice,
-    GstWebRTCICEStream * stream, GstWebRTCICECandidateStats ** local_stats,
-    GstWebRTCICECandidateStats ** remote_stats)
-{
-  GstWebRTCNice *nice = GST_WEBRTC_NICE (ice);
-  NiceCandidate *local_cand = NULL;
-  NiceCandidate *remote_cand = NULL;
-
-
-  if (stream) {
-    if (nice_agent_get_selected_pair (nice->priv->nice_agent, stream->stream_id,
-            NICE_COMPONENT_TYPE_RTP, &local_cand, &remote_cand)) {
-      _fill_local_candidate_credentials (nice->priv->nice_agent, local_cand);
-      _fill_remote_candidate_credentials (nice, remote_cand);
-
-      *local_stats = g_new0 (GstWebRTCICECandidateStats, 1);
-      _populate_candidate_stats (nice, local_cand, stream, *local_stats, TRUE);
-
-      *remote_stats = g_new0 (GstWebRTCICECandidateStats, 1);
-      _populate_candidate_stats (nice, remote_cand, stream, *remote_stats,
-          FALSE);
-
-      return TRUE;
-    }
-  }
-
-  return FALSE;
 }
 
 static void
@@ -1560,43 +1605,29 @@ gst_webrtc_nice_get_http_proxy (GstWebRTCICE * ice)
 
 struct close_data
 {
-  GWeakRef nice_weak;
   GstPromise *promise;
   gboolean agent_closed;
 };
 
 static struct close_data *
-close_data_new (GstWebRTCNice * ice, GstPromise * p)
+close_data_new (GstPromise * p)
 {
-  struct close_data *d = g_atomic_rc_box_new0 (struct close_data);
-  g_weak_ref_init (&d->nice_weak, ice);
-  d->promise = p;
+  struct close_data *d = g_new0 (struct close_data, 1);
+  d->promise = p ? gst_promise_ref (p) : NULL;
   d->agent_closed = FALSE;
   return d;
 }
 
 static void
-close_data_clear (struct close_data *d)
+close_data_free (struct close_data *d)
 {
-  g_weak_ref_clear (&d->nice_weak);
   if (d->promise)
     gst_promise_unref (d->promise);
-}
-
-static struct close_data *
-close_data_ref (struct close_data *d)
-{
-  return (struct close_data *) g_atomic_rc_box_acquire (d);
+  g_free (d);
 }
 
 static void
-close_data_unref (struct close_data *d)
-{
-  g_atomic_rc_box_release_full (d, (GDestroyNotify) close_data_clear);
-}
-
-static void
-on_agent_closed (GObject * src, GAsyncResult * result, gpointer user_data)
+_agent_closed_cb (GObject * src, GAsyncResult * result, gpointer user_data)
 {
   struct close_data *d = (struct close_data *) user_data;
 
@@ -1609,41 +1640,76 @@ on_agent_closed (GObject * src, GAsyncResult * result, gpointer user_data)
   }
 
   d->agent_closed = TRUE;
-  close_data_unref (d);
 }
 
 static gboolean
-close_main_cb (gpointer user_data)
+_agent_closed_timeout_cb (gpointer user_data)
 {
-  struct close_data *d = (struct close_data *) user_data;
-  GstWebRTCNice *nice = g_weak_ref_get (&d->nice_weak);
+  gboolean *agent_timeout = user_data;
 
-  if (nice) {
-    /* 8. Destroy connection's ICE Agent, abruptly ending any active ICE
-     * processing and releasing any relevant resources (e.g. TURN permissions). */
-    nice_agent_close_async (NICE_AGENT (nice->priv->nice_agent),
-        on_agent_closed, close_data_ref (d));
-    if (!d->promise) {
-      while (!d->agent_closed) {
-        g_main_context_iteration (nice->priv->main_context, TRUE);
-      }
-    }
-    gst_object_unref (nice);
+  *agent_timeout = TRUE;
+  return FALSE;
+};
+
+static void
+_close_agent (GstWebRTCNice * ice, GstPromise * promise)
+{
+  GMainContext *main_context = NULL;
+  struct close_data *agent_close_data = NULL;
+  gboolean agent_timeout = FALSE;
+  GSource *timeout_source;
+
+  if (!ice->priv->thread) {
+    if (promise) {
+      GError *error =
+          g_error_new (GST_WEBRTC_ERROR, GST_WEBRTC_ERROR_INTERNAL_FAILURE,
+          "ICE thread not running");
+      GstStructure *s = gst_structure_new ("application/x-gst-promise", "error",
+          G_TYPE_ERROR, error, NULL);
+      gst_promise_reply (promise, s);
+      g_clear_error (&error);
+    };
+    return;
   }
 
-  return G_SOURCE_REMOVE;
+  g_cancellable_cancel (ice->priv->resolve_cancellable);
+
+  main_context = g_main_context_new ();
+  g_main_context_push_thread_default (main_context);
+  timeout_source = g_timeout_source_new (MAX_CLOSING_TIME_MILLI_SECONDS);
+  g_source_set_callback (timeout_source, _agent_closed_timeout_cb,
+      &agent_timeout, NULL);
+  g_source_attach (timeout_source, main_context);
+
+  /* 8. Destroy connection's ICE Agent, abruptly ending any active ICE
+   * processing and releasing any relevant resources (e.g. TURN permissions). */
+  agent_close_data = close_data_new (promise);
+  nice_agent_close_async (ice->priv->nice_agent, _agent_closed_cb,
+      agent_close_data);
+
+  while (!agent_close_data->agent_closed && !agent_timeout) {
+    g_main_context_iteration (main_context, TRUE);
+  }
+  if (agent_timeout) {
+    GST_WARNING ("nice_agent_close_async() did not finish");
+  }
+  g_source_destroy (timeout_source);
+  g_source_unref (timeout_source);
+  g_main_context_pop_thread_default (main_context);
+  g_main_context_unref (main_context);
+  close_data_free (agent_close_data);
+
+  outstanding_resolves_wait (ice->priv->outstanding_resolves);
+  _stop_thread (ice);
 }
 
 static void
 gst_webrtc_nice_close (GstWebRTCICE * ice, GstPromise * promise)
 {
   GstWebRTCNice *nice = GST_WEBRTC_NICE (ice);
-  struct close_data *d = close_data_new (nice, promise);
 
   /* https://www.w3.org/TR/webrtc/#dom-rtcpeerconnection-close */
-
-  g_main_context_invoke_full (nice->priv->main_context, G_PRIORITY_DEFAULT,
-      close_main_cb, d, (GDestroyNotify) close_data_unref);
+  _close_agent (nice, promise);
 }
 
 static void
@@ -1718,7 +1784,10 @@ gst_webrtc_nice_finalize (GObject * object)
 
   g_signal_handlers_disconnect_by_data (ice->priv->nice_agent, ice);
 
-  _stop_thread (ice);
+  _close_agent (ice, NULL);
+
+  g_clear_object (&ice->priv->resolve_cancellable);
+  outstanding_resolves_unref (ice->priv->outstanding_resolves);
 
   if (ice->priv->on_candidate_notify)
     ice->priv->on_candidate_notify (ice->priv->on_candidate_data);
@@ -1757,11 +1826,8 @@ gst_webrtc_nice_constructed (GObject * object)
 
   options |= NICE_AGENT_OPTION_ICE_TRICKLE;
   options |= NICE_AGENT_OPTION_REGULAR_NOMINATION;
-
-/*  https://gitlab.freedesktop.org/libnice/libnice/-/merge_requests/257 */
-#ifdef HAVE_LIBNICE_CONSENT_FIX
+  options |= NICE_AGENT_OPTION_CLOSE_FORCED;
   options |= NICE_AGENT_OPTION_CONSENT_FRESHNESS;
-#endif
 
   ice->priv->nice_agent = nice_agent_new_full (ice->priv->main_context,
       NICE_COMPATIBILITY_RFC5245, options);
@@ -1803,7 +1869,6 @@ gst_webrtc_nice_class_init (GstWebRTCNiceClass * klass)
       gst_webrtc_nice_get_local_candidates;
   gst_webrtc_ice_class->get_remote_candidates =
       gst_webrtc_nice_get_remote_candidates;
-  gst_webrtc_ice_class->get_selected_pair = gst_webrtc_nice_get_selected_pair;
   gst_webrtc_ice_class->close = gst_webrtc_nice_close;
 
   gobject_class->constructed = gst_webrtc_nice_constructed;
@@ -1852,6 +1917,11 @@ gst_webrtc_nice_init (GstWebRTCNice * ice)
       g_array_new (FALSE, TRUE, sizeof (struct NiceStreamItem));
   g_array_set_clear_func (ice->priv->nice_stream_map,
       (GDestroyNotify) _clear_ice_stream);
+
+  ice->priv->resolve_cancellable = g_cancellable_new ();
+  ice->priv->outstanding_resolves = g_atomic_rc_box_new0 (OutstandingResolves);
+  g_mutex_init (&ice->priv->outstanding_resolves->mutex);
+  g_cond_init (&ice->priv->outstanding_resolves->cond);
 }
 
 GstWebRTCNice *

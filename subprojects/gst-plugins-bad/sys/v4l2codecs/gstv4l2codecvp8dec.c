@@ -667,7 +667,7 @@ gst_v4l2_codec_vp8_dec_end_picture (GstVp8Decoder * decoder,
 {
   GstV4l2CodecVp8Dec *self = GST_V4L2_CODEC_VP8_DEC (decoder);
   GstVideoCodecFrame *frame;
-  GstV4l2Request *request;
+  GstV4l2Request *request = NULL;
   GstBuffer *buffer;
   GstFlowReturn flow_ret = GST_FLOW_OK;
   gsize bytesused;
@@ -734,6 +734,9 @@ gst_v4l2_codec_vp8_dec_end_picture (GstVp8Decoder * decoder,
   return GST_FLOW_OK;
 
 fail:
+  if (request)
+    gst_v4l2_request_unref (request);
+
   gst_v4l2_codec_vp8_dec_reset_picture (self);
 
   if (flow_ret != GST_FLOW_OK)
@@ -800,6 +803,8 @@ gst_v4l2_codec_vp8_dec_output_picture (GstVp8Decoder * decoder,
   GstV4l2Request *request = gst_vp8_picture_get_user_data (picture);
   GstCodecPicture *codec_picture = GST_CODEC_PICTURE (picture);
   gint ret;
+
+  g_return_val_if_fail (request, GST_FLOW_ERROR);
 
   if (codec_picture->discont_state) {
     if (!gst_video_decoder_negotiate (vdec)) {

@@ -86,6 +86,7 @@ typedef enum
   GstCaps *audio_caps;
   GstCaps *video_caps;
   gboolean reading;
+  gboolean use_video_meta;
   GstClockTime duration;
   GstClockTime position;
 }
@@ -99,7 +100,9 @@ typedef enum
 - (void) seekTo: (guint64) start : (guint64) stop : (GError **) error;
 - (BOOL) hasMediaType: (GstAVFAssetReaderMediaType) type;
 - (GstCaps *) getCaps: (GstAVFAssetReaderMediaType) type;
+- (GstCaps *) videoCaps;
 - (BOOL) selectTrack: (GstAVFAssetReaderMediaType) type : (gint) index;
+- (void) setUseVideoMeta: (gboolean) useVideoMeta;
 - (GstBuffer *) nextBuffer:  (GstAVFAssetReaderMediaType) type : (GError **) error;
 @end
 
@@ -122,6 +125,7 @@ struct _GstAVFAssetSrc
 
   GstFlowReturn last_audio_pad_ret;
   GstFlowReturn last_video_pad_ret;
+  gboolean use_video_meta;
 
   /* Properties */
   gchar * uri;
@@ -133,6 +137,7 @@ struct _GstAVFAssetSrcClass
 };
 
 GType gst_avf_asset_src_get_type (void);
+GST_ELEMENT_REGISTER_DECLARE (avfassetsrc);
 
 G_END_DECLS
 

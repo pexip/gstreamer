@@ -3734,7 +3734,7 @@ gst_decode_group_hide (GstDecodeGroup * group)
  *
  * Not MT-safe, call with parent's chain lock!
  */
-static void
+static gpointer
 gst_decode_chain_free_hidden_groups (GList * old_groups)
 {
   GList *l;
@@ -3745,6 +3745,8 @@ gst_decode_chain_free_hidden_groups (GList * old_groups)
     gst_decode_group_free (group);
   }
   g_list_free (old_groups);
+
+  return NULL;
 }
 
 static void
@@ -4430,7 +4432,7 @@ gst_decode_group_reset_buffering (GstDecodeGroup * group)
  * GCompareFunc to use with lists of GstPad.
  * Sorts pads by mime type.
  * First video (raw, then non-raw), then audio (raw, then non-raw),
- * then others.
+ * then others, empty / any caps last.
  *
  * Return: negative if a<b, 0 if a==b, positive if a>b
  */
@@ -4447,33 +4449,49 @@ sort_end_pads (GstDecodePad * da, GstDecodePad * db)
   capsa = get_pad_caps (GST_PAD_CAST (da));
   capsb = get_pad_caps (GST_PAD_CAST (db));
 
-  sa = gst_caps_get_structure ((const GstCaps *) capsa, 0);
-  sb = gst_caps_get_structure ((const GstCaps *) capsb, 0);
+  if (gst_caps_get_size (capsa) == 0 || gst_caps_get_size (capsb) == 0) {
+    if (gst_caps_is_any (capsa))
+      va = 6;
+    if (gst_caps_is_empty (capsa))
+      va = 7;
+    else
+      va = 0;
 
-  namea = gst_structure_get_name (sa);
-  nameb = gst_structure_get_name (sb);
+    if (gst_caps_is_any (capsb))
+      vb = 6;
+    if (gst_caps_is_empty (capsb))
+      vb = 7;
+    else
+      vb = 0;
+  } else {
+    sa = gst_caps_get_structure (capsa, 0);
+    sb = gst_caps_get_structure (capsb, 0);
 
-  if (g_strrstr (namea, "video/x-raw"))
-    va = 0;
-  else if (g_strrstr (namea, "video/"))
-    va = 1;
-  else if (g_strrstr (namea, "audio/x-raw"))
-    va = 2;
-  else if (g_strrstr (namea, "audio/"))
-    va = 3;
-  else
-    va = 4;
+    namea = gst_structure_get_name (sa);
+    nameb = gst_structure_get_name (sb);
 
-  if (g_strrstr (nameb, "video/x-raw"))
-    vb = 0;
-  else if (g_strrstr (nameb, "video/"))
-    vb = 1;
-  else if (g_strrstr (nameb, "audio/x-raw"))
-    vb = 2;
-  else if (g_strrstr (nameb, "audio/"))
-    vb = 3;
-  else
-    vb = 4;
+    if (g_strrstr (namea, "video/x-raw"))
+      va = 0;
+    else if (g_strrstr (namea, "video/"))
+      va = 1;
+    else if (g_strrstr (namea, "audio/x-raw"))
+      va = 2;
+    else if (g_strrstr (namea, "audio/"))
+      va = 3;
+    else
+      va = 4;
+
+    if (g_strrstr (nameb, "video/x-raw"))
+      vb = 0;
+    else if (g_strrstr (nameb, "video/"))
+      vb = 1;
+    else if (g_strrstr (nameb, "audio/x-raw"))
+      vb = 2;
+    else if (g_strrstr (nameb, "audio/"))
+      vb = 3;
+    else
+      vb = 4;
+  }
 
   gst_caps_unref (capsa);
   gst_caps_unref (capsb);
@@ -4584,10 +4602,9 @@ gst_decode_chain_get_topology (GstDecodeChain * chain)
     for (l = chain->active_group->children; l; l = l->next) {
       s = gst_decode_chain_get_topology (l->data);
       if (s) {
-        gst_value_set_structure (&item, s);
+        gst_value_take_structure (&item, s);
         gst_value_list_append_value (&list, &item);
         g_value_reset (&item);
-        gst_structure_free (s);
       }
     }
     gst_structure_set_value (u, "next", &list);
@@ -4792,6 +4809,7 @@ retry:
   /* Don't add pads if we are shutting down */
   DYN_LOCK (dbin);
   if (G_UNLIKELY (dbin->shutdown)) {
+    g_list_free_full (endpads, gst_object_unref);
     GST_WARNING_OBJECT (dbin, "Currently, shutting down, aborting exposing");
     DYN_UNLOCK (dbin);
     return FALSE;

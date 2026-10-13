@@ -25,6 +25,7 @@
 
 #include <gst/check/check.h>
 #include <gst/video/video-sei.h>
+#include <gst/pbutils/pbutils.h>
 #include "parser.h"
 
 #define SRC_CAPS_TMPL   "video/x-h265, parsed=(boolean)false"
@@ -119,6 +120,19 @@ static const guint8 h265_sei_mdcv[] = {
   0x96, 0x80, 0x00, 0x00, 0x03, 0x00, 0x01, 0x80
 };
 
+/* hdr10plus user data SEI message.
+ * See https://gitlab.freedesktop.org/gstreamer/gst-plugins-bad/-/merge_requests/1242
+ * for the reference test stream.
+ */
+static guint8 h265_sei_hdr10_plus_user_data[] = {
+  0x00, 0x00, 0x00, 0x01, 0x4e, 0x01, 0x04, 0x40, 0xb5, 0x00, 0x3c, 0x00, 0x01,
+  0x04, 0x01, 0x40, 0x00, 0x0c, 0x80, 0x8b, 0x4c, 0x41, 0xff, 0x1b, 0xd6,
+  0x01, 0x03, 0x64, 0x08, 0x00, 0x0c, 0x28, 0xdb, 0x20, 0x50, 0x00, 0xac,
+  0xc8, 0x00, 0xe1, 0x90, 0x03, 0x6e, 0x58, 0x10, 0x32, 0xd0, 0x2a, 0x6a,
+  0xf8, 0x48, 0xf3, 0x18, 0xe1, 0xb4, 0x00, 0x40, 0x44, 0x10, 0x25, 0x09,
+  0xa6, 0xae, 0x5c, 0x83, 0x50, 0xdd, 0xf9, 0x8e, 0xc7, 0xbd, 0x00, 0x80
+};
+
 
 /* single-sliced data, generated with:
  * gst-launch-1.0 videotestsrc num-buffers=1 pattern=green \
@@ -149,7 +163,20 @@ static const guint8 h265_128x128_pps[] = {
   0xb4, 0x22, 0x40
 };
 
+static const guint8 h265_aud[] = {
+  0x00, 0x00, 0x00, 0x01, 0x46, 0x01, 0x50
+};
+
 static const guint8 h265_128x128_slice_idr_n_lp[] = {
+  0x00, 0x00, 0x00, 0x01, 0x28, 0x01, 0xaf, 0x0e,
+  0xe0, 0x34, 0x82, 0x15, 0x84, 0xf4, 0x70, 0x4f,
+  0xff, 0xed, 0x41, 0x3f, 0xff, 0xe4, 0xcd, 0xc4,
+  0x7c, 0x03, 0x0c, 0xc2, 0xbb, 0xb0, 0x74, 0xe5,
+  0xef, 0x4f, 0xe1, 0xa3, 0xd4, 0x00, 0x02, 0xc2
+};
+
+static const guint8 h265_128x128_slice_idr_n_lp_with_aud[] = {
+  0x00, 0x00, 0x00, 0x01, 0x46, 0x01, 0x50,
   0x00, 0x00, 0x00, 0x01, 0x28, 0x01, 0xaf, 0x0e,
   0xe0, 0x34, 0x82, 0x15, 0x84, 0xf4, 0x70, 0x4f,
   0xff, 0xed, 0x41, 0x3f, 0xff, 0xe4, 0xcd, 0xc4,
@@ -219,9 +246,11 @@ verify_buffer_bs_au (buffer_verify_data_s * vdata, GstBuffer * buffer)
     guint8 *data = map.data;
 
     /* VPS, SPS, PPS */
-    fail_unless (map.size == vdata->data_to_verify_size +
+    fail_unless (map.size == vdata->data_to_verify_size + sizeof (h265_aud) +
         ctx_headers[0].size + ctx_headers[1].size + ctx_headers[2].size);
 
+    fail_unless (memcmp (data, h265_aud, sizeof (h265_aud)) == 0);
+    data += sizeof (h265_aud);
     fail_unless (memcmp (data, ctx_headers[0].data, ctx_headers[0].size) == 0);
     data += ctx_headers[0].size;
     fail_unless (memcmp (data, ctx_headers[1].data, ctx_headers[1].size) == 0);
@@ -234,12 +263,36 @@ verify_buffer_bs_au (buffer_verify_data_s * vdata, GstBuffer * buffer)
             vdata->data_to_verify_size) == 0);
   } else {
     /* IDR frame */
-    fail_unless (map.size == vdata->data_to_verify_size);
-
-    fail_unless (memcmp (map.data, vdata->data_to_verify, map.size) == 0);
+    guint aud_size = sizeof (h265_aud);
+    fail_unless (map.size == vdata->data_to_verify_size + aud_size);
+    fail_unless (memcmp (map.data, h265_aud, aud_size) == 0);
+    fail_unless (memcmp (map.data + aud_size, vdata->data_to_verify,
+            map.size - aud_size) == 0);
   }
 
   gst_buffer_unmap (buffer, &map);
+  return TRUE;
+}
+
+static gboolean
+verify_meta_hdr10_plus (buffer_verify_data_s * vdata, GstBuffer * buffer)
+{
+  GstVideoHDRMeta *meta;
+
+  /* Check for GstVideoHDR10PlusMeta content */
+  meta = gst_buffer_get_video_hdr_meta (buffer);
+  if (meta) {
+    GstVideoHDR10Plus hdr10_plus;
+    /* Count the meta received, should be only one. */
+    ctx_meta_count++;
+    fail_unless (meta->data != NULL);
+    fail_unless (gst_video_hdr_parse_hdr10_plus (meta->data, meta->size,
+            &hdr10_plus));
+    fail_unless (hdr10_plus.application_identifier == 0x4);
+    fail_unless (hdr10_plus.application_version == 0x1);
+    fail_unless (hdr10_plus.num_windows == 1);
+  }
+
   return TRUE;
 }
 
@@ -338,7 +391,141 @@ GST_START_TEST (test_parse_detect_stream_with_hdr_sei)
       "34000:16000:13250:34500:7500:3000:15635:16450:10000000:1");
   fail_unless_structure_field_string_equals (s, "content-light-level",
       "1000:400");
+  fail_unless_structure_field_string_equals (s, "hdr-format", "hdr10");
 
+
+  g_free (h265_idr_plus_sei);
+  gst_caps_unref (caps);
+}
+
+GST_END_TEST;
+
+static inline GstBuffer *wrap_buffer (const guint8 * buf, gsize size,
+    GstClockTime pts, GstBufferFlags flags);
+static inline GstBuffer *composite_buffer (GstClockTime pts,
+    GstBufferFlags flags, gint count, ...);
+
+/* Verify that mastering-display-info, content-light-level and hdr-format are
+ * removed from caps when the HDR SEIs disappear from the bitstream.
+ *
+ * The parser state machine for HDR SEIs:
+ *   EXPIRED → (SEI seen) → PARSED → (IRAP) → ACTIVE → (IRAP, no SEI) → EXPIRED
+ *
+ * Sequence:
+ *   AU1: VPS+SPS+PPS+CLLI+MDC+IDR → state PARSED→ACTIVE, caps WITH hdr-format=hdr10
+ *   AU2: IDR only (no SEI)         → state ACTIVE→EXPIRED, update_caps=TRUE,
+ *                                    caps WITHOUT hdr-format
+ *   AU3: IDR only (no SEI)         → state stays EXPIRED, no caps event
+ */
+#define bytestream_set_caps(h, in_align, out_align) \
+  gst_harness_set_caps_str (h, \
+      "video/x-h265, parsed=(boolean)false, stream-format=byte-stream, alignment=" in_align ", framerate=30/1", \
+      "video/x-h265, parsed=(boolean)true, stream-format=byte-stream, alignment=" out_align)
+
+GST_START_TEST (test_parse_detect_stream_hdr_sei_expiry)
+{
+  GstHarness *h = gst_harness_new ("h265parse");
+  GstCaps *caps;
+  GstStructure *s;
+  GstBuffer *buf;
+
+  bytestream_set_caps (h, "au", "au");
+
+  /* AU1: full headers + HDR SEIs + IDR → parser emits caps with HDR fields */
+  buf = composite_buffer (10, 0, 6,
+      h265_vps, sizeof (h265_vps),
+      h265_sps, sizeof (h265_sps),
+      h265_pps, sizeof (h265_pps),
+      h265_sei_clli, sizeof (h265_sei_clli),
+      h265_sei_mdcv, sizeof (h265_sei_mdcv), h265_idr, sizeof (h265_idr));
+  fail_unless_equals_int (gst_harness_push (h, buf), GST_FLOW_OK);
+  fail_unless (gst_harness_buffers_in_queue (h) == 1);
+
+  caps = gst_pad_get_current_caps (h->sinkpad);
+  fail_unless (caps != NULL);
+  s = gst_caps_get_structure (caps, 0);
+  fail_unless_structure_field_string_equals (s, "mastering-display-info",
+      "34000:16000:13250:34500:7500:3000:15635:16450:10000000:1");
+  fail_unless_structure_field_string_equals (s, "content-light-level",
+      "1000:400");
+  fail_unless_structure_field_string_equals (s, "hdr-format", "hdr10");
+  gst_caps_unref (caps);
+  while (gst_harness_buffers_in_queue (h) > 0) {
+    GstBuffer *b = gst_harness_pull (h);
+    gst_buffer_unref (b);
+  }
+
+  /* AU2: IDR without HDR SEIs → state ACTIVE→EXPIRED, update_caps=TRUE → caps
+   * WITHOUT HDR fields */
+  buf = wrap_buffer (h265_idr, sizeof (h265_idr), 20, 0);
+  fail_unless_equals_int (gst_harness_push (h, buf), GST_FLOW_OK);
+  caps = gst_pad_get_current_caps (h->sinkpad);
+  fail_unless (caps != NULL);
+  s = gst_caps_get_structure (caps, 0);
+  fail_if (gst_structure_has_field (s, "mastering-display-info"));
+  fail_if (gst_structure_has_field (s, "content-light-level"));
+  fail_if (gst_structure_has_field (s, "hdr-format"));
+  gst_caps_unref (caps);
+  while (gst_harness_buffers_in_queue (h) > 0) {
+    GstBuffer *b = gst_harness_pull (h);
+    gst_buffer_unref (b);
+  }
+
+  /* AU3: IDR without HDR SEIs → state stays EXPIRED, caps still without HDR */
+  buf = wrap_buffer (h265_idr, sizeof (h265_idr), 30, 0);
+  fail_unless_equals_int (gst_harness_push (h, buf), GST_FLOW_OK);
+  caps = gst_pad_get_current_caps (h->sinkpad);
+  fail_unless (caps != NULL);
+  s = gst_caps_get_structure (caps, 0);
+  fail_if (gst_structure_has_field (s, "mastering-display-info"));
+  fail_if (gst_structure_has_field (s, "content-light-level"));
+  fail_if (gst_structure_has_field (s, "hdr-format"));
+  gst_caps_unref (caps);
+  while (gst_harness_buffers_in_queue (h) > 0) {
+    GstBuffer *b = gst_harness_pull (h);
+    gst_buffer_unref (b);
+  }
+
+  gst_harness_teardown (h);
+}
+
+GST_END_TEST;
+
+GST_START_TEST (test_parse_detect_stream_with_hdrplus_sei)
+{
+  GstCaps *caps;
+  GstStructure *s;
+  guint8 *h265_idr_plus_sei;
+
+  gsize h265_idr_plus_sei_size =
+      sizeof (h265_sei_hdr10_plus_user_data) + sizeof (h265_idr);
+
+  h265_idr_plus_sei = malloc (h265_idr_plus_sei_size);
+
+  memcpy (h265_idr_plus_sei, h265_sei_hdr10_plus_user_data,
+      sizeof (h265_sei_hdr10_plus_user_data));
+  memcpy (h265_idr_plus_sei + sizeof (h265_sei_hdr10_plus_user_data), h265_idr,
+      sizeof (h265_idr));
+  ctx_verify_buffer = verify_meta_hdr10_plus;
+
+  caps =
+      gst_parser_test_get_output_caps (h265_idr_plus_sei,
+      h265_idr_plus_sei_size, NULL);
+
+  fail_unless (caps != NULL);
+  fail_unless (ctx_meta_count != 0);
+  /* Check that the negotiated caps are as expected */
+  GST_DEBUG ("output caps: %" GST_PTR_FORMAT, caps);
+  s = gst_caps_get_structure (caps, 0);
+  fail_unless (gst_structure_has_name (s, "video/x-h265"));
+  fail_unless_structure_field_int_equals (s, "width", 16);
+  fail_unless_structure_field_int_equals (s, "height", 16);
+  fail_unless_structure_field_string_equals (s, "stream-format", "byte-stream");
+  fail_unless_structure_field_string_equals (s, "alignment", "au");
+  fail_unless_structure_field_string_equals (s, "profile", "main");
+  fail_unless_structure_field_string_equals (s, "tier", "main");
+  fail_unless_structure_field_string_equals (s, "level", "2.1");
+  fail_unless_structure_field_string_equals (s, "hdr-format", "hdr10+");
   g_free (h265_idr_plus_sei);
   gst_caps_unref (caps);
 }
@@ -357,6 +544,8 @@ h265parse_suite (void)
   tcase_add_test (tc_chain, test_parse_split);
   tcase_add_test (tc_chain, test_parse_detect_stream);
   tcase_add_test (tc_chain, test_parse_detect_stream_with_hdr_sei);
+  tcase_add_test (tc_chain, test_parse_detect_stream_hdr_sei_expiry);
+  tcase_add_test (tc_chain, test_parse_detect_stream_with_hdrplus_sei);
 
   return s;
 }
@@ -453,11 +642,6 @@ pull_and_check_full (GstHarness * h, const guint8 * data, gsize size,
   const gsize slice_1_size = sliced ? sizeof (h265_128x128_slice_1_idr_n_lp) : sizeof (h265_128x128_slice_idr_n_lp); \
   const gsize slice_2_size = sliced ? sizeof (h265_128x128_slice_2_idr_n_lp) : 0
 
-#define bytestream_set_caps(h, in_align, out_align) \
-  gst_harness_set_caps_str (h, \
-      "video/x-h265, parsed=(boolean)false, stream-format=byte-stream, alignment=" in_align ", framerate=30/1", \
-      "video/x-h265, parsed=(boolean)true, stream-format=byte-stream, alignment=" out_align)
-
 static inline void
 bytestream_push_first_au_inalign_nal (GstHarness * h, gboolean sliced)
 {
@@ -534,13 +718,13 @@ test_flow_outalign_au (GstHarness * h)
       sizeof (h265_128x128_slice_idr_n_lp), 100, 0);
   fail_unless_equals_int (gst_harness_push (h, buf), GST_FLOW_OK);
   fail_unless_equals_int (gst_harness_buffers_in_queue (h), 1);
-  pull_and_check (h, h265_128x128_slice_idr_n_lp, 100, 0);
+  pull_and_check (h, h265_128x128_slice_idr_n_lp_with_aud, 100, 0);
 
   buf = wrap_buffer (h265_128x128_slice_idr_n_lp,
       sizeof (h265_128x128_slice_idr_n_lp), 200, 0);
   fail_unless_equals_int (gst_harness_push (h, buf), GST_FLOW_OK);
   fail_unless_equals_int (gst_harness_buffers_in_queue (h), 1);
-  pull_and_check (h, h265_128x128_slice_idr_n_lp, 200, 0);
+  pull_and_check (h, h265_128x128_slice_idr_n_lp_with_aud, 200, 0);
 }
 
 GST_START_TEST (test_flow_nal_nal)
@@ -594,7 +778,9 @@ GST_START_TEST (test_flow_nal_au)
   fail_unless_equals_int (gst_harness_push (h, buf), GST_FLOW_OK);
 
   fail_unless_equals_int (gst_harness_buffers_in_queue (h), 1);
-  pull_and_check (h, h265_128x128_slice_idr_n_lp, 100, 0);
+
+  /* h265parse will insert AUD for byte-stream + AU output */
+  pull_and_check (h, h265_128x128_slice_idr_n_lp_with_aud, 100, 0);
 
   gst_harness_teardown (h);
 }
@@ -625,20 +811,16 @@ test_headers_outalign_nal (GstHarness * h)
   pull_and_check (h, h265_128x128_sps, 10, 0);
   pull_and_check (h, h265_128x128_pps, 10, 0);
 
-  /* FIXME The timestamp should be 10 really, but base parse refuse to repeat
-   * the same TS for two consecutive calls to _finish_frame(), see [0] for
-   * more details. It's not a huge issue, the decoder can fix it for now.
-   *
-   * [0] https://gitlab.freedesktop.org/gstreamer/gstreamer/-/merge_requests/287
-   */
-  pull_and_check (h, h265_128x128_slice_idr_n_lp, -1, 0);
+  /* The slice retains the PTS from the input buffer (same as headers) */
+  pull_and_check (h, h265_128x128_slice_idr_n_lp, 10, 0);
 }
 
 static void
 test_headers_outalign_au (GstHarness * h)
 {
   fail_unless_equals_int (gst_harness_buffers_in_queue (h), 1);
-  pull_and_check_composite (h, 10, 0, 4,
+  pull_and_check_composite (h, 10, 0, 5,
+      h265_aud, sizeof (h265_aud),
       h265_128x128_vps, sizeof (h265_128x128_vps),
       h265_128x128_sps, sizeof (h265_128x128_sps),
       h265_128x128_pps, sizeof (h265_128x128_pps),
@@ -783,7 +965,7 @@ test_discont_outalign_au (GstHarness * h)
       sizeof (h265_128x128_slice_idr_n_lp), 1000, GST_BUFFER_FLAG_DISCONT);
   fail_unless_equals_int (gst_harness_push (h, buf), GST_FLOW_OK);
   fail_unless_equals_int (gst_harness_buffers_in_queue (h), 1);
-  pull_and_check (h, h265_128x128_slice_idr_n_lp, 1000,
+  pull_and_check (h, h265_128x128_slice_idr_n_lp_with_aud, 1000,
       GST_BUFFER_FLAG_DISCONT);
 }
 
@@ -839,9 +1021,9 @@ GST_START_TEST (test_sliced_nal_nal)
   while (gst_harness_buffers_in_queue (h) > 2)
     pull_and_drop (h);
 
-  /* but expect 2 slices */
-  pull_and_check (h, h265_128x128_slice_1_idr_n_lp, -1, 0);
-  pull_and_check (h, h265_128x128_slice_2_idr_n_lp, -1, 0);
+  /* but expect 2 slices, both with the PTS from the input buffer */
+  pull_and_check (h, h265_128x128_slice_1_idr_n_lp, 10, 0);
+  pull_and_check (h, h265_128x128_slice_2_idr_n_lp, 10, 0);
 
   /* push some more */
   buf = wrap_buffer (h265_128x128_slice_1_idr_n_lp,
@@ -854,7 +1036,7 @@ GST_START_TEST (test_sliced_nal_nal)
       sizeof (h265_128x128_slice_2_idr_n_lp), 100, 0);
   fail_unless_equals_int (gst_harness_push (h, buf), GST_FLOW_OK);
   fail_unless_equals_int (gst_harness_buffers_in_queue (h), 1);
-  pull_and_check (h, h265_128x128_slice_2_idr_n_lp, -1, 0);
+  pull_and_check (h, h265_128x128_slice_2_idr_n_lp, 100, 0);
 
   gst_harness_teardown (h);
 }
@@ -874,9 +1056,9 @@ GST_START_TEST (test_sliced_au_nal)
   while (gst_harness_buffers_in_queue (h) > 2)
     pull_and_drop (h);
 
-  /* but expect 2 slices */
-  pull_and_check (h, h265_128x128_slice_1_idr_n_lp, -1, 0);
-  pull_and_check (h, h265_128x128_slice_2_idr_n_lp, -1, 0);
+  /* Both slices from the first AU should have the PTS from the input buffer */
+  pull_and_check (h, h265_128x128_slice_1_idr_n_lp, 10, 0);
+  pull_and_check (h, h265_128x128_slice_2_idr_n_lp, 10, 0);
 
   /* push some more */
   buf = composite_buffer (100, 0, 2,
@@ -885,7 +1067,7 @@ GST_START_TEST (test_sliced_au_nal)
   fail_unless_equals_int (gst_harness_push (h, buf), GST_FLOW_OK);
   fail_unless_equals_int (gst_harness_buffers_in_queue (h), 2);
   pull_and_check (h, h265_128x128_slice_1_idr_n_lp, 100, 0);
-  pull_and_check (h, h265_128x128_slice_2_idr_n_lp, -1, 0);
+  pull_and_check (h, h265_128x128_slice_2_idr_n_lp, 100, 0);
 
   gst_harness_teardown (h);
 }
@@ -911,7 +1093,8 @@ GST_START_TEST (test_sliced_nal_au)
 
   /* now we can see the initial AU on the output */
   fail_unless_equals_int (gst_harness_buffers_in_queue (h), 1);
-  pull_and_check_composite (h, 10, 0, 5,
+  pull_and_check_composite (h, 10, 0, 6,
+      h265_aud, sizeof (h265_aud),
       h265_128x128_sliced_vps, sizeof (h265_128x128_sliced_vps),
       h265_128x128_sliced_sps, sizeof (h265_128x128_sliced_sps),
       h265_128x128_sliced_pps, sizeof (h265_128x128_sliced_pps),
@@ -928,7 +1111,8 @@ GST_START_TEST (test_sliced_nal_au)
   fail_unless_equals_int (gst_harness_push (h, buf), GST_FLOW_OK);
 
   fail_unless_equals_int (gst_harness_buffers_in_queue (h), 1);
-  pull_and_check_composite (h, 100, 0, 2,
+  pull_and_check_composite (h, 100, 0, 3,
+      h265_aud, sizeof (h265_aud),
       h265_128x128_slice_1_idr_n_lp, sizeof (h265_128x128_slice_1_idr_n_lp),
       h265_128x128_slice_2_idr_n_lp, sizeof (h265_128x128_slice_2_idr_n_lp));
 
@@ -946,7 +1130,8 @@ GST_START_TEST (test_sliced_au_au)
   bytestream_push_first_au_inalign_au (h, TRUE);
 
   fail_unless_equals_int (gst_harness_buffers_in_queue (h), 1);
-  pull_and_check_composite (h, 10, 0, 5,
+  pull_and_check_composite (h, 10, 0, 6,
+      h265_aud, sizeof (h265_aud),
       h265_128x128_sliced_vps, sizeof (h265_128x128_sliced_vps),
       h265_128x128_sliced_sps, sizeof (h265_128x128_sliced_sps),
       h265_128x128_sliced_pps, sizeof (h265_128x128_sliced_pps),
@@ -959,7 +1144,8 @@ GST_START_TEST (test_sliced_au_au)
       h265_128x128_slice_2_idr_n_lp, sizeof (h265_128x128_slice_2_idr_n_lp));
   fail_unless_equals_int (gst_harness_push (h, buf), GST_FLOW_OK);
   fail_unless_equals_int (gst_harness_buffers_in_queue (h), 1);
-  pull_and_check_composite (h, 100, 0, 2,
+  pull_and_check_composite (h, 100, 0, 3,
+      h265_aud, sizeof (h265_aud),
       h265_128x128_slice_1_idr_n_lp, sizeof (h265_128x128_slice_1_idr_n_lp),
       h265_128x128_slice_2_idr_n_lp, sizeof (h265_128x128_slice_2_idr_n_lp));
 

@@ -467,13 +467,25 @@ _memory_add (GstBuffer * buffer, gint idx, GstMemory * mem)
   GST_CAT_LOG (GST_CAT_BUFFER, "buffer %p, idx %d, mem %p", buffer, idx, mem);
 
   if (G_UNLIKELY (len >= GST_BUFFER_MEM_MAX)) {
+    GstMemory *merged;
+
     /* too many buffer, span them. */
     /* FIXME, there is room for improvement here: We could only try to merge
      * 2 buffers to make some room. If we can't efficiently merge 2 buffers we
      * could try to only merge the two smallest buffers to avoid memcpy, etc. */
     GST_CAT_DEBUG (GST_CAT_PERFORMANCE, "memory array overflow in buffer %p",
         buffer);
-    _replace_memory (buffer, len, 0, len, _get_merged_memory (buffer, 0, len));
+    merged = _get_merged_memory (buffer, 0, len);
+    if (G_UNLIKELY (merged == NULL)) {
+      /* failed to merge, e.g. because a memory is still writably mapped.
+       * drop the new memory instead of corrupting the buffer. */
+      g_critical ("failed to merge memories of buffer %p, dropping memory %p",
+          buffer, mem);
+      gst_memory_unlock (mem, GST_LOCK_FLAG_EXCLUSIVE);
+      gst_memory_unref (mem);
+      return;
+    }
+    _replace_memory (buffer, len, 0, len, merged);
     /* we now have 1 single spanned buffer */
     len = 1;
   }
@@ -1876,7 +1888,7 @@ gst_buffer_map_range (GstBuffer * buffer, guint idx, gint length,
     goto no_memory;
 
   /* now try to map */
-  nmem = gst_memory_make_mapped (mem, info, flags);
+  nmem = gst_memory_make_mapped (mem, info, flags & (~GST_MAP_REF_MEMORY));
   if (G_UNLIKELY (nmem == NULL))
     goto cannot_map;
 
@@ -1893,6 +1905,9 @@ gst_buffer_map_range (GstBuffer * buffer, guint idx, gint length,
       }
     }
   }
+
+  info->flags |= GST_MAP_REF_MEMORY;
+
   return TRUE;
 
   /* ERROR */
@@ -1931,7 +1946,7 @@ gst_buffer_unmap (GstBuffer * buffer, GstMapInfo * info)
   g_return_if_fail (GST_IS_BUFFER (buffer));
   g_return_if_fail (info != NULL);
 
-  _gst_buffer_map_info_clear ((GstBufferMapInfo *) info);
+  gst_map_info_clear (info);
 }
 
 static gsize
@@ -2968,12 +2983,28 @@ timestamp_meta_deserialize (const GstMetaInfo * info, GstBuffer * buffer,
   if (size > 16 + caps_str_len + 1) {
     const gchar *info_str = (const gchar *) data + 16 + caps_str_len + 1;
     rtinfo = gst_structure_from_string (info_str, NULL);
+    if (!rtinfo) {
+      gst_clear_caps (&reference);
+      return NULL;
+    }
   }
 
-  GstReferenceTimestampMeta *meta =
-      gst_buffer_add_reference_timestamp_meta (buffer,
-      reference, timestamp, duration);
-  gst_caps_unref (reference);
+  GstReferenceTimestampMeta *meta;
+
+  /* The reference and the timestamp must be valid, otherwise
+   * gst_buffer_add_reference_timestamp_meta() would fail */
+  if (reference == NULL || timestamp == GST_CLOCK_TIME_NONE)
+    meta = NULL;
+  else
+    meta = gst_buffer_add_reference_timestamp_meta (buffer, reference,
+        timestamp, duration);
+
+  gst_clear_caps (&reference);
+
+  if (meta == NULL) {
+    gst_clear_structure (&rtinfo);
+    return NULL;
+  }
   meta->info = rtinfo;
 
   return (GstMeta *) meta;

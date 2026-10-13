@@ -115,6 +115,23 @@ gst_vulkan_trash_init (GstVulkanTrash * trash, GstVulkanFence * fence,
   trash->user_data = user_data;
 }
 
+static void
+gst_vulkan_trash_reinit (GstVulkanTrash * trash, GstVulkanFence * fence,
+    GstVulkanTrashNotify notify, gpointer user_data)
+{
+  g_return_if_fail (fence != NULL);
+  g_return_if_fail (GST_IS_VULKAN_DEVICE (fence->device));
+  g_return_if_fail (notify != NULL);
+  g_assert (trash->fence == NULL);
+
+  GST_TRACE ("Reinitializing trash object %p with fence %" GST_PTR_FORMAT
+      " on device %" GST_PTR_FORMAT, trash, fence, fence->device);
+
+  trash->fence = gst_vulkan_fence_ref (fence);
+  trash->notify = notify;
+  trash->user_data = user_data;
+}
+
 /**
  * gst_vulkan_trash_new:
  * @fence: a #GstVulkanFence
@@ -328,7 +345,14 @@ gst_vulkan_trash_list_wait (GstVulkanTrashList * trash_list, guint64 timeout)
 static gpointer
 gst_vulkan_trash_list_alloc_impl (GstVulkanHandlePool * pool, GError ** error)
 {
-  return g_new0 (GstVulkanTrash, 1);
+  GstVulkanTrash *trash = g_new0 (GstVulkanTrash, 1);
+
+  gst_mini_object_init ((GstMiniObject *) trash, 0,
+      gst_vulkan_trash_get_type (), NULL,
+      (GstMiniObjectDisposeFunction) gst_vulkan_trash_dispose,
+      (GstMiniObjectFreeFunction) gst_vulkan_trash_free);
+
+  return trash;
 }
 
 static void
@@ -393,7 +417,7 @@ gst_vulkan_trash_list_acquire (GstVulkanTrashList * trash_list,
   pool_class = GST_VULKAN_HANDLE_POOL_GET_CLASS (trash_list);
 
   trash = pool_class->acquire (pool, NULL);
-  gst_vulkan_trash_init (trash, fence, notify, user_data);
+  gst_vulkan_trash_reinit (trash, fence, notify, user_data);
   trash->cache = gst_object_ref (trash_list);
 
   GST_TRACE_OBJECT (trash_list, "acquired trash object %p", trash);
@@ -452,23 +476,38 @@ gst_vulkan_trash_fence_list_wait (GstVulkanTrashList * trash_list,
     VkFence *fences;
     GstVulkanDevice *device = NULL;
     GList *l = NULL;
+    guint n_fences = 0;
 
     fences = g_new0 (VkFence, n);
     for (i = 0, l = fence_list->list; i < n; i++, l = g_list_next (l)) {
       GstVulkanTrash *trash = l->data;
+      guint j;
 
       if (device == NULL)
         device = trash->fence->device;
 
-      fences[i] = trash->fence->fence;
+      /* an always-signalled fence has no handle and nothing to wait on */
+      if (trash->fence->fence == VK_NULL_HANDLE)
+        continue;
+
+      /* several trash objects can share one fence; passing duplicate handles
+       * makes vkWaitForFences fail on some drivers. No VUID covers this. */
+      for (j = 0; j < n_fences; j++) {
+        if (fences[j] == trash->fence->fence)
+          break;
+      }
+      if (j == n_fences)
+        fences[n_fences++] = trash->fence->fence;
 
       /* only support waiting on fences from the same device */
       g_assert (device == trash->fence->device);
     }
 
-    GST_TRACE_OBJECT (trash_list, "Waiting on %d fences with timeout %"
-        GST_TIME_FORMAT, n, GST_TIME_ARGS (timeout));
-    err = vkWaitForFences (device->device, n, fences, TRUE, timeout);
+    if (n_fences > 0) {
+      GST_TRACE_OBJECT (trash_list, "Waiting on %u fences with timeout %"
+          GST_TIME_FORMAT, n_fences, GST_TIME_ARGS (timeout));
+      err = vkWaitForFences (device->device, n_fences, fences, TRUE, timeout);
+    }
     g_free (fences);
 
     gst_vulkan_trash_fence_list_gc (trash_list);

@@ -24,6 +24,7 @@
 #include <gst/base/gstqueuearray.h>
 #include <gst/codecparsers/gsth264parser.h>
 #include <gst/video/video.h>
+#include <TargetConditionals.h>
 #include <VideoToolbox/VideoToolbox.h>
 
 G_BEGIN_DECLS
@@ -102,10 +103,9 @@ struct _GstVTEnc
   GstVideoInfo video_info;
   VTCompressionSessionRef session;
   CFDictionaryRef keyframe_props;
-  GstClockTime dts_offset;
 
   GstVecDeque * output_queue;
-  /* Protects output_queue, is_flushing and pause_task */
+  /* Protects output_queue, is_flushing, is_draining and pause_task */
   GMutex queue_mutex;
   GCond queue_cond;
 
@@ -117,6 +117,7 @@ struct _GstVTEnc
   GstFlowReturn downstream_ret;
   gboolean negotiate_downstream;
   gboolean is_flushing;
+  gboolean is_draining;
   gboolean pause_task;
 
   /* If we get an EncoderMalfunctionErr or similar, we restart the session
@@ -127,11 +128,26 @@ struct _GstVTEnc
    * We can't do it straight from the setter as that would often deadlock,
    * so we instead reconfigure on next encode call. */
   gboolean require_reconfigure;
+
+  /* DTS offset: frame2 PTS - frame1 PTS
+   * Explanation here: https://gitlab.freedesktop.org/gstreamer/gstreamer/-/merge_requests/6791#note_2396581 */
+  GstClockTime dts_offset;
+  GstVideoCodecFrame *first_frame;
 };
 
 GType gst_vtenc_get_type (void);
 
-void gst_vtenc_register_elements (GstPlugin * plugin);
+gboolean gst_vtenc_register_elements (GstPlugin * plugin);
+
+GST_ELEMENT_REGISTER_DECLARE (vtenc_h264);
+GST_ELEMENT_REGISTER_DECLARE (vtenc_h265);
+GST_ELEMENT_REGISTER_DECLARE (vtenc_h265a);
+#if TARGET_OS_OSX
+GST_ELEMENT_REGISTER_DECLARE (vtenc_h264_hw);
+GST_ELEMENT_REGISTER_DECLARE (vtenc_h265_hw);
+GST_ELEMENT_REGISTER_DECLARE (vtenc_h265a_hw);
+#endif
+GST_ELEMENT_REGISTER_DECLARE (vtenc_prores);
 
 G_END_DECLS
 

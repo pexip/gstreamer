@@ -303,14 +303,14 @@ gst_video_time_code_init_from_date_time_full (GstVideoTimeCode * tc,
     gst_video_time_code_init (tc, fps_n, fps_d, jam, flags,
         hour, min, sec, 0, field_count);
   } else {
+    GstClockTime time;
     guint64 frames;
     gboolean add_a_frame = FALSE;
 
     /* Note: This might be inaccurate for 1 frame
      * in case we have a drop frame timecode */
-    frames =
-        gst_util_uint64_scale_round (g_date_time_get_microsecond (dt) *
-        G_GINT64_CONSTANT (1000), fps_n, fps_d * GST_SECOND);
+    time = g_date_time_get_microsecond (dt) * GST_USECOND;
+    frames = gst_util_uint64_scale_round (time, fps_n, fps_d * GST_SECOND);
     if (G_UNLIKELY (((frames == fps_n) && (fps_d == 1)) ||
             ((frames == fps_n / 1000) && (fps_d == 1001)))) {
       /* Avoid invalid timecodes */
@@ -372,41 +372,46 @@ gst_video_time_code_nsec_since_daily_jam (const GstVideoTimeCode * tc)
 guint64
 gst_video_time_code_frames_since_daily_jam (const GstVideoTimeCode * tc)
 {
-  guint ff_nom;
+  gint fps_n = tc->config.fps_n, fps_d = tc->config.fps_d;
+  guint64 ff_nom;
   gdouble ff;
 
   g_return_val_if_fail (gst_video_time_code_is_valid (tc), -1);
 
-  gst_util_fraction_to_double (tc->config.fps_n, tc->config.fps_d, &ff);
-  if (tc->config.fps_d == 1001) {
-    ff_nom = tc->config.fps_n / 1000;
-  } else {
-    ff_nom = ff;
-  }
+  gst_util_fraction_to_double (fps_n, fps_d, &ff);
+  ff_nom = fps_d == 1001 ? fps_n / 1000 : ff;
+
   if (tc->config.flags & GST_VIDEO_TIME_CODE_FLAGS_DROP_FRAME) {
     /* these need to be truncated to integer: side effect, code looks cleaner */
-    guint ff_minutes = 60 * ff;
-    guint ff_hours = 3600 * ff;
-    /* for 30000/1001 we drop the first 2 timecodes per minute, for 60000/1001
-     * the first 4, etc. except for every 10th minute */
-    guint dropframe_multiplier;
+    guint64 ff_hour = 3600 * ff;        /* frames per hour, accurate */
+    guint64 ff_min = 60 * ff;   /* frames in dropping minutes */
+    guint64 tens_minutes = tc->minutes / 10;
+    guint64 drop_frames;
+
+    /* for drop frame timecodes, we drop the first X frames each minute except
+     * every tenth, i.e. the last 9 out of every 10 minutes start with n_frames
+     * at X.
+     *
+     * since ff_min doesn't account for the undropped frames, we need to add
+     * X frames for every ten minutes that passed, within an hour */
 
     /* already checked by gst_video_time_code_is_valid() */
     g_assert (tc->config.fps_n % 30000 == 0);
-    dropframe_multiplier = 2 * (tc->config.fps_n / 30000);
+    drop_frames = 2 * (tc->config.fps_n / 30000);
 
-    return tc->frames + (ff_nom * tc->seconds) +
-        (ff_minutes * tc->minutes) +
-        dropframe_multiplier * ((gint) (tc->minutes / 10)) +
-        (ff_hours * tc->hours);
-  } else if (tc->config.fps_d > tc->config.fps_n) {
-    return gst_util_uint64_scale (tc->seconds + (60 * (tc->minutes +
-                (60 * tc->hours))), tc->config.fps_n, tc->config.fps_d);
+    return tc->frames + ff_nom * tc->seconds +
+        ff_min * tc->minutes + drop_frames * tens_minutes + ff_hour * tc->hours;
   } else {
-    return tc->frames + (ff_nom * (tc->seconds + (60 * (tc->minutes +
-                    (60 * tc->hours)))));
-  }
+    /* This allows for better readability than putting G_GUINT64_CONSTANT(60)
+     * into a long calculation line */
+    const guint64 sixty = 60;
+    guint64 secs = tc->seconds + (sixty * (tc->minutes + (sixty * tc->hours)));
 
+    if (fps_d > fps_n)
+      return gst_util_uint64_scale_int_ceil (secs, fps_n, fps_d);
+    else
+      return tc->frames + ff_nom * secs;
+  }
 }
 
 /**
@@ -436,107 +441,76 @@ gst_video_time_code_increment_frame (GstVideoTimeCode * tc)
 void
 gst_video_time_code_add_frames (GstVideoTimeCode * tc, gint64 frames)
 {
-  guint64 framecount;
-  guint64 h_notmod24;
-  guint64 h_new, min_new, sec_new, frames_new;
+  gint fps_n = tc->config.fps_n, fps_d = tc->config.fps_d;
+  guint64 h_new, min_new, sec_new, frames_new, framecount;
+  guint64 ff_nom;
   gdouble ff;
-  guint ff_nom;
-  /* This allows for better readability than putting G_GUINT64_CONSTANT(60)
-   * into a long calculation line */
-  const guint64 sixty = 60;
+
   /* formulas found in SMPTE ST 2059-1:2015 section 9.4.3
    * and adapted for 60/1.001 as well as 30/1.001 */
 
   g_return_if_fail (gst_video_time_code_is_valid (tc));
 
-  gst_util_fraction_to_double (tc->config.fps_n, tc->config.fps_d, &ff);
-  if (tc->config.fps_d == 1001) {
-    ff_nom = tc->config.fps_n / 1000;
-  } else {
-    ff_nom = ff;
-  }
+  framecount = gst_video_time_code_frames_since_daily_jam (tc);
+  framecount += frames;
+
+  gst_util_fraction_to_double (fps_n, fps_d, &ff);
+  ff_nom = fps_d == 1001 ? fps_n / 1000 : ff;
 
   if (tc->config.flags & GST_VIDEO_TIME_CODE_FLAGS_DROP_FRAME) {
-    /* these need to be truncated to integer: side effect, code looks cleaner
-     * */
-    guint ff_minutes = 60 * ff;
-    guint ff_hours = 3600 * ff;
-    /* a bunch of intermediate variables, to avoid monster code with possible
-     * integer overflows */
-    guint64 min_new_tmp1, min_new_tmp2, min_new_tmp3, min_new_denom;
-    /* for 30000/1001 we drop the first 2 timecodes per minute, for 60000/1001
-     * the first 4, etc. except for every 10th minute */
-    guint dropframe_multiplier;
+    /* these need to be truncated to integer: side effect, code looks cleaner */
+    guint64 ff_hour = 3600 * ff;        /* frames per hour, accurate */
+    guint64 ff_min = 60 * ff;   /* frames in dropping minutes */
+    guint64 ff_min_nom = 60 * ff_nom;   /* frames in nondropping minutes */
+    guint64 drop_frames, tens_minutes, framecount_h, framecount_m;
+
+    /* for drop frame timecodes, we drop the first X frames each minute except
+     * every tenth, i.e. n_frames is at least X except when minutes % 10 == 0.
+     *
+     * since ff_min_nom doesn't account for the dropped frames, we need to
+     * remove X frames for every ten minutes that passed, within an hour */
 
     /* already checked by gst_video_time_code_is_valid() */
     g_assert (tc->config.fps_n % 30000 == 0);
-    dropframe_multiplier = 2 * (tc->config.fps_n / 30000);
+    drop_frames = 2 * (tc->config.fps_n / 30000);
 
-    framecount =
-        frames + tc->frames + (ff_nom * tc->seconds) +
-        (ff_minutes * tc->minutes) +
-        dropframe_multiplier * ((gint) (tc->minutes / 10)) +
-        (ff_hours * tc->hours);
-    h_notmod24 = gst_util_uint64_scale_int (framecount, 1, ff_hours);
+    h_new = framecount / ff_hour;
+    framecount_h = framecount % ff_hour;        /* frames within an hour */
 
-    min_new_denom = sixty * ff_nom;
-    min_new_tmp1 = (framecount - (h_notmod24 * ff_hours)) / min_new_denom;
-    min_new_tmp2 = framecount + dropframe_multiplier * min_new_tmp1;
-    min_new_tmp1 =
-        (framecount - (h_notmod24 * ff_hours)) / (sixty * 10 * ff_nom);
-    min_new_tmp3 =
-        dropframe_multiplier * min_new_tmp1 + (h_notmod24 * ff_hours);
-    min_new =
-        gst_util_uint64_scale_int (min_new_tmp2 - min_new_tmp3, 1,
-        min_new_denom);
+    /* add drop frames for each minute and
+     * remove drop frames for every 10 minutes */
+    min_new = (framecount_h + drop_frames * (framecount_h / ff_min_nom)
+        - drop_frames * (framecount_h / (10 * ff_min_nom))) / ff_min_nom;
 
-    sec_new =
-        (guint64) ((framecount - (ff_minutes * min_new) -
-            dropframe_multiplier * ((gint) (min_new / 10)) -
-            (ff_hours * h_notmod24)) / ff_nom);
+    /* frames within a minute */
+    tens_minutes = min_new / 10;
+    framecount_m = framecount_h - (ff_min * min_new) -
+        drop_frames * tens_minutes;
 
-    frames_new =
-        framecount - (ff_nom * sec_new) - (ff_minutes * min_new) -
-        (dropframe_multiplier * ((gint) (min_new / 10))) -
-        (ff_hours * h_notmod24);
-  } else if (tc->config.fps_d > tc->config.fps_n) {
-    frames_new =
-        frames + gst_util_uint64_scale (tc->seconds + (60 * (tc->minutes +
-                (60 * tc->hours))), tc->config.fps_n, tc->config.fps_d);
-    sec_new =
-        gst_util_uint64_scale (frames_new, tc->config.fps_d, tc->config.fps_n);
-    frames_new = 0;
+    sec_new = framecount_m / ff_nom;
+    frames_new = framecount_m % ff_nom;
+  } else {
+    if (fps_d > fps_n) {
+      sec_new = gst_util_uint64_scale_int (framecount, fps_d, fps_n);
+      frames_new = 0;
+    } else {
+      sec_new = framecount / ff_nom;
+      frames_new = framecount % ff_nom;
+    }
+
     min_new = sec_new / 60;
     sec_new = sec_new % 60;
-    h_notmod24 = min_new / 60;
-    min_new = min_new % 60;
-  } else {
-    framecount =
-        frames + tc->frames + (ff_nom * (tc->seconds + (sixty * (tc->minutes +
-                    (sixty * tc->hours)))));
-    h_notmod24 =
-        gst_util_uint64_scale_int (framecount, 1, ff_nom * sixty * sixty);
-    min_new =
-        gst_util_uint64_scale_int ((framecount -
-            (ff_nom * sixty * sixty * h_notmod24)), 1, (ff_nom * sixty));
-    sec_new =
-        gst_util_uint64_scale_int ((framecount - (ff_nom * sixty * (min_new +
-                    (sixty * h_notmod24)))), 1, ff_nom);
-    frames_new =
-        framecount - (ff_nom * (sec_new + sixty * (min_new +
-                (sixty * h_notmod24))));
-    if (frames_new > ff_nom)
-      frames_new = 0;
-  }
 
-  h_new = h_notmod24 % 24;
+    h_new = min_new / 60;
+    min_new = min_new % 60;
+  }
 
   /* The calculations above should always give correct results */
   g_assert (min_new < 60);
   g_assert (sec_new < 60);
   g_assert (frames_new < ff_nom || (ff_nom == 0 && frames_new == 0));
 
-  tc->hours = h_new;
+  tc->hours = h_new % 24;
   tc->minutes = min_new;
   tc->seconds = sec_new;
   tc->frames = frames_new;
@@ -631,7 +605,7 @@ gst_video_time_code_compare (const GstVideoTimeCode * tc1,
  * gst_video_time_code_new:
  * @fps_n: Numerator of the frame rate
  * @fps_d: Denominator of the frame rate
- * @latest_daily_jam: The latest daily jam of the #GstVideoTimeCode
+ * @latest_daily_jam: (allow-none): The latest daily jam of the #GstVideoTimeCode
  * @flags: #GstVideoTimeCodeFlags
  * @hours: the hours field of #GstVideoTimeCode
  * @minutes: the minutes field of #GstVideoTimeCode
@@ -640,7 +614,6 @@ gst_video_time_code_compare (const GstVideoTimeCode * tc1,
  * @field_count: Interlaced video field count
  *
  * @field_count is 0 for progressive, 1 or 2 for interlaced.
- * @latest_daiy_jam reference is stolen from caller.
  *
  * Returns: a new #GstVideoTimeCode with the given values.
  * The values are not checked for being in a valid range. To see if your
@@ -834,7 +807,6 @@ gst_video_time_code_new_from_date_time_full (guint fps_n, guint fps_d,
  * @field_count: Interlaced video field count
  *
  * @field_count is 0 for progressive, 1 or 2 for interlaced.
- * @latest_daiy_jam reference is stolen from caller.
  *
  * Initializes @tc with the given values.
  * The values are not checked for being in a valid range. To see if your

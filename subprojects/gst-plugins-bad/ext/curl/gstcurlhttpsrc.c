@@ -192,13 +192,13 @@ static GstStateChangeReturn gst_curl_http_src_change_state (GstElement *
     element, GstStateChange transition);
 static void gst_curl_http_src_cleanup_instance (GstCurlHttpSrc * src);
 static gboolean gst_curl_http_src_query (GstBaseSrc * bsrc, GstQuery * query);
-static gboolean gst_curl_http_src_get_content_length (GstBaseSrc * bsrc,
-    guint64 * size);
+static gboolean gst_curl_http_src_get_size (GstBaseSrc * bsrc, guint64 * size);
 static gboolean gst_curl_http_src_is_seekable (GstBaseSrc * bsrc);
 static gboolean gst_curl_http_src_do_seek (GstBaseSrc * bsrc,
     GstSegment * segment);
 static gboolean gst_curl_http_src_unlock (GstBaseSrc * bsrc);
 static gboolean gst_curl_http_src_unlock_stop (GstBaseSrc * bsrc);
+static guint64 gst_curl_http_src_get_length_from_headers (GstCurlHttpSrc * src);
 
 /* URI Handler functions */
 static void gst_curl_http_src_uri_handler_init (gpointer g_iface,
@@ -280,8 +280,7 @@ gst_curl_http_src_class_init (GstCurlHttpSrcClass * klass)
       GST_DEBUG_FUNCPTR (gst_curl_http_src_change_state);
   gstpushsrc_class->create = GST_DEBUG_FUNCPTR (gst_curl_http_src_create);
   gstbasesrc_class->query = GST_DEBUG_FUNCPTR (gst_curl_http_src_query);
-  gstbasesrc_class->get_size =
-      GST_DEBUG_FUNCPTR (gst_curl_http_src_get_content_length);
+  gstbasesrc_class->get_size = GST_DEBUG_FUNCPTR (gst_curl_http_src_get_size);
   gstbasesrc_class->is_seekable =
       GST_DEBUG_FUNCPTR (gst_curl_http_src_is_seekable);
   gstbasesrc_class->do_seek = GST_DEBUG_FUNCPTR (gst_curl_http_src_do_seek);
@@ -495,6 +494,60 @@ gst_curl_http_src_class_init (GstCurlHttpSrcClass * klass)
 }
 
 static void
+gst_curl_http_src_reset (GstCurlHttpSrc * source)
+{
+  g_mutex_lock (&source->buffer_mutex);
+
+  source->transfer_begun = FALSE;
+  source->data_received = FALSE;
+  source->retries_remaining = source->total_retries;
+  source->content_size = 0;
+  source->request_position = 0;
+  source->stop_position = -1;
+  if (source->http_headers != NULL) {
+    gst_structure_free (source->http_headers);
+    source->http_headers = NULL;
+  }
+  if (source->curl_handle) {
+    gst_curl_http_src_destroy_easy_handle (source);
+    source->curl_handle = NULL;
+  }
+
+  g_mutex_unlock (&source->buffer_mutex);
+}
+
+static gboolean
+gst_curl_http_src_update_uri (GstCurlHttpSrc * source, const gchar * uri)
+{
+  gboolean changed = FALSE;
+  gboolean rc = TRUE;
+  GSTCURL_FUNCTION_ENTRY (source);
+
+  g_mutex_lock (&source->uri_mutex);
+  if (g_strcmp0 (source->uri, uri) != 0) {
+    if (source->uri) {
+      GST_DEBUG_OBJECT (source,
+          "URI already present as %s, updating to new URI %s", source->uri,
+          uri);
+      g_free (source->uri);
+    }
+    source->uri = g_strdup (uri);
+    if (source->uri == NULL)
+      rc = FALSE;
+    changed = TRUE;
+  }
+  g_mutex_unlock (&source->uri_mutex);
+
+  if (changed) {
+    gst_curl_http_src_wait_until_removed (source);
+    gst_curl_http_src_reset (source);
+  }
+
+  GSTCURL_FUNCTION_EXIT (source);
+  return rc;
+}
+
+static void
 gst_curl_http_src_set_property (GObject * object, guint prop_id,
     const GValue * value, GParamSpec * pspec)
 {
@@ -503,10 +556,7 @@ gst_curl_http_src_set_property (GObject * object, guint prop_id,
 
   switch (prop_id) {
     case PROP_URI:
-      g_mutex_lock (&source->uri_mutex);
-      g_free (source->uri);
-      source->uri = g_value_dup_string (value);
-      g_mutex_unlock (&source->uri_mutex);
+      gst_curl_http_src_update_uri (source, g_value_get_string (value));
       break;
     case PROP_USERNAME:
       g_free (source->username);
@@ -735,7 +785,6 @@ gst_curl_http_src_init (GstCurlHttpSrc * source)
   source->connection_status = GSTCURL_NOT_CONNECTED;
 
   source->http_headers = NULL;
-  source->content_type = NULL;
   source->status_code = 0;
   source->reason_phrase = NULL;
   source->hdrs_updated = FALSE;
@@ -771,10 +820,10 @@ gst_curl_http_src_ref_multi (GstCurlHttpSrc * src)
     klass->multi_task_context.multi_handle = curl_multi_init ();
 
     curl_multi_setopt (klass->multi_task_context.multi_handle,
-        CURLMOPT_PIPELINING, 1);
+        CURLMOPT_PIPELINING, 1L);
 #ifdef CURLMOPT_MAX_HOST_CONNECTIONS
     curl_multi_setopt (klass->multi_task_context.multi_handle,
-        CURLMOPT_MAX_HOST_CONNECTIONS, 1);
+        CURLMOPT_MAX_HOST_CONNECTIONS, 1L);
 #endif
 
     /* Start the thread */
@@ -1099,7 +1148,7 @@ gst_curl_http_src_create_easy_handle (GstCurlHttpSrc * s)
   GST_INFO_OBJECT (s, "Creating a new handle for URI %s", s->uri);
 
 #ifndef GST_DISABLE_GST_DEBUG
-  if (curl_easy_setopt (handle, CURLOPT_VERBOSE, 1) != CURLE_OK) {
+  if (curl_easy_setopt (handle, CURLOPT_VERBOSE, 1L) != CURLE_OK) {
     GST_WARNING_OBJECT (s, "Failed to set verbose!");
   }
   if (curl_easy_setopt (handle, CURLOPT_DEBUGDATA, s) != CURLE_OK) {
@@ -1151,7 +1200,7 @@ gst_curl_http_src_create_easy_handle (GstCurlHttpSrc * s)
   gst_curl_setopt_int_default (s, handle, CURLOPT_MAXREDIRS,
       s->max_3xx_redirects);
   gst_curl_setopt_bool (s, handle, CURLOPT_TCP_KEEPALIVE, s->keep_alive);
-  gst_curl_setopt_int (s, handle, CURLOPT_TIMEOUT, s->timeout_secs);
+  gst_curl_setopt_int (s, handle, CURLOPT_TIMEOUT, (long) s->timeout_secs);
   gst_curl_setopt_bool (s, handle, CURLOPT_SSL_VERIFYPEER, s->strict_ssl);
   gst_curl_setopt_str (s, handle, CURLOPT_CAINFO, s->custom_ca_file);
 
@@ -1225,9 +1274,7 @@ gst_curl_http_src_handle_response (GstCurlHttpSrc * src)
 {
   glong curl_info_long;
   gdouble curl_info_dbl;
-  curl_off_t curl_info_offt;
   gchar *redirect_url;
-  GstBaseSrc *basesrc;
   const GValue *response_headers;
   GstFlowReturn ret = GST_FLOW_OK;
 
@@ -1318,29 +1365,22 @@ gst_curl_http_src_handle_response (GstCurlHttpSrc * src)
   /*
    * Push the content length
    */
-  if (curl_easy_getinfo (src->curl_handle, CURLINFO_CONTENT_LENGTH_DOWNLOAD_T,
-          &curl_info_offt) == CURLE_OK) {
-    if (curl_info_offt == -1) {
-      GST_WARNING_OBJECT (src,
-          "No Content-Length was specified in the response.");
-      src->seekable = GSTCURL_SEEKABLE_FALSE;
-    } else {
-      /* Note that in the case of a range get, Content-Length is the number
-         of bytes requested, not the total size of the resource */
-      GST_INFO_OBJECT (src,
-          "Content-Length was given as %" G_GOFFSET_FORMAT,
-          (goffset) curl_info_offt);
-      if (src->content_size == 0) {
-        src->content_size = src->request_position + curl_info_offt;
-      }
-      basesrc = GST_BASE_SRC_CAST (src);
-      basesrc->segment.duration = src->request_position + curl_info_offt;
-      if (src->seekable == GSTCURL_SEEKABLE_UNKNOWN) {
-        src->seekable = GSTCURL_SEEKABLE_TRUE;
-      }
+  src->content_size = gst_curl_http_src_get_length_from_headers (src);
+  if (src->content_size) {
+    GstBaseSrc *basesrc = GST_BASE_SRC_CAST (src);
+
+    if (src->seekable == GSTCURL_SEEKABLE_UNKNOWN) {
+      src->seekable = GSTCURL_SEEKABLE_TRUE;
+    }
+    if (basesrc->segment.duration != src->content_size) {
+      basesrc->segment.duration = src->content_size;
       gst_element_post_message (GST_ELEMENT (src),
           gst_message_new_duration_changed (GST_OBJECT (src)));
     }
+  } else {
+    GST_WARNING_OBJECT (src,
+        "No Content-Length was specified in the response.");
+    src->seekable = GSTCURL_SEEKABLE_FALSE;
   }
 
   /*
@@ -1553,30 +1593,59 @@ gst_curl_http_src_query (GstBaseSrc * bsrc, GstQuery * query)
   return ret;
 }
 
-static gboolean
-gst_curl_http_src_get_content_length (GstBaseSrc * bsrc, guint64 * size)
+static guint64
+gst_curl_http_src_get_length_from_headers (GstCurlHttpSrc * src)
 {
-  GstCurlHttpSrc *src = GST_CURLHTTPSRC (bsrc);
   const GValue *response_headers;
-  gboolean ret = FALSE;
 
-  if (src->http_headers == NULL) {
-    return FALSE;
-  }
+  if (src->http_headers == NULL)
+    return 0;
 
   response_headers = gst_structure_get_value (src->http_headers,
       RESPONSE_HEADERS_NAME);
+
+  /* In the case of a Range GET, the Content-Length header will contain
+   * the size of range requested, and the Content-Range header should
+   * have the start, stop and total size of the resource */
+  if (gst_structure_has_field_typed (gst_value_get_structure (response_headers),
+          "content-range", G_TYPE_STRING)) {
+    const gchar *content_range =
+        gst_structure_get_string (gst_value_get_structure (response_headers),
+        "content-range");
+    const gchar *slash = strchr (content_range, '/');
+    if (slash && slash[1] != '*') {
+      return g_ascii_strtoull (slash + 1, NULL, 10);
+    }
+  }
   if (gst_structure_has_field_typed (gst_value_get_structure (response_headers),
           "content-length", G_TYPE_STRING)) {
     const gchar *content_length =
         gst_structure_get_string (gst_value_get_structure (response_headers),
         "content-length");
-    *size = (guint64) g_ascii_strtoull (content_length, NULL, 10);
-    ret = TRUE;
-  } else {
-    GST_DEBUG_OBJECT (src,
-        "No content length has yet been set, or there was an error!");
+    /* Adjust by request_position since the length is of just the range. Should
+     * have been taken care of content-range above */
+    return src->request_position + g_ascii_strtoull (content_length, NULL, 10);
   }
+  return 0;
+}
+
+static gboolean
+gst_curl_http_src_get_size (GstBaseSrc * bsrc, guint64 * size)
+{
+  GstCurlHttpSrc *src = GST_CURLHTTPSRC (bsrc);
+  gboolean ret = FALSE;
+
+  if (src->content_size == 0 && src->http_headers == NULL) {
+    return FALSE;
+  }
+  if (src->content_size == 0) {
+    src->content_size = gst_curl_http_src_get_length_from_headers (src);
+  }
+  if (src->content_size > 0) {
+    *size = src->content_size;
+    ret = TRUE;
+  }
+
   return ret;
 }
 
@@ -1628,6 +1697,20 @@ gst_curl_http_src_do_seek (GstBaseSrc * bsrc, GstSegment * segment)
 
   src->request_position = segment->start;
   src->stop_position = segment->stop;
+
+  if (src->transfer_begun) {
+    GST_DEBUG_OBJECT (src, "stopping existing transfer");
+    g_mutex_unlock (&src->buffer_mutex);
+    gst_curl_http_src_wait_until_removed (src);
+    g_mutex_lock (&src->buffer_mutex);
+    src->transfer_begun = FALSE;
+    if (src->buffer_len > 0) {
+      g_free (src->buffer);
+      src->buffer = NULL;
+      src->buffer_len = 0;
+    }
+  }
+
 done:
   g_mutex_unlock (&src->buffer_mutex);
   return ret;
@@ -1682,30 +1765,16 @@ gst_curl_http_src_urihandler_set_uri (GstURIHandler * handler,
     const gchar * uri, GError ** error)
 {
   GstCurlHttpSrc *source = GST_CURLHTTPSRC (handler);
+  gboolean rc;
   GSTCURL_FUNCTION_ENTRY (source);
 
   g_return_val_if_fail (GST_IS_URI_HANDLER (handler), FALSE);
   g_return_val_if_fail (uri != NULL, FALSE);
 
-  g_mutex_lock (&source->uri_mutex);
-
-  if (source->uri != NULL) {
-    GST_DEBUG_OBJECT (source,
-        "URI already present as %s, updating to new URI %s", source->uri, uri);
-    g_free (source->uri);
-  }
-
-  source->uri = g_strdup (uri);
-  if (source->uri == NULL) {
-    g_mutex_unlock (&source->uri_mutex);
-    return FALSE;
-  }
-  source->retries_remaining = source->total_retries;
-
-  g_mutex_unlock (&source->uri_mutex);
+  rc = gst_curl_http_src_update_uri (source, uri);
 
   GSTCURL_FUNCTION_EXIT (source);
-  return TRUE;
+  return rc;
 }
 
 /*
@@ -1918,7 +1987,13 @@ gst_curl_http_src_get_header (void *header, size_t size, size_t nmemb,
   GstCurlHttpSrc *s = src;
   char *substr;
 
-  GST_DEBUG_OBJECT (s, "Received header: %s", (char *) header);
+  if (nmemb == 2) {
+    /* blank header, skip */
+    return size * nmemb;
+  }
+
+  GST_DEBUG_OBJECT (s, "Received header: %.*s", (int) nmemb - 2,
+      (char *) header);
 
   g_mutex_lock (&s->buffer_mutex);
 
@@ -1960,6 +2035,7 @@ gst_curl_http_src_get_header (void *header, size_t size, size_t nmemb,
           (guint) g_ascii_strtoll (status_line_fields[1], NULL, 10);
       g_free (s->reason_phrase);
       s->reason_phrase = g_strdup (status_line_fields[2]);
+      g_strchomp (s->reason_phrase);
       GST_INFO_OBJECT (s, "Received status %u for request for URI %s: %s",
           s->status_code, s->uri, s->reason_phrase);
       gst_structure_set (s->http_headers, HTTP_STATUS_CODE,
@@ -2002,14 +2078,6 @@ gst_curl_http_src_get_header (void *header, size_t size, size_t nmemb,
       } else if (g_strcmp0 (header_key, "accept-ranges") == 0 &&
           g_ascii_strcasecmp (header_value, "none") == 0) {
         s->seekable = GSTCURL_SEEKABLE_FALSE;
-      } else if (g_strcmp0 (header_key, "content-range") == 0) {
-        /* In the case of a Range GET, the Content-Length header will contain
-           the size of range requested, and the Content-Range header will
-           have the start, stop and total size of the resource */
-        gchar *size = strchr (header_value, '/');
-        if (size) {
-          s->content_size = atoi (size);
-        }
       }
 
       g_free (header_key);

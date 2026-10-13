@@ -1,3 +1,8 @@
+if get_option('mse').disabled()
+  gstmse_private_test_dep = dependency('', required: false)
+  subdir_done()
+endif
+
 gstmse_headers_private = files(
   'gstappendpipeline-private.h',
   'gstmediasourcesamplemap-private.h',

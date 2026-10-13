@@ -26,14 +26,18 @@
  * @see_also: #GstRgLimiter, #GstRgAnalysis
  *
  * This element applies volume changes to streams as lined out in the proposed
- * [ReplayGain standard](https://wiki.hydrogenaud.io/index.php?title=ReplayGain).
- * It interprets the ReplayGain meta data tags and carries out the adjustment
- * (by using a volume element internally).
+ * [ReplayGain standard](https://wiki.hydrogenaud.io/index.php?title=ReplayGain)
+ * and in the [EBU R 128](https://tech.ebu.ch/publications/r128/) standard.
+ * It interprets the ReplayGain and R128 meta data tags and carries out the
+ * adjustment (by using a volume element internally).
+ * If R128 tags are present, ReplayGain tags are ignored.
  *
  * The relevant tags are:
  * * #GST_TAG_TRACK_GAIN
+ * * #GST_TAG_TRACK_GAIN_R128
  * * #GST_TAG_TRACK_PEAK
  * * #GST_TAG_ALBUM_GAIN
+ * * #GST_TAG_ALBUM_GAIN_R128
  * * #GST_TAG_ALBUM_PEAK
  * * #GST_TAG_REFERENCE_LEVEL
  *
@@ -278,6 +282,7 @@ gst_rg_volume_class_init (GstRgVolumeClass * klass)
       "Filter/Effect/Audio",
       "Apply ReplayGain volume adjustment",
       "Ren\xc3\xa9 Stadler <mail@renestadler.de>");
+  gst_element_class_mark_as_untrusted_aware (element_class);
 
   GST_DEBUG_CATEGORY_INIT (gst_rg_volume_debug, "rgvolume", 0,
       "ReplayGain volume element");
@@ -479,7 +484,9 @@ gst_rg_volume_tag_event (GstRgVolume * self, GstEvent * event)
 {
   GstTagList *tag_list;
   gboolean has_track_gain, has_track_peak, has_album_gain, has_album_peak;
+  gboolean has_track_gain_r128, has_album_gain_r128;
   gboolean has_ref_level;
+  gdouble track_gain_r128, album_gain_r128;
 
   g_return_val_if_fail (event != NULL, NULL);
   g_return_val_if_fail (GST_EVENT_TYPE (event) == GST_EVENT_TAG, event);
@@ -491,18 +498,39 @@ gst_rg_volume_tag_event (GstRgVolume * self, GstEvent * event)
 
   has_track_gain = gst_tag_list_get_double (tag_list, GST_TAG_TRACK_GAIN,
       &self->track_gain);
+  has_track_gain_r128 = gst_tag_list_get_double (tag_list,
+      GST_TAG_TRACK_GAIN_R128, &track_gain_r128);
   has_track_peak = gst_tag_list_get_double (tag_list, GST_TAG_TRACK_PEAK,
       &self->track_peak);
   has_album_gain = gst_tag_list_get_double (tag_list, GST_TAG_ALBUM_GAIN,
       &self->album_gain);
+  has_album_gain_r128 = gst_tag_list_get_double (tag_list,
+      GST_TAG_ALBUM_GAIN_R128, &album_gain_r128);
   has_album_peak = gst_tag_list_get_double (tag_list, GST_TAG_ALBUM_PEAK,
       &self->album_peak);
   has_ref_level = gst_tag_list_get_double (tag_list, GST_TAG_REFERENCE_LEVEL,
       &self->reference_level);
 
-  if (!has_track_gain && !has_track_peak && !has_album_gain && !has_album_peak)
+  if (!has_track_gain && !has_track_gain_r128 && !has_track_peak &&
+      !has_album_gain && !has_album_gain_r128 && !has_album_peak)
     return event;
 
+  /* Only apply the dBSPL reference level compensation when the stored
+   * reference level is positive (traditional ReplayGain uses ~89 dBSPL).
+   * A negative reference level indicates LUFS format (e.g. -18 LUFS as
+   * written by loudgain); in that case the gains are already computed
+   * relative to the LUFS target and need no dBSPL adjustment.
+   * When no reference level tag is present at all (e.g. as written by
+   * rsgain), has_ref_level is FALSE and compensation is skipped entirely,
+   * which is also correct: the gain values are self-consistent and need
+   * no adjustment. */
+  if (has_ref_level && self->reference_level <= 0) {
+    GST_DEBUG_OBJECT (self,
+        "ignoring LUFS reference level %" GAIN_FORMAT
+        " for ReplayGain dBSPL compensation", self->reference_level);
+    has_ref_level = FALSE;
+    self->reference_level = RG_REFERENCE_LEVEL;
+  }
   if (has_ref_level && (has_track_gain || has_album_gain)
       && (ABS (self->reference_level - RG_REFERENCE_LEVEL) > 1.e-6)) {
     /* Log a message stating the amount of adjustment that is applied below. */
@@ -510,11 +538,30 @@ gst_rg_volume_tag_event (GstRgVolume * self, GstEvent * event)
         "compensating for reference level difference by %" GAIN_FORMAT,
         RG_REFERENCE_LEVEL - self->reference_level);
   }
-  if (has_track_gain) {
+  if (has_track_gain && has_ref_level) {
     self->track_gain += RG_REFERENCE_LEVEL - self->reference_level;
   }
-  if (has_album_gain) {
+  if (has_album_gain && has_ref_level) {
     self->album_gain += RG_REFERENCE_LEVEL - self->reference_level;
+  }
+
+  /*
+   * R128 tags can be present together with RG tags, should take priority,
+   * and should not take interference from RG reference level or peak tags.
+   */
+  if (has_track_gain_r128) {
+    has_track_peak = FALSE;
+    self->track_gain = track_gain_r128 + 5.;
+    GST_DEBUG_OBJECT (self,
+        "decoded R128 track gain %lf as %" GAIN_FORMAT,
+        track_gain_r128, self->track_gain);
+  }
+  if (has_album_gain_r128) {
+    has_album_peak = FALSE;
+    self->album_gain = album_gain_r128 + 5.;
+    GST_DEBUG_OBJECT (self,
+        "decoded R128 album gain %lf as %" GAIN_FORMAT,
+        album_gain_r128, self->album_gain);
   }
 
   /* Ignore values that are obviously invalid. */
@@ -553,15 +600,17 @@ gst_rg_volume_tag_event (GstRgVolume * self, GstEvent * event)
     self->album_peak = 1.0;
   }
 
-  self->has_track_gain |= has_track_gain;
+  self->has_track_gain |= has_track_gain | has_track_gain_r128;
   self->has_track_peak |= has_track_peak;
-  self->has_album_gain |= has_album_gain;
+  self->has_album_gain |= has_album_gain | has_album_gain_r128;
   self->has_album_peak |= has_album_peak;
 
   tag_list = gst_tag_list_copy (tag_list);
   gst_tag_list_remove_tag (tag_list, GST_TAG_TRACK_GAIN);
+  gst_tag_list_remove_tag (tag_list, GST_TAG_TRACK_GAIN_R128);
   gst_tag_list_remove_tag (tag_list, GST_TAG_TRACK_PEAK);
   gst_tag_list_remove_tag (tag_list, GST_TAG_ALBUM_GAIN);
+  gst_tag_list_remove_tag (tag_list, GST_TAG_ALBUM_GAIN_R128);
   gst_tag_list_remove_tag (tag_list, GST_TAG_ALBUM_PEAK);
   gst_tag_list_remove_tag (tag_list, GST_TAG_REFERENCE_LEVEL);
 

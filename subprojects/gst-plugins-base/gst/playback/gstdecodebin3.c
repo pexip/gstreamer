@@ -307,7 +307,7 @@ struct _GstDecodebin3
   GList *decodable_factories;
 
   /* counters for pads */
-  guint32 apadcount, vpadcount, tpadcount, opadcount;
+  guint32 apadcount, vpadcount, tpadcount, mpadcount, opadcount;
 
   /* Properties */
   GstCaps *caps;
@@ -353,8 +353,8 @@ struct _DecodebinInput
    * be avoided */
   gboolean input_is_parsed;
 
-  /* List of events that need to be pushed once we get the first
-   * GST_EVENT_STREAM_COLLECTION */
+  /* List of events that need to be pushed once we get the
+   * GST_EVENT_STREAM_COLLECTION for a GstStream */
   GList *events_waiting_for_collection;
 
   /* input buffer probe for detecting whether input has caps or not */
@@ -531,6 +531,19 @@ GST_STATIC_PAD_TEMPLATE ("text_%u",
     GST_PAD_SOMETIMES,
     GST_STATIC_CAPS_ANY);
 
+/**
+ * GstDecodebin3!metadata_%u:
+ *
+ * Pad template for metadata source pads.
+ *
+ * Since: 1.28
+ */
+static GstStaticPadTemplate metadata_src_template =
+GST_STATIC_PAD_TEMPLATE ("metadata_%u",
+    GST_PAD_SRC,
+    GST_PAD_SOMETIMES,
+    GST_STATIC_CAPS_ANY);
+
 static GstStaticPadTemplate src_template = GST_STATIC_PAD_TEMPLATE ("src_%u",
     GST_PAD_SRC,
     GST_PAD_SOMETIMES,
@@ -566,6 +579,8 @@ static GstStateChangeReturn gst_decodebin3_change_state (GstElement * element,
     GstStateChange transition);
 static gboolean gst_decodebin3_send_event (GstElement * element,
     GstEvent * event);
+static const gchar *stream_in_collection (GstStreamCollection * collection,
+    const gchar * sid);
 
 static void gst_decode_bin_update_factories_list (GstDecodebin3 * dbin);
 
@@ -641,7 +656,7 @@ gst_decodebin3_class_init (GstDecodebin3Class * klass)
           GST_TYPE_CAPS, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 
   /**
-   * GstDecodebin3::select-stream
+   * GstDecodebin3::select-stream:
    * @decodebin: a #GstDecodebin3
    * @collection: a #GstStreamCollection
    * @stream: a #GstStream
@@ -689,6 +704,8 @@ gst_decodebin3_class_init (GstDecodebin3Class * klass)
       gst_static_pad_template_get (&audio_src_template));
   gst_element_class_add_pad_template (element_class,
       gst_static_pad_template_get (&text_src_template));
+  gst_element_class_add_pad_template (element_class,
+      gst_static_pad_template_get (&metadata_src_template));
   gst_element_class_add_pad_template (element_class,
       gst_static_pad_template_get (&src_template));
 
@@ -991,8 +1008,9 @@ gst_decodebin_input_stream_src_probe (GstPad * pad, GstPadProbeInfo * info,
             SELECTION_LOCK (input->dbin);
             gst_decodebin_input_link_to_slot (input);
             SELECTION_UNLOCK (input->dbin);
-          } else
+          } else {
             gst_object_unref (stream);
+          }
         }
       }
         break;
@@ -1824,8 +1842,9 @@ gst_decodebin_input_reset (DecodebinInput * input)
     gst_bin_remove (GST_BIN (dbin), input->identity);
     gst_clear_object (&input->identity);
   }
-  if (input->collection)
+  if (input->collection) {
     gst_clear_object (&input->collection);
+  }
 
   if (input->input_probe) {
     gst_pad_remove_probe (input->ghost_sink, input->input_probe);
@@ -1986,6 +2005,8 @@ sink_event_function (GstPad * sinkpad, GstDecodebin3 * dbin, GstEvent * event)
       }
       gst_query_unref (q);
 
+      INPUT_LOCK (dbin);
+
       /* FIXME : We force `decodebin3` to upstream selection mode if *any* of the
          inputs is. This means things might break if there's a mix */
       if (input->upstream_selected)
@@ -2004,8 +2025,31 @@ sink_event_function (GstPad * sinkpad, GstDecodebin3 * dbin, GstEvent * event)
 
       /* Make sure group ids will be recalculated */
       input->group_id = GST_GROUP_ID_INVALID;
-      INPUT_LOCK (dbin);
       recalculate_group_id (dbin);
+
+      GstStream *stream = NULL;
+
+      gst_event_parse_stream (event, &stream);
+      if (stream) {
+        const gchar *stream_id = gst_stream_get_stream_id (stream);
+        if (dbin->input_collection && dbin->input_collection->collection &&
+            !stream_in_collection (dbin->input_collection->collection,
+                stream_id)) {
+          GstMessage *msg;
+          GST_DEBUG_OBJECT (sinkpad,
+              "Stream %" GST_PTR_FORMAT
+              " is from a new collection on this input", stream);
+          /* This is a stream from a new collection. Invalidate the old collection */
+          msg = handle_stream_collection_locked (dbin, NULL, input);
+          if (msg) {
+            INPUT_UNLOCK (dbin);
+            gst_element_post_message ((GstElement *) dbin, msg);
+            INPUT_LOCK (dbin);
+          }
+        }
+        gst_object_unref (stream);
+      }
+
       INPUT_UNLOCK (dbin);
       break;
     }
@@ -2569,7 +2613,7 @@ find_message_parsebin (GstDecodebin3 * dbin, GstElement * child)
 }
 
 static const gchar *
-stream_in_collection (GstStreamCollection * collection, gchar * sid)
+stream_in_collection (GstStreamCollection * collection, const gchar * sid)
 {
   guint i, len;
 
@@ -2697,10 +2741,8 @@ handle_stream_collection_locked (GstDecodebin3 * dbin,
   }
 
   /* Replace collection in input */
-  if (input->collection)
-    gst_object_unref (input->collection);
-  if (collection)
-    input->collection = gst_object_ref (collection);
+  gst_object_replace ((GstObject **) & input->collection,
+      (GstObject *) collection);
   GST_DEBUG_OBJECT (dbin, "Setting collection %p on input %p", collection,
       input);
 
@@ -3231,9 +3273,12 @@ mq_slot_check_reconfiguration (MultiQueueSlot * slot)
     gst_element_post_message ((GstElement *) slot->dbin, selection_msg);
 }
 
+/* Update the `all_streams_present` state of the provided collection by checking
+ * if every stream is mapped to a slot */
 static void
 update_stream_presence (GstDecodebin3 * dbin, DecodebinCollection * collection)
 {
+  guint i, len;
   GList *tmp;
 
   if (dbin->upstream_handles_selection) {
@@ -3241,16 +3286,28 @@ update_stream_presence (GstDecodebin3 * dbin, DecodebinCollection * collection)
     return;
   }
 
-  if (g_list_length (dbin->slots) !=
+  /* All streams are present only if the number of slots if greater or equal to
+   * the number of streams in the collection */
+  if (g_list_length (dbin->slots) <
       gst_stream_collection_get_size (collection->collection)) {
     collection->all_streams_present = FALSE;
     return;
   }
 
-  for (tmp = dbin->slots; tmp; tmp = tmp->next) {
-    MultiQueueSlot *slot = tmp->data;
-    if (!stream_in_collection (collection->collection,
-            (gchar *) slot->active_stream_id)) {
+  /* Check if all streams of the collection are present on the current slots */
+  len = gst_stream_collection_get_size (collection->collection);
+  for (i = 0; i < len; i++) {
+    GstStream *stream =
+        gst_stream_collection_get_stream (collection->collection, i);
+    gboolean found_slot = FALSE;
+    for (tmp = dbin->slots; tmp; tmp = tmp->next) {
+      MultiQueueSlot *slot = tmp->data;
+      if (!g_strcmp0 (stream->stream_id, slot->active_stream_id)) {
+        found_slot = TRUE;
+        break;
+      }
+    }
+    if (!found_slot) {
       collection->all_streams_present = FALSE;
       return;
     }
@@ -3637,6 +3694,14 @@ gst_decodebin_input_link_to_slot (DecodebinInputStream * input_stream)
   GstDecodebin3 *dbin = input_stream->dbin;
   MultiQueueSlot *slot =
       gst_decodebin_get_slot_for_input_stream_locked (dbin, input_stream);
+
+  if (!slot) {
+    GST_ERROR_OBJECT (dbin,
+        "Fatal, could not get a multiqueue slot for input stream");
+    GST_ELEMENT_ERROR (dbin, STREAM, FAILED, (NULL),
+        ("Fatal, could not get a multiqueue slot for input stream"));
+    return;
+  }
 
   if (slot->input != NULL && slot->input != input_stream) {
     GST_ERROR_OBJECT (slot->dbin, "Input stream is already linked to a slot");
@@ -4475,6 +4540,10 @@ db_output_stream_new (GstDecodebin3 * dbin, GstStreamType type)
     templ = &text_src_template;
     counter = &dbin->tpadcount;
     prefix = "text";
+  } else if (type & GST_STREAM_TYPE_METADATA) {
+    templ = &metadata_src_template;
+    counter = &dbin->mpadcount;
+    prefix = "metadata";
   } else {
     templ = &src_template;
     counter = &dbin->opadcount;

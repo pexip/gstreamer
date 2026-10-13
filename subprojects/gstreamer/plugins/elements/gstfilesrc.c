@@ -166,7 +166,7 @@ gst_file_src_class_init (GstFileSrcClass * klass)
       g_param_spec_string ("location", "File Location",
           "Location of the file to read", NULL,
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
-          GST_PARAM_MUTABLE_READY));
+          GST_PARAM_MUTABLE_READY | GST_PARAM_UNTRUSTED_SENSITIVE));
 
   g_object_class_install_property (gobject_class, PROP_LOOP,
       g_param_spec_int ("loop", "Loop",
@@ -180,6 +180,8 @@ gst_file_src_class_init (GstFileSrcClass * klass)
       "Source/File",
       "Read from arbitrary point in a file",
       "Erik Walthinsen <omega@cse.ogi.edu>");
+
+  gst_element_class_mark_as_untrusted_aware (gstelement_class);
   gst_element_class_add_static_pad_template (gstelement_class, &srctemplate);
 
   gstbasesrc_class->start = GST_DEBUG_FUNCPTR (gst_file_src_start);

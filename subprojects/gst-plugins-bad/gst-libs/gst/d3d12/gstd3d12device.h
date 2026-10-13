@@ -36,6 +36,30 @@ G_BEGIN_DECLS
 #define GST_D3D12_DEVICE_HANDLE_CONTEXT_TYPE "gst.d3d12.device.handle"
 
 /**
+ * GstD3D12DecoderSessionReuse:
+ * @GST_D3D12_DECODER_SESSION_REUSE_DISABLED: Decoder sessions are not reused
+ * @GST_D3D12_DECODER_SESSION_REUSE_ALL: Complete decoder sessions, including
+ *   their textures, are kept alive and reused
+ * @GST_D3D12_DECODER_SESSION_REUSE_WITHOUT_TEXTURES: Decoder sessions are kept
+ *   alive and reused, but the textures of a session are released while the
+ *   session is not in use
+ *
+ * Decoder session reuse mode
+ *
+ * Since: 1.30
+ */
+typedef enum
+{
+  GST_D3D12_DECODER_SESSION_REUSE_DISABLED,
+  GST_D3D12_DECODER_SESSION_REUSE_ALL,
+  GST_D3D12_DECODER_SESSION_REUSE_WITHOUT_TEXTURES,
+} GstD3D12DecoderSessionReuse;
+
+GST_D3D12_API
+GType gst_d3d12_decoder_session_reuse_get_type (void);
+#define GST_TYPE_D3D12_DECODER_SESSION_REUSE (gst_d3d12_decoder_session_reuse_get_type())
+
+/**
  * GstD3D12Device:
  *
  * Opaque GstD3D12Device struct
@@ -123,6 +147,21 @@ HRESULT                 gst_d3d12_device_fence_wait               (GstD3D12Devic
 GST_D3D12_API
 gboolean                gst_d3d12_device_is_equal                 (GstD3D12Device * device1,
                                                                    GstD3D12Device * device2);
+
+GST_D3D12_API
+HRESULT                 gst_d3d12_device_enqueue_make_resident    (GstD3D12Device * device,
+                                                                   D3D12_RESIDENCY_FLAGS flags,
+                                                                   guint num_objects,
+                                                                   ID3D12Pageable ** objects,
+                                                                   ID3D12Fence ** fence,
+                                                                   guint64 * fence_value);
+
+GST_D3D12_API
+gboolean                gst_d3d12_device_prepare_graphics_cmd_list (GstD3D12Device * device,
+                                                                    ID3D12GraphicsCommandList ** cl,
+                                                                    GstD3D12CmdAllocPool * ca_pool,
+                                                                    ID3D12PipelineState * initial_state,
+                                                                    GstD3D12FenceData * fence_data);
 
 G_END_DECLS
 

@@ -32,7 +32,7 @@
 
 G_BEGIN_DECLS
 
-#define MAX_HRD_NUM_LEAKY_BUCKETS 31
+#define GST_VC1_MAX_HRD_NUM_LEAKY_BUCKETS 31
 
 /**
  * GST_VC1_BFRACTION_BASIS:
@@ -169,8 +169,8 @@ struct _GstVC1HrdParam
   guint8 hrd_num_leaky_buckets;
   guint8 bit_rate_exponent;
   guint8 buffer_size_exponent;
-  guint16 hrd_rate[MAX_HRD_NUM_LEAKY_BUCKETS];
-  guint16 hrd_buffer[MAX_HRD_NUM_LEAKY_BUCKETS];
+  guint16 hrd_rate[GST_VC1_MAX_HRD_NUM_LEAKY_BUCKETS];
+  guint16 hrd_buffer[GST_VC1_MAX_HRD_NUM_LEAKY_BUCKETS];
 };
 
 /**
@@ -200,7 +200,7 @@ struct _GstVC1EntryPointHdr
   guint8 range_mapuv_flag;
   guint8 range_mapuv;
 
-  guint8 hrd_full[MAX_HRD_NUM_LEAKY_BUCKETS];
+  guint8 hrd_full[GST_VC1_MAX_HRD_NUM_LEAKY_BUCKETS];
 };
 
 /**
@@ -636,7 +636,7 @@ GstVC1ParserResult gst_vc1_parse_field_header          (const guint8 *data,
 GST_CODEC_PARSERS_API
 GstVC1ParserResult gst_vc1_parse_slice_header           (const guint8 *data,
                                                          gsize size,
-                                                         GstVC1SliceHdr *slicehdr, 
+                                                         GstVC1SliceHdr *slicehdr,
                                                          GstVC1SeqHdr *seqhdr);
 
 GST_CODEC_PARSERS_API

@@ -226,7 +226,8 @@ gst_real_audio_demux_sink_activate_mode (GstPad * sinkpad, GstObject * parent,
         demux->seekable = TRUE;
 
         res = gst_pad_start_task (sinkpad,
-            (GstTaskFunction) gst_real_audio_demux_loop, demux, NULL);
+            (GstTaskFunction) gst_real_audio_demux_loop, gst_object_ref (demux),
+            gst_object_unref);
       } else {
         demux->seekable = FALSE;
         res = gst_pad_stop_task (sinkpad);
@@ -342,6 +343,30 @@ gst_real_audio_demux_parse_header (GstRealAudioDemux * demux)
     return GST_FLOW_OK;
   }
 
+  /* Check if enough data is available to parse the header */
+  switch (demux->ra_version) {
+    case 3:
+      /* Nothing is parsed */
+      break;
+    case 4:
+      if (avail < demux->data_offset - 6 + 63) {
+        GST_DEBUG_OBJECT (demux, "Need %u bytes, but only %u available now",
+            demux->data_offset - 6 + 63, avail);
+        return GST_FLOW_OK;
+      }
+      break;
+    case 5:
+#if 0
+      /* Unsupported for now */
+      if (avail < demux->data_offset - 6 + 64) {
+        GST_DEBUG_OBJECT (demux, "Need %u bytes, but only %u available now",
+            demux->data_offset - 6 + 64, avail);
+        return GST_FLOW_OK;
+      }
+#endif
+      break;
+  }
+
   data = gst_adapter_map (demux->adapter, demux->data_offset - 6);
   g_assert (data);
 
@@ -366,6 +391,9 @@ gst_real_audio_demux_parse_header (GstRealAudioDemux * demux)
       demux->sample_width = GST_READ_UINT16_BE (data + 46);
       demux->channels = GST_READ_UINT16_BE (data + 48);
       demux->fourcc = GST_READ_UINT32_LE (data + 56);
+      // FIXME: This is broken. We need to make sure that the whole packet
+      // is available to be sure we can actually read all tags. This now
+      // randomly cuts off the tags depending on input buffer chunking.
       demux->pending_tags = gst_rm_utils_read_tags (data + 63,
           demux->data_offset - 63, gst_rm_utils_read_string8);
       if (demux->pending_tags)
@@ -841,7 +869,8 @@ gst_real_audio_demux_handle_seek (GstRealAudioDemux * demux, GstEvent * event)
   demux->segment_running = TRUE;
   /* restart our task since it might have been stopped when we did the flush */
   gst_pad_start_task (demux->sinkpad,
-      (GstTaskFunction) gst_real_audio_demux_loop, demux, NULL);
+      (GstTaskFunction) gst_real_audio_demux_loop, gst_object_ref (demux),
+      gst_object_unref);
 
   /* streaming can continue now */
   GST_PAD_STREAM_UNLOCK (demux->sinkpad);

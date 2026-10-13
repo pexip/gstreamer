@@ -245,16 +245,18 @@ field_size (guint8 field)
   }
 }
 
-/* Set the padding field to te correct value as the spec
- * says it should be se to 0 in the rtp packets
- */
+/* Update the packet with the required amount of padding. For RTP packets the
+ * padding is stripped off and here we need to add it back to create valid
+ * ASF packets again. This requires allocating a packet_size large buffer,
+ * adding zero padding and rewriting the padding length field with the correct
+ * value. */
 static GstBuffer *
 gst_rtp_asf_depay_update_padding (GstRtpAsfDepay * depayload, GstBuffer * buf)
 {
   GstBuffer *result;
   GstMapInfo map;
   guint8 *data;
-  gint offset = 0;
+  guint offset = 0;
   guint8 aux;
   guint8 seq_type;
   guint8 pad_type;
@@ -268,18 +270,20 @@ gst_rtp_asf_depay_update_padding (GstRtpAsfDepay * depayload, GstBuffer * buf)
   padding = depayload->packet_size - plen;
 
   GST_LOG_OBJECT (depayload,
-      "padding buffer size %" G_GSIZE_FORMAT " to packet size %d", plen,
+      "padding buffer size %" G_GSIZE_FORMAT " to packet size %u", plen,
       depayload->packet_size);
 
   result = gst_buffer_new_and_alloc (depayload->packet_size);
 
-  gst_buffer_map (result, &map, GST_MAP_READ);
+  gst_buffer_map (result, &map, GST_MAP_READWRITE);
   data = map.data;
   memset (data + plen, 0, padding);
 
   gst_buffer_extract (buf, 0, data, plen);
   gst_buffer_unref (buf);
 
+  if (offset + 1 > depayload->packet_size)
+    goto malformed;
   aux = data[offset++];
   if (aux & 0x80) {
     guint8 err_len = 0;
@@ -293,6 +297,8 @@ gst_rtp_asf_depay_update_padding (GstRtpAsfDepay * depayload, GstBuffer * buf)
     err_len = aux & 0x0F;
     offset += err_len;
 
+    if (offset + 1 > depayload->packet_size)
+      goto malformed;
     aux = data[offset++];
   }
   seq_type = (aux >> 1) & 0x3;
@@ -307,16 +313,22 @@ gst_rtp_asf_depay_update_padding (GstRtpAsfDepay * depayload, GstBuffer * buf)
   switch (pad_type) {
       /* DWORD */
     case 3:
+      if (offset + 4 > depayload->packet_size)
+        goto malformed;
       GST_WRITE_UINT32_LE (&(data[offset]), padding);
       break;
 
       /* WORD */
     case 2:
+      if (offset + 2 > depayload->packet_size)
+        goto malformed;
       GST_WRITE_UINT16_LE (&(data[offset]), padding);
       break;
 
       /* BYTE */
     case 1:
+      if (offset + 1 > depayload->packet_size)
+        goto malformed;
       data[offset] = (guint8) padding;
       break;
 
@@ -328,6 +340,14 @@ gst_rtp_asf_depay_update_padding (GstRtpAsfDepay * depayload, GstBuffer * buf)
   gst_buffer_unmap (result, &map);
 
   return result;
+
+malformed:
+  {
+    GST_WARNING_OBJECT (depayload, "ASF packet too small to contain header");
+    gst_buffer_unmap (result, &map);
+    gst_buffer_unref (result);
+    return NULL;
+  }
 }
 
 /* Docs: 'RTSP Protocol PDF' document from http://sdp.ppona.com/ (page 8) */
@@ -344,6 +364,7 @@ gst_rtp_asf_depay_process (GstRTPBaseDepayload * depayload, GstBuffer * buf)
   guint len_offs;
   GstClockTime timestamp;
   GstRTPBuffer rtpbuf = { NULL };
+  guint packet_len = 0;
 
   depay = GST_RTP_ASF_DEPAY (depayload);
 
@@ -365,14 +386,14 @@ gst_rtp_asf_depay_process (GstRTPBaseDepayload * depayload, GstBuffer * buf)
 
   outbufs = gst_buffer_list_new ();
   do {
-    guint packet_len;
+    hdr_len = 4;
 
     /* packet header is at least 4 bytes */
-    if (payload_len < 4)
+    if (payload_len < hdr_len)
       goto too_small;
 
     /*                      1                   2                   3
-     *  0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 
+     *  0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
      * +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
      * |S|L|R|D|I|RES  | Length/Offset                                 |
      * +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
@@ -398,32 +419,33 @@ gst_rtp_asf_depay_process (GstRTPBaseDepayload * depayload, GstBuffer * buf)
     D = ((payload[0] & 0x10) != 0);
     I = ((payload[0] & 0x08) != 0);
 
-    hdr_len = 4;
-
     len_offs = (payload[1] << 16) | (payload[2] << 8) | payload[3];
 
     if (R) {
-      GST_DEBUG ("Relative timestamp field present : %u",
-          GST_READ_UINT32_BE (payload + hdr_len));
       hdr_len += 4;
+      if (payload_len < hdr_len)
+        goto too_small;
+      GST_DEBUG ("Relative timestamp field present : %u",
+          GST_READ_UINT32_BE (payload + hdr_len - 4));
     }
     if (D) {
-      GST_DEBUG ("Duration field present : %u",
-          GST_READ_UINT32_BE (payload + hdr_len));
       hdr_len += 4;
+      if (payload_len < hdr_len)
+        goto too_small;
+      GST_DEBUG ("Duration field present : %u",
+          GST_READ_UINT32_BE (payload + hdr_len - 4));
     }
     if (I) {
-      GST_DEBUG ("LocationId field present : %u",
-          GST_READ_UINT32_BE (payload + hdr_len));
       hdr_len += 4;
+      if (payload_len < hdr_len)
+        goto too_small;
+      GST_DEBUG ("LocationId field present : %u",
+          GST_READ_UINT32_BE (payload + hdr_len - 4));
     }
 
     GST_LOG_OBJECT (depay, "S %d, L %d, R %d, D %d, I %d", S, L, R, D, I);
-    GST_LOG_OBJECT (depay, "payload_len:%d, hdr_len:%d, len_offs:%d",
+    GST_LOG_OBJECT (depay, "payload_len:%u, hdr_len:%u, len_offs:%u",
         payload_len, hdr_len, len_offs);
-
-    if (payload_len < hdr_len)
-      goto too_small;
 
     /* skip headers */
     payload_len -= hdr_len;
@@ -433,6 +455,11 @@ gst_rtp_asf_depay_process (GstRTPBaseDepayload * depayload, GstBuffer * buf)
     if (L) {
       /* L bit set, len contains the length of the packet */
       packet_len = len_offs;
+      if (packet_len == 0) {
+        GST_WARNING_OBJECT (depay, "Zero length ASF packet, ignoring rest of "
+            "payload");
+        break;
+      }
     } else {
       /* else it contains an offset which we don't handle yet */
       GST_LOG_OBJECT (depay, "We have a fragmented packet");
@@ -441,6 +468,9 @@ gst_rtp_asf_depay_process (GstRTPBaseDepayload * depayload, GstBuffer * buf)
 
     if (packet_len > payload_len)
       packet_len = payload_len;
+
+    if (packet_len > depay->packet_size)
+      goto too_big;
 
     GST_LOG_OBJECT (depay, "packet len %u, payload len %u, packet_size:%u",
         packet_len, payload_len, depay->packet_size);
@@ -460,6 +490,12 @@ gst_rtp_asf_depay_process (GstRTPBaseDepayload * depayload, GstBuffer * buf)
         gst_adapter_push (depay->adapter, sub);
         /* RTP marker bit M is set if this is last fragment */
         if (gst_rtp_buffer_get_marker (&rtpbuf)) {
+          if (available + packet_len > depay->packet_size) {
+            /* Update packet_len for the debug log further below */
+            packet_len = available + packet_len;
+            gst_adapter_clear (depay->adapter);
+            goto too_big;
+          }
           GST_LOG_OBJECT (depay, "last fragment, assembling packet");
           outbuf =
               gst_adapter_take_buffer (depay->adapter, available + packet_len);
@@ -481,11 +517,17 @@ gst_rtp_asf_depay_process (GstRTPBaseDepayload * depayload, GstBuffer * buf)
     /* If we haven't completed a full ASF packet, return but first
        push what we have so far */
     if (!outbuf) {
+      gst_rtp_buffer_unmap (&rtpbuf);
       gst_rtp_base_depayload_push_list (depayload, outbufs);
       return NULL;
     }
 
     outbuf = gst_rtp_asf_depay_update_padding (depay, outbuf);
+    if (!outbuf) {
+      gst_rtp_buffer_unmap (&rtpbuf);
+      gst_rtp_base_depayload_push_list (depayload, outbufs);
+      return NULL;
+    }
 
     if (!S)
       GST_BUFFER_FLAG_SET (outbuf, GST_BUFFER_FLAG_DELTA_UNIT);
@@ -519,8 +561,21 @@ gst_rtp_asf_depay_process (GstRTPBaseDepayload * depayload, GstBuffer * buf)
 too_small:
   {
     gst_rtp_buffer_unmap (&rtpbuf);
-    GST_WARNING_OBJECT (depayload, "Payload too small, expected at least 4 "
-        "bytes for header, but got only %d bytes", payload_len);
+    GST_WARNING_OBJECT (depayload, "Payload too small, expected at least %u "
+        "bytes for header, but got only %u bytes", hdr_len, payload_len);
+    if (gst_buffer_list_length (outbufs) == 0) {
+      gst_rtp_base_depayload_dropped (depayload);
+      gst_buffer_list_unref (outbufs);
+    } else {
+      gst_rtp_base_depayload_push_list (depayload, outbufs);
+    }
+    return NULL;
+  }
+too_big:
+  {
+    gst_rtp_buffer_unmap (&rtpbuf);
+    GST_WARNING_OBJECT (depayload, "Payload too big, expected at most %u "
+        "bytes, but got %u bytes", depay->packet_size, packet_len);
     if (gst_buffer_list_length (outbufs) == 0) {
       gst_rtp_base_depayload_dropped (depayload);
       gst_buffer_list_unref (outbufs);

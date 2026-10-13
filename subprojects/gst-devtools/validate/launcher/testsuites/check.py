@@ -33,6 +33,7 @@ LONG_VALGRIND_TESTS = [
     (r'check.[a-z-]*.generic_states.test_state_changes_down_seq', 'enough to run one of the sequences'),
     (r'check.[a-z-]*.generic_states.test_state_changes_up_seq', 'enough to run one of the sequences',),
     (r'check.[a-z-]*.generic_states.test_state_changes_up_and_down_seq', 'enough to run the sequences'),
+    (r'check.gst-plugins-good.elements_rtpfunnel.rtpfunnel_stress', '22m'),
     (r'check.gstreamer.gst_gstelement.test_foreach_pad$', '48s'),
     (r'check.gstreamer.gst_gstinfo.info_post_gst_init_category_registration$', '21s'),
     (r'check.gstreamer.gst_gstsystemclock.test_resolution$', '60s'),
@@ -88,6 +89,7 @@ LONG_VALGRIND_TESTS = [
 VALGRIND_BLACKLIST = [
     (r'check.gstreamer.gst_gstsystemclock.test_stress_cleanup_unschedule', '?'),
     (r'check.gstreamer.gst_gstsystemclock.test_stress_reschedule', '?'),
+    (r'check.gstreamer.gst_gsttracerdeinit', 'leaks a bin on purpose to check the leaks tracer report at gst_deinit()'),
     (r'check.gstreamer.tools_gstinspect', '?'),
     (r'check.gst-plugins-base.elements_videoscale', '?'),
     (r'check.gst-plugins-base.pipelines_gl_launch_lines', '?'),
@@ -104,7 +106,6 @@ VALGRIND_BLACKLIST = [
     (r'check.gst-plugins-bad.elements_mpeg2enc', '?'),
     (r'check.gst-plugins-bad.elements_mplex', '?'),
     (r'check.gst-plugins-bad.elements_mxfmux', '?'),
-    (r'check.gst-plugins-bad.elements_srt.test_src_listener_sink_caller', 'Need to investigate libsrt leaks (flaky)'),
     (r'check.gst-plugins-bad.elements_x265enc', '?'),
     (r'check.gst-plugins-bad.elements_zbar', '?'),
     (r'check.gst-plugins-bad.elements_webrtcbin.test_data_channel_remote_notify', 'Need to fix leaks'),
@@ -118,8 +119,10 @@ VALGRIND_BLACKLIST = [
     (r'check.gst-libav.generic_plugin_test', '?'),
     (r'check.gst-libav.generic_libavcodec_locking', '?'),
     (r'check.gst-libav.elements_avdemux_ape', '?'),
+    (r'check.gst-editing-services.check_edit_in_frames_with_framerate_mismatch', 'Massive external library leaks (PipeWire, ALSA, OpenAL) during audio sink autodetection'),
     (r'check.gst-editing-services.pythontests', 'Need to figure out how to introduce python suppressions'),
     (r'check.gst-editing-services.check_keyframes_in_compositor_two_sources', 'Valgrind exit with an exitcode 20 but shows no issue: https://gitlab.freedesktop.org/thiblahute/gst-editing-services/-/jobs/4079972'),
+    (r'check.gst-editing-services.validate.nle.ensure_no_unnecessary_stack_init_seeks', 'Flaky under valgrind: race in basesrc between seg_event push (outside LIVE_LOCK) and FLUSH_START from the init seek'),
     (r'check.gst-plugins-good.elements_splitmuxsrc.test_splitmuxsrc_sparse_streams', 'https://gitlab.freedesktop.org/gstreamer/gstreamer/-/issues/739'),
     (r'check.gst-plugins-good.elements_udpsrc.test_udpsrc_empty_packet', 'https://gitlab.freedesktop.org/gstreamer/gstreamer/-/issues/740'),
     (r'check.gst-plugins-bad.elements_svthevc*', 'https://gitlab.freedesktop.org/gstreamer/gstreamer/-/issues/3011'),
@@ -177,8 +180,6 @@ BLACKLIST = [
 
 CI_BLACKLIST = [
     (r'check.gst-plugins-good.elements_souphttpsrc2.test_icy_stream', 'flaky in valgrind, leaks in CI but not locally'),
-    (r'check.gst-plugins-bad.elements_vkcolorconvert.test_vulkan_color_convert_rgba_reorder', 'https://gitlab.freedesktop.org/gstreamer/gstreamer/-/issues/4612'),
-    (r'check.gst-plugins-bad.elements_vkdeviceprovider.vulkan_provider_creation', 'https://gitlab.freedesktop.org/gstreamer/gstreamer/-/issues/4612'),
 ]
 
 

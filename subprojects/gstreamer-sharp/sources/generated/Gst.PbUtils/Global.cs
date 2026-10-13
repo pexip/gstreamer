@@ -169,6 +169,15 @@ namespace Gst.PbUtils {
 		}
 
 		[DllImport("gstpbutils-1.0-0.dll", CallingConvention = CallingConvention.Cdecl)]
+		static extern IntPtr gst_codec_utils_h264_get_level_limits(int width, int height, int fps_n, int fps_d, uint bitrate, uint max_dec_frame_buffering, byte profile_idc);
+
+		public static Gst.PbUtils.H264LevelLimits CodecUtilsH264GetLevelLimits(int width, int height, int fps_n, int fps_d, uint bitrate, uint max_dec_frame_buffering, byte profile_idc) {
+			IntPtr raw_ret = gst_codec_utils_h264_get_level_limits(width, height, fps_n, fps_d, bitrate, max_dec_frame_buffering, profile_idc);
+			Gst.PbUtils.H264LevelLimits ret = Gst.PbUtils.H264LevelLimits.New (raw_ret);
+			return ret;
+		}
+
+		[DllImport("gstpbutils-1.0-0.dll", CallingConvention = CallingConvention.Cdecl)]
 		static extern IntPtr gst_codec_utils_h264_get_profile([MarshalAs(UnmanagedType.LPArray, SizeParamIndex=1)]byte[] sps, uint len);
 
 		public static string CodecUtilsH264GetProfile(byte[] sps) {
@@ -374,6 +383,62 @@ namespace Gst.PbUtils {
 		public static bool CodecUtilsOpusParseHeader(Gst.Buffer header, out uint rate, out byte channels, out byte channel_mapping_family, out byte stream_count, out byte coupled_count, out byte[] channel_mapping, out ushort pre_skip, out short output_gain) {
 			bool raw_ret = gst_codec_utils_opus_parse_header(header == null ? IntPtr.Zero : header.Handle, out rate, out channels, out channel_mapping_family, out stream_count, out coupled_count, out channel_mapping, out pre_skip, out output_gain);
 			bool ret = raw_ret;
+			return ret;
+		}
+
+		[DllImport("gstpbutils-1.0-0.dll", CallingConvention = CallingConvention.Cdecl)]
+		static extern byte gst_codec_utils_vp9_estimate_level_idc_from_caps(IntPtr caps);
+
+		public static byte CodecUtilsVp9EstimateLevelIdcFromCaps(Gst.Caps caps) {
+			byte raw_ret = gst_codec_utils_vp9_estimate_level_idc_from_caps(caps == null ? IntPtr.Zero : caps.Handle);
+			byte ret = raw_ret;
+			return ret;
+		}
+
+		[DllImport("gstpbutils-1.0-0.dll", CallingConvention = CallingConvention.Cdecl)]
+		static extern IntPtr gst_codec_utils_vp9_get_level(byte level_idc);
+
+		public static string CodecUtilsVp9GetLevel(byte level_idc) {
+			IntPtr raw_ret = gst_codec_utils_vp9_get_level(level_idc);
+			string ret = GLib.Marshaller.Utf8PtrToString (raw_ret);
+			return ret;
+		}
+
+		[DllImport("gstpbutils-1.0-0.dll", CallingConvention = CallingConvention.Cdecl)]
+		static extern byte gst_codec_utils_vp9_get_level_idc(IntPtr level);
+
+		public static byte CodecUtilsVp9GetLevelIdc(string level) {
+			IntPtr native_level = GLib.Marshaller.StringToPtrGStrdup (level);
+			byte raw_ret = gst_codec_utils_vp9_get_level_idc(native_level);
+			byte ret = raw_ret;
+			GLib.Marshaller.Free (native_level);
+			return ret;
+		}
+
+		[DllImport("gstpbutils-1.0-0.dll", CallingConvention = CallingConvention.Cdecl)]
+		static extern bool gst_codec_utils_vpx_caps_get_config(IntPtr caps, out int vpx_version, out byte profile, out byte level, out byte bit_depth, out byte chroma_subsampling, out bool video_full_range, out byte colour_primaries, out byte transfer_characteristics, out byte matrix_coefficients);
+
+		public static bool CodecUtilsVpxCapsGetConfig(Gst.Caps caps, out int vpx_version, out byte profile, out byte level, out byte bit_depth, out byte chroma_subsampling, out bool video_full_range, out byte colour_primaries, out byte transfer_characteristics, out byte matrix_coefficients) {
+			bool raw_ret = gst_codec_utils_vpx_caps_get_config(caps == null ? IntPtr.Zero : caps.Handle, out vpx_version, out profile, out level, out bit_depth, out chroma_subsampling, out video_full_range, out colour_primaries, out transfer_characteristics, out matrix_coefficients);
+			bool ret = raw_ret;
+			return ret;
+		}
+
+		[DllImport("gstpbutils-1.0-0.dll", CallingConvention = CallingConvention.Cdecl)]
+		static extern bool gst_codec_utils_vpx_caps_set_format_fields(IntPtr caps, int profile, int level, int bit_depth, int chroma_subsampling);
+
+		public static bool CodecUtilsVpxCapsSetFormatFields(Gst.Caps caps, int profile, int level, int bit_depth, int chroma_subsampling) {
+			bool raw_ret = gst_codec_utils_vpx_caps_set_format_fields(caps == null ? IntPtr.Zero : caps.Handle, profile, level, bit_depth, chroma_subsampling);
+			bool ret = raw_ret;
+			return ret;
+		}
+
+		[DllImport("gstpbutils-1.0-0.dll", CallingConvention = CallingConvention.Cdecl)]
+		static extern IntPtr gst_codec_utils_vpx_create_vpcc_from_caps(IntPtr caps);
+
+		public static Gst.Buffer CodecUtilsVpxCreateVpccFromCaps(Gst.Caps caps) {
+			IntPtr raw_ret = gst_codec_utils_vpx_create_vpcc_from_caps(caps == null ? IntPtr.Zero : caps.Handle);
+			Gst.Buffer ret = raw_ret == IntPtr.Zero ? null : (Gst.Buffer) GLib.Opaque.GetOpaque (raw_ret, typeof (Gst.Buffer), true);
 			return ret;
 		}
 

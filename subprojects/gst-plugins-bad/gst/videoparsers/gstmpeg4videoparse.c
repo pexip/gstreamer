@@ -190,6 +190,7 @@ gst_mpeg4vparse_init (GstMpeg4VParse * parse)
 
   gst_base_parse_set_pts_interpolation (GST_BASE_PARSE (parse), FALSE);
   gst_base_parse_set_infer_ts (GST_BASE_PARSE (parse), FALSE);
+  gst_base_parse_set_allow_duplicated_pts (GST_BASE_PARSE (parse), TRUE);
   GST_PAD_SET_ACCEPT_INTERSECT (GST_BASE_PARSE_SINK_PAD (parse));
   GST_PAD_SET_ACCEPT_TEMPLATE (GST_BASE_PARSE_SINK_PAD (parse));
 }
@@ -362,10 +363,17 @@ gst_mpeg4vparse_process_sc (GstMpeg4VParse * mp4vparse, GstMpeg4Packet * packet,
     case GST_MPEG4_VISUAL_OBJ_SEQ_START:
       GST_LOG_OBJECT (mp4vparse, "Visual Sequence Start");
       mp4vparse->config_found = TRUE;
-      mp4vparse->profile = gst_codec_utils_mpeg4video_get_profile (packet->data
-          + packet->offset + 1, packet->offset);
-      mp4vparse->level = gst_codec_utils_mpeg4video_get_level (packet->data
-          + packet->offset + 1, packet->offset);
+      if (packet->size > 1) {
+        mp4vparse->profile =
+            gst_codec_utils_mpeg4video_get_profile (packet->data +
+            packet->offset + 1, packet->size - 1);
+        mp4vparse->level =
+            gst_codec_utils_mpeg4video_get_level (packet->data +
+            packet->offset + 1, packet->size - 1);
+      } else {
+        GST_WARNING_OBJECT (mp4vparse,
+            "VOS packet too short to extract profile/level");
+      }
       break;
     case GST_MPEG4_VISUAL_OBJ:
       GST_LOG_OBJECT (mp4vparse, "Visual Object");
@@ -516,6 +524,7 @@ next:
 
   if (ret) {
     framesize = off - 3;
+    g_assert (framesize <= map.size);
   } else {
     goto next;
   }
@@ -526,7 +535,6 @@ out:
   if (ret) {
     GstFlowReturn res;
 
-    g_assert (framesize <= map.size);
     res = gst_mpeg4vparse_parse_frame (parse, frame);
     if (res == GST_BASE_PARSE_FLOW_DROPPED)
       frame->flags |= GST_BASE_PARSE_FRAME_FLAG_DROP;

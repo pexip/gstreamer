@@ -2,6 +2,7 @@ opengl_sources = [
   'gstopengl.c',
   'gstglelement.c',
   'gstglalpha.c',
+  'gstglalphacombine.c',
   'gstgluploadelement.c',
   'gstgldownloadelement.c',
   'gstglcolorconvertelement.c',
@@ -61,6 +62,7 @@ opengl_headers = [
   'gstgldifferencematte.h',
   'gstgltransformation.h',
   'gstglalpha.h',
+  'gstglalphacombine.h',
   'gstgloverlay.h',
   'gstglvideomixer.h',
   'gstglcolorscale.h',
@@ -176,7 +178,7 @@ if egl_dep.found() and drm_has_fourcc
   optional_deps += [allocators_dep, libdrm_dep]
 endif
 
-is_apple = host_system in ['darwin', 'ios'] 
+is_apple = host_system == 'darwin'
 if is_apple
   if not have_objc
     error('No ObjC compiler found')

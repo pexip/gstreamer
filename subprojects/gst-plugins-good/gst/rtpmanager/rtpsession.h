@@ -338,8 +338,20 @@ struct _RTPSession
 
   /* Transport-wide cc-extension */
   RTPTWCCManager *twcc;
+
   GstStructure *rtx_ssrc_map;
   GHashTable *rtx_ssrc_to_ssrc;
+
+  /* RTX throttling */
+  gint          rtx_percentage;
+  guint64       rtx_bitrate;
+  GstClockTime  prev_rtx_time;
+  guint64       rtx_bytes_sent;
+
+  /* DoS protection */
+  guint max_csrcs;
+  guint max_sources;
+  GQueue ssrc_queue; /* Sorted by least recently used */
 };
 
 /**

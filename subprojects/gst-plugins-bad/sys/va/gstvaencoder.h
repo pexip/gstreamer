@@ -40,9 +40,18 @@ struct _GstVaEncodePicture
   GstBuffer *reconstruct_buffer;
 
   VABufferID coded_buffer;
+  gboolean corrupt;
 };
 
 gboolean              gst_va_encoder_is_open              (GstVaEncoder * self);
+gboolean              gst_va_encoder_setup                (GstVaEncoder * self,
+                                                           VAProfile profile,
+                                                           guint rt_format,
+                                                           guint rc_ctrl,
+                                                           guint32 packed_headers);
+gboolean              gst_va_encoder_open_2               (GstVaEncoder * self,
+                                                           gint width,
+                                                           gint height);
 gboolean              gst_va_encoder_open                 (GstVaEncoder * self,
                                                            VAProfile profile,
                                                            GstVideoFormat video_format,
@@ -54,44 +63,21 @@ gboolean              gst_va_encoder_open                 (GstVaEncoder * self,
                                                            guint rc_ctrl,
                                                            guint32 packed_headers);
 gboolean              gst_va_encoder_close                (GstVaEncoder * self);
-gboolean              gst_va_encoder_get_reconstruct_pool_config (GstVaEncoder * self,
-                                                                  GstCaps ** caps,
-                                                                  guint * max_surfaces);
+void                  gst_va_encoder_set_coded_buffer_size
+                                                          (GstVaEncoder * self,
+                                                           guint coded_buffer_size);
+gboolean              gst_va_encoder_set_reconstruct_pool_config
+                                                          (GstVaEncoder * self,
+                                                           GstVideoFormat format,
+                                                           guint max_surfaces);
+gboolean              gst_va_encoder_get_reconstruct_pool_config
+                                                          (GstVaEncoder * self,
+                                                           GstCaps ** caps,
+                                                           guint * max_surfaces);
+guint                 gst_va_encoder_get_surface_alignment
+                                                          (GstVaEncoder * self);
 gboolean              gst_va_encoder_has_profile          (GstVaEncoder * self,
                                                            VAProfile profile);
-gint                  gst_va_encoder_get_max_slice_num    (GstVaEncoder * self,
-                                                           VAProfile profile,
-                                                           VAEntrypoint entrypoint);
-gint32                gst_va_encoder_get_slice_structure  (GstVaEncoder * self,
-                                                           VAProfile profile,
-                                                           VAEntrypoint entrypoint);
-gboolean              gst_va_encoder_get_max_num_reference (GstVaEncoder * self,
-                                                            VAProfile profile,
-                                                            VAEntrypoint entrypoint,
-                                                            guint32 * list0,
-                                                            guint32 * list1);
-guint                 gst_va_encoder_get_prediction_direction (GstVaEncoder * self,
-                                                               VAProfile profile,
-                                                               VAEntrypoint entrypoint);
-guint32               gst_va_encoder_get_rate_control_mode (GstVaEncoder * self,
-                                                            VAProfile profile,
-                                                            VAEntrypoint entrypoint);
-guint32               gst_va_encoder_get_quality_level    (GstVaEncoder * self,
-                                                           VAProfile profile,
-                                                           VAEntrypoint entrypoint);
-gboolean              gst_va_encoder_has_trellis          (GstVaEncoder * self,
-                                                           VAProfile profile,
-                                                           VAEntrypoint entrypoint);
-gboolean              gst_va_encoder_has_tile             (GstVaEncoder * self,
-                                                           VAProfile profile,
-                                                           VAEntrypoint entrypoint);
-guint32               gst_va_encoder_get_rtformat         (GstVaEncoder * self,
-                                                           VAProfile profile,
-                                                           VAEntrypoint entrypoint);
-gboolean               gst_va_encoder_get_packed_headers  (GstVaEncoder * self,
-                                                           VAProfile profile,
-                                                           VAEntrypoint entrypoint,
-                                                           guint32 * packed_headers);
 gboolean              gst_va_encoder_get_rate_control_enum (GstVaEncoder * self,
                                                             GEnumValue ratectl[16]);
 gboolean              gst_va_encoder_add_param            (GstVaEncoder * self,
@@ -119,7 +105,5 @@ GstVaEncodePicture *  gst_va_encode_picture_new           (GstVaEncoder * self,
 void                  gst_va_encode_picture_free          (GstVaEncodePicture * pic);
 VASurfaceID           gst_va_encode_picture_get_raw_surface (GstVaEncodePicture * pic);
 VASurfaceID           gst_va_encode_picture_get_reconstruct_surface (GstVaEncodePicture * pic);
-guint                 gst_va_encoder_get_surface_alignment (GstVaDisplay *display,
-                                                            VAProfile profile,
-                                                            VAEntrypoint entrypoint);
+
 G_END_DECLS

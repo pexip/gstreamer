@@ -79,9 +79,13 @@ good_tests = [
   [ 'elements/y4mdec', get_option('y4m').disabled()],
   [ 'elements/y4menc', get_option('y4m').disabled()],
   [ 'pipelines/effectv', get_option('effectv').disabled()],
+  [ 'pipelines/av1c-qtmux-qtdemux', get_option('isomp4').disabled(),
+    [gstriff_dep, zlib_dep] ],
   [ 'elements/equalizer', get_option('equalizer').disabled()],
   [ 'pipelines/simple-launch-lines' ],
   [ 'pipelines/tagschecking' ],
+  [ 'pipelines/isomp4-vpcc', get_option('isomp4').disabled() ],
+  [ 'pipelines/vp9-codecprivate', get_option('matroska').disabled(), [gstriff_dep] ],
   [ 'generic/states' ],
 ]
 
@@ -136,7 +140,9 @@ if host_machine.system() != 'windows'
     [ 'elements/dash_mpd', not adaptivedemux2_dep.found(), [adaptivedemux2_dep] ],
     [ 'pipelines/flacdec', not flac_dep.found() ],
     [ 'elements/gdkpixbufsink', not gdkpixbuf_dep.found(), [gdkpixbuf_dep] ],
-    [ 'elements/gdkpixbufoverlay', not gdkpixbuf_dep.found() ],
+    # Enable the below test after
+    # https://bugzilla.redhat.com/show_bug.cgi?id=2412232 is fixed
+    # [ 'elements/gdkpixbufoverlay', not gdkpixbuf_dep.found() ],
     [ 'elements/jpegdec', not jpeglib.found() ],
     [ 'elements/jpegenc', not jpeglib.found() ],
     [ 'elements/mpg123audiodec', not mpg123_dep.found(), [gstfft_dep]],
@@ -192,8 +198,8 @@ gst_plugin_scanner_path = join_paths(gst_plugin_scanner_dir, 'gst-plugin-scanner
 #   gst-launch fakesrc ! alsasink device="hw:2"
 #
 # need a way to figure out value for the device property
-state_ignore_elements = '''aasink autoaudiosrc autoaudiosink autovideosrc
- autovideosink cacasink cairotextoverlay gtkglsink gtksink jackaudiosrc
+state_ignore_elements = '''autoaudiosrc autoaudiosink autovideosrc
+ autovideosink cairotextoverlay gtkglsink gtksink jackaudiosrc
  jackaudiosink osssrc osssink osxaudiosink osxaudiosrc osxvideosrc osxvideosink
  pulsesink pulsesrc pulsemixer v4l2src'''
 

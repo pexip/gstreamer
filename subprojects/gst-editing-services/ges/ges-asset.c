@@ -187,7 +187,13 @@ struct _GESAssetPrivate
 
   /* The error that occurred when an asset has been initialized with error */
   GError *error;
+
+  /* Per-instance lock for MT-safety */
+  GRecMutex lock;
 };
+
+#define LOCK_ASSET(asset) g_rec_mutex_lock (&(asset)->priv->lock)
+#define UNLOCK_ASSET(asset) g_rec_mutex_unlock (&(asset)->priv->lock)
 
 /* Internal structure to help avoid full loading
  * of one asset several times
@@ -228,7 +234,7 @@ static GRecMutex asset_cache_lock;
 
 static gchar *
 _check_and_update_parameters (GType * extractable_type, const gchar * id,
-    GError ** error)
+    GESAssetRequestFlags flags, GError ** error)
 {
   gchar *real_id;
   GType old_type = *extractable_type;
@@ -246,7 +252,8 @@ _check_and_update_parameters (GType * extractable_type, const gchar * id,
     return NULL;
   }
 
-  real_id = ges_extractable_type_check_id (*extractable_type, id, error);
+  real_id = ges_extractable_type_check_id_full (*extractable_type, id, flags,
+      error);
   if (real_id == NULL) {
     GST_WARNING ("Wrong ID %s, can not create asset", id);
 
@@ -260,9 +267,24 @@ _check_and_update_parameters (GType * extractable_type, const gchar * id,
   return real_id;
 }
 
+/* An untrusted-input refusal is a per-request decision: the application may
+ * accept it and request again, and the same id requested without
+ * GES_ASSET_REQUEST_FLAG_NO_UNTRUSTED_BIN_DESCRIPTION is not refused at all.
+ * It must not end up cached as a wrong-id asset. */
+static gboolean
+_is_untrusted_refusal (const GError * error)
+{
+  return error && error->domain == GES_ERROR
+      && (error->code == GES_ERROR_UNTRUSTED_ELEMENT
+      || error->code == GES_ERROR_SENSITIVE_PROPERTY);
+}
+
 /* FIXME: why are we not accepting a GError ** error argument, which we
  * could pass to ges_asset_cache_set_loaded ()? Which would allow the
  * error to be set for the GInitable init method below */
+static GESAsset *_ges_asset_request (GType extractable_type, const gchar * id,
+    GESAssetRequestFlags flags, GError ** error);
+
 static gboolean
 start_loading (GESAsset * asset)
 {
@@ -420,10 +442,10 @@ ges_asset_get_property (GObject * object, guint property_id,
       g_value_set_string (value, asset->priv->id);
       break;
     case PROP_PROXY:
-      g_value_set_object (value, ges_asset_get_proxy (asset));
+      g_value_take_object (value, ges_asset_get_proxy_full (asset));
       break;
     case PROP_PROXY_TARGET:
-      g_value_set_object (value, ges_asset_get_proxy_target (asset));
+      g_value_take_object (value, ges_asset_get_proxy_target_full (asset));
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, property_id, pspec);
@@ -473,6 +495,8 @@ ges_asset_finalize (GObject * object)
 
   if (priv->proxies)
     g_list_free (priv->proxies);
+
+  g_rec_mutex_clear (&priv->lock);
 
   G_OBJECT_CLASS (ges_asset_parent_class)->finalize (object);
 }
@@ -566,6 +590,7 @@ ges_asset_init (GESAsset * self)
 
   self->priv->state = ASSET_INITIALIZING;
   self->priv->proxied_asset_id = NULL;
+  g_rec_mutex_init (&self->priv->lock);
 }
 
 /* Internal methods */
@@ -789,7 +814,8 @@ ges_asset_cache_deinit (void)
   _deinit_formatter_assets ();
 
   LOCK_CACHE;
-  g_hash_table_destroy (type_entries_table);
+  if (type_entries_table)
+    g_hash_table_destroy (type_entries_table);
   type_entries_table = NULL;
   UNLOCK_CACHE;
 }
@@ -1065,13 +1091,51 @@ ges_asset_unproxy (GESAsset * asset, GESAsset * proxy)
  *
  * Returns: (element-type GESAsset) (transfer none): The list of proxies
  * that @asset has.
+ *
+ * Deprecated: 1.30: Use ges_asset_list_proxies_full() instead for MT-safety.
  */
 GList *
 ges_asset_list_proxies (GESAsset * asset)
 {
+  GList *res;
+
   g_return_val_if_fail (GES_IS_ASSET (asset), NULL);
 
-  return asset->priv->proxies;
+  LOCK_ASSET (asset);
+  res = asset->priv->proxies;
+  UNLOCK_ASSET (asset);
+
+  return res;
+}
+
+/**
+ * ges_asset_list_proxies_full:
+ * @asset: A #GESAsset
+ *
+ * Get all the proxies that the asset has. The first item of the list will
+ * be the default #GESAsset:proxy. The second will be the proxy that is
+ * 'next in line' to be default, and so on.
+ *
+ * Returns: (element-type GESAsset) (transfer full): The list of proxies
+ * that @asset has.
+ *
+ * Since: 1.30
+ */
+GList *
+ges_asset_list_proxies_full (GESAsset * asset)
+{
+  GList *res = NULL;
+  GList *tmp;
+
+  g_return_val_if_fail (GES_IS_ASSET (asset), NULL);
+
+  LOCK_ASSET (asset);
+  for (tmp = asset->priv->proxies; tmp; tmp = tmp->next) {
+    res = g_list_prepend (res, gst_object_ref (tmp->data));
+  }
+  UNLOCK_ASSET (asset);
+
+  return g_list_reverse (res);
 }
 
 /**
@@ -1081,17 +1145,50 @@ ges_asset_list_proxies (GESAsset * asset)
  * Gets the default #GESAsset:proxy of the asset.
  *
  * Returns: (transfer none) (nullable): The default proxy of @asset.
+ *
+ * Deprecated: 1.30: Use ges_asset_get_proxy_full() instead for MT-safety.
  */
 GESAsset *
 ges_asset_get_proxy (GESAsset * asset)
 {
+  GESAsset *res = NULL;
+
   g_return_val_if_fail (GES_IS_ASSET (asset), NULL);
 
+  LOCK_ASSET (asset);
   if (asset->priv->state == ASSET_PROXIED && asset->priv->proxies) {
-    return asset->priv->proxies->data;
+    res = asset->priv->proxies->data;
   }
+  UNLOCK_ASSET (asset);
 
-  return NULL;
+  return res;
+}
+
+/**
+ * ges_asset_get_proxy_full:
+ * @asset: A #GESAsset
+ *
+ * Gets the default #GESAsset:proxy of the asset.
+ *
+ * Returns: (transfer full) (nullable): The default proxy of @asset,
+ * or %NULL if @asset has no proxy.
+ *
+ * Since: 1.30
+ */
+GESAsset *
+ges_asset_get_proxy_full (GESAsset * asset)
+{
+  GESAsset *res = NULL;
+
+  g_return_val_if_fail (GES_IS_ASSET (asset), NULL);
+
+  LOCK_ASSET (asset);
+  if (asset->priv->state == ASSET_PROXIED && asset->priv->proxies) {
+    res = gst_object_ref (asset->priv->proxies->data);
+  }
+  UNLOCK_ASSET (asset);
+
+  return res;
 }
 
 /**
@@ -1105,13 +1202,51 @@ ges_asset_get_proxy (GESAsset * asset)
  *
  * Returns: (transfer none) (nullable): The asset that @proxy is a proxy
  * of.
+ *
+ * Deprecated: 1.30: Use ges_asset_get_proxy_target_full() instead for MT-safety.
  */
 GESAsset *
 ges_asset_get_proxy_target (GESAsset * proxy)
 {
+  GESAsset *res;
+
   g_return_val_if_fail (GES_IS_ASSET (proxy), NULL);
 
-  return proxy->priv->proxy_target;
+  LOCK_ASSET (proxy);
+  res = proxy->priv->proxy_target;
+  UNLOCK_ASSET (proxy);
+
+  return res;
+}
+
+/**
+ * ges_asset_get_proxy_target_full:
+ * @proxy: A #GESAsset
+ *
+ * Gets the #GESAsset:proxy-target of the asset.
+ *
+ * Note that the proxy target may have loaded with an error, so you should
+ * call ges_asset_get_error() on the returned target.
+ *
+ * Returns: (transfer full) (nullable): The asset that @proxy is a proxy
+ * of, or %NULL if @proxy is not a proxy for another asset.
+ *
+ * Since: 1.30
+ */
+GESAsset *
+ges_asset_get_proxy_target_full (GESAsset * proxy)
+{
+  GESAsset *res;
+
+  g_return_val_if_fail (GES_IS_ASSET (proxy), NULL);
+
+  LOCK_ASSET (proxy);
+  res = proxy->priv->proxy_target;
+  if (res)
+    gst_object_ref (res);
+  UNLOCK_ASSET (proxy);
+
+  return res;
 }
 
 /* Caution, this method should be used in rare cases (ie: for the project
@@ -1203,6 +1338,32 @@ ges_asset_get_extractable_type (GESAsset * self)
 }
 
 /**
+ * ges_asset_request_full:
+ * @extractable_type: The #GESExtractable object type to retrieve an asset for
+ * @id: (allow-none): The Identifier of the asset we want to retrieve
+ * @flags: options for this request
+ * @error: (allow-none) (transfer full): An error to be set if something wrong
+ * happens or %NULL
+ *
+ * Same as ges_asset_request(), with @flags. Pass
+ * %GES_ASSET_REQUEST_FLAG_NO_UNTRUSTED_BIN_DESCRIPTION when @id was read from
+ * content the application does not control, such as a project file: the asset
+ * is then only created if it uses elements marked untrusted-aware and sets no
+ * property marked %GST_PARAM_UNTRUSTED_SENSITIVE.
+ *
+ * Returns: (transfer full) (allow-none): A reference to the wanted #GESAsset
+ * or %NULL
+ *
+ * Since: 1.30
+ */
+GESAsset *
+ges_asset_request_full (GType extractable_type, const gchar * id,
+    GESAssetRequestFlags flags, GError ** error)
+{
+  return _ges_asset_request (extractable_type, id, flags, error);
+}
+
+/**
  * ges_asset_request:
  * @extractable_type: The #GESAsset:extractable-type of the asset
  * @id: (allow-none): The #GESAsset:id of the asset
@@ -1248,6 +1409,14 @@ ges_asset_get_extractable_type (GESAsset * self)
 GESAsset *
 ges_asset_request (GType extractable_type, const gchar * id, GError ** error)
 {
+  return _ges_asset_request (extractable_type, id,
+      GES_ASSET_REQUEST_FLAG_NONE, error);
+}
+
+static GESAsset *
+_ges_asset_request (GType extractable_type, const gchar * id,
+    GESAssetRequestFlags flags, GError ** error)
+{
   gchar *real_id;
 
   GError *lerr = NULL;
@@ -1259,8 +1428,13 @@ ges_asset_request (GType extractable_type, const gchar * id, GError ** error)
   g_return_val_if_fail (g_type_is_a (extractable_type, GES_TYPE_EXTRACTABLE),
       NULL);
 
-  real_id = _check_and_update_parameters (&extractable_type, id, &lerr);
+  real_id = _check_and_update_parameters (&extractable_type, id, flags, &lerr);
   if (real_id == NULL) {
+    if (_is_untrusted_refusal (lerr)) {
+      g_propagate_error (error, lerr);
+      return NULL;
+    }
+
     /* We create an asset for that wrong ID so we have a reference that the
      * user requested it */
     _ensure_asset_for_wrong_id (id, extractable_type, lerr);
@@ -1406,6 +1580,29 @@ ges_asset_request_async (GType extractable_type,
     const gchar * id, GCancellable * cancellable, GAsyncReadyCallback callback,
     gpointer user_data)
 {
+  ges_asset_request_async_full (extractable_type, id,
+      GES_ASSET_REQUEST_FLAG_NONE, cancellable, callback, user_data);
+}
+
+/**
+ * ges_asset_request_async_full: (finish-func ges_asset_request_finish)
+ * @extractable_type: The #GESExtractable type to retrieve an asset for
+ * @id: (allow-none): The Identifier of the asset we want to retrieve
+ * @flags: options for this request
+ * @cancellable: (allow-none): optional %GCancellable object, %NULL to ignore.
+ * @callback: a #GAsyncReadyCallback to call when the initialization is finished
+ * @user_data: The user data to pass when @callback is called
+ *
+ * Same as ges_asset_request_async(), with @flags, see
+ * ges_asset_request_full(). Get the result with ges_asset_request_finish().
+ *
+ * Since: 1.30
+ */
+void
+ges_asset_request_async_full (GType extractable_type,
+    const gchar * id, GESAssetRequestFlags flags, GCancellable * cancellable,
+    GAsyncReadyCallback callback, gpointer user_data)
+{
   gchar *real_id;
   GESAsset *asset;
   GError *error = NULL;
@@ -1418,8 +1615,20 @@ ges_asset_request_async (GType extractable_type,
   GST_DEBUG ("Creating asset with extractable type %s and ID=%s",
       g_type_name (extractable_type), id);
 
-  real_id = _check_and_update_parameters (&extractable_type, id, &error);
+  real_id = _check_and_update_parameters (&extractable_type, id, flags, &error);
   if (error) {
+    if (_is_untrusted_refusal (error)) {
+      GESAsset *tmpasset = g_object_new (GES_TYPE_ASSET, "id", id,
+          "extractable-type", extractable_type, NULL);
+
+      task = g_task_new (tmpasset, cancellable, callback, user_data);
+      g_task_return_error (task, error);
+      g_object_unref (task);
+      gst_object_unref (tmpasset);
+      g_free (real_id);
+      return;
+    }
+
     _ensure_asset_for_wrong_id (id, extractable_type, error);
     real_id = g_strdup (id);
   }
@@ -1529,7 +1738,8 @@ ges_asset_needs_reload (GType extractable_type, const gchar * id)
   g_return_val_if_fail (g_type_is_a (extractable_type, GES_TYPE_EXTRACTABLE),
       FALSE);
 
-  real_id = _check_and_update_parameters (&extractable_type, id, &error);
+  real_id = _check_and_update_parameters (&extractable_type, id,
+      GES_ASSET_REQUEST_FLAG_NONE, &error);
   if (error) {
     _ensure_asset_for_wrong_id (id, extractable_type, error);
     real_id = g_strdup (id);
@@ -1689,6 +1899,8 @@ ges_list_assets (GType filter)
  * %NULL if no error occurred when @asset was loaded.
  *
  * Since: 1.8
+ *
+ * Deprecated: 1.30: Use ges_asset_get_error_full() instead for MT-safety.
  */
 GError *
 ges_asset_get_error (GESAsset * self)
@@ -1696,4 +1908,30 @@ ges_asset_get_error (GESAsset * self)
   g_return_val_if_fail (GES_IS_ASSET (self), NULL);
 
   return self->priv->error;
+}
+
+/**
+ * ges_asset_get_error_full:
+ * @self: A #GESAsset
+ *
+ * Retrieve the error that was set on the asset when it was loaded.
+ *
+ * Returns: (transfer full) (nullable): A copy of the error set on @asset,
+ * or %NULL if no error occurred when @asset was loaded. Free with
+ * g_error_free() when no longer needed.
+ *
+ * Since: 1.30
+ */
+GError *
+ges_asset_get_error_full (GESAsset * self)
+{
+  GError *res;
+
+  g_return_val_if_fail (GES_IS_ASSET (self), NULL);
+
+  LOCK_ASSET (self);
+  res = self->priv->error ? g_error_copy (self->priv->error) : NULL;
+  UNLOCK_ASSET (self);
+
+  return res;
 }

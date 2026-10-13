@@ -104,6 +104,18 @@ context_set_hip_device (GstContext * context, GstHipDevice * device)
   gst_structure_set (s, "device", GST_TYPE_HIP_DEVICE, device,
       "vendor", GST_TYPE_HIP_VENDOR, vendor,
       "device-id", G_TYPE_UINT, device_id, nullptr);
+
+#ifdef G_OS_WIN32
+  gint64 luid = 0;
+  g_object_get (device, "adapter-luid", &luid, nullptr);
+  gst_structure_set (s, "adapter-luid", G_TYPE_INT64, luid, nullptr);
+#else
+  gchar *pci_bus_id = nullptr;
+  g_object_get (device, "pci-bus-id", &pci_bus_id, nullptr);
+  if (pci_bus_id)
+    gst_structure_set (s, "pci-bus-id", G_TYPE_STRING, pci_bus_id, nullptr);
+  g_free (pci_bus_id);
+#endif
 }
 
 static gboolean
@@ -224,6 +236,98 @@ gst_hip_ensure_element_data (GstElement * element, GstHipVendor vendor,
 }
 
 /**
+ * gst_hip_ensure_element_data_for_adapter_luid:
+ * @element: the #GstElement running the query
+ * @vendor: a #GstHipVendor
+ * @adapter_luid: DXGI adapter LUID
+ * @device: (inout): the resulting #GstHipDevice
+ *
+ * Perform the steps necessary for retrieving a #GstHipDevice from the
+ * surrounding elements or from the application using the #GstContext mechanism.
+ *
+ * If the content of @device is not %NULL, then no #GstContext query is
+ * necessary for #GstHipDevice.
+ *
+ * Returns: whether a #GstHipDevice exists in @device
+ *
+ * Since: 1.30
+ */
+gboolean
+gst_hip_ensure_element_data_for_adapter_luid (GstElement * element,
+    GstHipVendor vendor, gint64 adapter_luid, GstHipDevice ** device)
+{
+  if (*device)
+    return TRUE;
+
+  run_hip_context_query (element, device);
+  if (*device)
+    return TRUE;
+
+  *device = gst_hip_device_new_for_adapter_luid (vendor, adapter_luid);
+
+  if (*device == nullptr) {
+    GST_ERROR_OBJECT (element,
+        "Couldn't create new device with luid %" G_GINT64_FORMAT, adapter_luid);
+    return FALSE;
+  } else {
+    auto ctx = gst_context_new_hip_device (*device);
+    gst_element_set_context (element, ctx);
+    auto msg = gst_message_new_have_context (GST_OBJECT_CAST (element), ctx);
+    gst_element_post_message (GST_ELEMENT_CAST (element), msg);
+  }
+
+  return TRUE;
+}
+
+/**
+ * gst_hip_ensure_element_data_for_pci_bus_id:
+ * @element: the #GstElement running the query
+ * @vendor: a #GstHipVendor
+ * @pci_bus_id: The PCI bus ID
+ * @device: (inout): the resulting #GstHipDevice
+ *
+ * Perform the steps necessary for retrieving a #GstHipDevice from the
+ * surrounding elements or from the application using the #GstContext mechanism.
+ *
+ * If the content of @device is not %NULL, then no #GstContext query is
+ * necessary for #GstHipDevice.
+ *
+ * Returns: whether a #GstHipDevice exists in @device
+ *
+ * Since: 1.30
+ */
+gboolean
+gst_hip_ensure_element_data_for_pci_bus_id (GstElement * element,
+    GstHipVendor vendor, const gchar * pci_bus_id, GstHipDevice ** device)
+{
+  g_return_val_if_fail (GST_IS_ELEMENT (element), FALSE);
+  g_return_val_if_fail (pci_bus_id, FALSE);
+  g_return_val_if_fail (device, FALSE);
+
+  if (*device)
+    return TRUE;
+
+  run_hip_context_query (element, device);
+  if (*device)
+    return TRUE;
+
+  *device = gst_hip_device_new_for_pci_bus_id (vendor, pci_bus_id);
+
+  if (*device == nullptr) {
+    GST_ERROR_OBJECT (element,
+        "Couldn't create new device with PCI bus ID %s", pci_bus_id);
+    return FALSE;
+  } else {
+    auto ctx = gst_context_new_hip_device (*device);
+    gst_element_set_context (element, ctx);
+    auto msg = gst_message_new_have_context (GST_OBJECT_CAST (element), ctx);
+    gst_element_post_message (GST_ELEMENT_CAST (element), msg);
+  }
+
+  return TRUE;
+}
+
+/**
  * gst_hip_handle_set_context:
  * @element: a #GstElement
  * @context: a #GstContext
@@ -272,6 +376,119 @@ gst_hip_handle_set_context (GstElement * element, GstContext * context,
       }
 
       gst_object_unref (other_device);
+    }
+  }
+
+  return FALSE;
+}
+
+/**
+ * gst_hip_handle_set_context_for_adapter_luid:
+ * @element: a #GstElement
+ * @context: a #GstContext
+ * @vendor: a #GstHipVendor
+ * @adapter_luid: DXGI adapter LUID
+ * @device: (inout) (transfer full): location of a #GstHipDevice
+ *
+ * Helper function for implementing #GstElementClass.set_context() in
+ * HIP capable elements.
+ *
+ * Retrieves the #GstHipDevice in @context and places the result in @device.
+ *
+ * Returns: whether the @device could be set successfully
+ *
+ * Since: 1.30
+ */
+gboolean
+gst_hip_handle_set_context_for_adapter_luid (GstElement * element,
+    GstContext * context, GstHipVendor vendor, gint64 adapter_luid,
+    GstHipDevice ** device)
+{
+  g_return_val_if_fail (GST_IS_ELEMENT (element), FALSE);
+  g_return_val_if_fail (device != nullptr, FALSE);
+
+  if (!context)
+    return FALSE;
+
+  auto context_type = gst_context_get_context_type (context);
+  if (g_strcmp0 (context_type, GST_HIP_DEVICE_CONTEXT_TYPE) == 0) {
+    GstHipDevice *other_device = nullptr;
+    gint64 other_adapter = 0;
+    GstHipVendor other_vendor;
+
+    /* If we had device already, will not replace it */
+    if (*device)
+      return TRUE;
+
+    auto s = gst_context_get_structure (context);
+    if (gst_structure_get (s, "device", GST_TYPE_HIP_DEVICE, &other_device,
+            "vendor", GST_TYPE_HIP_VENDOR, &other_vendor,
+            "adapter-luid", G_TYPE_INT64, &other_adapter, nullptr)) {
+      if (adapter_luid == other_adapter &&
+          (vendor == GST_HIP_VENDOR_UNKNOWN || vendor == other_vendor)) {
+        *device = other_device;
+        return TRUE;
+      }
+
+      gst_object_unref (other_device);
+    }
+  }
+
+  return FALSE;
+}
+
+/**
+ * gst_hip_handle_set_context_for_pci_bus_id:
+ * @element: a #GstElement
+ * @context: a #GstContext
+ * @vendor: a #GstHipVendor
+ * @pci_bus_id: The PCI bus ID
+ * @device: (inout) (transfer full): location of a #GstHipDevice
+ *
+ * Helper function for implementing #GstElementClass.set_context() in
+ * HIP capable elements.
+ *
+ * Retrieves the #GstHipDevice in @context and places the result in @device.
+ *
+ * Returns: whether the @device could be set successfully
+ *
+ * Since: 1.30
+ */
+gboolean
+gst_hip_handle_set_context_for_pci_bus_id (GstElement * element,
+    GstContext * context, GstHipVendor vendor, const gchar * pci_bus_id,
+    GstHipDevice ** device)
+{
+  g_return_val_if_fail (GST_IS_ELEMENT (element), FALSE);
+  g_return_val_if_fail (device, FALSE);
+  g_return_val_if_fail (pci_bus_id, FALSE);
+
+  if (!context)
+    return FALSE;
+
+  auto context_type = gst_context_get_context_type (context);
+  if (g_strcmp0 (context_type, GST_HIP_DEVICE_CONTEXT_TYPE) == 0) {
+    GstHipDevice *other_device = nullptr;
+    gchar *other_pci_bus_id = nullptr;
+    GstHipVendor other_vendor;
+
+    /* If we had device already, will not replace it */
+    if (*device)
+      return TRUE;
+
+    auto s = gst_context_get_structure (context);
+    if (gst_structure_get (s, "device", GST_TYPE_HIP_DEVICE, &other_device,
+            "vendor", GST_TYPE_HIP_VENDOR, &other_vendor,
+            "pci-bus-id", G_TYPE_STRING, &other_pci_bus_id, nullptr)) {
+      if (g_strcmp0 (pci_bus_id, other_pci_bus_id) == 0 &&
+          (vendor == GST_HIP_VENDOR_UNKNOWN || vendor == other_vendor)) {
+        *device = other_device;
+        g_free (other_pci_bus_id);
+        return TRUE;
+      }
+
+      gst_object_unref (other_device);
+      g_free (other_pci_bus_id);
     }
   }
 
@@ -340,4 +557,189 @@ gst_context_new_hip_device (GstHipDevice * device)
   context_set_hip_device (ctx, device);
 
   return ctx;
+}
+
+static gboolean
+gst_hip_buffer_copy_into_fallback (GstBuffer * dst, GstBuffer * src,
+    const GstVideoInfo * info)
+{
+  GstVideoFrame in_frame, out_frame;
+  gboolean ret;
+
+  if (!gst_video_frame_map (&in_frame, info, src, GST_MAP_READ)) {
+    GST_ERROR ("Couldn't map src frame");
+    return FALSE;
+  }
+
+  if (!gst_video_frame_map (&out_frame, info, dst, GST_MAP_WRITE)) {
+    GST_ERROR ("Couldn't map dst frame");
+    gst_video_frame_unmap (&in_frame);
+    return FALSE;
+  }
+
+  ret = gst_video_frame_copy (&out_frame, &in_frame);
+
+  gst_video_frame_unmap (&in_frame);
+  gst_video_frame_unmap (&out_frame);
+
+  return ret;
+}
+
+/**
+ * gst_hip_buffer_copy_into:
+ * @dest: a #GstBuffer
+ * @src: a #GstBuffer
+ * @info: a #GstVideoInfo
+ *
+ * Copies video data from @src into @dest according to @info.
+ *
+ * This function copies only memory contents and does not copy buffer
+ * metadata. Use gst_buffer_copy_into() separately if metadata also needs
+ * to be copied.
+ *
+ * If either @src or @dest contains HIP memory, an optimized copy path is
+ * used when possible.
+ *
+ * Since: 1.30
+ */
+gboolean
+gst_hip_buffer_copy_into (GstBuffer * dest, GstBuffer * src,
+    const GstVideoInfo * info)
+{
+  g_return_val_if_fail (GST_IS_BUFFER (dest), FALSE);
+  g_return_val_if_fail (GST_IS_BUFFER (src), FALSE);
+  g_return_val_if_fail (info, FALSE);
+
+  /* HIP expects single memory buffer */
+  if (gst_buffer_n_memory (src) != 1 || gst_buffer_n_memory (dest) != 1)
+    return gst_hip_buffer_copy_into_fallback (dest, src, info);
+
+  auto in_mem = gst_buffer_peek_memory (src, 0);
+  auto out_mem = gst_buffer_peek_memory (dest, 0);
+
+  auto in_hip = gst_is_hip_memory (in_mem);
+  auto out_hip = gst_is_hip_memory (out_mem);
+
+  if (!in_hip && !out_hip)
+    return gst_hip_buffer_copy_into_fallback (dest, src, info);
+
+  enum CopyType
+  {
+    CopyUnknown,
+    CopyDtoD,
+    CopyDtoH,
+    CopyHtoD,
+  };
+
+  CopyType copy_type = CopyUnknown;
+  GstHipVendor vendor = GST_HIP_VENDOR_UNKNOWN;
+  GstHipStream *stream = nullptr;
+
+  if (in_hip) {
+    auto in_hmem = GST_HIP_MEMORY_CAST (in_mem);
+    stream = gst_hip_memory_get_stream (in_hmem);
+    vendor = gst_hip_device_get_vendor (in_hmem->device);
+    if (!stream)
+      stream = gst_hip_device_get_stream (in_hmem->device);
+
+    if (!out_hip) {
+      copy_type = CopyDtoH;
+    } else {
+      auto out_hmem = GST_HIP_MEMORY_CAST (out_mem);
+      if (gst_hip_device_is_equal (in_hmem->device, out_hmem->device)) {
+        /* in/out same device, DtoD */
+        copy_type = CopyDtoD;
+      } else {
+        /* Copy in device into out staging */
+        copy_type = CopyDtoH;
+      }
+    }
+  } else {
+    auto out_hmem = GST_HIP_MEMORY_CAST (out_mem);
+    stream = gst_hip_memory_get_stream (out_hmem);
+    vendor = gst_hip_device_get_vendor (out_hmem->device);
+    if (!stream)
+      stream = gst_hip_device_get_stream (out_hmem->device);
+
+    copy_type = CopyHtoD;
+  }
+
+  g_assert (copy_type != CopyUnknown);
+
+  GstVideoFrame in_frame, out_frame;
+  GstMapFlags in_map_flags, out_map_flags;
+
+  switch (copy_type) {
+    case CopyDtoD:
+      in_map_flags = GST_MAP_READ_HIP;
+      out_map_flags = GST_MAP_WRITE_HIP;
+      break;
+    case CopyDtoH:
+      in_map_flags = GST_MAP_READ_HIP;
+      out_map_flags = GST_MAP_WRITE;
+      break;
+    case CopyHtoD:
+      in_map_flags = GST_MAP_READ;
+      out_map_flags = GST_MAP_WRITE_HIP;
+      break;
+    default:
+      g_assert_not_reached ();
+      return FALSE;
+  }
+
+  if (!gst_video_frame_map (&in_frame, info, src, in_map_flags)) {
+    GST_ERROR ("Couldn't map src frame");
+    return FALSE;
+  }
+
+  if (!gst_video_frame_map (&out_frame, info, dest, out_map_flags)) {
+    GST_ERROR ("Couldn't map dst frame");
+    gst_video_frame_unmap (&in_frame);
+    return FALSE;
+  }
+
+  hipError_t hip_ret = hipSuccess;
+  auto stream_handle = gst_hip_stream_get_handle (stream);
+
+  for (guint i = 0; i < GST_VIDEO_FRAME_N_PLANES (&in_frame); i++) {
+    hip_Memcpy2D param = { };
+    param.srcPitch = GST_VIDEO_FRAME_PLANE_STRIDE (&in_frame, i);
+
+    param.dstPitch = GST_VIDEO_FRAME_PLANE_STRIDE (&out_frame, i);
+    param.WidthInBytes = GST_VIDEO_FRAME_COMP_WIDTH (&in_frame, i)
+        * GST_VIDEO_FRAME_COMP_PSTRIDE (&in_frame, i);
+    param.Height = GST_VIDEO_FRAME_COMP_HEIGHT (&in_frame, i);
+
+    if (copy_type == CopyDtoD) {
+      param.srcMemoryType = hipMemoryTypeDevice;
+      param.srcDevice = GST_VIDEO_FRAME_PLANE_DATA (&in_frame, i);
+
+      param.dstMemoryType = hipMemoryTypeDevice;
+      param.dstDevice = GST_VIDEO_FRAME_PLANE_DATA (&out_frame, i);
+    } else if (copy_type == CopyDtoH) {
+      param.srcMemoryType = hipMemoryTypeDevice;
+      param.srcDevice = GST_VIDEO_FRAME_PLANE_DATA (&in_frame, i);
+
+      param.dstMemoryType = hipMemoryTypeHost;
+      param.dstHost = GST_VIDEO_FRAME_PLANE_DATA (&out_frame, i);
+    } else {
+      param.srcMemoryType = hipMemoryTypeHost;
+      param.srcHost = GST_VIDEO_FRAME_PLANE_DATA (&in_frame, i);
+
+      param.dstMemoryType = hipMemoryTypeDevice;
+      param.dstDevice = GST_VIDEO_FRAME_PLANE_DATA (&out_frame, i);
+    }
+
+    hip_ret = HipMemcpyParam2DAsync (vendor, &param, stream_handle);
+    if (!gst_hip_result (hip_ret, vendor))
+      break;
+  }
+
+  if (hip_ret == hipSuccess)
+    hip_ret = HipStreamSynchronize (vendor, stream_handle);
+
+  gst_video_frame_unmap (&out_frame);
+  gst_video_frame_unmap (&in_frame);
+
+  return gst_hip_result (hip_ret, vendor);
 }

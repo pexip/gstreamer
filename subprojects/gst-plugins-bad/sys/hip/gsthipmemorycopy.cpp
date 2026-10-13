@@ -23,6 +23,7 @@
 
 #include "gsthip-config.h"
 #include <gst/hip/gsthip.h>
+#include <gst/hip/gsthip-private.h>
 
 #ifdef HAVE_GST_CUDA
 #include <gst/cuda/gstcuda.h>
@@ -32,8 +33,10 @@
 #include <gst/hip/gsthip-gl.h>
 #endif
 
+#include <gst/allocators/gstdmabuf.h>
 #include "gsthipmemorycopy.h"
 #include <mutex>
+#include <atomic>
 
 GST_DEBUG_CATEGORY_STATIC (gst_hip_memory_copy_debug);
 #define GST_CAT_DEFAULT gst_hip_memory_copy_debug
@@ -42,7 +45,16 @@ GST_DEBUG_CATEGORY_STATIC (gst_hip_memory_copy_debug);
     "{ I420, YV12, NV12, NV21, P010_10LE, P012_LE, P016_LE, I420_10LE, I420_12LE, Y444, " \
     "Y444_10LE, Y444_12LE, Y444_16LE, BGRA, RGBA, RGBx, BGRx, ARGB, ABGR, RGB, " \
     "BGR, BGR10A2_LE, RGB10A2_LE, Y42B, I422_10LE, I422_12LE, YUY2, UYVY, RGBP, " \
-    "BGRP, GBR, GBR_10LE, GBR_12LE, GBR_16LE, GBRA, VUYA }"
+    "BGRP, GBR, GBR_10LE, GBR_12LE, GBR_16LE, GBRA, VUYA, RGBA_F32LE, RGBA_F16LE, " \
+    "RGBP_F32LE, RGBP_F16LE, RGB_F32LE, RGB_F16LE, GRAY16_LE, GRAY8, GRAY_F32LE, GRAY_F16LE }"
+
+#ifndef DRM_FORMAT_INVALID
+#define DRM_FORMAT_INVALID 0
+#endif
+
+#ifndef DRM_FORMAT_MOD_LINEAR
+#define DRM_FORMAT_MOD_LINEAR 0ULL
+#endif
 
 enum class TransferType
 {
@@ -51,6 +63,7 @@ enum class TransferType
   GL_TO_HIP,
   HIP_TO_CUDA,
   HIP_TO_GL,
+  IMPORT_TO_HIP,
 };
 
 enum class MemoryType
@@ -59,6 +72,7 @@ enum class MemoryType
   HIP,
   CUDA,
   GL,
+  DmaBuf,
 };
 
 enum class DeviceSearchType
@@ -75,8 +89,46 @@ enum
   PROP_VENDOR,
 };
 
+enum GstHipUploadMethod
+{
+  GST_HIP_UPLOAD_METHOD_AUTO,
+  GST_HIP_UPLOAD_METHOD_IMPORT,
+  GST_HIP_UPLOAD_METHOD_PINNED_COPY,
+  GST_HIP_UPLOAD_METHOD_SYSTEM,
+};
+
+/**
+ * GstHipUploadMethod:
+ *
+ * Since: 1.30
+ */
+#define GST_TYPE_HIP_UPLOAD_METHOD (gst_hip_upload_method_get_type ())
+static GType
+gst_hip_upload_method_get_type (void)
+{
+  static GType type = 0;
+  static const GEnumValue values[] = {
+    {GST_HIP_UPLOAD_METHOD_AUTO,
+        "Prefer import on iGPU, pinned copy otherwise", "auto"},
+    {GST_HIP_UPLOAD_METHOD_IMPORT,
+        "Propose host-pinned memory and import", "import"},
+    {GST_HIP_UPLOAD_METHOD_PINNED_COPY,
+        "Propose host-pinned memory and copy to device memory", "pinned"},
+    {GST_HIP_UPLOAD_METHOD_SYSTEM,
+        "Propose system memory buffer pool", "system"},
+    {0, nullptr, nullptr}
+  };
+
+  GST_HIP_CALL_ONCE_BEGIN {
+    type = g_enum_register_static ("GstHipUploadMethod", values);
+  } GST_HIP_CALL_ONCE_END;
+
+  return type;
+}
+
 #define DEFAULT_DEVICE_ID -1
 #define DEFAULT_VENDOR GST_HIP_VENDOR_UNKNOWN
+#define DEFAULT_UPLOAD_METHOD GST_HIP_UPLOAD_METHOD_AUTO
 
 /* *INDENT-OFF* */
 struct _GstHipMemoryCopyPrivate
@@ -139,6 +191,8 @@ struct _GstHipMemoryCopyPrivate
 
   gint device_id = DEFAULT_DEVICE_ID;
   GstHipVendor vendor = DEFAULT_VENDOR;
+  std::atomic<GstHipUploadMethod> upload_method =
+      { GST_HIP_UPLOAD_METHOD_SYSTEM };
 };
 /* *INDENT-ON* */
 
@@ -164,6 +218,11 @@ static gboolean gst_hip_memory_copy_propose_allocation (GstBaseTransform *
     trans, GstQuery * decide_query, GstQuery * query);
 static gboolean gst_hip_memory_copy_decide_allocation (GstBaseTransform *
     trans, GstQuery * query);
+static GstFlowReturn
+gst_hip_memory_copy_generate_output (GstBaseTransform * trans,
+    GstBuffer ** outbuf);
+static gboolean gst_hip_memory_copy_transform_meta (GstBaseTransform * trans,
+    GstBuffer * outbuf, GstMeta * meta, GstBuffer * inbuf);
 static GstFlowReturn gst_hip_memory_copy_transform (GstBaseTransform * trans,
     GstBuffer * inbuf, GstBuffer * outbuf);
 
@@ -210,6 +269,10 @@ gst_hip_memory_copy_class_init (GstHipMemoryCopyClass * klass)
   trans_class->query = GST_DEBUG_FUNCPTR (gst_hip_memory_copy_query);
   trans_class->before_transform =
       GST_DEBUG_FUNCPTR (gst_hip_memory_copy_before_transform);
+  trans_class->generate_output =
+      GST_DEBUG_FUNCPTR (gst_hip_memory_copy_generate_output);
+  trans_class->transform_meta =
+      GST_DEBUG_FUNCPTR (gst_hip_memory_copy_transform_meta);
   trans_class->transform = GST_DEBUG_FUNCPTR (gst_hip_memory_copy_transform);
 
   gst_type_mark_as_plugin_api (GST_TYPE_HIP_MEMORY_COPY, (GstPluginAPIFlags) 0);
@@ -486,6 +549,7 @@ gst_hip_memory_copy_set_caps (GstBaseTransform * trans, GstCaps * incaps,
 {
   auto self = GST_HIP_MEMORY_COPY (trans);
   auto priv = self->priv;
+  GstVideoInfoDmaDrm drm_info;
 
   if (!priv->device) {
     GST_ERROR_OBJECT (self, "No availaable HIP device");
@@ -495,8 +559,21 @@ gst_hip_memory_copy_set_caps (GstBaseTransform * trans, GstCaps * incaps,
   gst_caps_replace (&priv->in_caps, incaps);
   gst_caps_replace (&priv->out_caps, outcaps);
 
-  if (!gst_video_info_from_caps (&priv->info, incaps)) {
-    GST_ERROR_OBJECT (self, "Invalid input caps %" GST_PTR_FORMAT, incaps);
+  if (!gst_video_info_from_caps (&priv->info, outcaps)) {
+    GST_ERROR_OBJECT (self, "Invalid outcaps caps %" GST_PTR_FORMAT, outcaps);
+    return FALSE;
+  }
+
+  gst_video_info_dma_drm_init (&drm_info);
+  if (gst_video_info_dma_drm_from_caps (&drm_info, incaps)) {
+    if (GST_VIDEO_INFO_FORMAT (&priv->info) !=
+        GST_VIDEO_INFO_FORMAT (&drm_info.vinfo)) {
+      GST_ERROR_OBJECT (self, "Input DRM format mismatch with output, incaps: %"
+          GST_PTR_FORMAT ", outcaps: %" GST_PTR_FORMAT, incaps, outcaps);
+      return FALSE;
+    }
+  } else if (!gst_video_info_from_caps (&drm_info.vinfo, incaps)) {
+    GST_ERROR_OBJECT (self, "Invalid incaps caps %" GST_PTR_FORMAT, incaps);
     return FALSE;
   }
 
@@ -518,6 +595,10 @@ gst_hip_memory_copy_set_caps (GstBaseTransform * trans, GstCaps * incaps,
     priv->in_type = MemoryType::GL;
   }
 #endif
+  else if (gst_caps_features_contains (features,
+          GST_CAPS_FEATURE_MEMORY_DMABUF)) {
+    priv->in_type = MemoryType::DmaBuf;
+  }
 
   features = gst_caps_get_features (outcaps, 0);
   if (features && gst_caps_features_contains (features,
@@ -550,6 +631,26 @@ gst_hip_memory_copy_set_caps (GstBaseTransform * trans, GstCaps * incaps,
     return TRUE;
   }
 #endif
+
+  if (priv->in_type == MemoryType::DmaBuf) {
+    if (priv->out_type != MemoryType::HIP) {
+      GST_ERROR_OBJECT (self, "DmaBuf input is only supported with HIP output");
+      return FALSE;
+    }
+
+    priv->transfer_type = TransferType::IMPORT_TO_HIP;
+    return TRUE;
+  } else if (priv->in_type == MemoryType::SYSTEM &&
+      priv->out_type == MemoryType::HIP &&
+      (priv->upload_method == GST_HIP_UPLOAD_METHOD_AUTO ||
+          priv->upload_method == GST_HIP_UPLOAD_METHOD_IMPORT)) {
+    /* Proposed host pinned memory, try importing.
+     * We might disable the host map flag during propose_allocation()
+     * but then gst_hip_allocator_import_external_memory() will return false
+     * gracefully, then will switch method to system copy */
+    priv->transfer_type = TransferType::IMPORT_TO_HIP;
+    return TRUE;
+  }
 
   return gst_hip_memory_copy_ensure_device (self);
 }
@@ -588,6 +689,7 @@ static void
 gst_hip_memory_copy_before_transform (GstBaseTransform * trans,
     GstBuffer * buffer)
 {
+#ifdef HAVE_GST_CUDA
   auto self = GST_HIP_MEMORY_COPY (trans);
   auto priv = self->priv;
 
@@ -678,22 +780,243 @@ gst_hip_memory_copy_before_transform (GstBaseTransform * trans,
     gst_hip_memory_copy_set_caps (trans, priv->in_caps, priv->out_caps);
     gst_base_transform_reconfigure_src (trans);
   }
+#endif
 }
+
+#ifndef G_OS_WIN32
+/* *INDENT-OFF* */
+static const GValue *
+gst_hip_get_drm_formats_value (void)
+{
+  static std::once_flag once;
+  static GValue list = G_VALUE_INIT;
+
+  std::call_once (once, [&] {
+    g_value_init (&list, GST_TYPE_LIST);
+
+    GValue formats = G_VALUE_INIT;
+    g_value_init (&formats, GST_TYPE_LIST);
+
+    gst_value_deserialize (&formats, GST_HIP_FORMATS);
+
+    auto n = gst_value_list_get_size (&formats);
+    for (guint i = 0; i < n; i++) {
+      auto val = gst_value_list_get_value (&formats, i);
+
+      auto format_str = g_value_get_string (val);
+      auto format = gst_video_format_from_string (format_str);
+      auto fourcc = gst_video_dma_drm_fourcc_from_format (format);
+      if (fourcc == DRM_FORMAT_INVALID)
+        continue;
+
+      auto drm_str =
+          gst_video_dma_drm_fourcc_to_string (fourcc, DRM_FORMAT_MOD_LINEAR);
+      if (!drm_str)
+        continue;
+
+      GValue drm_val = G_VALUE_INIT;
+      g_value_init (&drm_val, G_TYPE_STRING);
+      g_value_take_string (&drm_val, drm_str);
+      gst_value_list_append_and_take_value (&list, &drm_val);
+    }
+
+    g_value_unset (&formats);
+  });
+
+  return &list;
+}
+/* *INDENT-ON* */
+
+static gboolean
+gst_hip_video_formats_to_drm_formats (const GValue * formats,
+    GValue * drm_formats)
+{
+  g_value_init (drm_formats, GST_TYPE_LIST);
+
+  guint n;
+  if (GST_VALUE_HOLDS_LIST (formats))
+    n = gst_value_list_get_size (formats);
+  else
+    n = 1;
+
+  for (guint i = 0; i < n; i++) {
+    const GValue *val;
+
+    if (GST_VALUE_HOLDS_LIST (formats))
+      val = gst_value_list_get_value (formats, i);
+    else
+      val = formats;
+
+    auto format_str = g_value_get_string (val);
+    if (!format_str)
+      continue;
+
+    auto format = gst_video_format_from_string (format_str);
+    auto fourcc = gst_video_dma_drm_fourcc_from_format (format);
+    if (fourcc == DRM_FORMAT_INVALID)
+      continue;
+
+    auto drm_str =
+        gst_video_dma_drm_fourcc_to_string (fourcc, DRM_FORMAT_MOD_LINEAR);
+    if (!drm_str)
+      continue;
+
+    GValue drm_val = G_VALUE_INIT;
+    g_value_init (&drm_val, G_TYPE_STRING);
+    g_value_take_string (&drm_val, drm_str);
+    gst_value_list_append_and_take_value (drm_formats, &drm_val);
+  }
+
+  return gst_value_list_get_size (drm_formats) > 0;
+}
+
+static gboolean
+gst_hip_drm_formats_to_video_formats (const GValue * drm_formats,
+    GValue * formats)
+{
+  g_value_init (formats, GST_TYPE_LIST);
+
+  guint n;
+  if (GST_VALUE_HOLDS_LIST (drm_formats))
+    n = gst_value_list_get_size (drm_formats);
+  else
+    n = 1;
+
+  for (guint i = 0; i < n; i++) {
+    const GValue *val;
+
+    if (GST_VALUE_HOLDS_LIST (drm_formats))
+      val = gst_value_list_get_value (drm_formats, i);
+    else
+      val = drm_formats;
+
+    auto drm_str = g_value_get_string (val);
+    if (!drm_str)
+      continue;
+
+    guint64 modifier = 0;
+    guint32 fourcc = gst_video_dma_drm_fourcc_from_string (drm_str, &modifier);
+    if (fourcc == DRM_FORMAT_INVALID)
+      continue;
+
+    /* We can only import linear */
+    if (modifier != DRM_FORMAT_MOD_LINEAR)
+      continue;
+
+    auto format = gst_video_dma_drm_format_to_gst_format (fourcc,
+        DRM_FORMAT_MOD_LINEAR);
+    if (format == GST_VIDEO_FORMAT_UNKNOWN)
+      continue;
+
+    auto format_str = gst_video_format_to_string (format);
+
+    GValue format_val = G_VALUE_INIT;
+    g_value_init (&format_val, G_TYPE_STRING);
+    g_value_set_string (&format_val, format_str);
+    gst_value_list_append_and_take_value (formats, &format_val);
+  }
+
+  return gst_value_list_get_size (formats) > 0;
+}
+#endif
 
 static GstCaps *
 _set_caps_features (const GstCaps * caps, const gchar * feature_name)
 {
-  GstCaps *tmp = gst_caps_copy (caps);
-  guint n = gst_caps_get_size (tmp);
+  GstCaps *tmp = gst_caps_new_empty ();
+  guint n = gst_caps_get_size (caps);
   guint i = 0;
 
   for (i = 0; i < n; i++) {
-    gst_caps_set_features (tmp, i,
-        gst_caps_features_new_single_static_str (feature_name));
+    auto s = gst_caps_get_structure (caps, i);
+    auto new_s = gst_structure_copy (s);
+    auto features = gst_caps_get_features (caps, i);
+
+    if (gst_caps_features_is_any (features)) {
+      gst_caps_append_structure_full (tmp, new_s,
+          gst_caps_features_copy (features));
+      continue;
+    }
+#ifndef G_OS_WIN32
+    if (features && gst_caps_features_contains (features,
+            GST_CAPS_FEATURE_MEMORY_DMABUF)) {
+      /* remove/converts DMABUF specific ones to normal  */
+      auto drm_formats = gst_structure_get_value (s, "drm-format");
+      if (drm_formats) {
+        GValue formats = G_VALUE_INIT;
+        if (!gst_hip_drm_formats_to_video_formats (drm_formats, &formats)) {
+          gst_structure_free (new_s);
+          g_value_unset (&formats);
+          continue;
+        }
+
+        gst_structure_set_value (new_s, "format", &formats);
+        g_value_unset (&formats);
+        gst_structure_remove_field (new_s, "drm-format");
+      } else {
+        gst_structure_remove_field (new_s, "format");
+      }
+    }
+#endif
+
+    auto new_features = gst_caps_features_new_single (feature_name);
+    if (gst_caps_features_contains (features,
+            GST_CAPS_FEATURE_META_GST_VIDEO_OVERLAY_COMPOSITION)) {
+      gst_caps_features_add (new_features,
+          GST_CAPS_FEATURE_META_GST_VIDEO_OVERLAY_COMPOSITION);
+    }
+
+    gst_caps_append_structure_full (tmp, new_s, new_features);
   }
 
   return tmp;
 }
+
+#ifndef G_OS_WIN32
+static GstCaps *
+_set_dmabuf_caps_features (const GstCaps * caps)
+{
+  GstCaps *tmp = gst_caps_new_empty ();
+  guint n = gst_caps_get_size (caps);
+  guint i = 0;
+
+  for (i = 0; i < n; i++) {
+    auto s = gst_caps_get_structure (caps, i);
+    auto features = gst_caps_get_features (caps, i);
+    if (gst_caps_features_is_any (features)) {
+      gst_caps_append_structure_full (tmp, gst_structure_copy (s),
+          gst_caps_features_copy (features));
+      continue;
+    }
+
+    auto format_val = gst_structure_get_value (s, "format");
+    if (!format_val)
+      continue;
+
+    GValue drm_formats = G_VALUE_INIT;
+    if (!gst_hip_video_formats_to_drm_formats (format_val, &drm_formats)) {
+      g_value_unset (&drm_formats);
+      continue;
+    }
+
+    auto new_s = gst_structure_copy (s);
+    gst_structure_set (new_s, "format", G_TYPE_STRING, "DMA_DRM", nullptr);
+    gst_structure_set_value (new_s, "drm-format", &drm_formats);
+
+    auto new_features =
+        gst_caps_features_new_single (GST_CAPS_FEATURE_MEMORY_DMABUF);
+    if (gst_caps_features_contains (features,
+            GST_CAPS_FEATURE_META_GST_VIDEO_OVERLAY_COMPOSITION)) {
+      gst_caps_features_add (new_features,
+          GST_CAPS_FEATURE_META_GST_VIDEO_OVERLAY_COMPOSITION);
+    }
+
+    gst_caps_append_structure_full (tmp, new_s, new_features);
+  }
+
+  return tmp;
+}
+#endif
 
 static void
 _remove_field (GstCaps * caps, const gchar * field)
@@ -756,7 +1079,10 @@ gst_hip_memory_copy_transform_caps (GstBaseTransform * trans,
           _set_caps_features (caps, GST_CAPS_FEATURE_MEMORY_GL_MEMORY);
       ret = gst_caps_merge (ret, caps_gl);
 #endif
-
+#ifndef G_OS_WIN32
+      auto caps_dmabuf = _set_dmabuf_caps_features (caps);
+      ret = gst_caps_merge (ret, caps_dmabuf);
+#endif
       auto caps_sys =
           _set_caps_features (caps, GST_CAPS_FEATURE_MEMORY_SYSTEM_MEMORY);
       tmp = gst_caps_merge (ret, caps_sys);
@@ -792,7 +1118,7 @@ gst_hip_memory_copy_propose_allocation (GstBaseTransform * trans,
   GstBufferPool *pool = nullptr;
   GstCaps *caps;
   guint size;
-  bool is_system = true;
+  bool is_system = false;
 
   if (!GST_BASE_TRANSFORM_CLASS (parent_class)->propose_allocation (trans,
           decide_query, query))
@@ -809,25 +1135,30 @@ gst_hip_memory_copy_propose_allocation (GstBaseTransform * trans,
     return FALSE;
   }
 
+  GST_DEBUG_OBJECT (self, "Allocation query with caps %" GST_PTR_FORMAT, caps);
+  auto features = gst_caps_get_features (caps, 0);
+  if (gst_caps_features_contains (features, GST_CAPS_FEATURE_MEMORY_DMABUF)) {
+    /* We don't propose dmabuf allocator pool */
+    gst_query_add_allocation_meta (query, GST_VIDEO_META_API_TYPE, nullptr);
+    return TRUE;
+  }
+
   if (!gst_video_info_from_caps (&info, caps)) {
     GST_ERROR_OBJECT (self, "Invalid caps %" GST_PTR_FORMAT, caps);
     return FALSE;
   }
 
   if (gst_query_get_n_allocation_pools (query) == 0) {
-    auto features = gst_caps_get_features (caps, 0);
     if (gst_caps_features_contains (features,
             GST_CAPS_FEATURE_MEMORY_HIP_MEMORY)) {
       GST_DEBUG_OBJECT (self, "upstream support hip memory");
       pool = gst_hip_buffer_pool_new (priv->device);
-      is_system = false;
     }
 #ifdef HAVE_GST_CUDA
     else if (gst_caps_features_contains (features,
             GST_CAPS_FEATURE_MEMORY_CUDA_MEMORY) && priv->cuda_ctx) {
       GST_DEBUG_OBJECT (self, "upstream support cuda memory");
       pool = gst_cuda_buffer_pool_new (priv->cuda_ctx);
-      is_system = false;
     }
 #endif
 #ifdef HAVE_GST_HIP_GL
@@ -836,12 +1167,67 @@ gst_hip_memory_copy_propose_allocation (GstBaseTransform * trans,
         gst_hip_memory_copy_ensure_gl_context (self)) {
       GST_DEBUG_OBJECT (self, "upstream support gl memory");
       pool = gst_gl_buffer_pool_new (priv->gl_ctx);
-      is_system = false;
     }
 #endif
 
-    if (!pool)
-      pool = gst_video_buffer_pool_new ();
+    auto upload_method = priv->upload_method.load ();
+    guint host_alloc_flags = 0;
+    bool is_host = false;
+    if (!pool) {
+      if (upload_method == GST_HIP_UPLOAD_METHOD_AUTO) {
+        /* Use host pinned memory by default. And decide upload method
+         * based on device capabilities */
+        int is_igpu = 0;
+        auto hip_ret = gst_hip_device_get_attribute (priv->device,
+            hipDeviceAttributeIntegrated, &is_igpu);
+        if (hip_ret == hipSuccess) {
+          GST_DEBUG_OBJECT (self, "Device is %s", is_igpu ? "iGPU" : "dGPU");
+          if (is_igpu) {
+            /* iGPU will share memory with system. Use import method */
+            upload_method = GST_HIP_UPLOAD_METHOD_IMPORT;
+          } else {
+            /* dGPU will require PCI transfer after all, copy to device memory */
+            upload_method = GST_HIP_UPLOAD_METHOD_PINNED_COPY;
+          }
+        } else {
+          GST_DEBUG_OBJECT (self,
+              "Couldn't query device type, using pinned copy");
+          upload_method = GST_HIP_UPLOAD_METHOD_PINNED_COPY;
+        }
+      }
+
+      if (upload_method == GST_HIP_UPLOAD_METHOD_IMPORT) {
+        /* check if device can map host memory */
+        int can_map_host = 0;
+        auto hip_ret = gst_hip_device_get_attribute (priv->device,
+            hipDeviceAttributeCanMapHostMemory, &can_map_host);
+        if (hip_ret != hipSuccess || !can_map_host) {
+          GST_DEBUG_OBJECT (self, "Device cannot map host memory");
+          upload_method = GST_HIP_UPLOAD_METHOD_PINNED_COPY;
+        }
+      }
+
+      switch (upload_method) {
+        case GST_HIP_UPLOAD_METHOD_IMPORT:
+          pool = gst_hip_host_buffer_pool_new (priv->device);
+          host_alloc_flags = hipHostMallocMapped;
+          is_host = true;
+          break;
+        case GST_HIP_UPLOAD_METHOD_PINNED_COPY:
+          pool = gst_hip_host_buffer_pool_new (priv->device);
+          is_host = true;
+          break;
+        default:
+          is_system = true;
+          pool = gst_video_buffer_pool_new ();
+          break;
+      }
+
+      if (!pool) {
+        GST_ERROR_OBJECT (self, "Failed to create buffer pool");
+        return FALSE;
+      }
+    }
 
     auto config = gst_buffer_pool_get_config (pool);
     gst_buffer_pool_config_add_option (config,
@@ -854,6 +1240,11 @@ gst_hip_memory_copy_propose_allocation (GstBaseTransform * trans,
 
     size = GST_VIDEO_INFO_SIZE (&info);
     gst_buffer_pool_config_set_params (config, caps, size, 0, 0);
+
+    if (is_host) {
+      gst_buffer_pool_config_set_hip_host_alloc_flags (config,
+          host_alloc_flags);
+    }
 
     if (!gst_buffer_pool_set_config (pool, config)) {
       GST_ERROR_OBJECT (self, "Bufferpool config failed");
@@ -975,36 +1366,6 @@ gst_hip_memory_copy_decide_allocation (GstBaseTransform * trans,
 
   return GST_BASE_TRANSFORM_CLASS (parent_class)->decide_allocation (trans,
       query);
-}
-
-static GstFlowReturn
-gst_hip_memory_copy_system_copy (GstHipMemoryCopy * self,
-    GstBuffer * inbuf, GstBuffer * outbuf)
-{
-  auto priv = self->priv;
-  GstVideoFrame in_frame, out_frame;
-  GstFlowReturn ret = GST_FLOW_OK;
-
-  if (!gst_video_frame_map (&in_frame, &priv->info, inbuf, GST_MAP_READ)) {
-    GST_ERROR_OBJECT (self, "Couldn't map input frame");
-    return GST_FLOW_ERROR;
-  }
-
-  if (!gst_video_frame_map (&out_frame, &priv->info, outbuf, GST_MAP_WRITE)) {
-    GST_ERROR_OBJECT (self, "Couldn't map output frame");
-    gst_video_frame_unmap (&in_frame);
-    return GST_FLOW_ERROR;
-  }
-
-  if (!gst_video_frame_copy (&out_frame, &in_frame)) {
-    GST_ERROR_OBJECT (self, "Copy failed");
-    ret = GST_FLOW_ERROR;
-  }
-
-  gst_video_frame_unmap (&out_frame);
-  gst_video_frame_unmap (&in_frame);
-
-  return ret;
 }
 
 #ifdef HAVE_GST_CUDA
@@ -1277,6 +1638,104 @@ gst_hip_memory_copy_gl_copy (GstHipMemoryCopy * self, GstBuffer * inbuf,
 }
 #endif
 
+static GstMemory *
+gst_hip_memory_copy_import (GstHipMemoryCopy * self, GstBuffer * buffer)
+{
+  auto priv = self->priv;
+  auto n_mem = gst_buffer_n_memory (buffer);
+
+  if (n_mem != 1) {
+    GST_DEBUG_OBJECT (self, "Couldn't import buffer with multiple mem objects");
+    return nullptr;
+  }
+
+  auto info = priv->info;
+  auto vmeta = gst_buffer_get_video_meta (buffer);
+  if (!vmeta) {
+    GST_DEBUG_OBJECT (self, "Couldn't import buffer without video meta");
+    return nullptr;
+  }
+
+  auto mem = gst_buffer_peek_memory (buffer, 0);
+
+  info.width = vmeta->width;
+  info.height = vmeta->height;
+  for (guint i = 0; i < vmeta->n_planes; i++) {
+    info.stride[i] = vmeta->stride[i];
+    info.offset[i] = vmeta->offset[i];
+  }
+  info.size = mem->size;
+
+  return gst_hip_allocator_import_external_memory (nullptr,
+      priv->device, mem, &info);
+}
+
+static GstFlowReturn
+gst_hip_memory_copy_generate_output (GstBaseTransform * trans,
+    GstBuffer ** outbuf)
+{
+  auto self = GST_HIP_MEMORY_COPY (trans);
+  auto priv = self->priv;
+
+  if (priv->transfer_type != TransferType::IMPORT_TO_HIP || !trans->queued_buf) {
+    return GST_BASE_TRANSFORM_CLASS (parent_class)->generate_output (trans,
+        outbuf);
+  }
+
+  auto imported = gst_hip_memory_copy_import (self, trans->queued_buf);
+  if (!imported) {
+    /* Once it failed, following buffers will be likely to fail as well.
+     * Switch copy mode to system memory */
+    priv->transfer_type = TransferType::SYSTEM;
+    GST_DEBUG_OBJECT (self, "Couldn't import memory, fallback to system copy");
+
+    return GST_BASE_TRANSFORM_CLASS (parent_class)->generate_output (trans,
+        outbuf);
+  }
+
+  GST_LOG_OBJECT (self, "Creating new buffer with imported memory");
+
+  auto out = gst_buffer_new ();
+  gst_buffer_append_memory (out, imported);
+
+  auto inbuf = trans->queued_buf;
+  trans->queued_buf = nullptr;
+
+  auto in_vmeta = gst_buffer_get_video_meta (inbuf);
+  gst_buffer_add_video_meta_full (out, in_vmeta->flags,
+      GST_VIDEO_INFO_FORMAT (&priv->info), in_vmeta->width,
+      in_vmeta->height, in_vmeta->n_planes, in_vmeta->offset, in_vmeta->stride);
+
+  GST_BASE_TRANSFORM_CLASS (parent_class)->copy_metadata (trans, inbuf, out);
+
+  gst_buffer_add_parent_buffer_meta (out, inbuf);
+  gst_buffer_unref (inbuf);
+
+  *outbuf = out;
+
+  return GST_FLOW_OK;
+}
+
+static gboolean
+gst_hip_memory_copy_transform_meta (GstBaseTransform * trans,
+    GstBuffer * outbuf, GstMeta * meta, GstBuffer * inbuf)
+{
+  auto info = meta->info;
+  const gchar *valid_tags[] = {
+    GST_META_TAG_VIDEO_STR,
+    GST_META_TAG_VIDEO_ORIENTATION_STR,
+    GST_META_TAG_VIDEO_SIZE_STR,
+    GST_META_TAG_VIDEO_COLORSPACE_STR,
+    nullptr
+  };
+
+  if (gst_meta_api_type_tags_contain_only (info->api, valid_tags))
+    return TRUE;
+
+  return GST_BASE_TRANSFORM_CLASS (parent_class)->transform_meta (trans, outbuf,
+      meta, inbuf);
+}
+
 static GstFlowReturn
 gst_hip_memory_copy_transform (GstBaseTransform * trans, GstBuffer * inbuf,
     GstBuffer * outbuf)
@@ -1311,7 +1770,10 @@ gst_hip_memory_copy_transform (GstBaseTransform * trans, GstBuffer * inbuf,
   }
 #endif
 
-  return gst_hip_memory_copy_system_copy (self, inbuf, outbuf);
+  if (!gst_hip_buffer_copy_into (outbuf, inbuf, &priv->info))
+    return GST_FLOW_ERROR;
+
+  return GST_FLOW_OK;
 }
 
 struct _GstHipUpload
@@ -1319,21 +1781,57 @@ struct _GstHipUpload
   GstHipMemoryCopy parent;
 };
 
+enum
+{
+  UPLOAD_PROP_0,
+  UPLOAD_PROP_UPLOAD_METHOD,
+};
+
+static void gst_hip_upload_set_property (GObject * object, guint prop_id,
+    const GValue * value, GParamSpec * pspec);
+static void gst_hip_upload_get_property (GObject * object, guint prop_id,
+    GValue * value, GParamSpec * pspec);
+
 G_DEFINE_TYPE (GstHipUpload, gst_hip_upload, GST_TYPE_HIP_MEMORY_COPY);
 
 static void
 gst_hip_upload_class_init (GstHipUploadClass * klass)
 {
+  auto object_class = G_OBJECT_CLASS (klass);
   auto element_class = GST_ELEMENT_CLASS (klass);
 
+  object_class->set_property = gst_hip_upload_set_property;
+  object_class->get_property = gst_hip_upload_get_property;
+
+  /**
+   * GstHipUpload:upload-method
+   *
+   * Upload method to use for uploading system memory into HIP device memory
+   *
+   * Since: 1.30
+   */
+  g_object_class_install_property (object_class, UPLOAD_PROP_UPLOAD_METHOD,
+      g_param_spec_enum ("upload-method", "Upload Method",
+          "Upload method to use for uploading system memory into HIP device memory",
+          GST_TYPE_HIP_UPLOAD_METHOD, DEFAULT_UPLOAD_METHOD,
+          (GParamFlags) (G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS)));
+
   gst_element_class_set_static_metadata (element_class,
-      "HIP Uploader", "Filter/Video",
+      "HIP Uploader", "Filter/Video/Uploader",
       "Uploads system memory into HIP device memory",
       "Seungha Yang <seungha@centricular.com>");
+  gst_element_class_mark_as_untrusted_aware (element_class);
 
-  auto sys_caps = gst_caps_from_string (GST_VIDEO_CAPS_MAKE (GST_HIP_FORMATS));
+  auto sys_caps = gst_caps_from_string (GST_VIDEO_CAPS_MAKE (GST_HIP_FORMATS)
+      ";" GST_VIDEO_CAPS_MAKE_WITH_FEATURES
+      (GST_CAPS_FEATURE_MEMORY_SYSTEM_MEMORY ","
+          GST_CAPS_FEATURE_META_GST_VIDEO_OVERLAY_COMPOSITION,
+          GST_HIP_FORMATS));
   auto hip_caps = gst_caps_from_string (GST_VIDEO_CAPS_MAKE_WITH_FEATURES
-      (GST_CAPS_FEATURE_MEMORY_HIP_MEMORY, GST_HIP_FORMATS));
+      (GST_CAPS_FEATURE_MEMORY_HIP_MEMORY, GST_HIP_FORMATS) ";"
+      GST_VIDEO_CAPS_MAKE_WITH_FEATURES (GST_CAPS_FEATURE_MEMORY_HIP_MEMORY ","
+          GST_CAPS_FEATURE_META_GST_VIDEO_OVERLAY_COMPOSITION,
+          GST_HIP_FORMATS));
 
   auto src_caps = gst_caps_merge (gst_caps_ref (hip_caps),
       gst_caps_ref (sys_caps));
@@ -1341,14 +1839,30 @@ gst_hip_upload_class_init (GstHipUploadClass * klass)
   auto sink_caps = sys_caps;
 #ifdef HAVE_GST_HIP_GL
   auto gl_caps = gst_caps_from_string (GST_VIDEO_CAPS_MAKE_WITH_FEATURES
-      (GST_CAPS_FEATURE_MEMORY_GL_MEMORY, GST_HIP_FORMATS));
+      (GST_CAPS_FEATURE_MEMORY_GL_MEMORY, GST_HIP_FORMATS) ";"
+      GST_VIDEO_CAPS_MAKE_WITH_FEATURES (GST_CAPS_FEATURE_MEMORY_GL_MEMORY ","
+          GST_CAPS_FEATURE_META_GST_VIDEO_OVERLAY_COMPOSITION,
+          GST_HIP_FORMATS));
   sink_caps = gst_caps_merge (sink_caps, gl_caps);
 #endif
 
 #ifdef HAVE_GST_CUDA
   auto cuda_caps = gst_caps_from_string (GST_VIDEO_CAPS_MAKE_WITH_FEATURES
-      (GST_CAPS_FEATURE_MEMORY_CUDA_MEMORY, GST_HIP_FORMATS));
+      (GST_CAPS_FEATURE_MEMORY_CUDA_MEMORY, GST_HIP_FORMATS) ";"
+      GST_VIDEO_CAPS_MAKE_WITH_FEATURES (GST_CAPS_FEATURE_MEMORY_CUDA_MEMORY ","
+          GST_CAPS_FEATURE_META_GST_VIDEO_OVERLAY_COMPOSITION,
+          GST_HIP_FORMATS));
   sink_caps = gst_caps_merge (sink_caps, cuda_caps);
+#endif
+
+#ifndef G_OS_WIN32
+  auto dma_caps = gst_caps_from_string (GST_VIDEO_CAPS_MAKE_WITH_FEATURES
+      (GST_CAPS_FEATURE_MEMORY_DMABUF, "DMA_DRM") ";"
+      GST_VIDEO_CAPS_MAKE_WITH_FEATURES (GST_CAPS_FEATURE_MEMORY_DMABUF ","
+          GST_CAPS_FEATURE_META_GST_VIDEO_OVERLAY_COMPOSITION,
+          "DMA_DRM"));
+  gst_caps_set_value (dma_caps, "drm-format", gst_hip_get_drm_formats_value ());
+  sink_caps = gst_caps_merge (sink_caps, dma_caps);
 #endif
 
   sink_caps = gst_caps_merge (sink_caps, hip_caps);
@@ -1360,6 +1874,9 @@ gst_hip_upload_class_init (GstHipUploadClass * klass)
       gst_pad_template_new ("sink", GST_PAD_SINK, GST_PAD_ALWAYS, sink_caps));
   gst_element_class_add_pad_template (element_class,
       gst_pad_template_new ("src", GST_PAD_SRC, GST_PAD_ALWAYS, src_caps));
+
+  gst_type_mark_as_plugin_api (GST_TYPE_HIP_UPLOAD_METHOD,
+      (GstPluginAPIFlags) 0);
 }
 
 static void
@@ -1367,6 +1884,41 @@ gst_hip_upload_init (GstHipUpload * self)
 {
   auto memcpy = GST_HIP_MEMORY_COPY (self);
   memcpy->priv->is_uploader = true;
+  memcpy->priv->upload_method = DEFAULT_UPLOAD_METHOD;
+}
+
+static void
+gst_hip_upload_set_property (GObject * object, guint prop_id,
+    const GValue * value, GParamSpec * pspec)
+{
+  auto self = GST_HIP_MEMORY_COPY (object);
+  auto priv = self->priv;
+
+  switch (prop_id) {
+    case UPLOAD_PROP_UPLOAD_METHOD:
+      priv->upload_method = (GstHipUploadMethod) g_value_get_enum (value);
+      break;
+    default:
+      G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
+      break;
+  }
+}
+
+static void
+gst_hip_upload_get_property (GObject * object, guint prop_id,
+    GValue * value, GParamSpec * pspec)
+{
+  auto self = GST_HIP_MEMORY_COPY (object);
+  auto priv = self->priv;
+
+  switch (prop_id) {
+    case UPLOAD_PROP_UPLOAD_METHOD:
+      g_value_set_enum (value, priv->upload_method);
+      break;
+    default:
+      G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
+      break;
+  }
 }
 
 struct _GstHipDownload
@@ -1382,13 +1934,21 @@ gst_hip_download_class_init (GstHipDownloadClass * klass)
   auto element_class = GST_ELEMENT_CLASS (klass);
 
   gst_element_class_set_static_metadata (element_class,
-      "HIP Downloader", "Filter/Video",
+      "HIP Downloader", "Filter/Video/Downloader",
       "Downloads HIP device memory into system memory",
       "Seungha Yang <seungha@centricular.com>");
+  gst_element_class_mark_as_untrusted_aware (element_class);
 
-  auto sys_caps = gst_caps_from_string (GST_VIDEO_CAPS_MAKE (GST_HIP_FORMATS));
+  auto sys_caps = gst_caps_from_string (GST_VIDEO_CAPS_MAKE (GST_HIP_FORMATS)
+      ";" GST_VIDEO_CAPS_MAKE_WITH_FEATURES
+      (GST_CAPS_FEATURE_MEMORY_SYSTEM_MEMORY ","
+          GST_CAPS_FEATURE_META_GST_VIDEO_OVERLAY_COMPOSITION,
+          GST_HIP_FORMATS));
   auto hip_caps = gst_caps_from_string (GST_VIDEO_CAPS_MAKE_WITH_FEATURES
-      (GST_CAPS_FEATURE_MEMORY_HIP_MEMORY, GST_HIP_FORMATS));
+      (GST_CAPS_FEATURE_MEMORY_HIP_MEMORY, GST_HIP_FORMATS) ";"
+      GST_VIDEO_CAPS_MAKE_WITH_FEATURES (GST_CAPS_FEATURE_MEMORY_HIP_MEMORY ","
+          GST_CAPS_FEATURE_META_GST_VIDEO_OVERLAY_COMPOSITION,
+          GST_HIP_FORMATS));
 
   auto sink_caps = gst_caps_merge (gst_caps_ref (hip_caps),
       gst_caps_ref (sys_caps));
@@ -1396,13 +1956,19 @@ gst_hip_download_class_init (GstHipDownloadClass * klass)
   auto src_caps = sys_caps;
 #ifdef HAVE_GST_HIP_GL
   auto gl_caps = gst_caps_from_string (GST_VIDEO_CAPS_MAKE_WITH_FEATURES
-      (GST_CAPS_FEATURE_MEMORY_GL_MEMORY, GST_HIP_FORMATS));
+      (GST_CAPS_FEATURE_MEMORY_GL_MEMORY, GST_HIP_FORMATS) ";"
+      GST_VIDEO_CAPS_MAKE_WITH_FEATURES (GST_CAPS_FEATURE_MEMORY_GL_MEMORY ","
+          GST_CAPS_FEATURE_META_GST_VIDEO_OVERLAY_COMPOSITION,
+          GST_HIP_FORMATS));
   src_caps = gst_caps_merge (src_caps, gl_caps);
 #endif
 
 #ifdef HAVE_GST_CUDA
   auto cuda_caps = gst_caps_from_string (GST_VIDEO_CAPS_MAKE_WITH_FEATURES
-      (GST_CAPS_FEATURE_MEMORY_CUDA_MEMORY, GST_HIP_FORMATS));
+      (GST_CAPS_FEATURE_MEMORY_CUDA_MEMORY, GST_HIP_FORMATS) ";"
+      GST_VIDEO_CAPS_MAKE_WITH_FEATURES (GST_CAPS_FEATURE_MEMORY_CUDA_MEMORY ","
+          GST_CAPS_FEATURE_META_GST_VIDEO_OVERLAY_COMPOSITION,
+          GST_HIP_FORMATS));
   src_caps = gst_caps_merge (src_caps, cuda_caps);
 #endif
 

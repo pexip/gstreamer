@@ -77,6 +77,10 @@ ensure_debug_category (void)
 
 #define READ_BYTES(reader, buf, length) G_STMT_START {          \
     const guint8 *vals;                                         \
+    if (length > sizeof (buf)) {                                \
+      GST_WARNING ("data size is bigger than its storage");     \
+      goto failed;                                              \
+    }                                                           \
     if (!gst_byte_reader_get_data (reader, length, &vals)) {    \
       GST_WARNING ("failed to read bytes, size:%d", length);    \
       goto failed;                                              \
@@ -600,7 +604,7 @@ build_huffman_table (GstJpegHuffmanTable * huf_table,
 
 /**
  * gst_jpeg_get_default_huffman_tables:
- * @huf_tables: (out): The default DC/AC Huffman tables to fill in
+ * @huff_tables: (out): The default DC/AC Huffman tables to fill in
  *
  * Fills in @huf_tables with the default AC/DC Huffman tables, as
  * specified by the JPEG standard.
@@ -664,7 +668,7 @@ gst_jpeg_get_default_quantization_tables (GstJpegQuantTables * quant_tables)
 
 /**
  * gst_jpeg_parse:
- * @segment: (out): pointer to a #GstJpegSegment structure to fill in
+ * @seg: (out): pointer to a #GstJpegSegment structure to fill in
  * @data: The data to parse
  * @size: The size of @data
  * @offset: The offset from which to start parsing

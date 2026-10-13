@@ -25,6 +25,7 @@
 #endif
 
 #include <gst/check/gstcheck.h>
+#include <gst/glib-compat-private.h>    // g_memdup2()
 
 GST_START_TEST (test_submemory)
 {
@@ -387,8 +388,39 @@ GST_START_TEST (test_map)
   fail_unless (info.data != NULL);
   fail_unless (info.size == 100);
   fail_unless (info.maxsize == maxalloc);
+  fail_unless_equals_int (GST_MINI_OBJECT_REFCOUNT (mem), 1);
 
   gst_memory_unmap (mem, &info);
+  fail_unless_equals_int (GST_MINI_OBJECT_REFCOUNT (mem), 1);
+  gst_memory_unref (mem);
+}
+
+GST_END_TEST;
+
+GST_START_TEST (test_map_ref)
+{
+  GstMemory *mem;
+  GstMapInfo info;
+  gsize maxalloc;
+  gsize size, offset;
+
+  /* one memory block */
+  mem = gst_allocator_alloc (NULL, 100, NULL);
+
+  size = gst_memory_get_sizes (mem, &offset, &maxalloc);
+  fail_unless (size == 100);
+  fail_unless (offset == 0);
+  fail_unless (maxalloc >= 100);
+
+  /* see if simply mapping works */
+  fail_unless (gst_memory_map (mem, &info, GST_MAP_READ | GST_MAP_REF_MEMORY));
+  fail_unless (info.data != NULL);
+  fail_unless (info.size == 100);
+  fail_unless (info.maxsize == maxalloc);
+  fail_unless_equals_int (GST_MINI_OBJECT_REFCOUNT (mem), 2);
+
+  gst_memory_unmap (mem, &info);
+  fail_unless_equals_int (GST_MINI_OBJECT_REFCOUNT (mem), 1);
   gst_memory_unref (mem);
 }
 
@@ -737,6 +769,29 @@ GST_START_TEST (test_no_error_and_no_warning_on_map_failure)
 GST_END_TEST;
 #endif /* !GST_DISABLE_GST_DEBUG */
 
+GST_START_TEST (test_auto_unmap)
+{
+#ifdef g_auto
+  g_autoptr (GstMemory) mem = NULL;
+
+  gpointer dup_memory = g_memdup2 (ro_memory, sizeof (ro_memory));
+  mem =
+      gst_memory_new_wrapped (0, dup_memory, sizeof (ro_memory), 0,
+      sizeof (ro_memory), dup_memory, g_free);
+
+  {
+    g_auto (GstMapInfo) map = GST_MAP_INFO_INIT;
+    fail_unless (gst_memory_map (mem, &map, GST_MAP_READ));
+    fail_unless_equals_int (GST_MINI_OBJECT_REFCOUNT (mem), 1);
+  }
+
+  /* mem should still only have a refcount of 1 */
+  fail_unless_equals_int (GST_MINI_OBJECT_REFCOUNT (mem), 1);
+#endif
+}
+
+GST_END_TEST;
+
 static Suite *
 gst_memory_suite (void)
 {
@@ -752,6 +807,7 @@ gst_memory_suite (void)
   tcase_add_test (tc_chain, test_try_new_and_alloc);
   tcase_add_test (tc_chain, test_resize);
   tcase_add_test (tc_chain, test_map);
+  tcase_add_test (tc_chain, test_map_ref);
   tcase_add_test (tc_chain, test_map_nested);
   tcase_add_test (tc_chain, test_map_resize);
   tcase_add_test (tc_chain, test_alloc_params);
@@ -759,6 +815,7 @@ gst_memory_suite (void)
 #ifndef GST_DISABLE_GST_DEBUG
   tcase_add_test (tc_chain, test_no_error_and_no_warning_on_map_failure);
 #endif
+  tcase_add_test (tc_chain, test_auto_unmap);
 
   return s;
 }

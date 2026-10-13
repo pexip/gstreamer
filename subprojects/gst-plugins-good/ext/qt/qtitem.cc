@@ -72,6 +72,8 @@ struct _QtGLVideoItemPrivate
   GstBuffer *buffer;
   GstCaps *new_caps;
   GstCaps *caps;
+  gboolean caps_change;
+
   GstVideoInfo new_v_info;
   GstGLTextureTarget new_tex_target;
 
@@ -332,6 +334,7 @@ QtGLVideoItem::updatePaintNode(QSGNode * oldNode,
     tex = GstQSGMaterial::new_for_format_and_target (GST_VIDEO_INFO_FORMAT (&this->priv->v_info), this->priv->tex_target);
     texNode->setMaterial(tex);
     texNode->setFlag(QSGGeometryNode::Flag::OwnsMaterial);
+    this->priv->caps_change = TRUE;
   }
 
   if ((old_buffer = tex->getBuffer(&was_bound))) {
@@ -365,7 +368,10 @@ QtGLVideoItem::updatePaintNode(QSGNode * oldNode,
     old_buffer = NULL;
   }
 
-  tex->setCaps (this->priv->caps);
+  if (this->priv->caps_change) {
+    tex->setCaps (this->priv->caps);
+    this->priv->caps_change = FALSE;
+  }
   tex->setBuffer (this->priv->buffer);
   texNode->markDirty(QSGNode::DirtyMaterial);
 
@@ -707,6 +713,7 @@ QtGLVideoItemInterface::setBuffer (GstBuffer * buffer)
     GST_DEBUG ("%p caps change from %" GST_PTR_FORMAT " to %" GST_PTR_FORMAT,
         this, qt_item->priv->caps, qt_item->priv->new_caps);
     gst_caps_take (&qt_item->priv->caps, qt_item->priv->new_caps);
+    qt_item->priv->caps_change = TRUE;
     qt_item->priv->new_caps = NULL;
     qt_item->priv->v_info = qt_item->priv->new_v_info;
     qt_item->priv->tex_target = qt_item->priv->new_tex_target;
@@ -844,16 +851,21 @@ QtGLVideoItemInterface::setCaps (GstCaps * caps)
   if (qt_item == NULL)
     return FALSE;
 
-  if (qt_item->priv->caps && gst_caps_is_equal_fixed (qt_item->priv->caps, caps))
-    return TRUE;
+  g_mutex_lock (&qt_item->priv->lock);
 
-  if (!gst_video_info_from_caps (&v_info, caps))
+  GstCaps *current_caps = qt_item->priv->new_caps ? qt_item->priv->new_caps : qt_item->priv->caps;
+  if (current_caps && gst_caps_is_equal_fixed (current_caps, caps)) {
+    g_mutex_unlock (&qt_item->priv->lock);
+    return TRUE;
+  }
+
+  if (!gst_video_info_from_caps (&v_info, caps)) {
+    g_mutex_unlock (&qt_item->priv->lock);
     return FALSE;
+  }
 
   GstStructure *s = gst_caps_get_structure (caps, 0);
   const gchar *target_str = gst_structure_get_string (s, "texture-target");
-
-  g_mutex_lock (&qt_item->priv->lock);
 
   GST_DEBUG ("%p set caps %" GST_PTR_FORMAT, qt_item, caps);
 

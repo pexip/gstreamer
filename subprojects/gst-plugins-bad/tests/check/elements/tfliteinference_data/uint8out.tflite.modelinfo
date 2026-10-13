@@ -1,0 +1,17 @@
+[modelinfo]
+version=1.1
+group-id=uint8out-group
+
+[serving_default_input_f32:0]
+id=input-0
+type=float32
+dims=1,4,4,3
+dir=input
+caps=video/x-raw, format=RGB
+ranges=0.0,255.0
+
+[PartitionedCall_1:0]
+id=output-0
+type=uint8
+dims=1,4,4,3
+dir=output

@@ -117,6 +117,7 @@ typedef struct
   /* configuration */
   gboolean gapless;
   gboolean instant_uri;
+  gboolean repeat;
 
   GstPlayTrickMode trick_mode;
   gdouble rate;
@@ -129,6 +130,7 @@ typedef struct
 
 static gboolean quiet = FALSE;
 static gboolean instant_rate_changes = FALSE;
+static gboolean install_missing = TRUE;
 
 static gboolean play_bus_msg (GstBus * bus, GstMessage * msg, gpointer data);
 static gboolean play_next (GstPlay * play);
@@ -362,9 +364,87 @@ play_toggle_audio_mute (GstPlay * play)
 static gboolean
 play_install_missing_plugins (GstPlay * play)
 {
-  /* FIXME: implement: try to install any missing plugins we haven't
-   * tried to install before */
-  return FALSE;
+  if (play->missing == NULL)
+    return FALSE;
+
+  if (!install_missing) {
+    gst_print (_
+        ("Missing plugin installation was disabled via command line options."));
+    return FALSE;
+  }
+
+  guint n = g_list_length (play->missing);
+  guint i = 0;
+
+  gchar **details = g_new0 (gchar *, n + 1);
+
+  while (play->missing != NULL) {
+    GstMessage *msg = play->missing->data;
+    gchar *detail;
+
+    detail = gst_missing_plugin_message_get_installer_detail (msg);
+
+    if (!g_strv_contains ((const gchar * const *) details, detail)) {
+      GST_INFO ("Installing: %s", detail);
+      details[i++] = detail;
+    } else {
+      g_free (detail);
+    }
+
+    play->missing = g_list_delete_link (play->missing, play->missing);
+
+    gst_message_unref (msg);
+  }
+
+  GstInstallPluginsReturn iret;
+  gboolean installed_something = FALSE;
+
+  iret = gst_install_plugins_sync ((const gchar * const *) details, NULL);
+
+  switch (iret) {
+    case GST_INSTALL_PLUGINS_SUCCESS:
+      gst_println (_("All missing plugins could be installed."));
+      installed_something = TRUE;
+      break;
+    case GST_INSTALL_PLUGINS_PARTIAL_SUCCESS:
+      gst_println (_("Some missing plugins could be installed."));
+      installed_something = TRUE;
+      break;
+    case GST_INSTALL_PLUGINS_NOT_FOUND:
+      gst_println (_
+          ("The missing plugins could not be found in the available package repositories."));
+      break;
+    case GST_INSTALL_PLUGINS_ERROR:
+      gst_println (_("An error occurred during plugin installation."));
+      break;
+    case GST_INSTALL_PLUGINS_USER_ABORT:
+      gst_println (_("Plugin installation was cancelled by the user."));
+      break;
+    case GST_INSTALL_PLUGINS_CRASHED:
+    case GST_INSTALL_PLUGINS_INVALID:
+    case GST_INSTALL_PLUGINS_INTERNAL_FAILURE:
+      gst_println (_
+          ("Something went wrong when trying to invoke the missing plugin installer."));
+      break;
+    case GST_INSTALL_PLUGINS_HELPER_MISSING:
+      gst_println (_
+          ("This system does not have a missing plugin handler installed."));
+      break;
+    default:
+      break;
+  }
+
+  g_strfreev (details);
+
+  if (installed_something) {
+    gst_println (_("Updating plugin registry for newly installed plugins.."));
+    if (!gst_update_registry ()) {
+      gst_println (_("Error updating plugin registry."));
+      installed_something = FALSE;
+    }
+  }
+
+  return installed_something;
 }
 
 static gboolean
@@ -382,6 +462,7 @@ play_bus_msg (GstBus * bus, GstMessage * msg, gpointer user_data)
       gst_print ("Prerolled.\r");
       if (play->missing != NULL && play_install_missing_plugins (play)) {
         gst_print ("New plugins installed, trying again...\n");
+        gst_element_set_state (play->playbin, GST_STATE_NULL);
         --play->cur_idx;
         play_next (play);
       }
@@ -490,10 +571,15 @@ play_bus_msg (GstBus * bus, GstMessage * msg, gpointer user_data)
 
       if (play->missing != NULL && play_install_missing_plugins (play)) {
         gst_print ("New plugins installed, trying again...\n");
+        gst_element_set_state (play->playbin, GST_STATE_NULL);
         --play->cur_idx;
         play_next (play);
         break;
       }
+
+      /* if looping is enabled, then disable it else will keep looping forever */
+      play->repeat = FALSE;
+
       /* try next item in list then */
       if (!play_next (play)) {
         gst_print ("%s\n", _("Reached end of play list."));
@@ -501,8 +587,17 @@ play_bus_msg (GstBus * bus, GstMessage * msg, gpointer user_data)
       }
       break;
     }
-    case GST_MESSAGE_ELEMENT:
-    {
+    case GST_MESSAGE_ELEMENT:{
+      if (gst_is_missing_plugin_message (msg)) {
+        gchar *desc;
+
+        desc = gst_missing_plugin_message_get_description (msg);
+        gst_print ("Missing plugin: %s\n", desc);
+        g_free (desc);
+        play->missing = g_list_prepend (play->missing, gst_message_ref (msg));
+        break;
+      }
+      // Will return GST_NAVIGATION_MESSAGE_INVALID if it's not a navigation message
       GstNavigationMessageType mtype = gst_navigation_message_get_type (msg);
       if (mtype == GST_NAVIGATION_MESSAGE_EVENT) {
         GstEvent *ev = NULL;
@@ -684,14 +779,6 @@ play_bus_msg (GstBus * bus, GstMessage * msg, gpointer user_data)
       break;
     }
     default:
-      if (gst_is_missing_plugin_message (msg)) {
-        gchar *desc;
-
-        desc = gst_missing_plugin_message_get_description (msg);
-        gst_print ("Missing plugin: %s\n", desc);
-        g_free (desc);
-        play->missing = g_list_append (play->missing, gst_message_ref (msg));
-      }
       break;
   }
 
@@ -793,8 +880,13 @@ play_uri (GstPlay * play, const gchar * next_uri)
 static gboolean
 play_next (GstPlay * play)
 {
-  if ((play->cur_idx + 1) >= play->num_uris)
-    return FALSE;
+  if ((play->cur_idx + 1) >= play->num_uris) {
+    if (play->repeat) {
+      gst_print ("Looping playlist \n");
+      play->cur_idx = -1;
+    } else
+      return FALSE;
+  }
 
   play_uri (play, play->uris[++play->cur_idx]);
   return TRUE;
@@ -1289,6 +1381,7 @@ play_cycle_track_selection (GstPlay * play, GstPlayTrackType track_type,
       }
       break;
     default:
+      g_mutex_unlock (&play->selection_lock);
       return;
   }
 
@@ -1598,6 +1691,7 @@ real_main (int argc, char **argv)
   gboolean gapless = FALSE;
   gboolean instant_uri = FALSE;
   gboolean shuffle = FALSE;
+  gboolean repeat = FALSE;
   gdouble volume = -1;
   gdouble start_position = 0;
   gboolean accurate_seeks = FALSE;
@@ -1634,6 +1728,7 @@ real_main (int argc, char **argv)
         N_("Enable instantaneous uri changes (only with playbin3)"), NULL},
     {"shuffle", 0, 0, G_OPTION_ARG_NONE, &shuffle,
         N_("Shuffle playlist"), NULL},
+    {"loop", 0, 0, G_OPTION_ARG_NONE, &repeat, "Repeat all", NULL},
     {"no-interactive", 0, G_OPTION_FLAG_REVERSE, G_OPTION_ARG_NONE,
           &interactive,
         N_("Disable interactive control via the keyboard"), NULL},
@@ -1665,6 +1760,10 @@ real_main (int argc, char **argv)
     {"no-position", 0, 0, G_OPTION_ARG_NONE, &no_position,
           N_("Do not print current position of pipeline"),
         NULL},
+    {"no-missing-plugin-installation", 0, G_OPTION_FLAG_REVERSE,
+          G_OPTION_ARG_NONE,
+          &install_missing,
+        N_("Disable missing plugin installation"), NULL},
     {G_OPTION_REMAINING, 0, 0, G_OPTION_ARG_FILENAME_ARRAY, &filenames, NULL},
     {NULL}
   };
@@ -1790,6 +1889,7 @@ real_main (int argc, char **argv)
       play_new (uris, audio_sink, video_sink, gapless, instant_uri, volume,
       verbose, flags, use_playbin3, start_position, no_position,
       accurate_seeks);
+  play->repeat = repeat;
 
   if (play == NULL) {
     gst_printerr

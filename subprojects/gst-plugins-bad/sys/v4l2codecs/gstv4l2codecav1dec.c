@@ -1297,7 +1297,7 @@ gst_v4l2_codec_av1_dec_end_picture (GstAV1Decoder * decoder,
 {
   GstV4l2CodecAV1Dec *self = GST_V4L2_CODEC_AV1_DEC (decoder);
   GstVideoCodecFrame *frame;
-  GstV4l2Request *request;
+  GstV4l2Request *request = NULL;
   GstBuffer *buffer;
   GstFlowReturn flow_ret;
   guint count = 1;
@@ -1406,7 +1406,14 @@ gst_v4l2_codec_av1_dec_end_picture (GstAV1Decoder * decoder,
   return GST_FLOW_OK;
 
 fail:
+  if (request)
+    gst_v4l2_request_unref (request);
+
   gst_v4l2_codec_av1_dec_reset_picture (self);
+
+  if (flow_ret != GST_FLOW_OK)
+    return flow_ret;
+
   return GST_FLOW_ERROR;
 }
 

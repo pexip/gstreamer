@@ -110,9 +110,10 @@ gst_zebra_stripe_class_init (GstZebraStripeClass * klass)
 
   gst_element_class_set_static_metadata (GST_ELEMENT_CLASS (klass),
       "Zebra stripe overlay",
-      "Filter/Analysis",
+      "Video/Filter/Analyzer",
       "Overlays zebra striping on overexposed areas of video",
       "David Schleef <ds@entropywave.com>");
+  gst_element_class_mark_as_untrusted_aware (GST_ELEMENT_CLASS (klass));
 
   gobject_class->set_property = gst_zebra_stripe_set_property;
   gobject_class->get_property = gst_zebra_stripe_get_property;

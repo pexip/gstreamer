@@ -137,10 +137,17 @@ GST_DEBUG_CATEGORY (ladspa_debug);
 #if defined (G_OS_WIN32)
 #define GST_LADSPA_ENVVARS "APPDATA/LADSPA:COMMONPROGRAMFILES/LADSPA"
 #define GST_LADSPA_DEFAULT_PATH ""
-#elif defined (HAVE_OSX)
+#define GST_MODULE_SUFFIX ".dll"
+#elif defined (__APPLE__)
+#include <TargetConditionals.h>
+#if TARGET_OS_OSX
 #define GST_LADSPA_ENVVARS "HOME/Library/Audio/Plug-Ins/LADSPA:HOME/.ladspa"
 #define GST_LADSPA_DEFAULT_PATH \
   "/usr/local/lib/ladspa:/usr/lib/ladspa:/Library/Audio/Plug-Ins/LADSPA"
+#endif
+#define GST_MODULE_SUFFIX ".so"
+#define GST_EXTRA_MODULE_SUFFIX ".dylib"
+// No default paths on non-macOS
 #elif defined (G_OS_UNIX)
 #define GST_LADSPA_ENVVARS "HOME/.ladspa"
 #define GST_LADSPA_DEFAULT_PATH \
@@ -149,6 +156,7 @@ GST_DEBUG_CATEGORY (ladspa_debug);
   "/usr/local/lib/ladspa:" \
   "/usr/local/lib64/ladspa:" \
    LIBDIR "/ladspa"
+#define GST_MODULE_SUFFIX ".so"
 #else
 #error "Unsupported OS"
 #endif
@@ -305,7 +313,7 @@ ladspa_plugin_directory_search (GstPlugin * ladspa_plugin, const char *dir_name)
 
   while ((entry_name = g_dir_read_name (dir))) {
     /* Only attempt to open files with the module suffixes */
-    if (!g_str_has_suffix (entry_name, "." G_MODULE_SUFFIX)
+    if (!g_str_has_suffix (entry_name, GST_MODULE_SUFFIX)
 #ifdef GST_EXTRA_MODULE_SUFFIX
         && !g_str_has_suffix (entry_name, GST_EXTRA_MODULE_SUFFIX)
 #endif
@@ -355,12 +363,18 @@ ladspa_plugin_path_search (GstPlugin * plugin)
   ladspa_path = g_string_new (NULL);
 
   search_path = g_getenv ("LADSPA_PATH");
+
+#ifdef GST_LADSPA_DEFAULT_PATH
   if (search_path) {
     g_string_append_printf (ladspa_path,
         "%s" G_SEARCHPATH_SEPARATOR_S GST_LADSPA_DEFAULT_PATH, search_path);
   } else {
     g_string_append (ladspa_path, GST_LADSPA_DEFAULT_PATH);
   }
+#else
+  if (search_path)
+    g_string_append (ladspa_path, search_path);
+#endif
 
 #ifdef G_OS_WIN32
   path = g_getenv ("APPDATA");
@@ -393,7 +407,7 @@ ladspa_plugin_path_search (GstPlugin * plugin)
     else
       g_string_append_printf (ladspa_path, "%s/.ladspa", path);
 
-#if defined (HAVE_IOS) || defined (HAVE_OSX)
+#if defined (__APPLE__) && defined (TARGET_OS_OSX)
     g_string_append_printf (ladspa_path, ":%s/Library/Audio/Plug-Ins/LADSPA",
         path);
 #endif
@@ -463,9 +477,11 @@ plugin_init (GstPlugin * plugin)
   bind_textdomain_codeset (GETTEXT_PACKAGE, "UTF-8");
 #endif
 
+#if defined(GST_LADSPA_ENVVARS) && defined(GST_LADSPA_DEFAULT_PATH)
   gst_plugin_add_dependency_simple (plugin,
       "LADSPA_PATH:" GST_LADSPA_ENVVARS,
       GST_LADSPA_DEFAULT_PATH, NULL, GST_PLUGIN_DEPENDENCY_FLAG_NONE);
+#endif
 
 #ifdef HAVE_LRDF
   lrdf_init ();

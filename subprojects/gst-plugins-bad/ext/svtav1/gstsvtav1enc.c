@@ -17,6 +17,8 @@
  * ]|
  * Encodes test input into AV1 compressed data which is then packaged in out.mkv
  * </refsect2>
+ *
+ * Since: 1.24
  */
 
 #include "config.h"
@@ -25,6 +27,8 @@
 #include <gst/gst.h>
 #include <gst/video/video.h>
 #include <gst/video/gstvideoencoder.h>
+
+#include <math.h>
 
 #if !SVT_AV1_CHECK_VERSION(1,2,1)
 #define SVT_AV1_RC_MODE_CQP_OR_CRF 0
@@ -80,7 +84,9 @@ typedef struct _GstSvtAv1Enc
 #else
   gint logical_processors;
 #endif
+#if !SVT_AV1_CHECK_VERSION(4, 0, 0)
   gint target_socket;
+#endif
   gchar *parameters_string;
 
   EbBufferHeaderType *input_buf;
@@ -132,7 +138,7 @@ enum
   PROP_INTRA_PERIOD_LENGTH,
   PROP_INTRA_REFRESH_TYPE,
   PROP_LOGICAL_PROCESSORS,      /// DEPRECATED: should be removed once the minimum version is 3.0.0
-  PROP_TARGET_SOCKET,
+  PROP_TARGET_SOCKET,           /// DEPRECATED: should be removed once the minimum version is 4.0.0
   PROP_PARAMETERS_STRING,
   PROP_LEVEL_OF_PARALLELISM,
 };
@@ -149,7 +155,7 @@ enum
 #define PROP_INTRA_REFRESH_TYPE_DEFAULT SVT_AV1_KF_REFRESH
 #define PROP_LEVEL_OF_PARALLELISM_DEFAULT 0
 #define PROP_LOGICAL_PROCESSORS_DEFAULT 0       /// DEPRECATED: should be removed once the minimum version is 3.0.0
-#define PROP_TARGET_SOCKET_DEFAULT -1
+#define PROP_TARGET_SOCKET_DEFAULT -1   /// DEPRECATED: should be removed once the minimum version is 4.0.0
 #define PROP_PARAMETERS_STRING_DEFAULT NULL
 
 #if G_BYTE_ORDER == G_LITTLE_ENDIAN
@@ -339,10 +345,12 @@ gst_svtav1enc_class_init (GstSvtAv1EncClass * klass)
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS | G_PARAM_DEPRECATED));
 
   g_object_class_install_property (gobject_class,
-      PROP_TARGET_SOCKET,
-      g_param_spec_int ("target-socket",
-          "Target socket",
+      PROP_TARGET_SOCKET, g_param_spec_int ("target-socket", "Target socket",
+#if SVT_AV1_CHECK_VERSION(4, 0, 0)
+          "Deprecated. This property is ignored in SVT-AV1 4.0.0 and later.",
+#else
           "Target CPU socket to run on. -1: all available",
+#endif
           -1,
           15,
           PROP_TARGET_SOCKET_DEFAULT,
@@ -378,7 +386,9 @@ gst_svtav1enc_init (GstSvtAv1Enc * svtav1enc)
 #else
   svtav1enc->logical_processors = PROP_LOGICAL_PROCESSORS_DEFAULT;
 #endif
+#if !SVT_AV1_CHECK_VERSION(4, 0, 0)
   svtav1enc->target_socket = PROP_TARGET_SOCKET_DEFAULT;
+#endif
   svtav1enc->parameters_string = PROP_PARAMETERS_STRING_DEFAULT;
 }
 
@@ -430,7 +440,7 @@ gst_svtav1enc_set_property (GObject * object, guint property_id,
       break;
     case PROP_LEVEL_OF_PARALLELISM:
 #if SVT_AV1_CHECK_VERSION(3, 0, 0)
-      svtav1enc->level_of_parallelism = g_value_get_int (value);
+      svtav1enc->level_of_parallelism = g_value_get_uint (value);
 #endif
       break;
     case PROP_LOGICAL_PROCESSORS:
@@ -439,7 +449,9 @@ gst_svtav1enc_set_property (GObject * object, guint property_id,
 #endif
       break;
     case PROP_TARGET_SOCKET:
+#if !SVT_AV1_CHECK_VERSION(4, 0, 0)
       svtav1enc->target_socket = g_value_get_int (value);
+#endif
       break;
     case PROP_PARAMETERS_STRING:{
       g_free (svtav1enc->parameters_string);
@@ -494,13 +506,15 @@ gst_svtav1enc_get_property (GObject * object, guint property_id, GValue * value,
     case PROP_LEVEL_OF_PARALLELISM:
     case PROP_LOGICAL_PROCESSORS:
 #if SVT_AV1_CHECK_VERSION(3, 0, 0)
-      g_value_set_int (value, svtav1enc->level_of_parallelism);
+      g_value_set_uint (value, svtav1enc->level_of_parallelism);
 #else
       g_value_set_uint (value, svtav1enc->logical_processors);
 #endif
       break;
     case PROP_TARGET_SOCKET:
+#if !SVT_AV1_CHECK_VERSION(4, 0, 0)
       g_value_set_int (value, svtav1enc->target_socket);
+#endif
       break;
     case PROP_PARAMETERS_STRING:
       g_value_set_string (value, svtav1enc->parameters_string);
@@ -546,6 +560,14 @@ gst_svtav1enc_deallocate_svt_buffers (GstSvtAv1Enc * svtav1enc)
   }
 }
 
+static inline guint16
+mdcv_to_svtav1 (guint16 x)
+{
+  gdouble v = (gdouble) x / 50000;
+  v = round (v * (1 << 16));
+  return GUINT16_TO_BE (v > 65535 ? 65535 : (guint16) v);
+}
+
 static gboolean
 gst_svtav1enc_configure_svt (GstSvtAv1Enc * svtav1enc)
 {
@@ -586,7 +608,11 @@ gst_svtav1enc_configure_svt (GstSvtAv1Enc * svtav1enc)
     GST_DEBUG_OBJECT (svtav1enc, "Enabling CQP mode (qp %u)", svtav1enc->cqp);
     svtav1enc->svt_config->qp = svtav1enc->cqp;
     svtav1enc->svt_config->rate_control_mode = SVT_AV1_RC_MODE_CQP_OR_CRF;
+#if SVT_AV1_CHECK_VERSION(4, 0, 0)
+    svtav1enc->svt_config->aq_mode = 0;
+#else
     svtav1enc->svt_config->enable_adaptive_quantization = FALSE;
+#endif
     svtav1enc->svt_config->force_key_frames = TRUE;
   } else {
     GST_DEBUG_OBJECT (svtav1enc, "Using default rate control settings");
@@ -598,7 +624,9 @@ gst_svtav1enc_configure_svt (GstSvtAv1Enc * svtav1enc)
 #else
   svtav1enc->svt_config->logical_processors = svtav1enc->logical_processors;
 #endif
+#if !SVT_AV1_CHECK_VERSION(4, 0, 0)
   svtav1enc->svt_config->target_socket = svtav1enc->target_socket;
+#endif
   gst_svtav1enc_parse_parameters_string (svtav1enc);
 
   /* set properties out of GstVideoInfo */
@@ -746,26 +774,38 @@ gst_svtav1enc_configure_svt (GstSvtAv1Enc * svtav1enc)
   GstVideoMasteringDisplayInfo master_display_info;
   if (gst_video_mastering_display_info_from_caps (&master_display_info,
           svtav1enc->state->caps)) {
+    gdouble max_lum, min_lum;
+
     svtav1enc->svt_config->mastering_display.r.x =
-        master_display_info.display_primaries[0].x;
+        mdcv_to_svtav1 (master_display_info.display_primaries[0].x);
     svtav1enc->svt_config->mastering_display.r.y =
-        master_display_info.display_primaries[0].y;
+        mdcv_to_svtav1 (master_display_info.display_primaries[0].y);
     svtav1enc->svt_config->mastering_display.g.x =
-        master_display_info.display_primaries[1].x;
+        mdcv_to_svtav1 (master_display_info.display_primaries[1].x);
     svtav1enc->svt_config->mastering_display.g.y =
-        master_display_info.display_primaries[1].y;
+        mdcv_to_svtav1 (master_display_info.display_primaries[1].y);
     svtav1enc->svt_config->mastering_display.b.x =
-        master_display_info.display_primaries[2].x;
+        mdcv_to_svtav1 (master_display_info.display_primaries[2].x);
     svtav1enc->svt_config->mastering_display.b.y =
-        master_display_info.display_primaries[2].y;
+        mdcv_to_svtav1 (master_display_info.display_primaries[2].y);
     svtav1enc->svt_config->mastering_display.white_point.x =
-        master_display_info.white_point.x;
+        mdcv_to_svtav1 (master_display_info.white_point.x);
     svtav1enc->svt_config->mastering_display.white_point.y =
-        master_display_info.white_point.y;
+        mdcv_to_svtav1 (master_display_info.white_point.y);
+
+    max_lum =
+        round ((gdouble) master_display_info.max_display_mastering_luminance /
+        10000 * (1 << 8));
+    min_lum =
+        round ((gdouble) master_display_info.min_display_mastering_luminance /
+        10000 * (1 << 14));
     svtav1enc->svt_config->mastering_display.max_luma =
-        master_display_info.max_display_mastering_luminance;
+        GUINT32_TO_BE ((guint32) max_lum);
     svtav1enc->svt_config->mastering_display.min_luma =
-        master_display_info.min_display_mastering_luminance;
+        GUINT32_TO_BE ((guint32) min_lum);
+#if !(SVT_AV1_CHECK_VERSION(3, 0, 0))
+    svtav1enc->svt_config->high_dynamic_range_input = TRUE;
+#endif
   } else {
     memset (&svtav1enc->svt_config->mastering_display,
         0, sizeof (svtav1enc->svt_config->mastering_display));
@@ -775,9 +815,9 @@ gst_svtav1enc_configure_svt (GstSvtAv1Enc * svtav1enc)
   if (gst_video_content_light_level_from_caps (&content_light_level,
           svtav1enc->state->caps)) {
     svtav1enc->svt_config->content_light_level.max_cll =
-        content_light_level.max_content_light_level;
+        GUINT16_TO_BE (content_light_level.max_content_light_level);
     svtav1enc->svt_config->content_light_level.max_fall =
-        content_light_level.max_frame_average_light_level;
+        GUINT16_TO_BE (content_light_level.max_frame_average_light_level);
   } else {
     memset (&svtav1enc->svt_config->content_light_level,
         0, sizeof (svtav1enc->svt_config->content_light_level));
@@ -1176,6 +1216,7 @@ gst_svtav1enc_parse_parameters_string (GstSvtAv1Enc * svtav1enc)
 static gboolean
 plugin_init (GstPlugin * plugin)
 {
+  gst_plugin_set_static_features_flag (plugin);
   return GST_ELEMENT_REGISTER (svtav1enc, plugin);
 }
 

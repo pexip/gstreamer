@@ -73,12 +73,18 @@ G_GNUC_INTERNAL
 gchar *                             _generate_fingerprint_from_certificate  (gchar * certificate,
                                                                              GChecksumType checksum_type);
 G_GNUC_INTERNAL
+gchar *                             _get_fingerprint_from_sdp_media         (GstSDPMessage *sdp,
+                                                                             guint media_idx,
+                                                                             GChecksumType * checksum_type);
+G_GNUC_INTERNAL
 void                                _generate_ice_credentials               (gchar ** ufrag,
                                                                              gchar ** password);
 
 G_GNUC_INTERNAL
 gboolean                            _media_has_attribute_key                (const GstSDPMedia * media,
                                                                              const gchar * key);
+G_GNUC_INTERNAL
+gboolean                            _media_is_datachannel                   (const GstSDPMedia * media);
 
 G_GNUC_INTERNAL
 int                                 _get_sctp_port_from_media               (const GstSDPMedia * media);

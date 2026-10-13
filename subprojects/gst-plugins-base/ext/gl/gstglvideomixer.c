@@ -46,7 +46,7 @@
 #include <string.h>
 #include <gst/controller/gstproxycontrolbinding.h>
 #include <gst/gl/gstglfuncs.h>
-#include <gst/video/gstvideoaffinetransformationmeta.h>
+#include <gst/video/video.h>
 
 #include "gstglelements.h"
 #include "gstglvideomixer.h"
@@ -615,6 +615,7 @@ gst_gl_video_mixer_bin_class_init (GstGLVideoMixerBinClass * klass)
   gst_element_class_set_static_metadata (element_class,
       "OpenGL video_mixer bin", "Bin/Filter/Effect/Video/Compositor",
       "OpenGL video_mixer bin", "Matthew Waters <matthew@centricular.com>");
+  gst_element_class_mark_as_untrusted_aware (element_class);
 
   gst_type_mark_as_plugin_api (gst_gl_video_mixer_input_get_type (), 0);
 }
@@ -665,6 +666,8 @@ static void gst_gl_video_mixer_get_property (GObject * object, guint prop_id,
     GValue * value, GParamSpec * pspec);
 
 static GstCaps *_update_caps (GstVideoAggregator * vagg, GstCaps * caps);
+static GstFlowReturn gst_gl_video_mixer_aggregate_frames (GstVideoAggregator *
+    vagg, GstBuffer * outbuf);
 static GstCaps *_fixate_caps (GstAggregator * agg, GstCaps * caps);
 static gboolean gst_gl_video_mixer_propose_allocation (GstAggregator *
     agg, GstAggregatorPad * agg_pad, GstQuery * decide_query, GstQuery * query);
@@ -764,6 +767,8 @@ struct _GstGLVideoMixerPad
   gboolean geometry_change;
   GLuint vertex_buffer;
   gfloat m_matrix[16];
+
+  gboolean copy_meta;
 };
 
 struct _GstGLVideoMixerPadClass
@@ -1306,6 +1311,7 @@ gst_gl_video_mixer_class_init (GstGLVideoMixerClass * klass)
   gst_element_class_set_static_metadata (element_class, "OpenGL video_mixer",
       "Filter/Effect/Video/Compositor", "OpenGL video_mixer",
       "Matthew Waters <matthew@centricular.com>");
+  gst_element_class_mark_as_untrusted_aware (element_class);
 
   gst_gl_mixer_class_add_rgba_pad_templates (GST_GL_MIXER_CLASS (klass));
   gst_element_class_add_static_pad_template_with_gtype (element_class,
@@ -1323,6 +1329,7 @@ gst_gl_video_mixer_class_init (GstGLVideoMixerClass * klass)
   GST_GL_BASE_MIXER_CLASS (klass)->gl_start = gst_gl_video_mixer_gl_start;
 
   vagg_class->update_caps = _update_caps;
+  vagg_class->aggregate_frames = gst_gl_video_mixer_aggregate_frames;
 
   agg_class->src_event = gst_gl_video_mixer_src_event;
   agg_class->fixate_src_caps = _fixate_caps;
@@ -2148,6 +2155,8 @@ gst_gl_video_mixer_callback (gpointer stuff)
     guint in_tex;
     guint in_width, in_height;
 
+    pad->copy_meta = FALSE;
+
     v_info = &GST_VIDEO_AGGREGATOR_PAD (pad)->info;
     in_width = GST_VIDEO_INFO_WIDTH (v_info);
     in_height = GST_VIDEO_INFO_HEIGHT (v_info);
@@ -2165,6 +2174,8 @@ gst_gl_video_mixer_callback (gpointer stuff)
       walk = g_list_next (walk);
       continue;
     }
+
+    pad->copy_meta = TRUE;
 
     in_tex = mix_pad->current_texture;
 
@@ -2327,4 +2338,77 @@ gst_gl_video_mixer_child_proxy_init (gpointer g_iface, gpointer iface_data)
 
   iface->get_child_by_index = gst_gl_video_mixer_child_proxy_get_child_by_index;
   iface->get_children_count = gst_gl_video_mixer_child_proxy_get_children_count;
+}
+
+static GstFlowReturn
+gst_gl_video_mixer_aggregate_frames (GstVideoAggregator * vagg,
+    GstBuffer * outbuf)
+{
+  GstGLVideoMixer *video_mixer = GST_GL_VIDEO_MIXER (vagg);
+  GstFlowReturn ret;
+  GList *walk;
+  const gchar *valid_tags[] = {
+    GST_META_TAG_VIDEO_STR,
+    GST_META_TAG_VIDEO_ORIENTATION_STR,
+    GST_META_TAG_VIDEO_SIZE_STR,
+    GST_META_TAG_VIDEO_COLORSPACE_STR,
+    NULL
+  };
+
+  ret =
+      GST_VIDEO_AGGREGATOR_CLASS
+      (gst_gl_video_mixer_parent_class)->aggregate_frames (vagg, outbuf);
+
+  if (ret != GST_FLOW_OK)
+    return ret;
+
+  GST_OBJECT_LOCK (video_mixer);
+  for (walk = GST_ELEMENT (video_mixer)->sinkpads; walk; walk = walk->next) {
+    GstGLVideoMixerPad *pad = walk->data;
+    GstVideoAggregatorPad *vagg_pad = walk->data;
+    GstMeta *meta = NULL;
+    gpointer state = NULL;
+    gint pad_width, pad_height;
+    gint pad_offset_x, pad_offset_y;
+    GstBuffer *buffer = gst_video_aggregator_pad_get_current_buffer (vagg_pad);
+
+    if (!pad->copy_meta)
+      continue;
+
+    /* FIXME: Add affine transformations */
+    if (gst_buffer_get_video_affine_transformation_meta (buffer))
+      continue;
+
+    _mixer_pad_get_output_size (video_mixer, pad,
+        GST_VIDEO_INFO_PAR_N (&vagg->info),
+        GST_VIDEO_INFO_PAR_D (&vagg->info),
+        &pad_width, &pad_height, &pad_offset_x, &pad_offset_y);
+
+    GstVideoMetaTransformMatrix trans_matrix;
+    const GstVideoRectangle in_rectangle = { pad->crop_left, pad->crop_top,
+      GST_VIDEO_INFO_WIDTH (&vagg_pad->info) - pad->crop_left - pad->crop_right,
+      GST_VIDEO_INFO_HEIGHT (&vagg_pad->info) - pad->crop_top - pad->crop_bottom
+    };
+    const GstVideoRectangle out_rectangle = { pad->xpos + pad_offset_x,
+      pad->ypos + pad_offset_y, pad_width, pad_height
+    };
+
+    gst_video_meta_transform_matrix_init (&trans_matrix, &vagg_pad->info,
+        &in_rectangle, &vagg->info, &out_rectangle);
+
+    while ((meta = gst_buffer_iterate_meta (buffer, &state))) {
+      if (meta->info->transform_func == NULL)
+        continue;
+
+      if (!gst_meta_api_type_tags_contain_only (meta->info->api, valid_tags))
+        continue;
+
+      meta->info->transform_func (outbuf, meta, buffer,
+          gst_video_meta_transform_matrix_get_quark (), &trans_matrix);
+    }
+  }
+
+  GST_OBJECT_UNLOCK (video_mixer);
+
+  return GST_FLOW_OK;
 }

@@ -24,35 +24,55 @@
 /**
  * SECTION:element-avfassetsrc
  *
- * Read and decode samples from AVFoundation assets using the AVFAssetReader API
+ * Read and decode samples from AVFoundation assets using the AVFAssetReader API.
  *
- * ## Example launch line
+ * Two URI protocols are supported: `avf+file://` and `ipod-library://`.
  *
- * |[
- * gst-launch-1.0 -v -m avfassetsrc uri="file://movie.mp4" ! autovideosink
- * ]|
+ * 'avf+file://' is used to distinguish media URIs which should be handled
+ *  and decoded by AVFoundation from regular arbitrary `file://` URIs.
+ * `ipod-library://` URIs are returned by the MPMediaItem API.
+ *
+ * ## Example launch lines
+ *
+ * ```
+ * gst-launch-1.0 -v -m avfassetsrc uri="file:///path/to/movie.mp4" ! autovideosink
+ * ```
+ *
+ * ```
+ * gst-play-1.0 -v avf+file:///path/to/movie.mp4
+ * ```
  */
 
 #ifdef HAVE_CONFIG_H
 #  include <config.h>
 #endif
 
+#include <AvailabilityMacros.h>
+
 #include "avfassetsrc.h"
+#include "helpers.h"
 #include "coremediabuffer.h"
+#include "vtutil.h"
+
+#include <gst/allocators/gstiosurface.h>
 
 GST_DEBUG_CATEGORY_STATIC (gst_avf_asset_src_debug);
 #define GST_CAT_DEFAULT gst_avf_asset_src_debug
 
 #define CMTIME_TO_GST_TIME(x) \
-    (x.value == 0 ? 0 : (guint64)(x.value * GST_SECOND / x.timescale));
+    (CMTIME_IS_INVALID(x) ? GST_CLOCK_TIME_NONE : (guint64)(x.value * GST_SECOND / x.timescale));
 #define GST_AVF_ASSET_SRC_LOCK(x) (g_mutex_lock (&x->lock));
 #define GST_AVF_ASSET_SRC_UNLOCK(x) (g_mutex_unlock (&x->lock));
 #define MEDIA_TYPE_TO_STR(x) \
     (x == GST_AVF_ASSET_READER_MEDIA_TYPE_AUDIO ? "audio" : "video")
 #define AVF_ASSET_READER_HAS_AUDIO(x) \
-    ([GST_AVF_ASSET_SRC_READER(self) hasMediaType:GST_AVF_ASSET_READER_MEDIA_TYPE_AUDIO])
+    ([GST_AVF_ASSET_SRC_READER(x) hasMediaType:GST_AVF_ASSET_READER_MEDIA_TYPE_AUDIO])
 #define AVF_ASSET_READER_HAS_VIDEO(x) \
-    ([GST_AVF_ASSET_SRC_READER(self) hasMediaType:GST_AVF_ASSET_READER_MEDIA_TYPE_VIDEO])
+    ([GST_AVF_ASSET_SRC_READER(x) hasMediaType:GST_AVF_ASSET_READER_MEDIA_TYPE_VIDEO])
+#define AVF_ASSET_READER_HAS_SUPPORTED_AUDIO(x) \
+  (AVF_ASSET_READER_HAS_AUDIO((x)) && (x)->selected_audio_track >= 0)
+#define AVF_ASSET_READER_HAS_SUPPORTED_VIDEO(x) \
+  (AVF_ASSET_READER_HAS_VIDEO((x)) && (x)->selected_video_track >= 0)
 
 enum
 {
@@ -71,14 +91,27 @@ static GstStaticPadTemplate audio_factory = GST_STATIC_PAD_TEMPLATE ("audio",
     )
 );
 
+#define AVF_ASSET_SRC_VIDEO_FORMATS "NV12"
+#define AVF_ASSET_SRC_VIDEO_CAPS_FIELDS \
+    "framerate = " GST_VIDEO_FPS_RANGE ", " \
+    "width = " GST_VIDEO_SIZE_RANGE ", " \
+    "height = " GST_VIDEO_SIZE_RANGE
+#define AVF_ASSET_SRC_VIDEO_CAPS_WITH_FEATURES(features) \
+    GST_VIDEO_CAPS_MAKE_WITH_FEATURES (features, \
+        AVF_ASSET_SRC_VIDEO_FORMATS) ", " \
+    AVF_ASSET_SRC_VIDEO_CAPS_FIELDS
+#define AVF_ASSET_SRC_VIDEO_CAPS_SYSTEM_MEMORY \
+    "video/x-raw, " \
+    "format = (string) " AVF_ASSET_SRC_VIDEO_FORMATS ", " \
+    AVF_ASSET_SRC_VIDEO_CAPS_FIELDS
+
 static GstStaticPadTemplate video_factory = GST_STATIC_PAD_TEMPLATE ("video",
     GST_PAD_SRC,
     GST_PAD_SOMETIMES,
-    GST_STATIC_CAPS ("video/x-raw, "
-        "format = (string) NV12, "
-        "framerate = " GST_VIDEO_FPS_RANGE ", "
-        "width = " GST_VIDEO_SIZE_RANGE ", "
-        "height = " GST_VIDEO_SIZE_RANGE
+    GST_STATIC_CAPS (
+        AVF_ASSET_SRC_VIDEO_CAPS_SYSTEM_MEMORY "; "
+        AVF_ASSET_SRC_VIDEO_CAPS_WITH_FEATURES
+        (GST_CAPS_FEATURE_MEMORY_IOSURFACE)
     )
 );
 
@@ -96,16 +129,85 @@ static gboolean gst_avf_asset_src_query (GstPad *pad, GstObject * parent, GstQue
 static gboolean gst_avf_asset_src_event (GstPad *pad, GstObject * parent, GstEvent *event);
 static gboolean gst_avf_asset_src_send_event (GstAVFAssetSrc *self,
     GstEvent *event);
+static GstFlowReturn gst_avf_asset_src_send_start_stream (GstAVFAssetSrc * self,
+    GstPad * pad, const gchar * stream_type);
+static GstCaps * gst_avf_asset_src_select_video_caps (GstAVFAssetSrc * self,
+    GstCaps * caps);
 
 static void gst_avf_asset_src_read_audio (GstAVFAssetSrc *self);
 static void gst_avf_asset_src_read_video (GstAVFAssetSrc *self);
 static void gst_avf_asset_src_start (GstAVFAssetSrc *self);
 static void gst_avf_asset_src_stop (GstAVFAssetSrc *self);
+static void gst_avf_asset_src_update_video_allocation (GstAVFAssetSrc * self);
 static gboolean gst_avf_asset_src_start_reading (GstAVFAssetSrc *self);
 static void gst_avf_asset_src_stop_reading (GstAVFAssetSrc *self);
 static void gst_avf_asset_src_stop_all (GstAVFAssetSrc *self);
 static void gst_avf_asset_src_uri_handler_init (gpointer g_iface,
     gpointer iface_data);
+
+static void gst_avf_asset_src_send_audio_eos (GstAVFAssetSrc * self);
+static void gst_avf_asset_src_send_video_eos (GstAVFAssetSrc * self);
+
+/* Undeprecate AVFoundation track APIs -- starting 15.0 */
+#if defined(MAC_OS_X_VERSION_MAX_ALLOWED) && MAC_OS_X_VERSION_MAX_ALLOWED >= 150000
+G_GNUC_BEGIN_IGNORE_DEPRECATIONS;
+#endif
+
+static gboolean
+gst_avf_asset_src_register_supplemental_decoders_if_needed (NSArray * tracks)
+{
+  gboolean need_vp9 = FALSE;
+  gboolean need_av1 = FALSE;
+  gboolean registration_happened = FALSE;
+  if (tracks == nil || [tracks count] == 0) {
+    GST_DEBUG ("No video tracks for supplemental decoder inspection");
+    return FALSE;
+  }
+
+  GST_DEBUG ("Inspecting %lu video tracks for supplemental decoder needs",
+      (unsigned long)[tracks count]);
+
+  for (guint i = 0; i < [tracks count]; i++) {
+    AVAssetTrack *track =[tracks objectAtIndex:i];
+
+    if (track.playable) {
+      GST_DEBUG("Track %u is playable", i);
+      continue;
+    }
+
+    NSArray *format_descriptions =[track formatDescriptions];
+    GST_DEBUG ("Track %u has %lu format descriptions", i,
+        (unsigned long)[format_descriptions count]);
+
+    for (guint j = 0; j < [format_descriptions count]; j++) {
+      CMFormatDescriptionRef fmt =
+          (__bridge CMFormatDescriptionRef) [format_descriptions objectAtIndex:j];
+      FourCharCode codec = CMFormatDescriptionGetMediaSubType (fmt);
+
+      GST_DEBUG ("Video track codec: %" GST_FOURCC_FORMAT,
+          GST_FOURCC_ARGS (GUINT32_FROM_BE (codec)));
+
+      if (codec == kCMVideoCodecType_VP9)
+        need_vp9 = TRUE;
+      else if (codec == kCMVideoCodecType_AV1)
+        need_av1 = TRUE;
+    }
+  }
+
+  if (!need_vp9 && !need_av1) {
+    GST_DEBUG ("No supplemental decoder registration needed for video tracks");
+    return FALSE;
+  }
+
+  if (need_vp9)
+    registration_happened |=
+        gst_vtutil_register_supplemental_decoder (kCMVideoCodecType_VP9);
+  if (need_av1)
+    registration_happened |=
+        gst_vtutil_register_supplemental_decoder (kCMVideoCodecType_AV1);
+
+  return registration_happened;
+}
 
 static void
 _do_init (GType avf_assetsrc_type)
@@ -124,6 +226,8 @@ _do_init (GType avf_assetsrc_type)
 
 G_DEFINE_TYPE_WITH_CODE (GstAVFAssetSrc, gst_avf_asset_src, GST_TYPE_ELEMENT,
     _do_init (g_define_type_id));
+GST_ELEMENT_REGISTER_DEFINE_WITH_CODE (avfassetsrc, "avfassetsrc", GST_RANK_PRIMARY,
+    GST_TYPE_AVF_ASSET_SRC, gst_applemedia_init_once ());
 
 
 /* GObject vmethod implementations */
@@ -168,6 +272,7 @@ gst_avf_asset_src_init (GstAVFAssetSrc * self)
   self->selected_video_track = 0;
   self->last_audio_pad_ret = GST_FLOW_OK;
   self->last_video_pad_ret = GST_FLOW_OK;
+  self->use_video_meta = FALSE;
   g_mutex_init (&self->lock);
 }
 
@@ -259,6 +364,7 @@ gst_avf_asset_src_change_state (GstElement * element, GstStateChange transition)
         gst_avf_asset_src_stop_all (self);
         return GST_STATE_CHANGE_FAILURE;
       }
+      [GST_AVF_ASSET_SRC_READER (self) setUseVideoMeta: self->use_video_meta];
       break;
     }
     case GST_STATE_CHANGE_READY_TO_PAUSED:
@@ -306,6 +412,48 @@ gst_avf_asset_src_get_caps(GstAVFAssetSrc * self, GstPad * pad, GstCaps * filter
   }
 
   return caps;
+}
+
+static gboolean
+gst_avf_asset_src_caps_has_feature (GstCaps * caps, const gchar * feature)
+{
+  GstCapsFeatures *features;
+
+  if (caps == NULL || gst_caps_is_empty (caps) || gst_caps_is_any (caps))
+    return FALSE;
+
+  features = gst_caps_get_features (caps, 0);
+  return features != NULL && gst_caps_features_contains (features, feature);
+}
+
+static GstCaps *
+gst_avf_asset_src_select_video_caps (GstAVFAssetSrc * self, GstCaps * caps)
+{
+  GstCaps *peer_caps;
+  GstCaps *candidates;
+  GstCaps *intersection;
+
+  peer_caps = gst_pad_peer_query_caps (self->videopad, NULL);
+  if (peer_caps == NULL || gst_caps_is_any (peer_caps)) {
+    gst_clear_caps (&peer_caps);
+    return gst_caps_ref (caps);
+  }
+
+  candidates = gst_caps_copy (caps);
+  gst_caps_append (candidates, gst_applemedia_copy_caps_with_feature (caps,
+          GST_CAPS_FEATURE_MEMORY_IOSURFACE));
+
+  intersection =
+      gst_caps_intersect_full (peer_caps, candidates, GST_CAPS_INTERSECT_FIRST);
+  gst_caps_unref (peer_caps);
+  gst_caps_unref (candidates);
+
+  if (gst_caps_is_empty (intersection)) {
+    gst_caps_unref (intersection);
+    return gst_caps_ref (caps);
+  }
+
+  return gst_caps_fixate (intersection);
 }
 
 static gboolean
@@ -440,13 +588,15 @@ gst_avf_asset_src_event (GstPad * pad, GstObject * parent, GstEvent * event)
 }
 
 static GstFlowReturn
-gst_avf_asset_src_send_start_stream (GstAVFAssetSrc * self, GstPad * pad)
+gst_avf_asset_src_send_start_stream (GstAVFAssetSrc * self, GstPad * pad,
+    const gchar * stream_type)
 {
   GstEvent *event;
   gchar *stream_id;
   GstFlowReturn ret;
 
-  stream_id = gst_pad_create_stream_id (pad, GST_ELEMENT_CAST (self), NULL);
+  stream_id = gst_pad_create_stream_id (pad, GST_ELEMENT_CAST (self),
+      stream_type);
   GST_DEBUG_OBJECT (self, "Pushing STREAM START");
   event = gst_event_new_stream_start (stream_id);
   gst_event_set_group_id (event, gst_util_group_id_next ());
@@ -467,11 +617,11 @@ gst_avf_asset_src_combine_flows (GstAVFAssetSrc * self, GstAVFAssetReaderMediaTy
   GST_AVF_ASSET_SRC_LOCK (self);
   if (type == GST_AVF_ASSET_READER_MEDIA_TYPE_AUDIO) {
     self->last_audio_pad_ret = ret;
-    has_other_pad = AVF_ASSET_READER_HAS_VIDEO (ret);
+    has_other_pad = AVF_ASSET_READER_HAS_SUPPORTED_VIDEO (self);
     last_other_pad_ret = self->last_video_pad_ret;
   } else if (type == GST_AVF_ASSET_READER_MEDIA_TYPE_VIDEO) {
     self->last_video_pad_ret = ret;
-    has_other_pad = AVF_ASSET_READER_HAS_AUDIO (ret);
+    has_other_pad = AVF_ASSET_READER_HAS_SUPPORTED_AUDIO (self);
     last_other_pad_ret = self->last_audio_pad_ret;
   } else {
     GST_ERROR ("Unsupported media type");
@@ -495,7 +645,7 @@ gst_avf_asset_src_read_data (GstAVFAssetSrc *self, GstPad *pad,
 {
   GstBuffer *buf;
   GstFlowReturn ret, combined_ret;
-  GError *error;
+  GError *error = NULL;
 
 
   GST_AVF_ASSET_SRC_LOCK (self);
@@ -554,8 +704,27 @@ gst_avf_asset_src_read_audio (GstAVFAssetSrc *self)
 static void
 gst_avf_asset_src_read_video (GstAVFAssetSrc *self)
 {
+  if (gst_pad_check_reconfigure (self->videopad))
+    gst_avf_asset_src_update_video_allocation (self);
+
   gst_avf_asset_src_read_data (self, self->videopad,
       GST_AVF_ASSET_READER_MEDIA_TYPE_VIDEO);
+}
+
+static void
+gst_avf_asset_src_send_audio_eos (GstAVFAssetSrc * self)
+{
+  GST_WARNING_OBJECT (self, "Audio track not playable, sending EOS");
+  gst_pad_push_event (self->audiopad, gst_event_new_eos ());
+  gst_pad_pause_task (self->audiopad);
+}
+
+static void
+gst_avf_asset_src_send_video_eos (GstAVFAssetSrc * self)
+{
+  GST_WARNING_OBJECT (self, "Video track not playable, sending EOS");
+  gst_pad_push_event (self->videopad, gst_event_new_eos ());
+  gst_pad_pause_task (self->videopad);
 }
 
 static gboolean
@@ -584,10 +753,10 @@ gst_avf_asset_src_send_event (GstAVFAssetSrc *self, GstEvent *event)
   gboolean ret = TRUE;
 
 
-  if (AVF_ASSET_READER_HAS_VIDEO (self)) {
+  if (AVF_ASSET_READER_HAS_SUPPORTED_VIDEO (self)) {
     ret |= gst_pad_push_event (self->videopad, gst_event_ref (event));
   }
-  if (AVF_ASSET_READER_HAS_AUDIO (self)) {
+  if (AVF_ASSET_READER_HAS_SUPPORTED_AUDIO (self)) {
     ret |= gst_pad_push_event (self->audiopad, gst_event_ref (event));
   }
 
@@ -599,6 +768,7 @@ static void
 gst_avf_asset_src_start (GstAVFAssetSrc *self)
 {
   GstSegment segment;
+  BOOL success = FALSE;
 
   if (self->state == GST_AVF_ASSET_SRC_STATE_STARTED) {
     return;
@@ -613,12 +783,18 @@ gst_avf_asset_src_start (GstAVFAssetSrc *self)
    * and no outputs can be added afterwards, so the tracks must be
    * selected before adding any of the new pads */
   if (AVF_ASSET_READER_HAS_AUDIO (self)) {
-    [GST_AVF_ASSET_SRC_READER(self) selectTrack: GST_AVF_ASSET_READER_MEDIA_TYPE_AUDIO:
+    success = [GST_AVF_ASSET_SRC_READER (self) selectTrack: GST_AVF_ASSET_READER_MEDIA_TYPE_AUDIO:
         self->selected_audio_track];
+    if (!success) {
+      self->selected_audio_track = -1;
+    }
   }
   if (AVF_ASSET_READER_HAS_VIDEO (self)) {
-    [GST_AVF_ASSET_SRC_READER(self) selectTrack: GST_AVF_ASSET_READER_MEDIA_TYPE_VIDEO:
-         self->selected_video_track];
+    success = [GST_AVF_ASSET_SRC_READER (self) selectTrack: GST_AVF_ASSET_READER_MEDIA_TYPE_VIDEO:
+        self->selected_video_track];
+    if (!success) {
+      self->selected_video_track = -1;
+    }
   }
 
   if (AVF_ASSET_READER_HAS_AUDIO (self)) {
@@ -629,7 +805,7 @@ gst_avf_asset_src_start (GstAVFAssetSrc *self)
         gst_avf_asset_src_event);
     gst_pad_use_fixed_caps (self->audiopad);
     gst_pad_set_active (self->audiopad, TRUE);
-    gst_avf_asset_src_send_start_stream (self, self->audiopad);
+    gst_avf_asset_src_send_start_stream (self, self->audiopad, "audio");
     gst_pad_set_caps (self->audiopad,
         [GST_AVF_ASSET_SRC_READER(self) getCaps: GST_AVF_ASSET_READER_MEDIA_TYPE_AUDIO]);
     gst_pad_push_event (self->audiopad, gst_event_new_caps (
@@ -638,6 +814,9 @@ gst_avf_asset_src_start (GstAVFAssetSrc *self)
     gst_element_add_pad (GST_ELEMENT (self), self->audiopad);
   }
   if (AVF_ASSET_READER_HAS_VIDEO (self)) {
+    GstCaps *vcaps = NULL;
+    GstCaps *selected_caps = NULL;
+
     self->videopad = gst_pad_new_from_static_template (&video_factory, "video");
     gst_pad_set_query_function (self->videopad,
         gst_avf_asset_src_query);
@@ -645,17 +824,74 @@ gst_avf_asset_src_start (GstAVFAssetSrc *self)
         gst_avf_asset_src_event);
     gst_pad_use_fixed_caps (self->videopad);
     gst_pad_set_active (self->videopad, TRUE);
-    gst_avf_asset_src_send_start_stream (self, self->videopad);
-    gst_pad_set_caps (self->videopad,
-        [GST_AVF_ASSET_SRC_READER(self) getCaps: GST_AVF_ASSET_READER_MEDIA_TYPE_VIDEO]);
-    gst_pad_push_event (self->videopad, gst_event_new_caps (
-        [GST_AVF_ASSET_SRC_READER(self) getCaps: GST_AVF_ASSET_READER_MEDIA_TYPE_VIDEO]));
-    gst_pad_push_event (self->videopad, gst_event_new_segment (&segment));
+    gst_avf_asset_src_send_start_stream (self, self->videopad, "video");
+    if (self->selected_video_track >= 0) {
+      vcaps = [GST_AVF_ASSET_SRC_READER (self)
+          getCaps:GST_AVF_ASSET_READER_MEDIA_TYPE_VIDEO];
+    } else {
+      vcaps = gst_pad_get_pad_template_caps (self->videopad);
+      if (vcaps) {
+        vcaps = gst_caps_make_writable (vcaps);
+        vcaps = gst_caps_fixate (vcaps);
+      }
+    }
     gst_element_add_pad (GST_ELEMENT (self), self->videopad);
+
+    if (vcaps) {
+      selected_caps = gst_avf_asset_src_select_video_caps (self, vcaps);
+      gst_pad_set_caps (self->videopad, selected_caps);
+      gst_pad_push_event (self->videopad, gst_event_new_caps (selected_caps));
+      gst_caps_unref (selected_caps);
+    }
+
+    gst_pad_push_event (self->videopad, gst_event_new_segment (&segment));
+    gst_clear_caps (&vcaps);
   }
   gst_element_no_more_pads (GST_ELEMENT (self));
 
   self->state = GST_AVF_ASSET_SRC_STATE_STARTED;
+}
+
+static void
+gst_avf_asset_src_update_video_allocation (GstAVFAssetSrc * self)
+{
+  GstCaps *base_caps;
+  GstCaps *caps;
+  GstCaps *current_caps;
+  GstQuery *query;
+
+  if (!self->videopad)
+    return;
+
+  base_caps = [GST_AVF_ASSET_SRC_READER (self) videoCaps];
+  if (!base_caps)
+    return;
+
+  caps = gst_avf_asset_src_select_video_caps (self, base_caps);
+  gst_caps_unref (base_caps);
+
+  current_caps = gst_pad_get_current_caps (self->videopad);
+  if (!current_caps || !gst_caps_is_equal (current_caps, caps)) {
+    gst_pad_set_caps (self->videopad, caps);
+    gst_pad_push_event (self->videopad, gst_event_new_caps (caps));
+  }
+  gst_clear_caps (&current_caps);
+
+  query = gst_query_new_allocation (caps, TRUE);
+  if (!gst_pad_peer_query (self->videopad, query)) {
+    GST_DEBUG_OBJECT (self, "peer ALLOCATION query failed");
+  }
+
+  self->use_video_meta =
+      gst_query_find_allocation_meta (query, GST_VIDEO_META_API_TYPE, NULL) ||
+      gst_avf_asset_src_caps_has_feature (caps,
+      GST_CAPS_FEATURE_MEMORY_IOSURFACE);
+  if (self->reader != NULL) {
+    [GST_AVF_ASSET_SRC_READER (self) setUseVideoMeta: self->use_video_meta];
+  }
+
+  gst_query_unref (query);
+  gst_caps_unref (caps);
 }
 
 static void
@@ -669,8 +905,8 @@ gst_avf_asset_src_stop (GstAVFAssetSrc *self)
 
   GST_DEBUG ("Stopping tasks and removing pads");
 
-  has_audio = AVF_ASSET_READER_HAS_AUDIO (self);
-  has_video = AVF_ASSET_READER_HAS_VIDEO (self);
+  has_audio = self->audiopad != NULL;
+  has_video = self->videopad != NULL;
   [GST_AVF_ASSET_SRC_READER(self) stop];
 
   if (has_audio) {
@@ -696,22 +932,40 @@ gst_avf_asset_src_start_reading (GstAVFAssetSrc *self)
 
   GST_DEBUG_OBJECT (self, "Start reading");
 
+  if (AVF_ASSET_READER_HAS_VIDEO (self))
+    gst_avf_asset_src_update_video_allocation (self);
+
   if ((ret = gst_avf_asset_src_start_reader (self)) != TRUE) {
     goto exit;
   }
-
-  if (AVF_ASSET_READER_HAS_AUDIO (self)) {
-    ret = gst_pad_start_task (self->audiopad, (GstTaskFunction)gst_avf_asset_src_read_audio, self, NULL);
+  if (AVF_ASSET_READER_HAS_SUPPORTED_AUDIO (self)) {
+    ret = gst_pad_start_task (self->audiopad, (GstTaskFunction) gst_avf_asset_src_read_audio, gst_object_ref (self), gst_object_unref);
     if (!ret) {
       GST_ERROR ("Failed to start audio task");
       goto exit;
     }
+  } else if (AVF_ASSET_READER_HAS_AUDIO (self) && self->audiopad) {
+    ret = gst_pad_start_task (self->audiopad,
+        (GstTaskFunction) gst_avf_asset_src_send_audio_eos, gst_object_ref (self),
+        gst_object_unref);
+    if (!ret) {
+      GST_ERROR ("Failed to start audio EOS task");
+      goto exit;
+    }
   }
 
-  if (AVF_ASSET_READER_HAS_VIDEO (self)) {
-    ret = gst_pad_start_task (self->videopad, (GstTaskFunction)gst_avf_asset_src_read_video, self, NULL);
+  if (AVF_ASSET_READER_HAS_SUPPORTED_VIDEO (self)) {
+    ret = gst_pad_start_task (self->videopad, (GstTaskFunction)gst_avf_asset_src_read_video, gst_object_ref (self), gst_object_unref);
     if (!ret) {
       GST_ERROR ("Failed to start video task");
+      goto exit;
+    }
+  } else if (AVF_ASSET_READER_HAS_VIDEO (self) && self->videopad) {
+    ret = gst_pad_start_task (self->videopad,
+        (GstTaskFunction) gst_avf_asset_src_send_video_eos, gst_object_ref (self),
+        gst_object_unref);
+    if (!ret) {
+      GST_ERROR ("Failed to start video EOS task");
       goto exit;
     }
   }
@@ -731,10 +985,10 @@ gst_avf_asset_src_stop_reading (GstAVFAssetSrc * self)
 
   GST_DEBUG_OBJECT (self, "Stop reading");
 
-  if (AVF_ASSET_READER_HAS_AUDIO (self)) {
+  if (AVF_ASSET_READER_HAS_SUPPORTED_AUDIO (self)) {
     gst_pad_pause_task (self->audiopad);
   }
-  if (AVF_ASSET_READER_HAS_VIDEO (self)) {
+  if (AVF_ASSET_READER_HAS_SUPPORTED_VIDEO (self)) {
     gst_pad_pause_task (self->videopad);
   }
 
@@ -770,7 +1024,10 @@ gst_avf_asset_src_uri_get_type (GType type)
 static const gchar * const *
 gst_avf_asset_src_uri_get_protocols (GType type)
 {
-  static const gchar * const protocols[] = { "file", "ipod-library", NULL };
+  /* ipod-library:// is returned by MPMediaItemPropertyAssetURL, rarely used these days but not deprecated yet.
+   * avf+file:// is what we use to distinguish file URLs which should be handled by AVFoundation
+   * (and have to point to a media file AVF can decode) from regular arbitrary file:// URIs we use elsewhere in GStreamer. */
+  static const gchar * const protocols[] = { "avf+file", "ipod-library", NULL };
 
   return protocols;
 }
@@ -783,27 +1040,76 @@ gst_avf_asset_src_uri_get_uri (GstURIHandler * handler)
   return g_strdup (self->uri);
 }
 
+static AVAsset* gst_avf_asset_src_get_playable_asset (const gchar * uri)
+{
+  NSString *str = [NSString stringWithUTF8String:uri];
+  NSURL *url = [[NSURL alloc] initWithString:str];
+  AVAsset *asset = [AVAsset assetWithURL:url];
+  NSArray *tracks;
+
+  if (asset.playable) {
+    return asset;
+  }
+
+  GST_WARNING ("Asset not playable, trying supplemental decoders.");
+  if (gst_avf_asset_src_register_supplemental_decoders_if_needed (
+      [asset tracksWithMediaType:AVMediaTypeVideo])) {
+    /* The side-effect of registering supplemental decoders is not reflected on
+       existing AVAssets; we need to re-create to see if "playable" changed. */
+    asset = [AVAsset assetWithURL:url];
+    if (asset.playable)
+      GST_INFO ("Asset became playable after registering supplemental codecs.");
+    else
+      GST_WARNING
+          ("Asset still not playable after registering supplemental codecs.");
+
+    if (asset.playable) {
+      return asset;
+    }
+  }
+
+  /* Non-playable assets can still have playable tracks. Return a non-nil asset
+     if at least one track is playable. */
+  tracks = [asset tracksWithMediaType:AVMediaTypeVideo];
+  for (AVAssetTrack * track in tracks) {
+    if (track.playable)
+      return asset;
+  }
+
+  tracks = [asset tracksWithMediaType:AVMediaTypeAudio];
+  for (AVAssetTrack * track in tracks) {
+    if (track.playable)
+      return asset;
+  }
+
+  return nil;
+}
+
 static gboolean
 gst_avf_asset_src_uri_set_uri (GstURIHandler * handler, const gchar * uri, GError **error)
 {
   GstAVFAssetSrc *self = GST_AVF_ASSET_SRC (handler);
-  NSString *str;
-  NSURL *url;
   AVAsset *asset;
   gboolean ret = FALSE;
+  const gchar *asset_uri;
 
-  str = [NSString stringWithUTF8String: uri];
-  url = [[NSURL alloc] initWithString: str];
-  asset = [AVAsset assetWithURL: url];
+  if (g_str_has_prefix (uri, "avf+")) {
+    asset_uri = uri + 4;
+  } else {
+    asset_uri = uri;
+  }
 
-  if (asset.playable) {
+  asset = gst_avf_asset_src_get_playable_asset (asset_uri);
+
+  if (asset != nil) {
     ret = TRUE;
     g_free (self->uri);
-    self->uri = g_strdup (uri);
+    self->uri = g_strdup (asset_uri);
   } else {
     g_set_error (error, GST_URI_ERROR, GST_URI_ERROR_BAD_URI,
         "Invalid URI '%s' for avfassetsrc", uri);
   }
+
   return ret;
 }
 
@@ -881,20 +1187,12 @@ gst_avf_asset_src_uri_handler_init (gpointer g_iface, gpointer iface_data)
 
 - (id) initWithURI:(gchar*)uri : (GError **)error;
 {
-  NSString *str;
-  NSURL *url;
-
   GST_INFO ("Initializing AVFAssetReader with uri: %s", uri);
   *error = NULL;
-
-  str = [NSString stringWithUTF8String: uri];
-  url = [[NSURL alloc] initWithString: str];
-  asset = [AVAsset assetWithURL: url];
-
-  if (!asset.playable) {
+  asset = gst_avf_asset_src_get_playable_asset (uri);
+  if (asset == nil) {
     *error = g_error_new (GST_AVF_ASSET_SRC_ERROR, GST_AVF_ASSET_ERROR_NOT_PLAYABLE,
         "Media is not playable");
-    asset = nil;
     return nil;
   }
 
@@ -941,17 +1239,26 @@ gst_avf_asset_src_uri_handler_init (gpointer g_iface, gpointer iface_data)
     settings = [NSDictionary dictionaryWithObjectsAndKeys:
         [NSNumber numberWithInt:
         kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange],
-        kCVPixelBufferPixelFormatTypeKey, nil];
+        kCVPixelBufferPixelFormatTypeKey,
+        [NSDictionary dictionary], kCVPixelBufferIOSurfacePropertiesKey, nil];
   } else {
     return FALSE;
   }
 
   tracks = [asset tracksWithMediaType:mediaType];
   if ([tracks count] == 0 || [tracks count] < index + 1) {
+    *selected_track = -1;
     return FALSE;
   }
 
-  track = [tracks objectAtIndex:index];
+  track =[tracks objectAtIndex:index];
+  if (!track.playable) {
+    GST_WARNING ("%s track at index %d is not playable.",
+        MEDIA_TYPE_TO_STR (type), index);
+    *selected_track = -1;
+    return FALSE;
+  }
+
   *selected_track = index;
   *output  = [AVAssetReaderTrackOutput
       assetReaderTrackOutputWithTrack:track
@@ -974,6 +1281,11 @@ gst_avf_asset_src_uri_handler_init (gpointer g_iface, gpointer iface_data)
   reading = TRUE;
 }
 
+- (void) setUseVideoMeta: (gboolean) useVideoMeta
+{
+  use_video_meta = useVideoMeta;
+}
+
 - (void) stop
 {
   [reader cancelReading];
@@ -991,8 +1303,7 @@ gst_avf_asset_src_uri_handler_init (gpointer g_iface, gpointer iface_data)
   return FALSE;
 }
 
-- (void) seekTo: (guint64) startTS : (guint64) stopTS : (GError **) error
-{
+- (void) seekTo: (guint64) startTS : (guint64) stopTS :(GError **) error {
   CMTime startTime = kCMTimeZero, stopTime = kCMTimePositiveInfinity;
 
   if (startTS != GST_CLOCK_TIME_NONE) {
@@ -1014,10 +1325,14 @@ gst_avf_asset_src_uri_handler_init (gpointer g_iface, gpointer iface_data)
   GST_DEBUG ("Seeking to start:%" GST_TIME_FORMAT " stop:%" GST_TIME_FORMAT,
       GST_TIME_ARGS(startTS), GST_TIME_ARGS(stopTS));
 
-  reader.timeRange = CMTimeRangeMake(startTime, stopTime);
-  [self selectTrack: GST_AVF_ASSET_READER_MEDIA_TYPE_AUDIO:selected_audio_track];
-  [self selectTrack: GST_AVF_ASSET_READER_MEDIA_TYPE_VIDEO:selected_video_track];
-  [self start: error];
+  reader.timeRange = CMTimeRangeMake (startTime, stopTime);
+  if (selected_audio_track >= 0) {
+    [self selectTrack: GST_AVF_ASSET_READER_MEDIA_TYPE_AUDIO:selected_audio_track];
+  }
+  if (selected_video_track >= 0) {
+    [self selectTrack: GST_AVF_ASSET_READER_MEDIA_TYPE_VIDEO:selected_video_track];
+  }
+  [self start:error];
 }
 
 - (GstBuffer *) nextBuffer: (GstAVFAssetReaderMediaType) type : (GError **) error
@@ -1028,10 +1343,11 @@ gst_avf_asset_src_uri_handler_init (gpointer g_iface, gpointer iface_data)
   CMTime dur, ts;
 
   GST_LOG ("Reading %s next buffer", MEDIA_TYPE_TO_STR (type));
-  if (type == GST_AVF_ASSET_READER_MEDIA_TYPE_AUDIO && audio_track != NULL) {
+  if (type == GST_AVF_ASSET_READER_MEDIA_TYPE_AUDIO && audio_track != NULL &&
+      selected_audio_track >= 0) {
     areader = audio_track;
   } else if (type == GST_AVF_ASSET_READER_MEDIA_TYPE_VIDEO &&
-      video_track != NULL) {
+      video_track != NULL && selected_video_track >= 0) {
     areader = video_track;
   }
 
@@ -1050,14 +1366,19 @@ gst_avf_asset_src_uri_handler_init (gpointer g_iface, gpointer iface_data)
     return NULL;
   }
 
-  buf = gst_core_media_buffer_new (cmbuf, FALSE, NULL);
+  ts = CMSampleBufferGetPresentationTimeStamp (cmbuf);
+  if (!CMTIME_IS_VALID (ts)) {
+    GST_WARNING ("Buffer %p has invalid timestamp", cmbuf);
+  }
+  dur = CMSampleBufferGetDuration (cmbuf);
+  buf = gst_core_media_buffer_new (cmbuf,
+      type == GST_AVF_ASSET_READER_MEDIA_TYPE_VIDEO ? use_video_meta :
+      FALSE, NULL);
   CFRelease (cmbuf);
   if (buf == NULL)
     return NULL;
-  /* cmbuf is now retained by buf (in meta) */
-  dur = CMSampleBufferGetDuration (cmbuf);
-  ts = CMSampleBufferGetPresentationTimeStamp (cmbuf);
-  if (dur.value != 0) {
+
+  if (CMTIME_IS_VALID (dur) && dur.value != 0) {
     GST_BUFFER_DURATION (buf) = CMTIME_TO_GST_TIME (dur);
   }
   GST_BUFFER_TIMESTAMP (buf) = CMTIME_TO_GST_TIME (ts);
@@ -1065,7 +1386,14 @@ gst_avf_asset_src_uri_handler_init (gpointer g_iface, gpointer iface_data)
       GST_TIME_FORMAT, MEDIA_TYPE_TO_STR (type),
       GST_TIME_ARGS(GST_BUFFER_TIMESTAMP (buf)),
       GST_TIME_ARGS(GST_BUFFER_DURATION (buf)));
-  if (GST_BUFFER_TIMESTAMP (buf) > position) {
+
+  /* FIXME: Buffers with invalid timestamp don't contribute to advancing the
+   * position. We have options: 1) try to use the previous buffer duration if
+   * available, 2) advance by one nominal frame duration (though this won't work
+   * with VFR content), or 3) advance by some epsilon value. Not sure yet what's
+   * best.
+   */
+  if (GST_BUFFER_TIMESTAMP_IS_VALID (buf) && GST_BUFFER_TIMESTAMP (buf) > position) {
     position = GST_BUFFER_TIMESTAMP (buf);
   }
   return buf;
@@ -1079,7 +1407,8 @@ gst_avf_asset_src_uri_handler_init (gpointer g_iface, gpointer iface_data)
   if (type == GST_AVF_ASSET_READER_MEDIA_TYPE_AUDIO) {
     caps = gst_caps_ref (audio_caps);
     GST_INFO ("Using audio caps: %" GST_PTR_FORMAT, caps);
-  } else if (type == GST_AVF_ASSET_READER_MEDIA_TYPE_VIDEO) {
+  } else if (type == GST_AVF_ASSET_READER_MEDIA_TYPE_VIDEO
+      && selected_video_track >= 0) {
     gint fr_n, fr_d;
 
     track = [video_tracks objectAtIndex: selected_video_track];
@@ -1096,6 +1425,11 @@ gst_avf_asset_src_uri_handler_init (gpointer g_iface, gpointer iface_data)
   return caps;
 }
 
+- (GstCaps *) videoCaps
+{
+  return video_caps ? gst_caps_ref (video_caps) : NULL;
+}
+
 - (void) dealloc
 {
   asset = nil;
@@ -1106,8 +1440,12 @@ gst_avf_asset_src_uri_handler_init (gpointer g_iface, gpointer iface_data)
   }
 
   if (video_caps != NULL) {
-    gst_caps_unref (audio_caps);
+    gst_caps_unref (video_caps);
   }
 }
 
 @end
+
+#if defined(MAC_OS_X_VERSION_MAX_ALLOWED) && MAC_OS_X_VERSION_MAX_ALLOWED >= 150000
+G_GNUC_END_IGNORE_DEPRECATIONS;
+#endif

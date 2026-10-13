@@ -80,13 +80,9 @@ typedef struct _GstWlDisplayPrivate
   GstPoll *wl_fd_poll;
 
   GRecMutex sync_mutex;
-
-  GMutex buffers_mutex;
-  GHashTable *buffers;
-  gboolean shutting_down;
 } GstWlDisplayPrivate;
 
-G_DEFINE_TYPE_WITH_CODE (GstWlDisplay, gst_wl_display, G_TYPE_OBJECT,
+G_DEFINE_TYPE_WITH_CODE (GstWlDisplay, gst_wl_display, GST_TYPE_OBJECT,
     G_ADD_PRIVATE (GstWlDisplay)
     GST_DEBUG_CATEGORY_INIT (gst_wl_display_debug,
         "wldisplay", 0, "wldisplay library");
@@ -117,8 +113,6 @@ gst_wl_display_init (GstWlDisplay * self)
       g_array_new (FALSE, FALSE, sizeof (uint32_t));
   priv->color_alpha_modes = g_array_new (FALSE, FALSE, sizeof (uint32_t));
   priv->wl_fd_poll = gst_poll_new (TRUE);
-  priv->buffers = g_hash_table_new (g_direct_hash, g_direct_equal);
-  g_mutex_init (&priv->buffers_mutex);
   g_rec_mutex_init (&priv->sync_mutex);
 
   g_mutex_init (&priv->outputs_mutex);
@@ -132,12 +126,6 @@ gst_wl_display_init (GstWlDisplay * self)
 }
 
 static void
-gst_wl_ref_wl_buffer (gpointer key, gpointer value, gpointer user_data)
-{
-  g_object_ref (value);
-}
-
-static void
 gst_wl_display_finalize (GObject * gobject)
 {
   GstWlDisplay *self = GST_WL_DISPLAY (gobject);
@@ -146,17 +134,6 @@ gst_wl_display_finalize (GObject * gobject)
   gst_poll_set_flushing (priv->wl_fd_poll, TRUE);
   if (priv->thread)
     g_thread_join (priv->thread);
-
-  /* to avoid buffers being unregistered from another thread
-   * at the same time, take their ownership */
-  g_mutex_lock (&priv->buffers_mutex);
-  priv->shutting_down = TRUE;
-  g_hash_table_foreach (priv->buffers, gst_wl_ref_wl_buffer, NULL);
-  g_mutex_unlock (&priv->buffers_mutex);
-
-  g_hash_table_foreach (priv->buffers,
-      (GHFunc) gst_wl_buffer_force_release_and_unref, NULL);
-  g_hash_table_remove_all (priv->buffers);
 
   g_array_unref (priv->shm_formats);
   g_array_unref (priv->dmabuf_formats);
@@ -169,8 +146,6 @@ gst_wl_display_finalize (GObject * gobject)
   g_array_unref (priv->color_coefficients_range);
 
   gst_poll_free (priv->wl_fd_poll);
-  g_hash_table_unref (priv->buffers);
-  g_mutex_clear (&priv->buffers_mutex);
   g_rec_mutex_clear (&priv->sync_mutex);
 
   g_mutex_clear (&priv->outputs_mutex);
@@ -455,7 +430,10 @@ output_done (void *data, struct wl_output *wl_output)
   GST_INFO ("---");
 
   g_mutex_lock (&priv->outputs_mutex);
-  g_hash_table_replace (priv->outputs, g_strdup (name), output);
+  if (name)
+    g_hash_table_replace (priv->outputs, g_strdup (name), output);
+  else
+    GST_WARNING ("Compositor has provided an unnamed output, ignoring.");
   g_mutex_unlock (&priv->outputs_mutex);
 }
 
@@ -709,7 +687,7 @@ gst_wl_display_new_existing (struct wl_display *display,
     if (wl_display_roundtrip_queue (priv->display, priv->queue) < 0) {
       *error = g_error_new (g_quark_from_static_string ("GstWlDisplay"), 0,
           "Error communicating with the wayland display");
-      g_object_unref (self);
+      gst_object_unref (self);
       return NULL;
     }
   }
@@ -720,7 +698,7 @@ gst_wl_display_new_existing (struct wl_display *display,
     g_set_error (error, g_quark_from_static_string ("GstWlDisplay"), 0, \
         "Could not bind to " interface ". Either it is not implemented in " \
         "the compositor, or the implemented version doesn't match"); \
-    g_object_unref (self); \
+    gst_object_unref (self); \
     return NULL; \
   }
 
@@ -756,52 +734,11 @@ gst_wl_display_new_existing (struct wl_display *display,
   if (err) {
     g_propagate_prefixed_error (error, err,
         "Failed to start thread for the display's events");
-    g_object_unref (self);
+    gst_object_unref (self);
     return NULL;
   }
 
   return self;
-}
-
-void
-gst_wl_display_register_buffer (GstWlDisplay * self, gpointer gstmem,
-    gpointer wlbuffer)
-{
-  GstWlDisplayPrivate *priv = gst_wl_display_get_instance_private (self);
-
-  g_assert (!priv->shutting_down);
-
-  GST_TRACE_OBJECT (self, "registering GstWlBuffer %p to GstMem %p",
-      wlbuffer, gstmem);
-
-  g_mutex_lock (&priv->buffers_mutex);
-  g_hash_table_replace (priv->buffers, gstmem, wlbuffer);
-  g_mutex_unlock (&priv->buffers_mutex);
-}
-
-gpointer
-gst_wl_display_lookup_buffer (GstWlDisplay * self, gpointer gstmem)
-{
-  GstWlDisplayPrivate *priv = gst_wl_display_get_instance_private (self);
-  gpointer wlbuffer;
-
-  g_mutex_lock (&priv->buffers_mutex);
-  wlbuffer = g_hash_table_lookup (priv->buffers, gstmem);
-  g_mutex_unlock (&priv->buffers_mutex);
-  return wlbuffer;
-}
-
-void
-gst_wl_display_unregister_buffer (GstWlDisplay * self, gpointer gstmem)
-{
-  GstWlDisplayPrivate *priv = gst_wl_display_get_instance_private (self);
-
-  GST_TRACE_OBJECT (self, "unregistering GstWlBuffer owned by %p", gstmem);
-
-  g_mutex_lock (&priv->buffers_mutex);
-  if (G_LIKELY (!priv->shutting_down))
-    g_hash_table_remove (priv->buffers, gstmem);
-  g_mutex_unlock (&priv->buffers_mutex);
 }
 
 /* gst_wl_display_sync
@@ -825,6 +762,50 @@ gst_wl_display_sync (GstWlDisplay * self,
   g_rec_mutex_unlock (&priv->sync_mutex);
 
   return callback;
+}
+
+/**
+ * gst_wl_display_sync_store:
+ * @self: the #GstWlDisplay
+ * @callback: (out): location to store the resulting #wl_callback pointer
+ * @listener: a listener to attach to the new callback
+ * @data: user data to pass to @listener
+ *
+ * Like gst_wl_display_sync(), but the resulting callback pointer is
+ * written into @callback while the internal sync mutex is still held.
+ *
+ * gst_wl_display_sync() returns the callback to the caller and lets the
+ * caller publish it; if the Wayland event thread dispatches and destroys
+ * the callback before the caller stores the pointer, the caller will end
+ * up writing a stale pointer to its own field, which then leads to a
+ * double-free during teardown.
+ *
+ * This function avoids that race by combining "create + listener-attach
+ * + store" into a single critical section, so by the time the mutex is
+ * released the pointer in @callback is either already valid or already
+ * cleared by the dispatched listener.
+ *
+ * Since: 1.30
+ */
+void
+gst_wl_display_sync_store (GstWlDisplay * self,
+    struct wl_callback **callback,
+    const struct wl_callback_listener *listener, gpointer data)
+{
+  GstWlDisplayPrivate *priv = gst_wl_display_get_instance_private (self);
+  struct wl_callback *new_callback;
+
+  g_rec_mutex_lock (&priv->sync_mutex);
+
+  new_callback = wl_display_sync (priv->display_wrapper);
+  if (new_callback && listener)
+    wl_callback_add_listener (new_callback, listener, data);
+
+  /* Store the callback while holding sync_mutex so it cannot be dispatched and
+   * destroyed before the caller publishes the pointer. */
+  *callback = new_callback;
+
+  g_rec_mutex_unlock (&priv->sync_mutex);
 }
 
 /* gst_wl_display_object_destroy

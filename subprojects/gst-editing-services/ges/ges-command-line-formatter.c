@@ -23,6 +23,8 @@
 
 #include "ges-command-line-formatter.h"
 
+#include <gst/pbutils/pbutils.h>
+
 #include "ges/ges-structured-interface.h"
 #include "ges-structure-parser.h"
 #include "ges-internal.h"
@@ -67,7 +69,7 @@ typedef struct
 } Property;
 
 // Currently Clip has the most properties.. adapt as needed
-#define MAX_PROPERTIES 8
+#define MAX_PROPERTIES 9
 typedef struct
 {
   const gchar *long_name;
@@ -102,6 +104,16 @@ static GESCommandLineOption options[] = {
               "    ges-launch-1.0 --track-types=audio +clip /path/to/media\n\n"
               "Assuming \"media\" is an audio video sample, this will only play the audio of the\n"
               "sample in its entirety.\n\n"
+              "    ges-launch-1.0 +clip /path/to/media selected-streams=1+3\n\n"
+"Assuming \"media\" contains several streams, this will only use the streams whose\n"
+"stream-number (as reported by gst-discoverer-1.0) is 1 or 3. A full stream-id can\n"
+"be used instead of the stream-number. With no track suffix, each stream is routed\n"
+"to the first track of its type.\n\n"
+              "    ges-launch-1.0 +track audio +track audio +clip /path/to/media selected-streams=2:0+4:1\n\n"
+"Each entry may be suffixed with ':<track>' to route the stream to a specific track,\n"
+"given by its index in +track declaration order. Here stream 2 goes to the first\n"
+"audio track and stream 4 to the second. As stream-ids may contain '+' or ':',\n"
+"prefix those characters with '\\' to give them literally.\n\n"
               "    ges-launch-1.0 +clip /path/to/media1 layer=1 set-alpha 0.9 +clip /path/to/media2 layer=0\n\n"
               "Assume media1 and media2 both contain audio and video and last for 10 seconds.\n\n"
               "This will first add media1 in a new layer of \"priority\" 1, thus implicitly\n"
@@ -144,6 +156,14 @@ static GESCommandLineOption options[] = {
       {
         "layer", "l", 0, NULL,
         "The priority of the layer into which the clip should be added."
+      },
+      {
+        "selected-streams", "ss", 0, NULL,
+        "A '+' separated list of the streams of the URI to use, each entry being"
+        " a stream-number (as reported by gst-discoverer-1.0) or a full"
+        " stream-id, optionally suffixed with ':<track>' to route it to the track"
+        " at that index (in +track declaration order). When unspecified, all the"
+        " streams of the URI are used."
       },
       {NULL, 0, 0, NULL, FALSE},
     },
@@ -467,6 +487,8 @@ _ges_command_line_formatter_add_clip (GESTimeline * timeline,
 {
   GESProject *proj;
   GESAsset *asset;
+  gboolean ret;
+
   if (!_cleanup_fields (options[CLIP].properties, structure, error))
     return FALSE;
 
@@ -478,9 +500,11 @@ _ges_command_line_formatter_add_clip (GESTimeline * timeline,
   proj = GES_PROJECT (ges_extractable_get_asset (GES_EXTRACTABLE (timeline)));
   asset = _ges_get_asset_from_timeline (timeline, GES_TYPE_URI_CLIP,
       gst_structure_get_string (structure, "asset-id"), NULL);
-  ges_project_add_asset (proj, asset);
 
-  return TRUE;
+  ret = ges_project_add_asset (proj, asset);
+  gst_object_unref (asset);
+
+  return ret;
 }
 
 static gboolean
@@ -738,6 +762,202 @@ _set_project_loaded (GESFormatter * self)
   return FALSE;
 }
 
+/* If the user did not declare any +track in the URI/CLI description, infer
+ * the needed tracks from the discovered stream types of the URI clips, so
+ * pipelines like `ges:+clip /path/file.mov` work out of the box. Falls back
+ * to audio+video when there are no URI clips to inspect (e.g. only
+ * +test-clip). ges_timeline_add_track retroactively wires existing clips
+ * into the new track (ges-timeline.c:2638-2646). */
+static void
+_auto_create_tracks (GESTimeline * timeline)
+{
+  GList *tracks, *layers, *lt;
+  gboolean has_video = FALSE, has_audio = FALSE, saw_uri_asset = FALSE;
+
+  tracks = ges_timeline_get_tracks (timeline);
+  if (tracks) {
+    g_list_free_full (tracks, gst_object_unref);
+    return;
+  }
+
+  layers = ges_timeline_get_layers (timeline);
+  for (lt = layers; lt; lt = lt->next) {
+    GList *clips = ges_layer_get_clips (lt->data);
+    GList *ct;
+
+    for (ct = clips; ct; ct = ct->next) {
+      GESAsset *asset;
+      const GList *streams, *st;
+
+      if (!GES_IS_URI_CLIP (ct->data))
+        continue;
+
+      asset = ges_extractable_get_asset (ct->data);
+      if (!GES_IS_URI_CLIP_ASSET (asset))
+        continue;
+
+      saw_uri_asset = TRUE;
+      streams =
+          ges_uri_clip_asset_get_stream_assets (GES_URI_CLIP_ASSET (asset));
+      for (st = streams; st; st = st->next) {
+        GstDiscovererStreamInfo *info =
+            ges_uri_source_asset_get_stream_info (st->data);
+
+        if (GST_IS_DISCOVERER_VIDEO_INFO (info))
+          has_video = TRUE;
+        else if (GST_IS_DISCOVERER_AUDIO_INFO (info))
+          has_audio = TRUE;
+      }
+    }
+    g_list_free_full (clips, gst_object_unref);
+  }
+  g_list_free_full (layers, gst_object_unref);
+
+  if (!saw_uri_asset)
+    has_video = has_audio = TRUE;
+
+  if (has_video)
+    ges_timeline_add_track (timeline, GES_TRACK (ges_video_track_new ()));
+  if (has_audio)
+    ges_timeline_add_track (timeline, GES_TRACK (ges_audio_track_new ()));
+}
+
+/* Histogram-walk modelled on get_smart_profile() in ges-launcher.c:508.
+ * For each unrestricted video/audio track, fills restriction caps with the
+ * (resolution+framerate) / (rate+channels) tuple seen on the most clips.
+ * Ties are broken toward the larger canvas / higher sample rate. */
+static void
+_auto_derive_track_restrictions (GESTimeline * timeline)
+{
+  GList *layers, *tracks, *lt, *tt;
+  /* string-keyed "w h fps_n fps_d" / "rate channels" -> occurrence count */
+  GHashTable *vcounts = g_hash_table_new_full (g_str_hash, g_str_equal,
+      g_free, NULL);
+  GHashTable *acounts = g_hash_table_new_full (g_str_hash, g_str_equal,
+      g_free, NULL);
+  gint best_vw = 0, best_vh = 0, best_vfps_n = 0, best_vfps_d = 0;
+  gint best_arate = 0, best_achannels = 0;
+  guint best_vcount = 0, best_acount = 0;
+
+  layers = ges_timeline_get_layers (timeline);
+  for (lt = layers; lt; lt = lt->next) {
+    GList *clips = ges_layer_get_clips (lt->data);
+    GList *ct;
+
+    for (ct = clips; ct; ct = ct->next) {
+      GESAsset *asset;
+      const GList *streams, *st;
+
+      if (!GES_IS_URI_CLIP (ct->data))
+        continue;
+
+      asset = ges_extractable_get_asset (ct->data);
+      if (!GES_IS_URI_CLIP_ASSET (asset))
+        continue;
+
+      streams =
+          ges_uri_clip_asset_get_stream_assets (GES_URI_CLIP_ASSET (asset));
+      for (st = streams; st; st = st->next) {
+        GstDiscovererStreamInfo *info =
+            ges_uri_source_asset_get_stream_info (st->data);
+
+        if (!info)
+          continue;
+
+        if (GST_IS_DISCOVERER_VIDEO_INFO (info)) {
+          GstDiscovererVideoInfo *vi = GST_DISCOVERER_VIDEO_INFO (info);
+          gint w = gst_discoverer_video_info_get_width (vi);
+          gint h = gst_discoverer_video_info_get_height (vi);
+          gint fps_n = gst_discoverer_video_info_get_framerate_num (vi);
+          gint fps_d = gst_discoverer_video_info_get_framerate_denom (vi);
+          guint par_n = gst_discoverer_video_info_get_par_num (vi);
+          guint par_d = gst_discoverer_video_info_get_par_denom (vi);
+          gchar *key;
+          guint count;
+
+          if (w <= 0 || h <= 0 || fps_n <= 0 || fps_d <= 0)
+            continue;
+
+          /* PAR correction mirrors ges_video_uri_source_get_natural_size. */
+          if (par_n != par_d && par_n > 0 && par_d > 0) {
+            if (par_n < par_d)
+              h = gst_util_uint64_scale_int (h, par_d, par_n);
+            else
+              w = gst_util_uint64_scale_int (w, par_n, par_d);
+          }
+
+          key = g_strdup_printf ("%d %d %d %d", w, h, fps_n, fps_d);
+          count = GPOINTER_TO_UINT (g_hash_table_lookup (vcounts, key)) + 1;
+          if (count > best_vcount
+              || (count == best_vcount
+                  && (gint64) w * h > (gint64) best_vw * best_vh)
+              || (count == best_vcount && w * h == best_vw * best_vh
+                  && (gint64) fps_n * best_vfps_d
+                  > (gint64) best_vfps_n * fps_d)) {
+            best_vw = w;
+            best_vh = h;
+            best_vfps_n = fps_n;
+            best_vfps_d = fps_d;
+            best_vcount = count;
+          }
+          g_hash_table_insert (vcounts, key, GUINT_TO_POINTER (count));
+        } else if (GST_IS_DISCOVERER_AUDIO_INFO (info)) {
+          GstDiscovererAudioInfo *ai = GST_DISCOVERER_AUDIO_INFO (info);
+          gint rate = gst_discoverer_audio_info_get_sample_rate (ai);
+          gint channels = gst_discoverer_audio_info_get_channels (ai);
+          gchar *key;
+          guint count;
+
+          if (rate <= 0 || channels <= 0)
+            continue;
+
+          key = g_strdup_printf ("%d %d", rate, channels);
+          count = GPOINTER_TO_UINT (g_hash_table_lookup (acounts, key)) + 1;
+          if (count > best_acount || (count == best_acount && rate > best_arate)
+              || (count == best_acount && rate == best_arate
+                  && channels > best_achannels)) {
+            best_arate = rate;
+            best_achannels = channels;
+            best_acount = count;
+          }
+          g_hash_table_insert (acounts, key, GUINT_TO_POINTER (count));
+        }
+      }
+    }
+    g_list_free_full (clips, gst_object_unref);
+  }
+  g_list_free_full (layers, gst_object_unref);
+
+  tracks = ges_timeline_get_tracks (timeline);
+  for (tt = tracks; tt; tt = tt->next) {
+    GESTrack *track = tt->data;
+
+    if (_ges_track_has_explicit_restrictions (track))
+      continue;
+
+    if (GES_IS_VIDEO_TRACK (track) && best_vcount > 0) {
+      GstCaps *caps = gst_caps_new_simple ("video/x-raw",
+          "width", G_TYPE_INT, best_vw,
+          "height", G_TYPE_INT, best_vh,
+          "framerate", GST_TYPE_FRACTION, best_vfps_n, best_vfps_d,
+          NULL);
+      ges_track_update_restriction_caps (track, caps);
+      gst_caps_unref (caps);
+    } else if (GES_IS_AUDIO_TRACK (track) && best_acount > 0) {
+      GstCaps *caps = gst_caps_new_simple ("audio/x-raw",
+          "rate", G_TYPE_INT, best_arate,
+          "channels", G_TYPE_INT, best_achannels,
+          NULL);
+      ges_track_update_restriction_caps (track, caps);
+      gst_caps_unref (caps);
+    }
+  }
+  g_list_free_full (tracks, gst_object_unref);
+
+  g_hash_table_unref (vcounts);
+  g_hash_table_unref (acounts);
+}
+
 static gboolean
 _load (GESFormatter * self, GESTimeline * timeline, const gchar * string,
     GError ** error)
@@ -781,6 +1001,9 @@ _load (GESFormatter * self, GESTimeline * timeline, const gchar * string,
   }
 
   gst_object_unref (parser);
+
+  _auto_create_tracks (timeline);
+  _auto_derive_track_restrictions (timeline);
 
   ges_callback_add ((GSourceFunc) _set_project_loaded, g_object_ref (self),
       NULL);
@@ -992,13 +1215,13 @@ _serialize_object_properties (GObject * object, GESCommandLineOption * option,
 
     if (!name) {
       g_free (value_str);
-      continue;
+      goto next;
     }
 
     if (GES_IS_TRACK_ELEMENT (object) &&
         _serialize_control_binding (GES_TRACK_ELEMENT (object), name, res)) {
       g_free (value_str);
-      continue;
+      goto next;
     }
 
     if (!value_str)
@@ -1128,9 +1351,11 @@ ges_command_line_formatter_get_timeline_uri (GESTimeline * timeline)
 
         option = &options[TEST_CLIP];
       } else if (GES_IS_TITLE_CLIP (clip)) {
+        gchar *text = (gchar *) ges_title_clip_get_text (GES_TITLE_CLIP (clip));
+
         g_string_append (res, " +title ");
-        _sanitize_argument (ges_title_clip_get_text (GES_TITLE_CLIP (clip)),
-            res);
+        _sanitize_argument (text, res);
+        g_free (text);
         option = &options[TITLE];
       } else if (GES_IS_URI_CLIP (clip)) {
         g_string_append (res, " +clip ");

@@ -246,6 +246,7 @@ gst_gl_transformation_class_init (GstGLTransformationClass * klass)
       "Transform video on the GPU",
       "Lubosz Sarnecki <lubosz@gmail.com>, "
       "Matthew Waters <matthew@centricular.com>");
+  gst_element_class_mark_as_untrusted_aware (element_class);
 
   GST_GL_BASE_FILTER_CLASS (klass)->supported_gl_api =
       GST_GL_API_OPENGL | GST_GL_API_OPENGL3 | GST_GL_API_GLES2;
@@ -714,7 +715,7 @@ gst_gl_transformation_src_event (GstBaseTransform * trans, GstEvent * event)
           return TRUE;
         }
 
-        gst_navigation_event_set_coordinates (event, x, y);
+        gst_navigation_event_set_coordinates (event, new_x, new_y);
       }
       break;
     }
@@ -833,7 +834,7 @@ gst_gl_transformation_prepare_output_buffer (GstBaseTransform * trans,
 
     *outbuf = gst_buffer_make_writable (inbuf);
 
-    af_meta = gst_buffer_get_video_affine_transformation_meta (inbuf);
+    af_meta = gst_buffer_get_video_affine_transformation_meta (*outbuf);
     if (!af_meta)
       af_meta = gst_buffer_add_video_affine_transformation_meta (*outbuf);
 

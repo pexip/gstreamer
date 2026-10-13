@@ -141,6 +141,7 @@ gst_valve_class_init (GstValveClass * klass)
   gst_element_class_set_static_metadata (gstelement_class, "Valve element",
       "Filter", "Drops buffers and events or lets them through",
       "Olivier Crete <olivier.crete@collabora.co.uk>");
+  gst_element_class_mark_as_untrusted_aware (gstelement_class);
 
   gst_type_mark_as_plugin_api (GST_TYPE_VALVE_DROP_MODE, 0);
 }
@@ -178,10 +179,13 @@ gst_valve_set_property (GObject * object,
   GstValve *valve = GST_VALVE (object);
 
   switch (prop_id) {
-    case PROP_DROP:
-      g_atomic_int_set (&valve->drop, g_value_get_boolean (value));
-      gst_pad_push_event (valve->sinkpad, gst_event_new_reconfigure ());
+    case PROP_DROP:{
+      gboolean drop = g_value_get_boolean (value);
+      if (g_atomic_int_compare_and_exchange (&valve->drop, !drop, drop)) {
+        gst_pad_push_event (valve->sinkpad, gst_event_new_reconfigure ());
+      }
       break;
+    }
     case PROP_DROP_MODE:
       valve->drop_mode = g_value_get_enum (value);
       break;

@@ -342,6 +342,8 @@ gst_dvd_sub_dec_parse_subpic (GstDvdSubDec * dec)
         GST_WARNING_OBJECT (dec, "SPU_WIPE not yet implemented");
 
         length = (buf[1] << 8) | (buf[2]);
+
+        PARSE_BYTES_NEEDED (1 + length);
         buf += 1 + length;
 
         dec->buf_dirty = TRUE;
@@ -501,8 +503,9 @@ gst_draw_rle_line (GstDvdSubDec * dec, guchar * buffer, RLE_state * state)
 
   target = state->target;
 
-  x = dec->left;
-  right = dec->right + 1;
+  /* If left/right is still outside the frame, clip it off */
+  x = CLAMP (dec->left, 0, dec->in_width - 1);
+  right = MIN (dec->right + 1, dec->in_width);
 
   while (x < right) {
     gboolean in_hl;
@@ -636,13 +639,15 @@ gst_dvd_sub_dec_merge_title (GstDvdSubDec * dec, GstVideoFrame * frame)
     hl_top = -1;
     hl_bottom = -1;
   }
-  last_y = MIN (dec->bottom, dec->in_height);
 
-  y = dec->top;
+  /* If top/bottom is still outside the frame, clip it off */
+  last_y = MIN (dec->bottom, dec->in_height - 1);
+  y = CLAMP (dec->top, 0, dec->in_height - 1);
+
   state.target = Y_data + 4 * dec->left + (y * Y_stride);
 
   /* Now draw scanlines until we hit last_y or end of RLE data */
-  for (; ((state.offset[1] < dec->data_size + 2) && (y <= last_y)); y++) {
+  for (; ((state.offset[state.id] < dec->data_size + 2) && (y <= last_y)); y++) {
     /* Set up to draw the highlight if we're in the right scanlines */
     if (y > hl_bottom || y < hl_top) {
       state.hl_left = -1;
@@ -1149,6 +1154,7 @@ not_handled:
 static gboolean
 plugin_init (GstPlugin * plugin)
 {
+  gst_plugin_set_static_features_flag (plugin);
   gboolean ret = FALSE;
 
   ret |= GST_ELEMENT_REGISTER (dvdsubdec, plugin);

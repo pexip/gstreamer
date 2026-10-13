@@ -986,6 +986,13 @@ gst_v4l2_transform_prepare_output_buffer (GstBaseTransform * trans,
 
   } while (ret == GST_V4L2_FLOW_CORRUPTED_BUFFER);
 
+  if (pool)
+    g_object_unref (pool);
+
+  pool = gst_v4l2_object_get_buffer_pool (self->v4l2output);
+  /* release the output buffer that is no longer needed */
+  gst_v4l2_buffer_pool_release_buffers (GST_V4L2_BUFFER_POOL (pool));
+
   if (ret != GST_FLOW_OK) {
     gst_buffer_unref (*outbuf);
     *outbuf = NULL;
@@ -1175,6 +1182,7 @@ gst_v4l2_transform_class_init (GstV4l2TransformClass * klass)
       "Filter/Converter/Video/Scaler",
       "Transform streams via V4L2 API",
       "Nicolas Dufresne <nicolas.dufresne@collabora.com>");
+  gst_element_class_mark_as_untrusted_aware (element_class);
 
   gobject_class->dispose = GST_DEBUG_FUNCPTR (gst_v4l2_transform_dispose);
   gobject_class->finalize = GST_DEBUG_FUNCPTR (gst_v4l2_transform_finalize);

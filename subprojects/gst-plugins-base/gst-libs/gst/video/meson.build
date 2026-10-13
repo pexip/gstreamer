@@ -4,8 +4,10 @@ video_sources = files([
   'convertframe.c',
   'gstvideoaffinetransformationmeta.c',
   'gstvideocodecalphameta.c',
+  'gstvideodscmeta.c',
   'gstvideoaggregator.c',
   'gstvideodecoder.c',
+  'gstvideodmabufpool.c',
   'gstvideoencoder.c',
   'gstvideofilter.c',
   'gstvideometa.c',
@@ -37,6 +39,7 @@ video_sources = files([
   'videodirection.c',
   'videoorientation.c',
   'videooverlay.c',
+  'gsth274.c',
 ])
 
 video_headers = files([
@@ -44,8 +47,10 @@ video_headers = files([
   'colorbalancechannel.h',
   'gstvideoaffinetransformationmeta.h',
   'gstvideocodecalphameta.h',
+  'gstvideodscmeta.h',
   'gstvideoaggregator.h',
   'gstvideodecoder.h',
+  'gstvideodmabufpool.h',
   'gstvideoencoder.h',
   'gstvideofilter.h',
   'gstvideometa.h',
@@ -77,6 +82,7 @@ video_headers = files([
   'video-overlay-composition.h',
   'video-multiview.h',
   'video-sei.h',
+  'gsth274.h',
 ])
 install_headers(video_headers, subdir : 'gstreamer-1.0/gst/video/')
 
@@ -124,9 +130,8 @@ gstvideo_h = video_enums[1]
 video_gen_sources = [gstvideo_h]
 
 orcsrc = 'video-orc'
-gstvideo_deps = [gst_base_dep, libm]
+gstvideo_deps = [allocators_dep, gst_base_dep, orc_dep, libm]
 if have_orcc
-  gstvideo_deps += [orc_dep]
   orc_h = custom_target(orcsrc + '.h',
     input : orcsrc + '.orc',
     output : orcsrc + '.h',

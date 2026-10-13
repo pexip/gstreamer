@@ -126,7 +126,7 @@ read_int (const gchar * line)
 static gboolean
 string_match (const gchar * line, const gchar * match, const gchar * upto)
 {
-  gchar *result = strstr (line, match);
+  const gchar *result = strstr (line, match);
   return (result < upto);
 }
 
@@ -180,7 +180,7 @@ make_color (gint r, gint g, gint b)
 static gboolean
 qttext_parse_tag (ParserState * state, const gchar * line, gint * index)
 {
-  gchar *next;
+  const gchar *next;
   gint next_index;
   gint aux;
   gchar *str;
@@ -229,6 +229,7 @@ qttext_parse_tag (ParserState * state, const gchar * line, gint * index)
 
   } else if (strncmp (line + *index, "textColor", 9) == 0) {
     if (read_color (line + *index + 9, &r, &g, &b)) {
+      g_free (context->fg_color);
       context->fg_color = make_color (r, g, b);
       GST_DEBUG ("Setting qttext fg color to %s", context->fg_color);
     } else {
@@ -238,6 +239,7 @@ qttext_parse_tag (ParserState * state, const gchar * line, gint * index)
 
   } else if (strncmp (line + *index, "backColor", 9) == 0) {
     if (read_color (line + *index + 9, &r, &g, &b)) {
+      g_free (context->bg_color);
       context->bg_color = make_color (r, g, b);
       GST_DEBUG ("Setting qttext bg color to %s", context->bg_color);
     } else {
@@ -303,10 +305,11 @@ static guint64
 qttext_parse_timestamp (ParserState * state, const gchar * line, gint index)
 {
   int ret;
-  gint hour, min, sec, dec;
+  guint hour, min, sec, dec;
+  guint64 timestamp, tmp;
   GstQTTextContext *context = GST_QTTEXT_CONTEXT (state);
 
-  ret = sscanf (line + index, "[%d:%d:%d.%d]", &hour, &min, &sec, &dec);
+  ret = sscanf (line + index, "[%u:%u:%u.%u]", &hour, &min, &sec, &dec);
   if (ret != 3 && ret != 4) {
     /* bad timestamp */
     GST_WARNING ("Bad qttext timestamp found: %s", line);
@@ -320,10 +323,16 @@ qttext_parse_timestamp (ParserState * state, const gchar * line, gint index)
 
   /* parse the decimal part according to the timescale */
   g_assert (context->timescale != 0);
-  dec = (GST_SECOND * dec) / context->timescale;
+  timestamp = gst_util_uint64_scale (dec, GST_SECOND, context->timescale);
+  timestamp += (guint64) sec *GST_SECOND;
+  if (!g_uint64_checked_mul (&tmp, min, MIN_TO_NSEC))
+    return GST_CLOCK_TIME_NONE;
+  timestamp += tmp;
+  if (!g_uint64_checked_mul (&tmp, hour, HOUR_TO_NSEC))
+    return GST_CLOCK_TIME_NONE;
+  timestamp += tmp;
 
-  /* return the result */
-  return hour * HOUR_TO_NSEC + min * MIN_TO_NSEC + sec * GST_SECOND + dec;
+  return timestamp;
 }
 
 static void

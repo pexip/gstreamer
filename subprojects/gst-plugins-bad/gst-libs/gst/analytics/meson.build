@@ -3,11 +3,15 @@ analytics_sources = files( 'gstanalyticsmeta.c',
                               'gstanalyticsobjectdetectionmtd.c',
                               'gstanalyticsobjecttrackingmtd.c',
                               'gstanalyticssegmentationmtd.c',
+                              'gstanalyticsgroupmtd.c',
+                              'gstanalyticskeypointmtd.c',
                               'gstanalyticsbatchmeta.c',
                               'gstanalyticstensormtd.c',
                               'gsttensormeta.c',
+                              'gstanalyticstextmtd.c',
                               'gsttensor.c',
-                              'gstanalytics_image_util.c')
+                              'gstanalytics_image_util.c',
+                              'modelinfo.c')
 
 analytics_headers = files(    'analytics.h',
                               'gstanalyticsmeta.h',
@@ -16,11 +20,15 @@ analytics_headers = files(    'analytics.h',
                               'gstanalyticsobjectdetectionmtd.h',
                               'gstanalyticsobjecttrackingmtd.h',
                               'gstanalyticssegmentationmtd.h',
+                              'gstanalyticsgroupmtd.h',
+                              'gstanalyticskeypointmtd.h',
                               'gstanalyticstensormtd.h',
                               'gstanalyticsbatchmeta.h',
+                              'gstanalyticstextmtd.h',
                               'gsttensormeta.h',
                               'gsttensor.h',
-                              'gstanalytics_image_util.h')
+                              'gstanalytics_image_util.h',
+                              'modelinfo.h')
 
 install_headers(analytics_headers, subdir : 'gstreamer-1.0/gst/analytics')
 
@@ -42,11 +50,10 @@ gstanalytics = library('gstanalytics-' + api_version,
   soversion : soversion,
   darwin_versions : osxversion,
   install : true,
-  dependencies : [gstbase_dep, gstvideo_dep],
-  link_args : ['-lm'])
+  dependencies : [gstbase_dep, gstvideo_dep, libm])
 
 pkgconfig.generate(gstanalytics,
-  libraries : [gst_dep, gstbase_dep, gstvideo_dep, '-lm'],
+  libraries : [gst_dep, gstbase_dep, gstvideo_dep, libm],
   variables : pkgconfig_variables,
   subdirs : pkgconfig_subdirs,
   name : pkg_name,

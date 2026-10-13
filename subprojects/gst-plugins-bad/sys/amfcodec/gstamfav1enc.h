@@ -20,10 +20,18 @@
 #pragma once
 
 #include "gstamfencoder.h"
+#ifdef G_OS_WIN32
 #include <gst/d3d11/gstd3d11.h>
+#ifdef HAVE_GST_D3D12
+#include <gst/d3d12/gstd3d12.h>
+#endif
+#endif
 
 G_BEGIN_DECLS
-    void gst_amf_av1_enc_register_d3d11 (GstPlugin * plugin,
-    GstD3D11Device * device, gpointer context, guint rank);
+void gst_amf_av1_enc_register (GstPlugin *plugin,
+                               GstObject *device,
+                               gpointer context,
+                               guint rank);
+
 
 G_END_DECLS

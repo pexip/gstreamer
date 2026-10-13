@@ -505,6 +505,7 @@ gst_iqa_class_init (GstIqaClass * klass)
       "Filter/Analyzer/Video",
       "Provides various Image Quality Assessment metrics",
       "Mathieu Duponchelle <mathieu.duponchelle@collabora.co.uk>");
+  gst_element_class_mark_as_untrusted_aware (gstelement_class);
 }
 
 static void
@@ -515,6 +516,7 @@ gst_iqa_init (GstIqa * self)
 static gboolean
 plugin_init (GstPlugin * plugin)
 {
+  gst_plugin_set_static_features_flag (plugin);
   return GST_ELEMENT_REGISTER (iqa, plugin);
 }
 

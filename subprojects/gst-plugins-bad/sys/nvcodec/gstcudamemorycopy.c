@@ -923,7 +923,7 @@ gst_cuda_memory_copy_transform (GstBaseTransform * trans, GstBuffer * inbuf,
     in_type = GST_CUDA_BUFFER_COPY_CUDA;
     use_device_copy = TRUE;
 #ifdef HAVE_CUDA_GST_GL
-  } else if (self->gl_context && gst_is_gl_memory_pbo (in_mem)) {
+  } else if (gst_is_gl_memory_pbo (in_mem)) {
     in_type = GST_CUDA_BUFFER_COPY_GL;
 #endif
 #ifdef G_OS_WIN32
@@ -943,7 +943,7 @@ gst_cuda_memory_copy_transform (GstBaseTransform * trans, GstBuffer * inbuf,
     out_type = GST_CUDA_BUFFER_COPY_CUDA;
     use_device_copy = TRUE;
 #ifdef HAVE_CUDA_GST_GL
-  } else if (self->gl_context && gst_is_gl_memory_pbo (out_mem)) {
+  } else if (gst_is_gl_memory_pbo (out_mem)) {
     out_type = GST_CUDA_BUFFER_COPY_GL;
 #endif
 #ifdef G_OS_WIN32
@@ -1054,9 +1054,10 @@ gst_cuda_upload_class_init (GstCudaUploadClass * klass, gpointer data)
           cdata->src_caps));
 
   gst_element_class_set_static_metadata (element_class,
-      "CUDA uploader", "Filter/Video",
+      "CUDA uploader", "Filter/Video/Uploader",
       "Uploads data into NVIDA GPU via CUDA APIs",
       "Seungha Yang <seungha.yang@navercorp.com>");
+  gst_element_class_mark_as_untrusted_aware (element_class);
 
   trans_class->transform = GST_DEBUG_FUNCPTR (gst_cuda_memory_copy_transform);
 
@@ -1118,9 +1119,10 @@ gst_cuda_download_class_init (GstCudaDownloadClass * klass, gpointer data)
           cdata->src_caps));
 
   gst_element_class_set_static_metadata (element_class,
-      "CUDA downloader", "Filter/Video",
+      "CUDA downloader", "Filter/Video/Downloader",
       "Downloads data from NVIDA GPU via CUDA APIs",
       "Seungha Yang <seungha.yang@navercorp.com>");
+  gst_element_class_mark_as_untrusted_aware (element_class);
 
   trans_class->before_transform =
       GST_DEBUG_FUNCPTR (gst_cuda_download_before_transform);

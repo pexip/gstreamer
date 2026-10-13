@@ -174,15 +174,29 @@ struct _GstMemory {
  * GstMapFlags:
  * @GST_MAP_READ: map for read access
  * @GST_MAP_WRITE: map for write access
+ * @GST_MAP_REF_MEMORY: Take another reference of the memory and store it in
+ *     the GstMapInfo. This makes sure that the memory stays valid  while it
+ *     is mapped and automatically unrefs it on unmap. (Since: 1.28)
  * @GST_MAP_FLAG_LAST: first flag that can be used for custom purposes
  *
  * Flags used when mapping memory
  */
 typedef enum {
-  GST_MAP_READ      = GST_LOCK_FLAG_READ,
-  GST_MAP_WRITE     = GST_LOCK_FLAG_WRITE,
+  GST_MAP_READ       = GST_LOCK_FLAG_READ,
+  GST_MAP_WRITE      = GST_LOCK_FLAG_WRITE,
 
-  GST_MAP_FLAG_LAST = (1 << 16)
+  /**
+   * GST_MAP_REF_MEMORY:
+   *
+   * Take another reference of the memory and store it in the GstMapInfo. This
+   * makes sure that the memory stays valid  while it is mapped and
+   * automatically unrefs it on unmap.
+   *
+   * Since: 1.28
+   */
+  GST_MAP_REF_MEMORY = GST_LOCK_FLAG_LAST,
+
+  GST_MAP_FLAG_LAST  = (1 << 16)
 } GstMapFlags;
 
 /**
@@ -436,6 +450,14 @@ G_DEFINE_AUTOPTR_CLEANUP_FUNC(GstMemory, gst_memory_unref)
 
 G_DEFINE_AUTOPTR_CLEANUP_FUNC(GstAllocator, gst_object_unref)
 
+GST_API
+void           gst_map_info_init       (GstMapInfo *info);
+
+GST_API
+void           gst_map_info_clear      (GstMapInfo *info);
+
+G_DEFINE_AUTO_CLEANUP_CLEAR_FUNC(GstMapInfo, gst_map_info_clear)
+
 /**
  * GstMemoryMapInfo: (skip):
  *
@@ -451,23 +473,15 @@ G_DEFINE_AUTOPTR_CLEANUP_FUNC(GstAllocator, gst_object_unref)
  * }
  * ```
  *
- * #GstMapInfo cannot be used with g_auto() because it is ambiguous whether it
- * needs to be unmapped using gst_buffer_unmap() or gst_memory_unmap().
- *
  * See also #GstBufferMapInfo.
  *
  * Since: 1.22
+ *
+ * Deprecated: 1.28: Use #GstMapInfo instead.
  */
-typedef GstMapInfo GstMemoryMapInfo;
+typedef GstMapInfo GstMemoryMapInfo GST_DEPRECATED_TYPE_FOR(GstMapInfo);
 
-static inline void _gst_memory_map_info_clear(GstMemoryMapInfo *info)
-{
-  if (G_LIKELY (info->memory)) {
-    gst_memory_unmap (info->memory, info);
-  }
-}
-
-G_DEFINE_AUTO_CLEANUP_CLEAR_FUNC(GstMemoryMapInfo, _gst_memory_map_info_clear)
+G_DEFINE_AUTO_CLEANUP_CLEAR_FUNC(GstMemoryMapInfo, gst_map_info_clear)
 
 G_END_DECLS
 

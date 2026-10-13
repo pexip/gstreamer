@@ -128,8 +128,9 @@ gst_gl_upload_element_class_init (GstGLUploadElementClass * klass)
   gst_caps_unref (upload_caps);
 
   gst_element_class_set_static_metadata (element_class,
-      "OpenGL uploader", "Filter/Video",
+      "OpenGL uploader", "Filter/Video/Uploader",
       "Uploads data into OpenGL", "Matthew Waters <matthew@centricular.com>");
+  gst_element_class_mark_as_untrusted_aware (element_class);
 
   gobject_class->finalize = gst_gl_upload_element_finalize;
 }

@@ -20,7 +20,7 @@
 #pragma once
 
 #include <gst/gst.h>
-#include "protocol/win32ipcmmf.h"
+#include "gstwin32ipcmmf.h"
 
 G_BEGIN_DECLS
 
@@ -34,12 +34,12 @@ struct _GstWin32IpcMemory
 {
   GstMemory mem;
 
-  Win32IpcMmf *mmf;
+  GstWin32IpcMmf *mmf;
 };
 
 gboolean gst_is_win32_ipc_memory (GstMemory * mem);
 
-GstWin32IpcAllocator * gst_win32_ipc_allocator_new (guint size);
+GstWin32IpcAllocator * gst_win32_ipc_allocator_new (gsize size);
 
 gboolean               gst_win32_ipc_allocator_set_active (GstWin32IpcAllocator * alloc,
                                                            gboolean active);

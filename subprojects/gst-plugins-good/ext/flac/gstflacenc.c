@@ -79,22 +79,20 @@ static const GstAudioChannelPosition channel_positions[8][8] = {
         GST_AUDIO_CHANNEL_POSITION_FRONT_CENTER,
         GST_AUDIO_CHANNEL_POSITION_LFE1,
         GST_AUDIO_CHANNEL_POSITION_REAR_LEFT,
-      GST_AUDIO_CHANNEL_POSITION_REAR_RIGHT},
-  /* FIXME: 7/8 channel layouts are not defined in the FLAC specs */
-  {
+      GST_AUDIO_CHANNEL_POSITION_REAR_RIGHT}, {
         GST_AUDIO_CHANNEL_POSITION_FRONT_LEFT,
         GST_AUDIO_CHANNEL_POSITION_FRONT_RIGHT,
-        GST_AUDIO_CHANNEL_POSITION_REAR_LEFT,
-        GST_AUDIO_CHANNEL_POSITION_REAR_RIGHT,
         GST_AUDIO_CHANNEL_POSITION_FRONT_CENTER,
         GST_AUDIO_CHANNEL_POSITION_LFE1,
-      GST_AUDIO_CHANNEL_POSITION_REAR_CENTER}, {
+        GST_AUDIO_CHANNEL_POSITION_REAR_CENTER,
+        GST_AUDIO_CHANNEL_POSITION_SIDE_LEFT,
+      GST_AUDIO_CHANNEL_POSITION_SIDE_RIGHT}, {
         GST_AUDIO_CHANNEL_POSITION_FRONT_LEFT,
         GST_AUDIO_CHANNEL_POSITION_FRONT_RIGHT,
-        GST_AUDIO_CHANNEL_POSITION_REAR_LEFT,
-        GST_AUDIO_CHANNEL_POSITION_REAR_RIGHT,
         GST_AUDIO_CHANNEL_POSITION_FRONT_CENTER,
         GST_AUDIO_CHANNEL_POSITION_LFE1,
+        GST_AUDIO_CHANNEL_POSITION_REAR_LEFT,
+        GST_AUDIO_CHANNEL_POSITION_REAR_RIGHT,
         GST_AUDIO_CHANNEL_POSITION_SIDE_LEFT,
       GST_AUDIO_CHANNEL_POSITION_SIDE_RIGHT}
 };
@@ -847,6 +845,8 @@ gst_flac_enc_generate_sink_caps (void)
   gst_value_list_append_value (&v_list, &v);
   g_value_set_static_string (&v, GST_AUDIO_NE (S24_32));
   gst_value_list_append_value (&v_list, &v);
+  g_value_set_static_string (&v, GST_AUDIO_NE (S32));
+  gst_value_list_append_value (&v_list, &v);
   g_value_unset (&v);
 
   s = gst_structure_new_empty ("audio/x-raw");
@@ -1035,24 +1035,24 @@ gst_flac_enc_update_quality (GstFlacEnc * flacenc, gint quality)
 
   if (GST_AUDIO_INFO_CHANNELS (info) == 2
       || GST_AUDIO_INFO_CHANNELS (info) == 0) {
-    DO_UPDATE (do_mid_side_stereo, mid_side, "mid_side_stereo");
-    DO_UPDATE (loose_mid_side_stereo, loose_mid_side, "loose_mid_side");
+    DO_UPDATE (do_mid_side_stereo, mid_side, "mid-side-stereo");
+    DO_UPDATE (loose_mid_side_stereo, loose_mid_side, "loose-mid-side-stereo");
   }
 
   DO_UPDATE (blocksize, blocksize, "blocksize");
-  DO_UPDATE (max_lpc_order, max_lpc_order, "max_lpc_order");
-  DO_UPDATE (qlp_coeff_precision, qlp_coeff_precision, "qlp_coeff_precision");
+  DO_UPDATE (max_lpc_order, max_lpc_order, "max-lpc-order");
+  DO_UPDATE (qlp_coeff_precision, qlp_coeff_precision, "qlp-coeff-precision");
   DO_UPDATE (do_qlp_coeff_prec_search, qlp_coeff_prec_search,
-      "qlp_coeff_prec_search");
-  DO_UPDATE (do_escape_coding, escape_coding, "escape_coding");
+      "qlp-coeff-prec-search");
+  DO_UPDATE (do_escape_coding, escape_coding, "escape-coding");
   DO_UPDATE (do_exhaustive_model_search, exhaustive_model_search,
-      "exhaustive_model_search");
+      "exhaustive-model-search");
   DO_UPDATE (min_residual_partition_order, min_residual_partition_order,
-      "min_residual_partition_order");
+      "min-residual-partition-order");
   DO_UPDATE (max_residual_partition_order, max_residual_partition_order,
-      "max_residual_partition_order");
+      "max-residual-partition-order");
   DO_UPDATE (rice_parameter_search_dist, rice_parameter_search_dist,
-      "rice_parameter_search_dist");
+      "rice-parameter-search-dist");
 
 #undef DO_UPDATE
 

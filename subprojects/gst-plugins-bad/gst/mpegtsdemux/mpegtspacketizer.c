@@ -53,6 +53,9 @@ G_DEFINE_TYPE_EXTENDED (MpegTSPacketizer2, mpegts_packetizer, G_TYPE_OBJECT, 0,
 #define PACKETIZER_GROUP_LOCK(p) g_mutex_lock(&((p)->group_lock))
 #define PACKETIZER_GROUP_UNLOCK(p) g_mutex_unlock(&((p)->group_lock))
 
+#define PACKETIZER_STATS_LOCK(p) g_mutex_lock(&((p)->stats_lock))
+#define PACKETIZER_STATS_UNLOCK(p) g_mutex_unlock(&((p)->stats_lock))
+
 static void mpegts_packetizer_dispose (GObject * object);
 static void mpegts_packetizer_finalize (GObject * object);
 static GstClockTime calculate_skew (MpegTSPacketizer2 * packetizer,
@@ -60,6 +63,8 @@ static GstClockTime calculate_skew (MpegTSPacketizer2 * packetizer,
 static void _close_current_group (MpegTSPCR * pcrtable);
 static void record_pcr (MpegTSPacketizer2 * packetizer, MpegTSPCR * pcrtable,
     guint64 pcr, guint64 offset);
+static void mpegts_packetizer_count_packet (MpegTSPacketizer2 * packetizer,
+    MpegTSPacketizerPacket * packet);
 
 #define CONTINUITY_UNSET 255
 #define VERSION_NUMBER_UNSET 255
@@ -277,6 +282,9 @@ mpegts_packetizer_init (MpegTSPacketizer2 * packetizer)
   packetizer->last_pts = GST_CLOCK_TIME_NONE;
   packetizer->last_dts = GST_CLOCK_TIME_NONE;
   packetizer->extra_shift = 0;
+
+  g_mutex_init (&packetizer->stats_lock);
+  packetizer->pid_stats = NULL;
 }
 
 static void
@@ -304,6 +312,9 @@ mpegts_packetizer_dispose (GObject * object)
     packetizer->empty = TRUE;
 
     flush_observations (packetizer);
+
+    mpegts_packetizer_set_packet_counts_enabled (packetizer, FALSE);
+    g_mutex_clear (&packetizer->stats_lock);
   }
 
   if (G_OBJECT_CLASS (mpegts_packetizer_parent_class)->dispose)
@@ -517,6 +528,7 @@ mpegts_packetizer_parse_packet (MpegTSPacketizer2 * packetizer,
   else
     packet->payload = NULL;
 
+  mpegts_packetizer_count_packet (packetizer, packet);
   return PACKET_OK;
 }
 
@@ -626,6 +638,12 @@ mpegts_packetizer_clear (MpegTSPacketizer2 * packetizer)
       break;
   }
   PACKETIZER_GROUP_UNLOCK (packetizer);
+
+  PACKETIZER_STATS_LOCK (packetizer);
+  if (packetizer->pid_stats) {
+    g_array_set_size (packetizer->pid_stats, 0);
+  }
+  PACKETIZER_STATS_UNLOCK (packetizer);
 }
 
 void
@@ -1041,8 +1059,9 @@ mpegts_packetizer_push_section (MpegTSPacketizer2 * packetizer,
   if (packet->payload_unit_start_indicator)
     pointer = *data++;
 
-  if (stream->continuity_counter == CONTINUITY_UNSET ||
-      (stream->continuity_counter + 1) % 16 != packet_cc) {
+  if (!packetizer->ignore_continuity_counter
+      && (stream->continuity_counter == CONTINUITY_UNSET
+          || (stream->continuity_counter + 1) % 16 != packet_cc)) {
     if (stream->continuity_counter != CONTINUITY_UNSET) {
       GST_WARNING ("PID 0x%04x section discontinuity (%d vs %d)", packet->pid,
           stream->continuity_counter, packet_cc);
@@ -1151,7 +1170,7 @@ section_start:
     GST_DEBUG ("Short packet");
     section_length = (GST_READ_UINT16_BE (data + 1) & 0xfff) + 3;
     /* Only do fast-path if we have enough byte */
-    if (data + section_length <= packet->data_end) {
+    if ((packet->data_end - data) >= section_length) {
       if ((section =
               gst_mpegts_section_new (packet->pid, g_memdup2 (data,
                       section_length), section_length))) {
@@ -1471,9 +1490,6 @@ calculate_skew (MpegTSPacketizer2 * packetizer,
   /* keep track of the last extended pcrtime */
   pcr->last_pcrtime = gstpcrtime;
 
-  if (!packetizer->skew_correction)
-    goto no_skew;
-
   /* we don't have an arrival timestamp so we can't do skew detection. we
    * should still apply a timestamp based on RTP timestamp and base_time */
   if (!GST_CLOCK_TIME_IS_VALID (time)
@@ -1513,6 +1529,9 @@ calculate_skew (MpegTSPacketizer2 * packetizer,
     send_diff = 0;
     delta = 0;
   }
+
+  if (!packetizer->skew_correction)
+    goto no_skew;
 
   pos = pcr->window_pos;
 
@@ -2292,21 +2311,48 @@ mpegts_packetizer_pts_to_ts_internal (MpegTSPacketizer2 * packetizer,
   pcrtable = get_pcr_table (packetizer, pcr_pid);
 
   if (pcr_pid == 0x1fff && GST_CLOCK_TIME_IS_VALID (packetizer->last_in_time)) {
+    /* pcr_pid = 0x1fff means no PCR table, so figure things out from PTSes */
     if (!GST_CLOCK_TIME_IS_VALID (pcrtable->base_time)) {
+      /* Take the first base time we see as a reference */
       pcrtable->base_time = packetizer->last_in_time;
       pcrtable->base_pcrtime = pts;
     } else if (check_diff) {
-      /* Handle discont and wraparound */
+      /* Handle discont and wraparound:
+       * The wraparound handling code assumes that the PCR gets updated regularly for
+       * being able to detect wraparounds. With ignore-pcr=true, or with no PCR track,
+       * that is not the case and it would stay initialized at 1h forever.
+       * 
+       * To avoid this problem, update the fake PCR whenever the PTS advanced by more
+       * than 5s, and also detect wraparounds in these fake PCRs.
+       */
       guint64 tmp_pts = pts + pcrtable->pcroffset + packetizer->extra_shift;
-      if (pcrtable->base_pcrtime < tmp_pts
-          && tmp_pts - pcrtable->base_pcrtime >= 5 * GST_SECOND) {
+      gint64 pcr_pts_diff = tmp_pts - pcrtable->base_pcrtime;
+
+      if (pcrtable->base_pcrtime < tmp_pts &&
+          pcr_pts_diff >= 5 * GST_SECOND &&
+          pcr_pts_diff < PCR_GST_MAX_VALUE / 2 /* Ignore wrap-under */ ) {
         guint64 diff = tmp_pts - pcrtable->base_pcrtime - 2 * GST_SECOND;
 
         pcrtable->base_time += diff;
         pcrtable->base_pcrtime += diff;
+        GST_DEBUG ("base_pcrtime now %" GST_TIMEP_FORMAT " to catch up to PTS %"
+            GST_TIMEP_FORMAT, &pcrtable->base_pcrtime, &tmp_pts);
       } else if (pcrtable->base_pcrtime > tmp_pts
           && pcrtable->base_pcrtime - tmp_pts > PCR_GST_MAX_VALUE / 2) {
+        GST_DEBUG ("Incrementing PCR offset for wraparound. base_pcrtime %"
+            GST_TIMEP_FORMAT " adjusted PTS %" GST_TIMEP_FORMAT,
+            &pcrtable->base_pcrtime, &tmp_pts);
         pcrtable->pcroffset += PCR_GST_MAX_VALUE;
+      } else if (pcrtable->base_pcrtime < tmp_pts
+          && tmp_pts - pcrtable->base_pcrtime > PCR_GST_MAX_VALUE / 2) {
+        /* This can happen when we get an out-of-order PTS that steps backward to before the
+         * previous rollover. The epoch can flip-flop a bit as we cross over, but settles
+         * once every stream advances enough */
+        GST_DEBUG
+            ("Decrementing PCR offset for backward PTS step. base_pcrtime %"
+            GST_TIMEP_FORMAT " adjusted PTS %" GST_TIMEP_FORMAT,
+            &pcrtable->base_pcrtime, &tmp_pts);
+        pcrtable->pcroffset -= PCR_GST_MAX_VALUE;
       }
     }
   }
@@ -2554,7 +2600,9 @@ calculate_points:
       lastpcr, lastoffset);
 
   res = firstoffset;
-  if (lastpcr != firstpcr)
+  if (querypcr < firstpcr)
+    querypcr = firstpcr;
+  else if (lastpcr != firstpcr)
     res += gst_util_uint64_scale (querypcr - firstpcr,
         lastoffset - firstoffset, lastpcr - firstpcr);
 
@@ -2648,4 +2696,85 @@ mpegts_packetizer_set_current_pcr_offset (MpegTSPacketizer2 * packetizer,
           GST_TIME_ARGS (PCRTIME_TO_GSTTIME (tgroup->pcr_offset)));
   }
   PACKETIZER_GROUP_UNLOCK (packetizer);
+}
+
+void
+mpegts_packetizer_set_packet_counts_enabled (MpegTSPacketizer2 * packetizer,
+    gboolean enabled)
+{
+  PACKETIZER_STATS_LOCK (packetizer);
+
+  if (enabled && !packetizer->pid_stats)
+    packetizer->pid_stats = g_array_new (FALSE, FALSE, sizeof (MpegTSPIDStats));
+  else if (!enabled && packetizer->pid_stats)
+    g_clear_pointer (&packetizer->pid_stats, g_array_unref);
+
+  PACKETIZER_STATS_UNLOCK (packetizer);
+}
+
+static void
+mpegts_packetizer_count_packet (MpegTSPacketizer2 * packetizer,
+    MpegTSPacketizerPacket * packet)
+{
+  GArray *array;
+  gint16 pid;
+  MpegTSPIDStats *stats = NULL;
+  gint i;
+
+  if (!packetizer->pid_stats)
+    return;
+
+  PACKETIZER_STATS_LOCK (packetizer);
+
+  array = packetizer->pid_stats;
+  if (!array)
+    goto out;
+
+  pid = packet->pid;
+
+  for (i = 0; i < array->len; i++) {
+    stats = &g_array_index (array, MpegTSPIDStats, i);
+
+    if (stats->pid == pid)
+      break;
+  }
+
+  if (i == array->len) {
+    MpegTSPIDStats new_stats = {.pid = pid };
+    g_array_append_val (array, new_stats);
+    stats = &g_array_index (array, MpegTSPIDStats, i);
+  }
+
+  stats->packets += 1;
+
+out:
+  PACKETIZER_STATS_UNLOCK (packetizer);
+}
+
+GstStructure *
+mpegts_packetizer_get_packet_counts (MpegTSPacketizer2 * packetizer)
+{
+  GArray *array;
+  GstStructure *s;
+  gint i;
+
+  s = gst_structure_new_empty ("application/x-gst-mpegts-packet-counts");
+
+  PACKETIZER_STATS_LOCK (packetizer);
+
+  array = packetizer->pid_stats;
+  if (!array)
+    goto out;
+
+  for (i = 0; i < array->len; i++) {
+    MpegTSPIDStats *stats = &g_array_index (array, MpegTSPIDStats, i);
+    gchar field_name[7];
+
+    g_snprintf (field_name, sizeof field_name, "0x%04x", stats->pid);
+    gst_structure_set (s, field_name, G_TYPE_UINT64, stats->packets, NULL);
+  }
+
+out:
+  PACKETIZER_STATS_UNLOCK (packetizer);
+  return s;
 }

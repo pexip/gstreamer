@@ -108,6 +108,10 @@ if gstvalidate_dep.found() and not get_option('tools').disabled()
     'check-clip-positioning': true,
     'set-layer-on-command-line': true,
     'check-zorder': true,
+    'check_selector_software': true,
+    'check_selector_glvideomixer': true,
+    'check_selector_glvideomixerelement_strict': true,
+    'check_selector_title_glvideomixer': true,
   }
 
   foreach scenario, is_validatetest: scenarios

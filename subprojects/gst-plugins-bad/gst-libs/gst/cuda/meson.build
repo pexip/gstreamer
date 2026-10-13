@@ -1,6 +1,8 @@
 cuda_sources = files([
+  'gstcudaaggregator.cpp',
   'gstcudabufferpool.cpp',
   'gstcudacontext.cpp',
+  'gstcudaconverter.cpp',
   'gstcudaloader.cpp',
   'gstcudamemory.cpp',
   'gstcudamemorypool.cpp',
@@ -12,9 +14,12 @@ cuda_sources = files([
 
 cuda_headers = files([
   'cuda-prelude.h',
+  'gstcuda_fwd.h',
   'gstcuda.h',
+  'gstcudaaggregator.h',
   'gstcudabufferpool.h',
   'gstcudacontext.h',
+  'gstcudaconverter.h',
   'gstcudaloader.h',
   'gstcudamemory.h',
   'gstcudamemorypool.h',
@@ -143,9 +148,19 @@ else
   endif
 endif
 
+cuda_kernel_precompiled = []
+cuda_precompile_opt = get_option('nvcodec-cuda-precompile')
+if not cuda_precompile_opt.disabled() and not meson.is_cross_build()
+  nvcc = find_program ('nvcc', required : cuda_precompile_opt)
+  if nvcc.found()
+    subdir('kernel')
+    extra_args += ['-DNVCODEC_CUDA_PRECOMPILED']
+  endif
+endif
+
 pkg_name = 'gstreamer-cuda-' + api_version
 gstcuda= library('gstcuda-' + api_version,
-  cuda_sources,
+  cuda_sources + cuda_kernel_precompiled,
   c_args : gst_plugins_bad_args + extra_args,
   cpp_args : gst_plugins_bad_args + extra_args,
   include_directories : [configinc, libsinc, cuda_stubinc] + gstcuda_nvmm_inc,

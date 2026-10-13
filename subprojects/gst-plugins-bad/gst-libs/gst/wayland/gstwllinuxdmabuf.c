@@ -110,7 +110,7 @@ gst_wl_linux_dmabuf_construct_wl_buffer (GstBuffer * buf,
   guint nplanes = 0, flags = 0;
   struct zwp_linux_buffer_params_v1 *params;
   gint64 timeout;
-  ConstructBufferData data;
+  ConstructBufferData data = { 0 };
 
   g_return_val_if_fail (gst_wl_display_check_format_for_dmabuf (display,
           drm_info), NULL);
@@ -170,16 +170,6 @@ gst_wl_linux_dmabuf_construct_wl_buffer (GstBuffer * buf,
       zwp_linux_buffer_params_v1_destroy (params);
       data.wbuf = NULL;
       goto out;
-    }
-  }
-
-  if (GST_BUFFER_FLAG_IS_SET (buf, GST_VIDEO_BUFFER_FLAG_INTERLACED)) {
-    GST_DEBUG_OBJECT (mem->allocator, "interlaced buffer");
-    flags = ZWP_LINUX_BUFFER_PARAMS_V1_FLAGS_INTERLACED;
-
-    if (!GST_BUFFER_FLAG_IS_SET (buf, GST_VIDEO_BUFFER_FLAG_TFF)) {
-      GST_DEBUG_OBJECT (mem->allocator, "with bottom field first");
-      flags |= ZWP_LINUX_BUFFER_PARAMS_V1_FLAGS_BOTTOM_FIRST;
     }
   }
 

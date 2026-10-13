@@ -34,8 +34,20 @@ from .loggable import Loggable
 from .baseclasses import _TestsLauncher, ScenarioManager
 from .utils import printc, path2url, DEFAULT_MAIN_DIR, launch_command, Colors, Protocols, which
 
+PAGER = os.environ.get("PAGER", "").split(" ")
+if not PAGER[0]:
+    PAGER = ["less"]
 
-LESS = "less"
+
+def show_file_in_pager(file_path: str):
+    # Modelled after the equivalent code in gst-inspect.c:
+    # "R" : support color
+    # "X" : do not clear the screen when leaving the pager
+    # "F" : skip the pager if content fit into the screen
+    less_opts = os.environ.get("GST_LESS", "RXF")
+    subprocess.check_call(PAGER + [file_path], env=os.environ | {"LESS": less_opts})
+
+
 HELP = '''
 
 ===============================================================================
@@ -75,10 +87,10 @@ you will need that tool to get started.
 ---------------------------
 
 To implement new tests, you will just need to set the media path using the
---medias-paths argument. If you want to run all available scenarios on all the
+--media-paths argument. If you want to run all available scenarios on all the
 file present in that folder, you should run the first time:
 
-.    $gst-validate-launcher --medias-paths /path/to/media/files --generate-media-info
+.    $gst-validate-launcher --media-paths /path/to/media/files --generate-media-info
 
 That will generate the .media_info files that contains information about the media
 files present in that folder. Those media_info files are simple XML file describing
@@ -144,7 +156,7 @@ if "--help" not in sys.argv:
     HELP = "Use --help for the full help"
 
 QA_ASSETS = "gstreamer"
-MEDIAS_FOLDER = "medias"
+MEDIA_FOLDER = "media"
 DEFAULT_GST_QA_ASSETS_REPO = "https://gitlab.freedesktop.org/gstreamer/gstreamer.git"
 
 
@@ -225,6 +237,7 @@ class LauncherConfig(Loggable):
         # paths passed with --media-path, and not defined by a testsuite
         self.user_paths = []
         self.paths = []
+        self.media_info_dir = None
         self.testsuites_dirs = utils.DEFAULT_TESTSUITES_DIRS
 
         self.clone_dir = None
@@ -324,7 +337,7 @@ class LauncherConfig(Loggable):
                 self.sync = True
 
             if not self.sync and not os.path.exists(self.clone_dir) and \
-                    self.clone_dir == os.path.join(self.clone_dir, MEDIAS_FOLDER):
+                    self.clone_dir == os.path.join(self.clone_dir, MEDIA_FOLDER):
                 printc("Media path (%s) does not exists. Forgot to run --sync ?"
                        % self.clone_dir, Colors.FAIL, True)
                 return False
@@ -542,13 +555,17 @@ class LauncherConfig(Loggable):
                                help="Directory where to store logs, default is OUTPUT_DIR/logs.")
         dir_group.add_argument("-R", "--render-path", dest="dest",
                                help="Set the path to which projects should be rendered, default is OUTPUT_DIR/rendered")
-        dir_group.add_argument("-p", "--medias-paths", dest="user_paths", action="append",
+        dir_group.add_argument("-p", "--media-paths", "--medias-paths", dest="user_paths", action="append",
                                help="Paths in which to look for media files")
+        dir_group.add_argument("--media-info-dir", dest="media_info_dir",
+                               help="Directory containing .media_info files that override or supplement\n"
+                               "those next to media files. The directory structure should mirror the\n"
+                               "media paths structure.")
         dir_group.add_argument("-a", "--clone-dir", dest="clone_dir",
                                help="Paths where to clone the testuite to run."
                                " default is MAIN_DIR/gst-integration-testsuites")
         dir_group.add_argument("-rl", "--redirect-logs", dest="redirect_logs",
-                               help="Redirect logs to 'stdout' or 'sdterr'.")
+                               help="Redirect logs to 'stdout' or 'stderr'.")
         dir_group.add_argument("-v", "--verbose", dest="verbose",
                                action='count',
                                help="Redirect logs to stdout.")
@@ -566,6 +583,10 @@ class LauncherConfig(Loggable):
         dir_group.add_argument("--part-index", dest="part_index",
                                help="The index of the part to be run (starts at 1).",
                                type=int, default=1)
+        dir_group.add_argument("--dedicated-part", dest="dedicated_part",
+                               help="Regex pattern for tests to assign to the last part exclusively. "
+                               "Matching tests go to the last part, the rest are split across parts 1..N-1.",
+                               type=str, default=None)
 
         http_server_group = parser.add_argument_group(
             "Handle the HTTP server to be created")
@@ -609,11 +630,12 @@ def setup_launcher_from_args(args, main_options=None):
     tests_launcher = _TestsLauncher()
     tests_launcher.add_options(parser)
 
-    if "--help" in sys.argv and which(LESS):
+    if "--help" in sys.argv and which(PAGER[0]):
         tmpf = tempfile.NamedTemporaryFile(mode='r+')
 
         parser.print_help(file=tmpf)
-        os.system("%s %s" % (LESS, tmpf.name))
+        tmpf.flush()
+        show_file_in_pager(tmpf.name)
         return False, None, None
 
     options = LauncherConfig()
@@ -648,6 +670,12 @@ def main(libsdir):
     res, options, tests_launcher = setup_launcher_from_args(sys.argv[1:])
     if res is False:
         return 1
+
+    if options.update_media_info or options.generate_info:
+        if tests_launcher.httpsrv:
+            tests_launcher.httpsrv.stop()
+        printc("Media info files have been updated", Colors.OKGREEN)
+        return 0
 
     if options.list_tests:
         if tests_launcher.list_tests() == -1:

@@ -631,7 +631,7 @@ deserialize_exif_altitude (XmpTag * xmptag, GstTagList * taglist,
     return;
   }
 
-  if (sscanf (altitude_str, "%d/%d", &frac_n, &frac_d) != 2) {
+  if (sscanf (altitude_str, "%d/%d", &frac_n, &frac_d) != 2 || frac_d == 0) {
     GST_WARNING ("Failed to parse fraction: %s", altitude_str);
     return;
   }
@@ -724,7 +724,7 @@ deserialize_exif_gps_speed (XmpTag * xmptag, GstTagList * taglist,
     return;
   }
 
-  if (sscanf (speed_str, "%d/%d", &frac_n, &frac_d) != 2) {
+  if (sscanf (speed_str, "%d/%d", &frac_n, &frac_d) != 2 || frac_d == 0) {
     GST_WARNING ("Failed to parse fraction: %s", speed_str);
     return;
   }
@@ -819,7 +819,7 @@ deserialize_exif_gps_direction (XmpTag * xmptag, GstTagList * taglist,
     return;
   }
 
-  if (sscanf (dir_str, "%d/%d", &frac_n, &frac_d) != 2) {
+  if (sscanf (dir_str, "%d/%d", &frac_n, &frac_d) != 2 || frac_d == 0) {
     GST_WARNING ("Failed to parse fraction: %s", dir_str);
     return;
   }
@@ -1136,7 +1136,7 @@ read_one_tag (GstTagList * list, XmpTag * xmptag,
       gdouble value = 0;
       gint frac_n, frac_d;
 
-      if (sscanf (v, "%d/%d", &frac_n, &frac_d) == 2) {
+      if (sscanf (v, "%d/%d", &frac_n, &frac_d) == 2 && frac_d != 0) {
         gst_util_fraction_to_double (frac_n, frac_d, &value);
         gst_tag_list_add (list, merge_mode, tag, value, NULL);
       } else {
@@ -1182,7 +1182,7 @@ gst_tag_list_from_xmp_buffer (GstBuffer * buffer)
 {
   GstTagList *list = NULL;
   GstMapInfo info;
-  gchar *xps, *xp1, *xp2, *xpe, *ns, *ne;
+  const gchar *xps, *xp1, *xp2, *xpe, *ns, *ne;
   gsize len, max_ft_len;
   gboolean in_tag;
   gchar *part = NULL, *pp;
@@ -1218,11 +1218,11 @@ gst_tag_list_from_xmp_buffer (GstBuffer * buffer)
   GST_LOG ("Starting xmp parsing");
 
   gst_buffer_map (buffer, &info, GST_MAP_READ);
-  xps = (gchar *) info.data;
+  xps = (const gchar *) info.data;
   len = info.size;
   g_return_val_if_fail (len > 0, NULL);
 
-  xpe = &xps[len + 1];
+  xpe = &xps[len];
 
   /* check header and footer */
   xp1 = g_strstr_len (xps, len, "<?xpacket begin");
@@ -1251,6 +1251,9 @@ gst_tag_list_from_xmp_buffer (GstBuffer * buffer)
   xp1++;
   while (*xp1 != '<' && xp1 < xpe)
     xp1++;
+
+  if (xp2 < xp1)
+    goto missing_footer;
 
   /* no tag can be longer than the whole buffer */
   part = g_malloc (xp2 - xp1);
@@ -1366,6 +1369,7 @@ gst_tag_list_from_xmp_buffer (GstBuffer * buffer)
               /* restore chars overwritten by '\0' */
               *d = '=';
               *ae = '"';
+              *pp = '\0';
             } else if (*ae == '\0' || *ae == ' ') {
               /* end of attr/value pair */
               as = &ae[1];

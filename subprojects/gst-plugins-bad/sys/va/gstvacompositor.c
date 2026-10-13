@@ -262,6 +262,7 @@ struct _GstVaCompositor
 
   guint32 scale_method;
   guint32 interpolation_method;
+  guint32 background_color;
 };
 
 struct CData
@@ -275,6 +276,7 @@ enum
   PROP_DEVICE_PATH = 1,
   PROP_SCALE_METHOD,
   PROP_INTERPOLATION_METHOD,
+  PROP_BACKGROUND_COLOR,
   N_PROPERTIES
 };
 
@@ -299,6 +301,13 @@ gst_va_compositor_set_property (GObject * object, guint prop_id,
     {
       GST_OBJECT_LOCK (object);
       self->interpolation_method = g_value_get_enum (value);
+      GST_OBJECT_UNLOCK (object);
+      break;
+    }
+    case PROP_BACKGROUND_COLOR:
+    {
+      GST_OBJECT_LOCK (object);
+      self->background_color = (guint32) g_value_get_uint (value);
       GST_OBJECT_UNLOCK (object);
       break;
     }
@@ -337,6 +346,13 @@ gst_va_compositor_get_property (GObject * object, guint prop_id,
     {
       GST_OBJECT_LOCK (object);
       g_value_set_enum (value, self->interpolation_method);
+      GST_OBJECT_UNLOCK (object);
+      break;
+    }
+    case PROP_BACKGROUND_COLOR:
+    {
+      GST_OBJECT_LOCK (object);
+      g_value_set_uint (value, self->background_color);
       GST_OBJECT_UNLOCK (object);
       break;
     }
@@ -570,7 +586,7 @@ gst_va_compositor_allocator_from_caps (GstVaCompositor * self, GstCaps * caps)
 {
   GstAllocator *allocator = NULL;
 
-  if (gst_caps_is_dmabuf (caps)) {
+  if (gst_video_is_dma_drm_caps (caps)) {
     allocator = gst_va_dmabuf_allocator_new (self->display);
   } else {
     GArray *surface_formats = gst_va_filter_get_surface_formats (self->filter);
@@ -747,7 +763,7 @@ gst_va_compositor_decide_allocation (GstAggregator * agg, GstQuery * query)
       goto bail;
     }
 
-    if (gst_caps_is_dmabuf (caps) && GST_VIDEO_INFO_IS_RGB (&info)) {
+    if (gst_video_is_dma_drm_caps (caps) && GST_VIDEO_INFO_IS_RGB (&info)) {
       usage_hint = VA_SURFACE_ATTRIB_USAGE_HINT_GENERIC;
     } else {
       usage_hint = va_get_surface_usage_hint (self->display,
@@ -1047,6 +1063,10 @@ gst_va_compositor_aggregate_frames (GstVideoAggregator * vagg,
   if (!gst_va_filter_set_interpolation_method (self->filter,
           self->interpolation_method))
     GST_WARNING_OBJECT (self, "couldn't set filter interpolation method");
+
+  if (!gst_va_filter_set_background_color (self->filter,
+          self->background_color))
+    GST_WARNING_OBJECT (self, "couldn't set background color");
 
   if (!gst_va_filter_compose (self->filter, &tx)) {
     GST_ERROR_OBJECT (self, "couldn't apply filter");
@@ -1688,6 +1708,20 @@ gst_va_compositor_class_init (gpointer g_class, gpointer class_data)
     gst_type_mark_as_plugin_api (GST_TYPE_VA_INTERPOLATION_METHOD, 0);
   }
 
+  /**
+   * GstVaCompositor:background-color:
+   *
+   * Sets the background color to use when the composed image is smaller than
+   * the resolution of the destination surface.
+   *
+   * Since: 1.30
+   */
+  properties[PROP_BACKGROUND_COLOR] = g_param_spec_uint ("background-color",
+      "Background Color", "Background color to use (big-endian ARGB)", 0,
+      UINT32_MAX, 0xff000000 /* ARGB black */ ,
+      G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS);
+  g_object_class_install_property (object_class, PROP_BACKGROUND_COLOR,
+      properties[PROP_BACKGROUND_COLOR]);
 
   g_free (long_name);
   g_free (cdata->description);
@@ -1742,6 +1776,7 @@ gst_va_compositor_init (GTypeInstance * instance, gpointer g_class)
   GstVaCompositor *self = GST_VA_COMPOSITOR (instance);
 
   self->other_pool = NULL;
+  self->background_color = 0xff000000;  /* ARGB black */
 }
 
 static gpointer

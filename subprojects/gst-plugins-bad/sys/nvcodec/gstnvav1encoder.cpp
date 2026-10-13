@@ -760,7 +760,7 @@ gst_nv_av1_encoder_set_property (GObject * object, guint prop_id,
       update_uint (self, &self->max_bitrate, value, UPDATE_BITRATE);
       break;
     case PROP_VBV_BUFFER_SIZE:
-      update_uint (self, &self->vbv_buffer_size, value, UPDATE_RC_PARAM);
+      update_uint (self, &self->vbv_buffer_size, value, UPDATE_BITRATE);
       break;
     case PROP_RC_LOOKAHEAD:
       /* rc-lookahead update requires pool size change */
@@ -1265,6 +1265,7 @@ gst_nv_av1_encoder_check_reconfigure (GstNvEncoder * encoder,
     if (klass->device_caps.dyn_bitrate_change > 0) {
       config->rcParams.averageBitRate = self->bitrate * 1024;
       config->rcParams.maxBitRate = self->max_bitrate * 1024;
+      config->rcParams.vbvBufferSize = self->vbv_buffer_size * 1024;
       reconfig = GST_NV_ENCODER_RECONFIGURE_BITRATE;
     } else {
       reconfig = GST_NV_ENCODER_RECONFIGURE_FULL;
@@ -1562,6 +1563,7 @@ gst_nv_av1_encoder_create_class_data (GstObject * device, gpointer session,
   cdata->src_caps = gst_caps_from_string (src_caps_str.c_str ());
   cdata->device_caps = dev_caps;
   cdata->device_mode = device_mode;
+  cdata->codec = cudaVideoCodec_AV1;
 
   /* *INDENT-OFF* */
   for (const auto &iter: formats)
@@ -1588,8 +1590,7 @@ gst_nv_av1_encoder_create_class_data (GstObject * device, gpointer session,
 }
 
 GstNvEncoderClassData *
-gst_nv_av1_encoder_register_cuda (GstPlugin * plugin, GstCudaContext * context,
-    guint rank)
+gst_nv_av1_encoder_inspect (GstPlugin * plugin, GstCudaContext * context)
 {
   NV_ENC_OPEN_ENCODE_SESSION_EX_PARAMS session_params = { 0, };
   gpointer session;
@@ -1615,10 +1616,13 @@ gst_nv_av1_encoder_register_cuda (GstPlugin * plugin, GstCudaContext * context,
       GST_NV_ENCODER_DEVICE_CUDA);
   NvEncDestroyEncoder (session);
 
-  if (!cdata)
-    return nullptr;
+  return cdata;
+}
 
-  gst_nv_encoder_class_data_ref (cdata);
+GstNvEncoderClassData *
+gst_nv_av1_encoder_register (GstPlugin * plugin,
+    GstNvEncoderClassData * cdata, guint rank)
+{
 
   GType type;
   gchar *type_name;
@@ -1629,7 +1633,7 @@ gst_nv_av1_encoder_register_cuda (GstPlugin * plugin, GstCudaContext * context,
     nullptr,
     (GClassInitFunc) gst_nv_av1_encoder_class_init,
     nullptr,
-    cdata,
+    gst_nv_encoder_class_data_ref (cdata),
     sizeof (GstNvAv1Encoder),
     0,
     (GInstanceInitFunc) gst_nv_av1_encoder_init,
@@ -1873,6 +1877,7 @@ gst_nv_av1_encoder_register_auto_select (GstPlugin * plugin,
   cdata->src_caps = gst_caps_from_string (src_caps_str.c_str ());
   cdata->device_caps = dev_caps;
   cdata->device_mode = GST_NV_ENCODER_DEVICE_AUTO_SELECT;
+  cdata->codec = cudaVideoCodec_AV1;
   cdata->adapter_luid = adapter_luid_list[0];
   cdata->adapter_luid_size = adapter_luid_size;
   memcpy (&cdata->adapter_luid_list,

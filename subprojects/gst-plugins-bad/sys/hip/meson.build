@@ -34,12 +34,12 @@ have_hipcc = false
 have_nvcc = false
 if not hip_precompile_amd_opt.disabled() and not meson.is_cross_build()
   if host_system == 'windows'
-    hipcc = find_program('hipcc.bin', required: false)
+    hipcc = find_program('hipcc.bin', 'hipcc.exe', required: false)
     if not hipcc.found()
       hip_root = run_command(python3, '-c', 'import os; print(os.environ.get("HIP_PATH"))', check: false).stdout().strip()
       if hip_root != '' and hip_root != 'None'
         hip_bin_path = join_paths(hip_root, 'bin')
-        hipcc = find_program('hipcc.bin',
+        hipcc = find_program('hipcc.bin', 'hipcc.exe',
                               dirs: [hip_bin_path],
                               required: hip_precompile_amd_opt)
       endif
@@ -81,7 +81,7 @@ gsthip = library('gsthip', hip_sources + hip_amd_precompiled + hip_nvidia_precom
   c_args : gst_plugins_bad_args + extra_args,
   cpp_args: gst_plugins_bad_args + extra_args,
   include_directories : [configinc, hipstub_incdir],
-  dependencies : [gstbase_dep, gstvideo_dep, gmodule_dep, gsthip_dep] + extra_deps,
+  dependencies : [gstbase_dep, gstvideo_dep, gmodule_dep, gsthip_dep, gstallocators_dep] + extra_deps,
   install : true,
   install_dir : plugins_install_dir,
 )

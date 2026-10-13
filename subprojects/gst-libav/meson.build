@@ -1,8 +1,9 @@
 project('gst-libav', 'c',
-  version : '1.27.2.1',
+  version : '1.29.2.1',
   meson_version : '>= 1.4',
   default_options : [ 'warning_level=1',
-                      'buildtype=debugoptimized' ])
+                      'buildtype=debugoptimized',
+                      'c_std=gnu11,c11' ])
 
 gst_version = meson.project_version()
 version_arr = gst_version.split('.')
@@ -40,7 +41,7 @@ libav_deps_type_name = ''
 
 foreach dep: libav_deps
   if libav_deps_type_name != '' and dep.type_name() != libav_deps_type_name
-    error('Libav deps must be either all internal or all external')
+    error('Found mixed @0@ and @1@ dependencies. Ensure all FFmpeg libraries are either provided by the system or built as subprojects.'.format(libav_deps_type_name, dep.type_name()))
   endif
   libav_deps_type_name = dep.type_name()
 endforeach
@@ -55,6 +56,10 @@ cdata = configuration_data()
 cdata.set('LIBAV_SOURCE', '"system install"')
 cdata.set('PACKAGE_VERSION', '"@0@"'.format(gst_version))
 cdata.set('PACKAGE', '"gst-libav"')
+
+if get_option('plugin-static-features')
+  cdata.set('GST_LIBAV_STATIC_FEATURES', 1)
+endif
 
 # GStreamer package name and origin url
 gst_package_name = get_option('package-name')
@@ -112,7 +117,10 @@ if cc.get_id() == 'msvc'
       '/wd4146', # unary minus on unsigned (beware INT_MIN)
       '/wd4244', # lossy type conversion (e.g. double -> int)
       '/wd4305', # truncating type conversion (e.g. double -> float)
-      cc.get_supported_arguments(['/utf-8']), # set the input encoding to utf-8
+      cc.get_supported_arguments([
+        '/utf-8', # set the input encoding to utf-8
+        '/Zc:preprocessor', # enable preprocessor conformance mode (disable legacy preprocessor)
+      ]),
   ]
 
   if gst_version_is_dev
@@ -256,7 +264,12 @@ endif
 
 configure_file(output: 'config.h', configuration: cdata)
 
-meson.add_dist_script('scripts/gen-changelog.py', meson.project_name(), '1.26.0', meson.project_version())
+meson.add_dist_script('scripts/gen-changelog.py', meson.project_name(), '1.28.0', meson.project_version())
+
+# dist common files from monorepo root
+if not meson.is_subproject()
+  meson.add_dist_script('scripts/dist-common-files.py', meson.project_version())
+endif
 
 gst_plugins = []
 foreach plugin: plugins

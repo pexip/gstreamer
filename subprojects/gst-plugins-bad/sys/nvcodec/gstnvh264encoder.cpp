@@ -129,6 +129,7 @@ enum
   PROP_AUD,
   PROP_CABAC,
   PROP_REPEAT_SEQUENCE_HEADER,
+  PROP_NUM_SLICES,
 };
 
 #define DEFAULT_PRESET            GST_NV_ENCODER_PRESET_DEFAULT
@@ -154,6 +155,7 @@ enum
 #define DEFAULT_CONST_QUALITY     0
 #define DEFAULT_AUD               TRUE
 #define DEFAULT_REPEAT_SEQUENCE_HEADER FALSE
+#define DEFAULT_NUM_SLICES        0
 
 typedef struct _GstNvH264Encoder
 {
@@ -213,6 +215,7 @@ typedef struct _GstNvH264Encoder
   gboolean aud;
   gboolean cabac;
   gboolean repeat_sequence_header;
+  guint num_slices;
 } GstNvH264Encoder;
 
 typedef struct _GstNvH264EncoderClass
@@ -603,6 +606,12 @@ gst_nv_h264_encoder_class_init (GstNvH264EncoderClass * klass, gpointer data)
       g_param_spec_boolean ("repeat-sequence-header", "Repeat Sequence Header",
           "Insert sequence headers (SPS/PPS) per IDR",
           DEFAULT_REPEAT_SEQUENCE_HEADER, param_flags));
+  if (dev_caps->dynamic_slice_mode) {
+    g_object_class_install_property (object_class, PROP_NUM_SLICES,
+        g_param_spec_uint ("num-slices", "Number of Slices",
+            "Number of slices per frame (0 = default, 1-32 = specific count)",
+            0, 32, DEFAULT_NUM_SLICES, conditional_param_flags));
+  }
 
   GstPadTemplate *pad_templ = gst_pad_template_new ("sink",
       GST_PAD_SINK, GST_PAD_ALWAYS, cdata->sink_caps);
@@ -725,6 +734,7 @@ gst_nv_h264_encoder_init (GstNvH264Encoder * self)
   if (klass->device_caps.cabac)
     self->cabac = TRUE;
   self->repeat_sequence_header = DEFAULT_REPEAT_SEQUENCE_HEADER;
+  self->num_slices = DEFAULT_NUM_SLICES;
 
   self->parser = gst_h264_nal_parser_new ();
   self->sei_array = g_array_new (FALSE, FALSE, sizeof (GstH264SEIMessage));
@@ -947,7 +957,7 @@ gst_nv_h264_encoder_set_property (GObject * object, guint prop_id,
       update_uint (self, &self->max_bitrate, value, UPDATE_BITRATE);
       break;
     case PROP_VBV_BUFFER_SIZE:
-      update_uint (self, &self->vbv_buffer_size, value, UPDATE_RC_PARAM);
+      update_uint (self, &self->vbv_buffer_size, value, UPDATE_BITRATE);
       break;
     case PROP_RC_LOOKAHEAD:
       /* rc-lookahead update requires pool size change */
@@ -1013,6 +1023,9 @@ gst_nv_h264_encoder_set_property (GObject * object, guint prop_id,
     case PROP_REPEAT_SEQUENCE_HEADER:
       update_boolean (self,
           &self->repeat_sequence_header, value, UPDATE_INIT_PARAM);
+      break;
+    case PROP_NUM_SLICES:
+      update_uint (self, &self->num_slices, value, UPDATE_INIT_PARAM);
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
@@ -1139,6 +1152,9 @@ gst_nv_h264_encoder_get_property (GObject * object, guint prop_id,
       break;
     case PROP_REPEAT_SEQUENCE_HEADER:
       g_value_set_boolean (value, self->repeat_sequence_header);
+      break;
+    case PROP_NUM_SLICES:
+      g_value_set_uint (value, self->num_slices);
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
@@ -1633,6 +1649,11 @@ gst_nv_h264_encoder_set_format (GstNvEncoder * encoder,
     h264_config->entropyCodingMode = NV_ENC_H264_ENTROPY_CODING_MODE_AUTOSELECT;
   }
 
+  if (dev_caps->dynamic_slice_mode && self->num_slices > 0) {
+    h264_config->sliceMode = 3;
+    h264_config->sliceModeData = self->num_slices;
+  }
+
   GstVideoColorimetry cinfo;
   switch (GST_VIDEO_INFO_FORMAT (info)) {
     case GST_VIDEO_FORMAT_NV12:
@@ -1999,6 +2020,7 @@ gst_nv_h264_encoder_check_reconfigure (GstNvEncoder * encoder,
     if (klass->device_caps.dyn_bitrate_change > 0) {
       config->rcParams.averageBitRate = self->bitrate * 1024;
       config->rcParams.maxBitRate = self->max_bitrate * 1024;
+      config->rcParams.vbvBufferSize = self->vbv_buffer_size * 1024;
       reconfig = GST_NV_ENCODER_RECONFIGURE_BITRATE;
     } else {
       reconfig = GST_NV_ENCODER_RECONFIGURE_FULL;
@@ -2377,6 +2399,7 @@ gst_nv_h264_encoder_create_class_data (GstObject * device, gpointer session,
   cdata->src_caps = gst_caps_from_string (src_caps_str.c_str ());
   cdata->device_caps = dev_caps;
   cdata->device_mode = device_mode;
+  cdata->codec = cudaVideoCodec_H264;
 
   /* *INDENT-OFF* */
   for (const auto &iter: formats)
@@ -2406,8 +2429,7 @@ gst_nv_h264_encoder_create_class_data (GstObject * device, gpointer session,
 }
 
 GstNvEncoderClassData *
-gst_nv_h264_encoder_register_cuda (GstPlugin * plugin, GstCudaContext * context,
-    guint rank)
+gst_nv_h264_encoder_inspect (GstPlugin * plugin, GstCudaContext * context)
 {
   NV_ENC_OPEN_ENCODE_SESSION_EX_PARAMS session_params = { 0, };
   gpointer session;
@@ -2433,10 +2455,13 @@ gst_nv_h264_encoder_register_cuda (GstPlugin * plugin, GstCudaContext * context,
       GST_NV_ENCODER_DEVICE_CUDA);
   NvEncDestroyEncoder (session);
 
-  if (!cdata)
-    return nullptr;
+  return cdata;
+}
 
-  gst_nv_encoder_class_data_ref (cdata);
+GstNvEncoderClassData *
+gst_nv_h264_encoder_register (GstPlugin * plugin,
+    GstNvEncoderClassData * cdata, guint rank)
+{
 
   GType type;
   gchar *type_name;
@@ -2711,6 +2736,7 @@ gst_nv_h264_encoder_register_auto_select (GstPlugin * plugin,
   cdata->src_caps = gst_caps_from_string (src_caps_str.c_str ());
   cdata->device_caps = dev_caps;
   cdata->device_mode = GST_NV_ENCODER_DEVICE_AUTO_SELECT;
+  cdata->codec = cudaVideoCodec_H264;
   cdata->adapter_luid = adapter_luid_list[0];
   cdata->adapter_luid_size = adapter_luid_size;
   memcpy (&cdata->adapter_luid_list,

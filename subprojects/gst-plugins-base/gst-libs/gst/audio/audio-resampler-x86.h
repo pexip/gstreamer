@@ -17,29 +17,24 @@
  * Boston, MA 02110-1301, USA.
  */
 
+#include <gst/gstinfo.h>
+#include <gst/gstcpuid.h>
+
 #include "audio-resampler-macros.h"
 #include "audio-resampler-x86-sse.h"
 #include "audio-resampler-x86-sse2.h"
 #include "audio-resampler-x86-sse41.h"
 
-static void
-audio_resampler_check_x86 (const gchar *option)
+static inline void
+audio_resampler_check_x86 (void)
 {
-  if (!strcmp (option, "sse")) {
-#if defined (HAVE_XMMINTRIN_H) && HAVE_SSE
-    GST_DEBUG ("enable SSE optimisations");
-    resample_gfloat_full_1 = resample_gfloat_full_1_sse;
-    resample_gfloat_linear_1 = resample_gfloat_linear_1_sse;
-    resample_gfloat_cubic_1 = resample_gfloat_cubic_1_sse;
+  const gboolean cpuid_sse2 = gst_cpuid_supports_x86_sse2();
+  const gboolean cpuid_sse4_1 = gst_cpuid_supports_x86_sse4_1();
 
-    interpolate_gfloat_linear = interpolate_gfloat_linear_sse;
-    interpolate_gfloat_cubic = interpolate_gfloat_cubic_sse;
-#else
-    GST_DEBUG ("SSE optimisations not enabled");
-#endif
-  } else if (!strcmp (option, "sse2")) {
-#if defined (HAVE_EMMINTRIN_H) && HAVE_SSE2
-    GST_DEBUG ("enable SSE2 optimisations");
+  GST_LOG ("cpuid: [sse2=%x, sse4_1=%x]", cpuid_sse2, cpuid_sse4_1);
+  if (cpuid_sse2) {
+#ifdef HAVE_SSE2
+    GST_INFO ("enable SSE2 optimisations");
     resample_gint16_full_1 = resample_gint16_full_1_sse2;
     resample_gint16_linear_1 = resample_gint16_linear_1_sse2;
     resample_gint16_cubic_1 = resample_gint16_cubic_1_sse2;
@@ -47,25 +42,31 @@ audio_resampler_check_x86 (const gchar *option)
     interpolate_gint16_linear = interpolate_gint16_linear_sse2;
     interpolate_gint16_cubic = interpolate_gint16_cubic_sse2;
 
+    resample_gfloat_full_1 = resample_gfloat_full_1_sse;
+    resample_gfloat_linear_1 = resample_gfloat_linear_1_sse;
+    resample_gfloat_cubic_1 = resample_gfloat_cubic_1_sse;
+
     resample_gdouble_full_1 = resample_gdouble_full_1_sse2;
     resample_gdouble_linear_1 = resample_gdouble_linear_1_sse2;
     resample_gdouble_cubic_1 = resample_gdouble_cubic_1_sse2;
 
+    interpolate_gfloat_linear = interpolate_gfloat_linear_sse;
+    interpolate_gfloat_cubic = interpolate_gfloat_cubic_sse;
+
     interpolate_gdouble_linear = interpolate_gdouble_linear_sse2;
     interpolate_gdouble_cubic = interpolate_gdouble_cubic_sse2;
 #else
-    GST_DEBUG ("SSE2 optimisations not enabled");
+    GST_INFO ("SSE2 optimisations not enabled");
 #endif
-  } else if (!strcmp (option, "sse41")) {
-#if defined (__x86_64__) && \
-    defined (HAVE_SMMINTRIN_H) && defined (HAVE_EMMINTRIN_H) && \
-    HAVE_SSE41
-    GST_DEBUG ("enable SSE41 optimisations");
+  }
+  if (cpuid_sse4_1) {
+#ifdef HAVE_SSE41
+    GST_INFO ("enable SSE41 optimisations");
     resample_gint32_full_1 = resample_gint32_full_1_sse41;
     resample_gint32_linear_1 = resample_gint32_linear_1_sse41;
     resample_gint32_cubic_1 = resample_gint32_cubic_1_sse41;
 #else
-    GST_DEBUG ("SSE41 optimisations not enabled");
+    GST_INFO ("SSE41 optimisations not enabled");
 #endif
   }
 }

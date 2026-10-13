@@ -65,11 +65,11 @@ struct _GstFlvDemux
   gboolean streams_aware;
 
   /* <private> */
-  
+
   GstIndex *index;
   gint index_id;
   gboolean own_index;
-  
+
   GArray * times;
   GArray * filepositions;
 
@@ -99,6 +99,7 @@ struct _GstFlvDemux
   gboolean flushing;
 
   gboolean no_more_pads;
+  GstClockTime no_more_pads_threshold;
 
 #ifndef GST_DISABLE_DEBUG
   gboolean no_audio_warned;
@@ -127,11 +128,6 @@ struct _GstFlvDemux
 
   GPtrArray *audio_tracks;
   GPtrArray *video_tracks;
-  gint16 default_audio_track_id;
-  gint16 default_video_track_id;
-
-  /* properties */
-  gint64 no_more_pads_threshold;
 };
 
 struct _GstFlvDemuxClass
@@ -154,6 +150,7 @@ typedef struct _GstFlvDemuxVideoTrackInfo
   guint32 par_y;
   gdouble framerate;
   gboolean got_par;
+  gboolean needs_renegotiation;
 } GstFlvDemuxVideoTrackInfo;
 
 typedef struct _GstFlvDemuxTrack
@@ -164,7 +161,7 @@ typedef struct _GstFlvDemuxTrack
     GstFlvDemuxVideoTrackInfo video;
   } info;
   GstPad *pad;
-  guint16 codec_tag;
+  guint32 codec_tag;
   guint64 offset;
   GstBuffer * codec_data;
   GstClockTime start;

@@ -21,34 +21,34 @@
 # include <config.h>
 #endif
 
+#include <TargetConditionals.h>
 #include <Foundation/Foundation.h>
 #include "corevideomemory.h"
-#ifdef HAVE_IOS
+
+#if TARGET_OS_IOS
 #include "iosassetsrc.h"
+#endif
+
+#if TARGET_OS_IOS || TARGET_OS_TV
 #include "iosglmemory.h"
 #include "avaudiodeviceprovider.h"
 #endif
-#ifdef HAVE_AVFOUNDATION
-#include "avfvideosrc.h"
+
 #include "avfassetsrc.h"
-#include "avfdeviceprovider.h"
 #include "avsamplevideosink.h"
+#if !TARGET_OS_WATCH && !TARGET_OS_TV
+#include "avfvideosrc.h"
+#if !TARGET_OS_TV && !TARGET_OS_VISION
+#include "avfdeviceprovider.h"
 #endif
-#ifdef HAVE_VIDEOTOOLBOX
+#endif
+
+#if !TARGET_OS_WATCH
 #include "vtdec.h"
-#endif
-#ifndef HAVE_IOS
-#define AV_RANK GST_RANK_SECONDARY
-#else
-#define AV_RANK GST_RANK_PRIMARY
+#include "vtenc.h"
 #endif
 
-#ifdef HAVE_VIDEOTOOLBOX
-void gst_vtenc_register_elements (GstPlugin * plugin);
-#endif
-
-#ifndef HAVE_IOS
-
+#if TARGET_OS_OSX
 static void
 enable_mt_mode (void)
 {
@@ -61,41 +61,40 @@ enable_mt_mode (void)
 static gboolean
 plugin_init (GstPlugin * plugin)
 {
-  gboolean res = TRUE;
+  gboolean res = FALSE;
 
   gst_apple_core_video_memory_init ();
 
-#ifdef HAVE_IOS
+#if TARGET_OS_IOS || TARGET_OS_TV
   gst_ios_gl_memory_init ();
+#endif
 
-  res &= gst_element_register (plugin, "iosassetsrc", GST_RANK_SECONDARY,
-      GST_TYPE_IOS_ASSET_SRC);
-  res &=
-      gst_device_provider_register (plugin, "avaudiodeviceprovider", GST_RANK_PRIMARY,
-      GST_TYPE_AV_AUDIO_DEVICE_PROVIDER);
-#else
+#if TARGET_OS_IOS
+  res |= GST_ELEMENT_REGISTER (iosassetsrc, plugin);
+#endif
+
+#if TARGET_OS_IOS || TARGET_OS_TV
+  res |= gst_device_provider_register (plugin, "avaudiodeviceprovider",
+      GST_RANK_PRIMARY, GST_TYPE_AV_AUDIO_DEVICE_PROVIDER);
+#endif
+
+#if TARGET_OS_OSX
   enable_mt_mode ();
 #endif
 
-#ifdef HAVE_AVFOUNDATION
-  res &= gst_element_register (plugin, "avfvideosrc", AV_RANK,
-      GST_TYPE_AVF_VIDEO_SRC);
-  res &= gst_element_register (plugin, "avfassetsrc", AV_RANK,
-      GST_TYPE_AVF_ASSET_SRC);
-  res &= gst_element_register (plugin, "avsamplebufferlayersink",
-      GST_RANK_NONE, GST_TYPE_AV_SAMPLE_VIDEO_SINK);
-  res &= gst_device_provider_register (plugin, "avfdeviceprovider",
-      GST_RANK_PRIMARY, GST_TYPE_AVF_DEVICE_PROVIDER);
+  res |= GST_ELEMENT_REGISTER (avfassetsrc, plugin);
+  res |= GST_ELEMENT_REGISTER (avsamplebufferlayersink, plugin);
+#if !TARGET_OS_WATCH && !TARGET_OS_TV
+  res |= GST_ELEMENT_REGISTER (avfvideosrc, plugin);
+#if !TARGET_OS_VISION
+  res |= GST_DEVICE_PROVIDER_REGISTER (avfdeviceprovider, plugin);
+#endif
 #endif
 
-#ifdef HAVE_VIDEOTOOLBOX
-  /* Check if the framework actually exists at runtime */
-  if (&VTCompressionSessionCreate != NULL) {
-    gst_vtdec_register_elements (plugin);
-    gst_vtenc_register_elements (plugin);
-  }
+#if !TARGET_OS_WATCH
+  res |= gst_vtdec_register_elements (plugin);
+  res |= gst_vtenc_register_elements (plugin);
 #endif
-
 
   return res;
 }

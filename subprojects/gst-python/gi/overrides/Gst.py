@@ -22,21 +22,50 @@
 #
 # SPDX-License-Identifier: LGPL-2.0-or-later
 
+from __future__ import annotations
+
 import sys
 import inspect
 import itertools
 import weakref
-from ..overrides import override
-from ..module import get_introspection_module
+import typing
+import gi
 
+gi.require_version('GLib', '2.0')
+gi.require_version('GObject', '2.0')
 from gi.repository import GLib, GObject
+from gi.overrides import override
 
+# Typing relies on https://github.com/pygobject/pygobject-stubs.
+if typing.TYPE_CHECKING:
+    # Import stubs for type checking this file.
+    #
+    # This causes some weirdness because stubs contains overridden APIs
+    # signatures. For example when using Gst.Bin.add() here, we mean to call the
+    # g-i generated API which does not have the same signature as our override
+    # Bin.add(). The type checker will use signature from stubs which is our
+    # override signature.
+    from gi.repository import Gst
+    from typing_extensions import Self
 
-Gst = get_introspection_module('Gst')
+    # Type annotations cannot have `Gst.` prefix because they are copied into
+    # Gst stubs module which cannot refer to itself. Use type aliases.
+    MiniObject = Gst.MiniObject
+    MiniObjectFlags = Gst.MiniObjectFlags
+    FlowReturn = Gst.FlowReturn
+    PadDirection = Gst.PadDirection
+    PadLinkReturn = Gst.PadLinkReturn
+    MapFlags = Gst.MapFlags
+    BufferFlags = Gst.BufferFlags
+else:
+    from gi.module import get_introspection_module
+    Gst = get_introspection_module('Gst')
+
 
 __all__ = []
 
-if Gst._version == '0.10':
+
+if Gst.VERSION_MAJOR < 1:
     import warnings
     warn_msg = "You have imported the Gst 0.10 module.  Because Gst 0.10 \
 was not designed for use with introspection some of the \
@@ -65,48 +94,77 @@ class URIHandler(Gst.URIHandler):
     pass
 
 
-URIHandler = override(URIHandler)
+override(URIHandler)
 __all__.append('URIHandler')
 
 
 class Element(Gst.Element):
     @staticmethod
-    def link_many(*args):
+    def link_many(*args: Element) -> None:  # type: ignore[override]
         '''
-        @raises: Gst.LinkError
+        :raises Gst.LinkError
         '''
         for pair in pairwise(args):
             if not pair[0].link(pair[1]):
-                raise LinkError(
-                    'Failed to link {} and {}'.format(pair[0], pair[1]))
+                raise LinkError(f'Failed to link {pair[0]} and {pair[1]}')
+
+    def iterate_pads(self) -> Iterator[Gst.Pad]:
+        return super().iterate_pads()  # type: ignore[return-value]
+
+    def iterate_sink_pads(self) -> Iterator[Gst.Pad]:
+        return super().iterate_sink_pads()  # type: ignore[return-value]
+
+    def iterate_src_pads(self) -> Iterator[Gst.Pad]:
+        return super().iterate_src_pads()  # type: ignore[return-value]
 
 
-Element = override(Element)
+override(Element)
 __all__.append('Element')
 
 
 class Bin(Gst.Bin):
-    def __init__(self, name=None):
+    def __init__(self, name: typing.Optional[str] = None):
         Gst.Bin.__init__(self, name=name)
 
-    def add(self, *args):
+    def add(self, *args: Element) -> None:  # type: ignore[override]
         for arg in args:
-            if not Gst.Bin.add(self, arg):
+            if not Gst.Bin.add(self, arg):  # type: ignore[func-returns-value]
                 raise AddError(arg)
 
-    def make_and_add(self, factoryname, name=None):
+    def make_and_add(self, factoryname: str, name: typing.Optional[str] = None) -> Element:
         '''
-        @raises: Gst.AddError
+        :raises Gst.AddError:
+        :raises Gst.MissingPluginError:
         '''
-        elem = Gst.ElementFactory.make(factoryname, name)
-        if not elem:
-            raise AddError(
-                'No such element: {}'.format(factoryname))
+        elem = ElementFactory.make(factoryname, name)
         self.add(elem)
         return elem
 
+    def iterate_all_by_element_factory_name(self, factory_name: str) -> Iterator[Element]:
+        return super().iterate_all_by_element_factory_name(factory_name)  # type: ignore[return-value]
 
-Bin = override(Bin)
+    def iterate_elements(self) -> Iterator[Element]:
+        return super().iterate_elements()  # type: ignore[return-value]
+
+    def iterate_recurse(self) -> Iterator[Element]:
+        return super().iterate_recurse()  # type: ignore[return-value]
+
+    def iterate_sinks(self) -> Iterator[Element]:
+        return super().iterate_sinks()  # type: ignore[return-value]
+
+    def iterate_sources(self) -> Iterator[Element]:
+        return super().iterate_sources()  # type: ignore[return-value]
+
+    def iterate_sorted(self) -> Iterator[Element]:
+        return super().iterate_sorted()  # type: ignore[return-value]
+
+    def __iter__(self) -> typing.Iterator[Element]:
+        """Iterate over all elements in the bin, non-recursive."""
+        for elem in self.iterate_elements():
+            yield elem
+
+
+override(Bin)
 __all__.append('Bin')
 
 
@@ -117,20 +175,26 @@ class NotWritableMiniObject(Exception):
 __all__.append('NotWritableMiniObject')
 
 
-class MiniObject:
-    def make_writable(self):
+class MiniObjectMixin:
+    def make_writable(self) -> bool:
         return _gi_gst.mini_object_make_writable(self)
 
-    def is_writable(self):
+    def is_writable(self) -> bool:
         return _gi_gst.mini_object_is_writable(self)
 
     @property
-    def flags(self):
+    def flags(self) -> MiniObjectFlags:
         return _gi_gst.mini_object_flags(self)
 
     @flags.setter
-    def flags(self, flags):
+    def flags(self, flags: MiniObjectFlags) -> None:
         _gi_gst.mini_object_set_flags(self, flags)
+
+    def __ptr__(self):
+        return _gi_gst._get_object_ptr(self)
+
+
+__all__.append('MiniObjectMixin')
 
 
 class NotWritableQuery(Exception):
@@ -140,16 +204,16 @@ class NotWritableQuery(Exception):
 __all__.append('NotWritableQuery')
 
 
-class Query(MiniObject, Gst.Query):
-    def get_structure(self):
+class Query(MiniObjectMixin, Gst.Query):  # type: ignore[misc]
+    def get_structure(self) -> typing.Optional[Structure]:
         s = _gi_gst.query_get_structure(self)
         return s._set_parent(self) if s is not None else None
 
-    def writable_structure(self):
-        return StructureWrapper(_gi_gst.query_writable_structure(self)._set_parent(self))
+    def writable_structure(self) -> StructureContextManager:  # type: ignore[override]
+        return StructureContextManager(_gi_gst.query_writable_structure(self), self)  # type: ignore[arg-type]
 
 
-Query = override(Query)
+override(Query)
 __all__.append('Query')
 
 
@@ -160,16 +224,16 @@ class NotWritableEvent(Exception):
 __all__.append('NotWritableEvent')
 
 
-class Event(MiniObject, Gst.Event):
-    def get_structure(self):
+class Event(MiniObjectMixin, Gst.Event):  # type: ignore[misc]
+    def get_structure(self) -> typing.Optional[Structure]:
         s = _gi_gst.event_get_structure(self)
         return s._set_parent(self) if s is not None else None
 
-    def writable_structure(self):
-        return StructureWrapper(_gi_gst.event_writable_structure(self)._set_parent(self))
+    def writable_structure(self) -> StructureContextManager:  # type: ignore[override]
+        return StructureContextManager(_gi_gst.event_writable_structure(self), self)  # type: ignore[arg-type]
 
 
-Event = override(Event)
+override(Event)
 __all__.append('Event')
 
 
@@ -180,16 +244,16 @@ class NotWritableContext(Exception):
 __all__.append('NotWritableContext')
 
 
-class Context(MiniObject, Gst.Context):
-    def get_structure(self):
+class Context(MiniObjectMixin, Gst.Context):  # type: ignore[misc]
+    def get_structure(self) -> Structure:
         s = _gi_gst.context_get_structure(self)
-        return s._set_parent(self) if s is not None else None
+        return s._set_parent(self)
 
-    def writable_structure(self):
-        return StructureWrapper(_gi_gst.context_writable_structure(self)._set_parent(self))
+    def writable_structure(self) -> StructureContextManager:  # type: ignore[override]
+        return StructureContextManager(_gi_gst.context_writable_structure(self), self)  # type: ignore[arg-type]
 
 
-Context = override(Context)
+override(Context)
 __all__.append('Context')
 
 
@@ -207,63 +271,93 @@ class NotWritableStructure(Exception):
 __all__.append('NotWritableStructure')
 
 
-class Caps(MiniObject, Gst.Caps):
+class Caps(MiniObjectMixin, Gst.Caps):  # type: ignore[misc]
 
     def __nonzero__(self):
         return not self.is_empty()
 
-    def __new__(cls, *args):
-        if not args:
-            return Caps.new_empty()
-        if len(args) > 1:
-            raise TypeError("wrong arguments when creating GstCaps object")
-
-        assert len(args) == 1
-        if isinstance(args[0], str):
-            return Caps.from_string(args[0])
-        elif isinstance(args[0], Caps):
-            return args[0].copy()
-        elif isinstance(args[0], Structure):
+    @staticmethod
+    def __new__(cls: type[Self], arg: typing.Optional[typing.Union[str, Caps, Structure, list[Structure], tuple[Structure, ...]]] = None) -> Self:
+        if not arg:
+            return Caps.new_empty()  # type: ignore[return-value]
+        elif isinstance(arg, str):
+            return Caps.from_string(arg)  # type: ignore[return-value]
+        elif isinstance(arg, Caps):
+            return arg.copy()  # type: ignore[return-value]
+        elif isinstance(arg, Structure):
             res = Caps.new_empty()
-            res.append_structure(args[0])
-            return res
-        elif isinstance(args[0], (list, tuple)):
+            res.append_structure(arg)
+            return res  # type: ignore[return-value]
+        elif isinstance(arg, (list, tuple)):
             res = Caps.new_empty()
-            for e in args[0]:
+            for e in arg:
                 res.append_structure(e)
-            return res
+            return res  # type: ignore[return-value]
 
-        raise TypeError("wrong arguments when creating GstCaps object")
+        raise TypeError(f"wrong arguments when creating GstCaps object")
 
-    def __init__(self, *args, **kwargs):
-        return super(Caps, self).__init__()
-
-    def __str__(self):
+    def __str__(self) -> str:
         return self.to_string()
 
-    def __getitem__(self, index):
-        if index >= self.get_size():
-            raise IndexError('structure index out of range')
+    def __getitem__(self, index: int) -> Structure:
+        return self.get_structure(index)
 
-        return Gst.Caps.get_structure(self, index)
+    def __iter__(self) -> typing.Iterator[Structure]:
+        for i in range(self.get_size()):
+            yield self.get_structure(i)
 
-    def __len__(self):
+    def __len__(self) -> int:
         return self.get_size()
 
-    def get_structure(self, index):
+    def get_structure(self, index: int) -> Structure:
+        if index >= self.get_size():
+            raise IndexError('structure index out of range')
         s = _gi_gst.caps_get_structure(self, index)
-        return s._set_parent(self) if s is not None else None
+        return s._set_parent(self)
 
-    def writable_structure(self, index):
-        return StructureWrapper(_gi_gst.caps_writable_structure(self, index)._set_parent(self))
+    def writable_structure(self, index: int) -> StructureContextManager:  # type: ignore[override]
+        return StructureContextManager(_gi_gst.caps_writable_structure(self, index), self)  # type: ignore[arg-type]
 
 
-Caps = override(Caps)
+override(Caps)
 __all__.append('Caps')
 
 
+class PadProbeInfoObjectContextManager:
+    def __init__(self, object: MiniObject, info: PadProbeInfo):
+        self.__object = object
+        self.__info = info
+
+    def __enter__(self) -> MiniObject:
+        return self.__object
+
+    def __exit__(self, _type, _value, _tb):
+        self.__info.set_object(self.__object)
+        self.__object = None
+        self.__info = None
+
+
+__all__.append('PadProbeInfoObjectContextManager')
+
+
+class PadProbeInfo(Gst.PadProbeInfo):  # type: ignore[misc]
+    def writable_object(self) -> PadProbeInfoObjectContextManager:  # type: ignore[override]
+        '''Return writable object contained in this PadProbeInfo.
+        It uses a context manager to steal the object from the PadProbeInfo,
+        and set it back when exiting the context.
+        '''
+        return PadProbeInfoObjectContextManager(_gi_gst.pad_probe_info_writable_object(self), self)
+
+    def set_object(self, obj: typing.Optional[MiniObject]) -> None:
+        _gi_gst.pad_probe_info_set_object(self, obj)
+
+
+setattr(sys.modules["gi.repository.Gst"], 'PadProbeInfo', PadProbeInfo)
+__all__.append('PadProbeInfo')
+
+
 class PadFunc:
-    def __init__(self, func):
+    def __init__(self, func: typing.Callable[..., FlowReturn]):
         self.func = func
 
     def __call__(self, pad, parent, obj):
@@ -278,8 +372,7 @@ class PadFunc:
             try:
                 res = func(pad, parent, obj)
             except TypeError:
-                raise TypeError("Invalid method %s, 2 or 3 arguments required"
-                                % func)
+                raise TypeError(f"Invalid method {func}, 2 or 3 arguments required")
 
         return res
 
@@ -288,21 +381,21 @@ class Pad(Gst.Pad):
     def __init__(self, *args, **kwargs):
         super(Gst.Pad, self).__init__(*args, **kwargs)
 
-    def set_chain_function(self, func):
+    def set_chain_function(self, func: typing.Callable[..., FlowReturn]) -> None:
         self.set_chain_function_full(PadFunc(func), None)
 
-    def set_event_function(self, func):
+    def set_event_function(self, func: typing.Callable[..., FlowReturn]) -> None:
         self.set_event_function_full(PadFunc(func), None)
 
-    def set_query_function(self, func):
+    def set_query_function(self, func: typing.Callable[..., FlowReturn]) -> None:
         self.set_query_function_full(PadFunc(func), None)
 
     def query_caps(self, filter=None):
         return Gst.Pad.query_caps(self, filter)
 
-    def set_caps(self, caps):
+    def set_caps(self, caps: Caps) -> bool:  # type: ignore[override]
         if not isinstance(caps, Gst.Caps):
-            raise TypeError("%s is not a Gst.Caps." % (type(caps)))
+            raise TypeError(f"{type(caps)} is not a Gst.Caps.")
 
         if not caps.is_fixed():
             return False
@@ -316,19 +409,19 @@ class Pad(Gst.Pad):
 
         return res
 
-    def link(self, pad):
+    def link(self, pad: Pad) -> PadLinkReturn:
         ret = Gst.Pad.link(self, pad)
         if ret != Gst.PadLinkReturn.OK:
             raise LinkError(ret)
         return ret
 
 
-Pad = override(Pad)
+override(Pad)
 __all__.append('Pad')
 
 
 class GhostPad(Gst.GhostPad):
-    def __init__(self, name, target=None, direction=None):
+    def __init__(self, name: str, target: typing.Optional[Pad] = None, direction: typing.Optional[PadDirection] = None):
         if direction is None:
             if target is None:
                 raise TypeError('you must pass at least one of target '
@@ -340,11 +433,11 @@ class GhostPad(Gst.GhostPad):
         if target is not None:
             self.set_target(target)
 
-    def query_caps(self, filter=None):
+    def query_caps(self, filter: typing.Optional[Caps] = None) -> Caps:
         return Gst.GhostPad.query_caps(self, filter)
 
 
-GhostPad = override(GhostPad)
+override(GhostPad)
 __all__.append('GhostPad')
 
 
@@ -353,6 +446,13 @@ class IteratorError(Exception):
 
 
 __all__.append('IteratorError')
+
+
+class MissingPluginError(Exception):
+    pass
+
+
+__all__.append('MissingPluginError')
 
 
 class AddError(Exception):
@@ -376,8 +476,11 @@ class MapError(Exception):
 __all__.append('MapError')
 
 
-class Iterator(Gst.Iterator):
-    def __iter__(self):
+T = typing.TypeVar('T')
+
+
+class Iterator(Gst.Iterator, typing.Generic[T]):
+    def __iter__(self) -> typing.Iterator[T]:
         while True:
             result, value = self.next()
             if result == Gst.IteratorResult.DONE:
@@ -389,84 +492,116 @@ class Iterator(Gst.Iterator):
             yield value
 
 
-Iterator = override(Iterator)
+override(Iterator)
 __all__.append('Iterator')
 
 
 class ElementFactory(Gst.ElementFactory):
 
     # ElementFactory
-    def get_longname(self):
+    def get_longname(self) -> typing.Optional[str]:
         return self.get_metadata("long-name")
 
-    def get_description(self):
+    def get_description(self) -> typing.Optional[str]:
         return self.get_metadata("description")
 
-    def get_klass(self):
+    def get_klass(self) -> typing.Optional[str]:
         return self.get_metadata("klass")
 
-    @classmethod
-    def make(cls, factoryname, name=None):
-        return Gst.ElementFactory.make(factoryname, name)
+    @staticmethod
+    def make(factoryname: str, name: typing.Optional[str] = None) -> Element:  # type: ignore[override]
+        '''
+        :raises Gst.PluginMissingError:
+        '''
+        elem = Gst.ElementFactory.make(factoryname, name)
+        if not elem:
+            raise MissingPluginError(f'No such element: {factoryname}')
+        return elem  # type: ignore[return-value]
 
 
 class Pipeline(Gst.Pipeline):
-    def __init__(self, name=None):
+    def __init__(self, name: typing.Optional[str] = None):
         Gst.Pipeline.__init__(self, name=name)
 
 
-Pipeline = override(Pipeline)
+override(Pipeline)
 __all__.append('Pipeline')
 
 
+class StructureContextManager:
+    """A Gst.Structure wrapper to force usage of a context manager.
+    """
+    def __init__(self, structure: Structure, parent: MiniObject):
+        self.__structure = structure
+        self.__parent = parent
+
+    def __enter__(self) -> Structure:
+        return self.__structure
+
+    def __exit__(self, _type, _value, _tb):
+        self.__structure = None
+        self.__parent = None
+
+
+__all__.append('StructureContextManager')
+
+
 class Structure(Gst.Structure):
-    def __new__(cls, *args, **kwargs):
-        if not args:
-            if kwargs:
-                raise TypeError("wrong arguments when creating GstStructure, first argument"
-                                " must be the structure name.")
-            struct = Structure.new_empty()
-            return struct
-        elif len(args) > 1:
-            raise TypeError("wrong arguments when creating GstStructure object")
-        elif isinstance(args[0], str):
+    @staticmethod
+    def __new__(cls: type[Self], arg: typing.Union[str, Structure], **kwargs) -> Self:
+        if isinstance(arg, str):
             if not kwargs:
-                struct = Structure.from_string(args[0])[0]
-                return struct
-            struct = Structure.new_empty(args[0])
+                struct = Structure.from_string(arg)[0]
+                return struct  # type: ignore[return-value]
+            struct = Structure.new_empty(arg)
             for k, v in kwargs.items():
                 struct[k] = v
-
-            return struct
-        elif isinstance(args[0], Structure):
-            struct = args[0].copy()
-            return struct
+            return struct  # type: ignore[return-value]
+        elif isinstance(arg, Structure):
+            struct = arg.copy()
+            return struct  # type: ignore[return-value]
 
         raise TypeError("wrong arguments when creating GstStructure object")
-
-    def __init__(self, *args, **kwargs):
-        pass
 
     def __ptr__(self):
         return _gi_gst._get_object_ptr(self)
 
-    def __getitem__(self, key):
-        return self.get_value(key)
+    def __getitem__(self, key: str) -> typing.Any:
+        val = self.get_value(key)
+        if val is None:
+            raise KeyError(f"key {key} not found")
+        return val
 
-    def keys(self):
-        keys = set()
+    def __setitem__(self, key: str, value: typing.Any) -> None:
+        self.set_value(key, value)
 
-        def foreach(fid, value, unused1, udata):
-            keys.add(GLib.quark_to_string(fid))
+    def __len__(self) -> int:
+        return self.n_fields()
+
+    def __iter__(self) -> typing.Iterator[str]:
+        return self.keys()
+
+    def items(self) -> typing.Iterator[typing.Tuple[str, typing.Any]]:
+        pairs: typing.List[typing.Tuple[str, typing.Any]] = []
+
+        def foreach(fid, value):
+            pairs.append((GLib.quark_to_string(fid), value))
             return True
 
-        self.foreach(foreach, None, None)
-        return keys
+        self.foreach(foreach)
+        return iter(pairs)
 
-    def __setitem__(self, key, value):
-        return self.set_value(key, value)
+    def keys(self) -> typing.Iterator[str]:
+        keys: list[str] = []
 
-    def set_value(self, key, value):
+        def foreach(fid, value):
+            keys.append(GLib.quark_to_string(fid))
+            return True
+
+        self.foreach(foreach)
+        return iter(keys)
+
+    def set_value(self, key: str, value: typing.Any) -> bool:
         if not _gi_gst.structure_is_writable(self):
             raise NotWritableStructure("Trying to write to a not writable structure."
                                        " Make sure to use the right APIs to have access to structure"
@@ -474,29 +609,32 @@ class Structure(Gst.Structure):
 
         return Gst.Structure.set_value(self, key, value)
 
-    def __str__(self):
+    def __str__(self) -> str:
         return self.to_string()
 
     def _set_parent(self, parent):
         self.__parent__ = parent
         return self
 
-    def __enter__(self):
+    def __enter__(self) -> Self:
         return self
 
     def __exit__(self, _type, _value, _tb):
         self._set_parent(None)
 
 
-Structure = override(Structure)
+override(Structure)
 __all__.append('Structure')
 
-ElementFactory = override(ElementFactory)
+override(ElementFactory)
 __all__.append('ElementFactory')
 
 
 class Fraction(Gst.Fraction):
-    def __init__(self, num, denom=1):
+    num: int
+    denom: int
+
+    def __init__(self, num: int, denom: int = 1):
         def __gcd(a, b):
             while b != 0:
                 tmp = a
@@ -515,8 +653,8 @@ class Fraction(Gst.Fraction):
             # Compute greatest common divisor
             gcd = __gcd(num, denom)
             if gcd != 0:
-                num /= gcd
-                denom /= gcd
+                num //= gcd
+                denom //= gcd
 
             self.num = num
             self.denom = denom
@@ -527,64 +665,62 @@ class Fraction(Gst.Fraction):
         __simplify()
         self.type = "fraction"
 
-    def __repr__(self):
-        return '<Gst.Fraction %s>' % (str(self))
+    def __repr__(self) -> str:
+        return f'<Gst.Fraction {self}>'
 
     def __value__(self):
         return self.num / self.denom
 
-    def __eq__(self, other):
+    def __eq__(self, other: object) -> bool:
         if isinstance(other, Fraction):
             return self.num * other.denom == other.num * self.denom
         return False
 
-    def __ne__(self, other):
+    def __ne__(self, other: object) -> bool:
         return not self.__eq__(other)
 
-    def __mul__(self, other):
+    def __mul__(self, other: object) -> Fraction:
         if isinstance(other, Fraction):
             return Fraction(self.num * other.num,
                             self.denom * other.denom)
         elif isinstance(other, int):
             return Fraction(self.num * other, self.denom)
-        raise TypeError("%s is not supported, use Gst.Fraction or int." %
-                        (type(other)))
+        raise TypeError(f"{type(other)} is not supported, use Gst.Fraction or int.")
 
     __rmul__ = __mul__
 
-    def __truediv__(self, other):
+    def __truediv__(self, other: object) -> Fraction:
         if isinstance(other, Fraction):
             return Fraction(self.num * other.denom,
                             self.denom * other.num)
         elif isinstance(other, int):
             return Fraction(self.num, self.denom * other)
-        return TypeError("%s is not supported, use Gst.Fraction or int." %
-                         (type(other)))
+        raise TypeError(f"{type(other)} is not supported, use Gst.Fraction or int.")
 
     __div__ = __truediv__
 
-    def __rtruediv__(self, other):
+    def __rtruediv__(self, other: object) -> Fraction:
         if isinstance(other, int):
             return Fraction(self.denom * other, self.num)
-        return TypeError("%s is not an int." % (type(other)))
+        raise TypeError(f"{type(other)} is not an int.")
 
     __rdiv__ = __rtruediv__
 
-    def __float__(self):
+    def __float__(self) -> float:
         return float(self.num) / float(self.denom)
 
-    def __str__(self):
-        return '%d/%d' % (self.num, self.denom)
+    def __str__(self) -> str:
+        return f'{self.num}/{self.denom}'
 
 
-Fraction = override(Fraction)
+override(Fraction)
 __all__.append('Fraction')
 
 
 class IntRange(Gst.IntRange):
-    def __init__(self, r):
+    def __init__(self, r: range):
         if not isinstance(r, range):
-            raise TypeError("%s is not a range." % (type(r)))
+            raise TypeError(f"{type(r)} is not a range.")
 
         if (r.start >= r.stop):
             raise TypeError("Range start must be smaller then stop")
@@ -597,18 +733,16 @@ class IntRange(Gst.IntRange):
 
         self.range = r
 
-    def __repr__(self):
-        return '<Gst.IntRange [%d,%d,%d]>' % (self.range.start,
-                                              self.range.stop, self.range.step)
+    def __repr__(self) -> str:
+        return f'<Gst.IntRange [{self.range.start},{self.range.stop},{self.range.step}]>'
 
-    def __str__(self):
+    def __str__(self) -> str:
         if self.range.step == 1:
-            return '[%d,%d]' % (self.range.start, self.range.stop)
+            return f'[{self.range.start},{self.range.stop}]'
         else:
-            return '[%d,%d,%d]' % (self.range.start, self.range.stop,
-                                   self.range.step)
+            return f'[{self.range.start},{self.range.stop},{self.range.step}]'
 
-    def __eq__(self, other):
+    def __eq__(self, other: object) -> bool:
         if isinstance(other, range):
             return self.range == other
         elif isinstance(other, IntRange):
@@ -616,15 +750,14 @@ class IntRange(Gst.IntRange):
         return False
 
 
-if sys.version_info >= (3, 0):
-    IntRange = override(IntRange)
-    __all__.append('IntRange')
+override(IntRange)
+__all__.append('IntRange')
 
 
 class Int64Range(Gst.Int64Range):
-    def __init__(self, r):
+    def __init__(self, r: range):
         if not isinstance(r, range):
-            raise TypeError("%s is not a range." % (type(r)))
+            raise TypeError(f"{type(r)} is not a range.")
 
         if (r.start >= r.stop):
             raise TypeError("Range start must be smaller then stop")
@@ -637,18 +770,16 @@ class Int64Range(Gst.Int64Range):
 
         self.range = r
 
-    def __repr__(self):
-        return '<Gst.Int64Range [%d,%d,%d]>' % (self.range.start,
-                                                self.range.stop, self.range.step)
+    def __repr__(self) -> str:
+        return f'<Gst.Int64Range [{self.range.start},{self.range.stop},{self.range.step}]>'
 
-    def __str__(self):
+    def __str__(self) -> str:
         if self.range.step == 1:
-            return '(int64)[%d,%d]' % (self.range.start, self.range.stop)
+            return f'(int64)[{self.range.start},{self.range.stop}]'
         else:
-            return '(int64)[%d,%d,%d]' % (self.range.start, self.range.stop,
-                                          self.range.step)
+            return f'(int64)[{self.range.start},{self.range.stop},{self.range.step}]'
 
-    def __eq__(self, other):
+    def __eq__(self, other: object) -> bool:
         if isinstance(other, range):
             return self.range == other
         elif isinstance(other, IntRange):
@@ -657,54 +788,61 @@ class Int64Range(Gst.Int64Range):
 
 
 class Bitmask(Gst.Bitmask):
-    def __init__(self, v):
+    v: int
+
+    def __init__(self, v: int) -> None:
         if not isinstance(v, int):
-            raise TypeError("%s is not an int." % (type(v)))
+            raise TypeError(f"{type(v)} is not an int.")
 
         self.v = int(v)
 
-    def __str__(self):
+    def __str__(self) -> str:
         return hex(self.v)
 
-    def __eq__(self, other):
+    def __eq__(self, other: object):
         return self.v == other
 
 
-Bitmask = override(Bitmask)
+override(Bitmask)
 __all__.append('Bitmask')
 
 
-if sys.version_info >= (3, 0):
-    Int64Range = override(Int64Range)
-    __all__.append('Int64Range')
+override(Int64Range)
+__all__.append('Int64Range')
 
 
 class DoubleRange(Gst.DoubleRange):
-    def __init__(self, start, stop):
+    start: float
+    stop: float
+
+    def __init__(self, start: float, stop: float):
         self.start = float(start)
         self.stop = float(stop)
 
         if (start >= stop):
             raise TypeError("Range start must be smaller then stop")
 
-    def __repr__(self):
-        return '<Gst.DoubleRange [%s,%s]>' % (str(self.start), str(self.stop))
+    def __repr__(self) -> str:
+        return f'<Gst.DoubleRange [{self.start},{self.stop}]>'
 
-    def __str__(self):
-        return '(double)[%s,%s]' % (str(self.range.start), str(self.range.stop))
+    def __str__(self) -> str:
+        return f'(double)[{self.start},{self.stop}]'
 
 
-DoubleRange = override(DoubleRange)
+override(DoubleRange)
 __all__.append('DoubleRange')
 
 
 class FractionRange(Gst.FractionRange):
-    def __init__(self, start, stop):
-        if not isinstance(start, Gst.Fraction):
-            raise TypeError("%s is not a Gst.Fraction." % (type(start)))
+    start: Fraction
+    stop: Fraction
 
-        if not isinstance(stop, Gst.Fraction):
-            raise TypeError("%s is not a Gst.Fraction." % (type(stop)))
+    def __init__(self, start: Fraction, stop: Fraction):
+        if not isinstance(start, Fraction):
+            raise TypeError(f"{type(start)} is not a Gst.Fraction.")
+
+        if not isinstance(stop, Fraction):
+            raise TypeError(f"{type(stop)} is not a Gst.Fraction.")
 
         if (float(start) >= float(stop)):
             raise TypeError("Range start must be smaller then stop")
@@ -712,99 +850,104 @@ class FractionRange(Gst.FractionRange):
         self.start = start
         self.stop = stop
 
-    def __repr__(self):
-        return '<Gst.FractionRange [%s,%s]>' % (str(self.start),
-                                                str(self.stop))
+    def __repr__(self) -> str:
+        return f'<Gst.FractionRange [{self.start},{self.stop}]>'
 
-    def __str__(self):
-        return '(fraction)[%s,%s]' % (str(self.start), str(self.stop))
+    def __str__(self) -> str:
+        return f'(fraction)[{self.start},{self.stop}]'
 
 
-FractionRange = override(FractionRange)
+override(FractionRange)
 __all__.append('FractionRange')
 
 
 class ValueArray(Gst.ValueArray):
-    def __init__(self, array=[]):
-        self.array = list(array)
+    def __init__(self, array: typing.Optional[typing.List[typing.Any]] = None):
+        self.array = list(array or [])
 
-    def append(self, item):
+    def append(self, item: typing.Any) -> None:
         self.array.append(item)
 
-    def prepend(self, item):
+    def prepend(self, item: typing.Any) -> None:
         self.array = [item] + self.array
 
     @staticmethod
-    def append_value(this, item):
+    def append_value(this: ValueArray, item: typing.Any) -> None:
         this.append(item)
 
     @staticmethod
-    def prepend_value(this, item):
+    def prepend_value(this: ValueArray, item: typing.Any) -> None:
         this.prepend(item)
 
     @staticmethod
-    def get_size(this):
+    def get_size(this: ValueArray) -> int:
         return len(this.array)
 
-    def __getitem__(self, index):
+    def __iter__(self) -> typing.Iterator[typing.Any]:
+        return iter(self.array)
+
+    def __getitem__(self, index: int) -> typing.Any:
         return self.array[index]
 
-    def __setitem__(self, index, value):
+    def __setitem__(self, index: int, value: typing.Any) -> None:
         self.array[index] = value
 
-    def __len__(self):
+    def __len__(self) -> int:
         return len(self.array)
 
-    def __str__(self):
+    def __str__(self) -> str:
         return '<' + ','.join(map(str, self.array)) + '>'
 
-    def __repr__(self):
-        return '<Gst.ValueArray %s>' % (str(self))
+    def __repr__(self) -> str:
+        return f'<Gst.ValueArray {self}>'
 
 
-ValueArray = override(ValueArray)
+override(ValueArray)
 __all__.append('ValueArray')
 
 
 class ValueList(Gst.ValueList):
-    def __init__(self, array=[]):
-        self.array = list(array)
+    def __init__(self, array: typing.Optional[typing.List[typing.Any]] = None):
+        self.array = list(array or [])
 
-    def append(self, item):
+    def append(self, item: typing.Any) -> None:
         self.array.append(item)
 
-    def prepend(self, item):
+    def prepend(self, item: typing.Any) -> None:
         self.array = [item] + self.array
 
     @staticmethod
-    def append_value(this, item):
+    def append_value(this: ValueList, item: typing.Any) -> None:
         this.append(item)
 
     @staticmethod
-    def prepend_value(this, item):
+    def prepend_value(this: ValueList, item: typing.Any) -> None:
         this.prepend(item)
 
     @staticmethod
-    def get_size(this):
+    def get_size(this: ValueList) -> int:
         return len(this.array)
 
-    def __getitem__(self, index):
+    def __iter__(self) -> typing.Iterator[typing.Any]:
+        return iter(self.array)
+
+    def __getitem__(self, index: int) -> typing.Any:
         return self.array[index]
 
-    def __setitem__(self, index, value):
+    def __setitem__(self, index: int, value: typing.Any) -> None:
         self.array[index] = value
 
-    def __len__(self):
+    def __len__(self) -> int:
         return len(self.array)
 
-    def __str__(self):
+    def __str__(self) -> str:
         return '{' + ','.join(map(str, self.array)) + '}'
 
-    def __repr__(self):
-        return '<Gst.ValueList %s>' % (str(self))
+    def __repr__(self) -> str:
+        return f'<Gst.ValueList {self}>'
 
 
-ValueList = override(ValueList)
+override(ValueList)
 __all__.append('ValueList')
 
 
@@ -812,7 +955,7 @@ class TagList(Gst.TagList):
     def __init__(self):
         Gst.TagList.__init__(self)
 
-    def __getitem__(self, index):
+    def __getitem__(self, index: int) -> typing.Any:
         if index >= self.n_tags():
             raise IndexError('taglist index out of range')
 
@@ -822,65 +965,57 @@ class TagList(Gst.TagList):
             raise KeyError(f"tag {key} not found")
         return val
 
-    def __setitem__(self, key, value):
-        self.add(Gst.TagMergeMode.REPLACE, key, value)
+    def __setitem__(self, key: str, value: typing.Any) -> None:
+        self.add_value(Gst.TagMergeMode.REPLACE, key, value)
 
-    def keys(self):
+    def keys(self) -> typing.Iterable[str]:
         keys = set()
 
-        def foreach(list, fid, value, udata):
+        def foreach(list, fid: str, udata):
             keys.add(fid)
             return True
 
         self.foreach(foreach, None, None)
         return keys
 
-    def enumerate(self):
+    def enumerate(self) -> map[tuple[str, typing.Any]]:
         return map(lambda k: (k, Gst.TagList.copy_value(self, k)[1]), self.keys())
 
-    def __len__(self):
+    def __len__(self) -> int:
         return self.n_tags()
 
-    def __str__(self):
+    def __str__(self) -> str:
         return self.to_string()
 
-    def __repr__(self):
-        return '<Gst.TagList %s>' % (str(self))
+    def __repr__(self) -> str:
+        return f'<Gst.TagList {self}>'
 
 
-TagList = override(TagList)
+override(TagList)
 __all__.append('TagList')
 
 # From https://docs.python.org/3/library/itertools.html
 
 
-def pairwise(iterable):
+def pairwise(iterable: typing.Iterable[Element]) -> typing.Iterator[tuple[Element, Element]]:
     a, b = itertools.tee(iterable)
     next(b, None)
     return zip(a, b)
 
 
-class StructureWrapper:
-    """A Gst.Structure wrapper to force usage of a context manager.
-    """
-    def __init__(self, structure):
-        self.__structure = structure
-
-    def __enter__(self):
-        return self.__structure
-
-    def __exit__(self, _type, _value, _tb):
-        self.__structure._set_parent(None)
-
-
 class MapInfo:
+    memory: typing.Optional[Memory]
+    flags: MapFlags
+    size: int
+    maxsize: int
+    data: typing.Optional[memoryview]
+
     def __init__(self):
         self.memory = None
         self.flags = Gst.MapFlags(0)
         self.size = 0
         self.maxsize = 0
         self.data = None
-        self.user_data = None
         self.__parent__ = None
 
     def __iter__(self):
@@ -889,7 +1024,7 @@ class MapInfo:
         for i in (self.__parent__ is not None, self):
             yield i
 
-    def __enter__(self):
+    def __enter__(self) -> Self:
         if not self.__parent__:
             raise MapError('MappingError', 'Mapping was not successful')
 
@@ -906,97 +1041,97 @@ class MapInfo:
 __all__.append("MapInfo")
 
 
-class Buffer(MiniObject, Gst.Buffer):
-    @property
-    def flags(self):
+class Buffer(MiniObjectMixin, Gst.Buffer):
+    @property  # type: ignore[override]
+    def flags(self) -> BufferFlags:
         return _gi_gst.mini_object_flags(self)
 
     @flags.setter
-    def flags(self, flags):
+    def flags(self, flags: BufferFlags) -> None:
         _gi_gst.mini_object_set_flags(self, flags)
 
     @property
-    def dts(self):
+    def dts(self) -> int:
         return _gi_gst.buffer_get_dts(self)
 
     @dts.setter
-    def dts(self, dts):
+    def dts(self, dts: int) -> None:
         _gi_gst.buffer_set_dts(self, dts)
 
     @property
-    def pts(self):
+    def pts(self) -> int:
         return _gi_gst.buffer_get_pts(self)
 
     @pts.setter
-    def pts(self, pts):
+    def pts(self, pts: int) -> None:
         _gi_gst.buffer_set_pts(self, pts)
 
     @property
-    def duration(self):
+    def duration(self) -> int:
         return _gi_gst.buffer_get_duration(self)
 
     @duration.setter
-    def duration(self, duration):
+    def duration(self, duration: int) -> None:
         _gi_gst.buffer_set_duration(self, duration)
 
     @property
-    def offset(self):
+    def offset(self) -> int:
         return _gi_gst.buffer_get_offset(self)
 
     @offset.setter
-    def offset(self, offset):
+    def offset(self, offset: int) -> None:
         _gi_gst.buffer_set_offset(self, offset)
 
     @property
-    def offset_end(self):
+    def offset_end(self) -> int:
         return _gi_gst.buffer_get_offset_end(self)
 
     @offset_end.setter
-    def offset_end(self, offset_end):
+    def offset_end(self, offset_end: int) -> None:
         _gi_gst.buffer_set_offset_end(self, offset_end)
 
-    def map_range(self, idx, length, flags):
+    def map_range(self, idx: int, length: int, flags: MapFlags) -> MapInfo:  # type: ignore[override]
         mapinfo = MapInfo()
         if (_gi_gst.buffer_override_map_range(self, mapinfo, idx, length, int(flags))):
             mapinfo.__parent__ = self
 
         return mapinfo
 
-    def map(self, flags):
+    def map(self, flags: MapFlags) -> MapInfo:  # type: ignore[override]
         mapinfo = MapInfo()
         if _gi_gst.buffer_override_map(self, mapinfo, int(flags)):
             mapinfo.__parent__ = self
 
         return mapinfo
 
-    def unmap(self, mapinfo):
+    def unmap(self, mapinfo: MapInfo) -> bool:  # type: ignore[override]
         mapinfo.__parent__ = None
         return _gi_gst.buffer_override_unmap(self, mapinfo)
 
 
-Buffer = override(Buffer)
+override(Buffer)
 __all__.append('Buffer')
 
 
 class Memory(Gst.Memory):
 
-    def map(self, flags):
+    def map(self, flags: MapFlags) -> MapInfo:  # type: ignore[override]
         mapinfo = MapInfo()
         if (_gi_gst.memory_override_map(self, mapinfo, int(flags))):
             mapinfo.__parent__ = self
 
         return mapinfo
 
-    def unmap(self, mapinfo):
+    def unmap(self, mapinfo: MapInfo) -> bool:  # type: ignore[override]
         mapinfo.__parent__ = None
         return _gi_gst.memory_override_unmap(self, mapinfo)
 
 
-Memory = override(Memory)
+override(Memory)
 __all__.append('Memory')
 
 
-def TIME_ARGS(time):
+def TIME_ARGS(time: int) -> str:
     if time == Gst.CLOCK_TIME_NONE:
         return "CLOCK_TIME_NONE"
 
@@ -1008,7 +1143,7 @@ def TIME_ARGS(time):
 
 __all__.append('TIME_ARGS')
 
-from gi.overrides import _gi_gst
+from gi.overrides import _gi_gst  # type: ignore[attr-defined]
 _gi_gst
 
 # maybe more python and less C some day if core turns a bit more introspection
@@ -1067,7 +1202,7 @@ class_methods = []
 for cname_klass in [o for o in inspect.getmembers(Gst) if isinstance(o[1], type(Gst.Element)) or isinstance(o[1], type(Gst.Caps))]:
     klass = cname_klass[1]
     methods = []
-    seen = set()
+    seen: set[str] = set()
 
     # Collect methods from the override class itself
     methods.extend(_collect_methods_from_dict(klass.__dict__, klass, seen))
@@ -1119,17 +1254,17 @@ def deinit_pygst():
 real_init = Gst.init
 
 
-def init(argv=None):
+def init(argv: typing.Optional[list[str]] = None) -> None:
     init_pygst()
 
     if Gst.is_initialized():
-        return True
+        return
 
     # FIXME: Workaround for pygobject handling nullability wrong
     if argv is None:
         argv = []
 
-    return real_init(argv)
+    real_init(argv)
 
 
 Gst.init = init
@@ -1137,10 +1272,10 @@ Gst.init = init
 real_init_check = Gst.init_check
 
 
-def init_check(argv):
+def init_check(argv: typing.Optional[list[str]] = None) -> typing.Tuple[bool, typing.Optional[list[str]]]:
     init_pygst()
     if Gst.is_initialized():
-        return True
+        return True, argv
 
     return real_init_check(argv)
 
@@ -1150,9 +1285,9 @@ Gst.init_check = init_check
 real_deinit = Gst.deinit
 
 
-def deinit():
+def deinit() -> None:
     deinit_pygst()
-    return real_deinit()
+    real_deinit()
 
 
 def init_python():

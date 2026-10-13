@@ -43,27 +43,6 @@ static gboolean started_java_vm = FALSE;
 static pthread_key_t current_jni_env;
 static jobject (*get_class_loader) (void);
 
-gint
-gst_amc_jni_get_android_level ()
-{
-  JNIEnv *env;
-  gint ret = __ANDROID_API__;
-  jfieldID sdkIntFieldID = NULL;
-
-  env = gst_amc_jni_get_env ();
-
-  jclass versionClass = (*env)->FindClass (env, "android/os/Build$VERSION");
-  if (versionClass == NULL)
-    goto done;
-
-  sdkIntFieldID = (*env)->GetStaticFieldID (env, versionClass, "SDK_INT", "I");
-  if (sdkIntFieldID == NULL)
-    goto done;
-
-  ret = (*env)->GetStaticIntField (env, versionClass, sdkIntFieldID);
-done:
-  return ret;
-}
 
 jclass
 gst_amc_jni_get_class (JNIEnv * env, GError ** err, const gchar * name)
@@ -878,16 +857,21 @@ done:
   return class;
 }
 
-#define CALL_STATIC_TYPE_METHOD(_type, _name,  _jname)                                                     \
+#define CALL_STATIC_TYPE_METHOD(_type, _name,  _jname)                                                       \
 gboolean gst_amc_jni_call_static_##_name##_method (JNIEnv *env, GError ** err, jclass klass, jmethodID methodID, _type * value, ...)   \
   {                                                                                                          \
     gboolean ret = TRUE;                                                                                     \
     va_list args;                                                                                            \
-    va_start(args, value);                                                                                \
+    if (methodID == NULL) {                                                                                  \
+      gst_amc_jni_set_error (env, err, GST_LIBRARY_ERROR, GST_LIBRARY_ERROR_INIT,                            \
+          "Java method not found");                                                                          \
+      return FALSE;                                                                                          \
+    }                                                                                                        \
+    va_start(args, value);                                                                                   \
     *value = (*env)->CallStatic##_jname##MethodV(env, klass, methodID, args);                                \
     if ((*env)->ExceptionCheck (env)) {                                                                      \
-      gst_amc_jni_set_error (env, err, GST_LIBRARY_ERROR, GST_LIBRARY_ERROR_FAILED,                               \
-          "Failed to call static Java method");                                                         \
+      gst_amc_jni_set_error (env, err, GST_LIBRARY_ERROR, GST_LIBRARY_ERROR_FAILED,                          \
+          "Failed to call static Java method");                                                              \
       ret = FALSE;                                                                                           \
     }                                                                                                        \
     va_end(args);                                                                                            \
@@ -927,11 +911,16 @@ gboolean gst_amc_jni_call_##_name##_method (JNIEnv *env, GError ** err, jobject 
   {                                                                                                          \
     gboolean ret = TRUE;                                                                                     \
     va_list args;                                                                                            \
-    va_start(args, value);                                                                                \
+    if (methodID == NULL) {                                                                                  \
+      gst_amc_jni_set_error (env, err, GST_LIBRARY_ERROR, GST_LIBRARY_ERROR_INIT,                            \
+          "Java method not found");                                                                          \
+      return FALSE;                                                                                          \
+    }                                                                                                        \
+    va_start(args, value);                                                                                   \
     *value = (*env)->Call##_jname##MethodV(env, obj, methodID, args);                                        \
     if ((*env)->ExceptionCheck (env)) {                                                                      \
-      gst_amc_jni_set_error (env, err, GST_LIBRARY_ERROR, GST_LIBRARY_ERROR_FAILED,                               \
-          "Failed to call Java method");                                                                \
+      gst_amc_jni_set_error (env, err, GST_LIBRARY_ERROR, GST_LIBRARY_ERROR_FAILED,                          \
+          "Failed to call Java method");                                                                     \
       ret = FALSE;                                                                                           \
     }                                                                                                        \
     va_end(args);                                                                                            \

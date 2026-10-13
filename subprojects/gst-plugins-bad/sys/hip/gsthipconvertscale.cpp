@@ -28,25 +28,38 @@
 GST_DEBUG_CATEGORY_STATIC (gst_hip_base_convert_debug);
 #define GST_CAT_DEFAULT gst_hip_base_convert_debug
 
-#define GST_HIP_CONVET_FORMATS \
+#define GST_HIP_CONVERT_FORMATS \
     "{ I420, YV12, NV12, NV21, P010_10LE, P012_LE, P016_LE, I420_10LE, I420_12LE, Y444, " \
     "Y444_10LE, Y444_12LE, Y444_16LE, BGRA, RGBA, RGBx, BGRx, ARGB, ABGR, RGB, " \
     "BGR, BGR10A2_LE, RGB10A2_LE, Y42B, I422_10LE, I422_12LE, RGBP, BGRP, GBR, " \
-    "GBRA, GBR_10LE, GBR_12LE, GBR_16LE, VUYA }"
+    "GBRA, GBR_10LE, GBR_12LE, GBR_16LE, VUYA, YUY2, RGBA_F32LE, RGBA_F16LE, " \
+    "RGBP_F32LE, RGBP_F16LE, RGB_F32LE, RGB_F16LE, GRAY16_LE, GRAY8, GRAY_F32LE, GRAY_F16LE }"
 
 static GstStaticPadTemplate sink_template = GST_STATIC_PAD_TEMPLATE ("sink",
     GST_PAD_SINK,
     GST_PAD_ALWAYS,
     GST_STATIC_CAPS (GST_VIDEO_CAPS_MAKE_WITH_FEATURES
-        (GST_CAPS_FEATURE_MEMORY_HIP_MEMORY, GST_HIP_CONVET_FORMATS))
+        (GST_CAPS_FEATURE_MEMORY_HIP_MEMORY, GST_HIP_CONVERT_FORMATS) ";"
+        GST_VIDEO_CAPS_MAKE_WITH_FEATURES
+        (GST_CAPS_FEATURE_MEMORY_HIP_MEMORY ","
+            GST_CAPS_FEATURE_META_GST_VIDEO_OVERLAY_COMPOSITION,
+            GST_HIP_CONVERT_FORMATS))
     );
 
 static GstStaticPadTemplate src_template = GST_STATIC_PAD_TEMPLATE ("src",
     GST_PAD_SRC,
     GST_PAD_ALWAYS,
     GST_STATIC_CAPS (GST_VIDEO_CAPS_MAKE_WITH_FEATURES
-        (GST_CAPS_FEATURE_MEMORY_HIP_MEMORY, GST_HIP_CONVET_FORMATS))
+        (GST_CAPS_FEATURE_MEMORY_HIP_MEMORY, GST_HIP_CONVERT_FORMATS) ";"
+        GST_VIDEO_CAPS_MAKE_WITH_FEATURES
+        (GST_CAPS_FEATURE_MEMORY_HIP_MEMORY ","
+            GST_CAPS_FEATURE_META_GST_VIDEO_OVERLAY_COMPOSITION,
+            GST_HIP_CONVERT_FORMATS))
     );
+
+static GQuark _size_quark;
+static GQuark _scale_quark;
+static GQuark _matrix_quark;
 
 #define DEFAULT_ADD_BORDERS TRUE
 
@@ -88,6 +101,8 @@ static gboolean gst_hip_base_convert_decide_allocation (GstBaseTransform *
     trans, GstQuery * query);
 static gboolean gst_hip_base_convert_filter_meta (GstBaseTransform * trans,
     GstQuery * query, GType api, const GstStructure * params);
+static gboolean gst_hip_base_convert_transform_meta (GstBaseTransform * trans,
+    GstBuffer * outbuf, GstMeta * meta, GstBuffer * inbuf);
 static GstFlowReturn gst_hip_base_convert_transform (GstBaseTransform * trans,
     GstBuffer * inbuf, GstBuffer * outbuf);
 static gboolean gst_hip_base_convert_set_info (GstHipBaseFilter * filter,
@@ -125,12 +140,18 @@ gst_hip_base_convert_class_init (GstHipBaseConvertClass * klass)
       GST_DEBUG_FUNCPTR (gst_hip_base_convert_decide_allocation);
   trans_class->filter_meta =
       GST_DEBUG_FUNCPTR (gst_hip_base_convert_filter_meta);
+  trans_class->transform_meta =
+      GST_DEBUG_FUNCPTR (gst_hip_base_convert_transform_meta);
   trans_class->transform = GST_DEBUG_FUNCPTR (gst_hip_base_convert_transform);
 
   filter_class->set_info = GST_DEBUG_FUNCPTR (gst_hip_base_convert_set_info);
 
   gst_type_mark_as_plugin_api (GST_TYPE_HIP_BASE_CONVERT,
       (GstPluginAPIFlags) 0);
+
+  _size_quark = g_quark_from_static_string (GST_META_TAG_VIDEO_SIZE_STR);
+  _scale_quark = gst_video_meta_transform_scale_get_quark ();
+  _matrix_quark = gst_video_meta_transform_matrix_get_quark ();
 }
 
 static void
@@ -156,9 +177,6 @@ gst_hip_base_convert_caps_remove_format_info (GstCaps * caps)
   GstCapsFeatures *f;
   gint i, n;
   GstCaps *res;
-  GstCapsFeatures *feature =
-      gst_caps_features_new_single_static_str
-      (GST_CAPS_FEATURE_MEMORY_HIP_MEMORY);
 
   res = gst_caps_new_empty ();
 
@@ -175,14 +193,13 @@ gst_hip_base_convert_caps_remove_format_info (GstCaps * caps)
     st = gst_structure_copy (st);
     /* Only remove format info for the cases when we can actually convert */
     if (!gst_caps_features_is_any (f)
-        && gst_caps_features_is_equal (f, feature)) {
+        && gst_caps_features_contains (f, GST_CAPS_FEATURE_MEMORY_HIP_MEMORY)) {
       gst_structure_remove_fields (st, "format", "colorimetry", "chroma-site",
           nullptr);
     }
 
     gst_caps_append_structure_full (res, st, gst_caps_features_copy (f));
   }
-  gst_caps_features_free (feature);
 
   return res;
 }
@@ -194,9 +211,6 @@ gst_hip_base_convert_caps_rangify_size_info (GstCaps * caps)
   GstCapsFeatures *f;
   gint i, n;
   GstCaps *res;
-  GstCapsFeatures *feature =
-      gst_caps_features_new_single_static_str
-      (GST_CAPS_FEATURE_MEMORY_HIP_MEMORY);
 
   res = gst_caps_new_empty ();
 
@@ -213,7 +227,7 @@ gst_hip_base_convert_caps_rangify_size_info (GstCaps * caps)
     st = gst_structure_copy (st);
     /* Only remove format info for the cases when we can actually convert */
     if (!gst_caps_features_is_any (f)
-        && gst_caps_features_is_equal (f, feature)) {
+        && gst_caps_features_contains (f, GST_CAPS_FEATURE_MEMORY_HIP_MEMORY)) {
       gst_structure_set (st, "width", GST_TYPE_INT_RANGE, 1, G_MAXINT,
           "height", GST_TYPE_INT_RANGE, 1, G_MAXINT, nullptr);
 
@@ -226,7 +240,6 @@ gst_hip_base_convert_caps_rangify_size_info (GstCaps * caps)
 
     gst_caps_append_structure_full (res, st, gst_caps_features_copy (f));
   }
-  gst_caps_features_free (feature);
 
   return res;
 }
@@ -238,9 +251,6 @@ gst_hip_base_convert_caps_remove_format_and_rangify_size_info (GstCaps * caps)
   GstCapsFeatures *f;
   gint i, n;
   GstCaps *res;
-  GstCapsFeatures *feature =
-      gst_caps_features_new_single_static_str
-      (GST_CAPS_FEATURE_MEMORY_HIP_MEMORY);
 
   res = gst_caps_new_empty ();
 
@@ -257,7 +267,7 @@ gst_hip_base_convert_caps_remove_format_and_rangify_size_info (GstCaps * caps)
     st = gst_structure_copy (st);
     /* Only remove format info for the cases when we can actually convert */
     if (!gst_caps_features_is_any (f)
-        && gst_caps_features_is_equal (f, feature)) {
+        && gst_caps_features_contains (f, GST_CAPS_FEATURE_MEMORY_HIP_MEMORY)) {
       gst_structure_set (st, "width", GST_TYPE_INT_RANGE, 1, G_MAXINT,
           "height", GST_TYPE_INT_RANGE, 1, G_MAXINT, nullptr);
       /* if pixel aspect ratio, make a range of it */
@@ -271,7 +281,6 @@ gst_hip_base_convert_caps_remove_format_and_rangify_size_info (GstCaps * caps)
 
     gst_caps_append_structure_full (res, st, gst_caps_features_copy (f));
   }
-  gst_caps_features_free (feature);
 
   return res;
 }
@@ -1419,6 +1428,59 @@ gst_hip_base_convert_filter_meta (GstBaseTransform * trans, GstQuery * query,
   return TRUE;
 }
 
+static gboolean
+gst_hip_base_convert_transform_meta (GstBaseTransform * trans,
+    GstBuffer * outbuf, GstMeta * meta, GstBuffer * inbuf)
+{
+  const auto info = meta->info;
+  if (info->api == GST_VIDEO_CROP_META_API_TYPE)
+    return FALSE;
+
+  const gchar *valid_tags[] = {
+    GST_META_TAG_VIDEO_STR,
+    GST_META_TAG_VIDEO_ORIENTATION_STR,
+    GST_META_TAG_VIDEO_SIZE_STR,
+    nullptr
+  };
+
+  if (!gst_meta_api_type_tags_contain_only (info->api, valid_tags)) {
+    return GST_BASE_TRANSFORM_CLASS (parent_class)->transform_meta (trans,
+        outbuf, meta, inbuf);
+  }
+
+  if (gst_meta_api_type_has_tag (info->api, _size_quark)) {
+    if (info->transform_func) {
+      auto base = GST_HIP_BASE_FILTER (trans);
+      auto self = GST_HIP_BASE_CONVERT (trans);
+      auto priv = self->priv;
+
+      GstVideoMetaTransformMatrix trans_matrix;
+      GstVideoMetaTransform trans = { &base->in_info, &base->out_info };
+      const GstVideoRectangle in_rectangle = { 0, 0,
+        GST_VIDEO_INFO_WIDTH (&base->in_info),
+        GST_VIDEO_INFO_HEIGHT (&base->in_info)
+      };
+      const GstVideoRectangle out_rectangle = {
+        priv->borders_w / 2,
+        priv->borders_h / 2,
+        GST_VIDEO_INFO_WIDTH (&base->out_info) - priv->borders_w,
+        GST_VIDEO_INFO_HEIGHT (&base->out_info) - priv->borders_h,
+      };
+
+      gst_video_meta_transform_matrix_init (&trans_matrix,
+          &base->in_info, &in_rectangle, &base->out_info, &out_rectangle);
+
+      if (!info->transform_func (outbuf, meta, inbuf, _matrix_quark,
+              &trans_matrix))
+        info->transform_func (outbuf, meta, inbuf, _scale_quark, &trans);
+    }
+
+    return FALSE;
+  }
+
+  return TRUE;
+}
+
 static GstFlowReturn
 gst_hip_base_convert_transform (GstBaseTransform * trans,
     GstBuffer * inbuf, GstBuffer * outbuf)
@@ -1538,6 +1600,7 @@ gst_hip_convert_scale_class_init (GstHipConvertScaleClass * klass)
       "Filter/Converter/Video/Scaler/Colorspace/Effect/Hardware",
       "Resizes video and allow color conversion using HIP",
       "Seungha Yang <seungha@centricular.com>");
+  gst_element_class_mark_as_untrusted_aware (element_class);
 
   trans_class->passthrough_on_same_caps = FALSE;
   trans_class->before_transform =
@@ -1679,9 +1742,10 @@ gst_hip_convert_class_init (GstHipConvertClass * klass)
 
   gst_element_class_set_static_metadata (element_class,
       "HIP colorspace converter",
-      "Filter/Converter/Video/Hardware",
+      "Filter/Converter/Video/Colorspace/Hardware",
       "Converts video from one colorspace to another using HIP",
       "Seungha Yang <seungha@centricular.com>");
+  gst_element_class_mark_as_untrusted_aware (element_class);
 
   trans_class->transform_caps =
       GST_DEBUG_FUNCPTR (gst_hip_convert_transform_caps);
@@ -1782,6 +1846,7 @@ gst_hip_scale_class_init (GstHipScaleClass * klass)
       "HIP video scaler",
       "Filter/Converter/Video/Scaler/Hardware",
       "Resize video using HIP", "Seungha Yang <seungha@centricular.com>");
+  gst_element_class_mark_as_untrusted_aware (element_class);
 
   trans_class->transform_caps =
       GST_DEBUG_FUNCPTR (gst_hip_scale_transform_caps);

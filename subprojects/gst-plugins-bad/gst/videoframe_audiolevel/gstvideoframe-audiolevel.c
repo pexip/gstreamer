@@ -117,6 +117,7 @@ gst_videoframe_audiolevel_class_init (GstVideoFrameAudioLevelClass * klass)
       "Video-frame audio level", "Filter/Analyzer/Audio",
       "Synchronized audio/video RMS Level messenger for audio/raw",
       "Vivia Nikolaidou <vivia@toolsonair.com>");
+  gst_element_class_mark_as_untrusted_aware (gstelement_class);
 
   gobject_class->finalize = gst_videoframe_audiolevel_finalize;
   gstelement_class->change_state = gst_videoframe_audiolevel_change_state;
@@ -776,6 +777,7 @@ out:
 static gboolean
 gst_videoframe_audiolevel_plugin_init (GstPlugin * plugin)
 {
+  gst_plugin_set_static_features_flag (plugin);
   return GST_ELEMENT_REGISTER (videoframe_audiolevel, plugin);
 }
 

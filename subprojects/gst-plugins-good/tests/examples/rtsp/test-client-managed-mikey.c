@@ -36,7 +36,8 @@ typedef struct
 } KeyParam;
 
 static KeyParam *
-key_param_new (guint key_size, guint32 mki)
+key_param_new (guint key_size, guint32 mki, const gchar * cipher,
+    const gchar * auth)
 {
   KeyParam *key_param = NULL;
   guint8 *data, *mki_data;
@@ -64,15 +65,13 @@ key_param_new (guint key_size, guint32 mki)
   /* parameters for MIKEY SETUP and srtpdec */
   key_param->key_caps =
       gst_caps_new_static_str_simple ("application/x-srtp", "srtp-key",
-      GST_TYPE_BUFFER, srtp_key, "srtp-cipher", G_TYPE_STRING, "aes-128-icm",
-      "srtp-auth", G_TYPE_STRING, "hmac-sha1-80", "mki", GST_TYPE_BUFFER,
-      mki_buf, "srtcp-cipher", G_TYPE_STRING, "aes-128-icm", "srtcp-auth",
-      G_TYPE_STRING, "hmac-sha1-80", NULL);
+      GST_TYPE_BUFFER, srtp_key, "srtp-cipher", G_TYPE_STRING, cipher,
+      "srtp-auth", G_TYPE_STRING, auth, "mki", GST_TYPE_BUFFER,
+      mki_buf, "srtcp-cipher", G_TYPE_STRING, cipher, "srtcp-auth",
+      G_TYPE_STRING, auth, NULL);
 
   /* parameters for re-keying */
-  key_param->rekey_caps =
-      gst_caps_new_static_str_simple ("application/x-srtp", "srtp-key",
-      GST_TYPE_BUFFER, srtp_key, "mki", GST_TYPE_BUFFER, mki_buf, NULL);
+  key_param->rekey_caps = gst_caps_copy (key_param->key_caps);
 
   gst_buffer_unref (mki_buf);
   gst_buffer_unref (srtp_key);
@@ -149,7 +148,7 @@ key_param_inc_mki (KeyParam * key_param)
  * * When configuring srtpenc for RTCP.
  * * When preparing the KeyMgmt parameter for the SETUP request.
  * * When srtpdec needs a key to decrypt an incoming packet.
- * * After 'remove-key', which we call when re-keying.
+ * * After 'invalidate-key', which we call when re-keying.
  */
 static GstCaps *
 request_key (G_GNUC_UNUSED GstElement * src,
@@ -270,9 +269,9 @@ on_rekey_reply (GstPromise * promise, gpointer user_data)
     goto next;
   }
 
-  g_signal_emit_by_name (rtspsrc, "remove-key", stream_id, &res);
+  g_signal_emit_by_name (rtspsrc, "invalidate-key", stream_id, &res);
   if (!res) {
-    GST_ERROR ("Failed to remove key from client for stream with id %u",
+    GST_ERROR ("Failed to invalidate key from client for stream with id %u",
         stream_id);
     goto next;
   }
@@ -304,7 +303,7 @@ rekey_all (gpointer user_data)
   key_param_inc_mki (key_param);
 
   /* rtspsrc can only process one SET_PARAMETER at once.
-   * We will chain SET_PARAMETER then remove-key for each stream.
+   * We will chain SET_PARAMETER then invalidate-key for each stream.
    */
   data = rekey_data_new (key_param, g_list_copy (streams));
   rekey_next_stream (data);
@@ -695,6 +694,48 @@ bus_message (G_GNUC_UNUSED GstBus * bus, GstMessage * message,
   return TRUE;
 }
 
+static gboolean
+validate_cipher (const gchar * cipher)
+{
+  static const gchar *valid_ciphers[] = {
+    "aes-128-icm",
+    "aes-256-icm",
+    "aes-128-gcm",
+    "aes-256-gcm",
+    NULL
+  };
+
+  if (!cipher || !cipher[0])
+    return FALSE;
+
+  for (guint i = 0; valid_ciphers[i] != NULL; i++) {
+    if (g_strcmp0 (cipher, valid_ciphers[i]) == 0)
+      return TRUE;
+  }
+
+  return FALSE;
+}
+
+static gboolean
+validate_auth (const gchar * auth)
+{
+  static const gchar *valid_auth[] = {
+    "hmac-sha1-80",
+    "null",
+    NULL
+  };
+
+  if (!auth || !auth[0])
+    return FALSE;
+
+  for (guint i = 0; valid_auth[i] != NULL; i++) {
+    if (g_strcmp0 (auth, valid_auth[i]) == 0)
+      return TRUE;
+  }
+
+  return FALSE;
+}
+
 gint
 main (gint argc, gchar ** argv)
 {
@@ -702,35 +743,73 @@ main (gint argc, gchar ** argv)
   GstBus *bus = NULL;
   KeyParam *key_param = NULL;
   gchar *location = NULL;
-  guint32 key_len, mki, rekey_int = 0;
-  if (argc != 5) {
-    g_printerr
-        ("Usage:\n\ttest-client-managed-mikey KEY_LEN MKI REKEY_INT LOCATION\n"
-        "\n\tWhere:\n" "\t\tKEY_LEN  : len of the key (e.g. 30)\n"
-        "\t\tMKI      : Master Key Index (e.g. 1200)\n"
-        "\t\tREKEY_INT: re-keying interval in seconds (e.g. 10). 0 to disable\n"
-        "\t\tLOCATION : rtsps://user:pass@host:port/resource (e.g. port "
-        "322)\n");
-    goto out;
-  }
-  if (!sscanf (argv[1], "%u", &key_len)) {
-    g_printerr ("Expected an integer for KEY_LEN, got: %s", argv[1]);
-    goto out;
-  }
-  if (!sscanf (argv[2], "%u", &mki)) {
-    g_printerr ("Expected an integer for MKI, got: %s", argv[2]);
-    goto out;
-  }
-  if (!sscanf (argv[3], "%u", &rekey_int)) {
-    g_printerr ("Expected an integer for REKEY_INT, got: %s", argv[3]);
-    goto out;
-  }
-  location = argv[4];
+  const gchar *cipher = "aes-128-icm";
+  const gchar *auth = "hmac-sha1-80";
+  guint32 key_len = 30;
+  guint32 mki = 1200;
+  guint32 rekey_int = 0;
+  GError *error = NULL;
+  GOptionContext *context = NULL;
+  GOptionEntry entries[] = {
+    {"cipher", 'c', 0, G_OPTION_ARG_STRING, &cipher,
+        "Encryption cipher to use (aes-128-icm, aes-256-icm, aes-128-gcm, "
+          "aes-256-gcm). Default: aes-128-icm", "CIPHER"},
+    {"auth", 'a', 0, G_OPTION_ARG_STRING, &auth,
+          "Authentication method to use (hmac-sha1-80, null). Set to 'null' for "
+          "authenticated encryption ciphers(AEAD) such as the aes-128-gcm. "
+          "Default: hmac-sha1-80",
+        "AUTH"},
+    {"key-length", 'k', 0, G_OPTION_ARG_INT, &key_len,
+        "Length of the key+salt (e.g. 30 for aes-128-icm, 28 for "
+          "aes-128-gcm, 44 for aes-256-gcm). Default: 30", "KEY_LEN"},
+    {"mki", 'm', 0, G_OPTION_ARG_INT, &mki,
+        "Master Key Index (e.g. 1200). Default: 1200", "MKI"},
+    {"rekey-interval", 'r', 0, G_OPTION_ARG_INT, &rekey_int,
+          "Re-keying interval in seconds (e.g. 10). 0 to disable re-keying. Default: 0",
+        "REKEY_INT"},
+    {"location", 'l', 0, G_OPTION_ARG_STRING, &location,
+          "RTSP location (e.g. rtsps://user:pass@host:port/resource)",
+        "LOCATION"},
+    {NULL}
+  };
+
   gst_init (&argc, &argv);
   GST_DEBUG_CATEGORY_INIT (srtp_client_debug, "test-client-managed-mikey", 0,
       "test-client-managed-mikey debug");
+
+  context =
+      g_option_context_new ("- SRTP/RTSPS client with client-managed MIKEY");
+  g_option_context_add_main_entries (context, entries, NULL);
+  g_option_context_set_summary (context,
+      "Example SRTP/RTSPS client supporting client-managed MIKEY key management.\n");
+
+  if (!g_option_context_parse (context, &argc, &argv, &error)) {
+    g_printerr ("Error parsing arguments: %s\n", error->message);
+    g_error_free (error);
+    goto out;
+  }
+
+  if (!location) {
+    g_printerr ("Error: --location/-l option is required\n");
+    g_printerr ("%s", g_option_context_get_help (context, TRUE, NULL));
+    goto out;
+  }
+
+  if (!validate_cipher (cipher)) {
+    g_printerr ("Error: Unsupported cipher '%s'\n", cipher);
+    g_printerr ("Supported ciphers: aes-128-icm, aes-256-icm, aes-128-gcm, "
+        "aes-256-gcm\n");
+    goto out;
+  }
+
+  if (!validate_auth (auth)) {
+    g_printerr ("Error: Unsupported auth '%s'\n", auth);
+    g_printerr ("Supported auth methods: hmac-sha1-80, null\n");
+    goto out;
+  }
+
   loop = g_main_loop_new (NULL, TRUE);
-  key_param = key_param_new (key_len, mki);
+  key_param = key_param_new (key_len, mki, cipher, auth);
   if (!build_pipeline (location, key_param)) {
     GST_ERROR ("Pipeline could not be built");
     goto out;
@@ -762,6 +841,7 @@ main (gint argc, gchar ** argv)
   res = EXIT_SUCCESS;
 
 out:
+  g_clear_pointer (&context, g_option_context_free);
   g_clear_pointer (&key_param, key_param_free);
   g_clear_pointer (&streams, g_list_free);
   g_clear_object (&rtspsrc);

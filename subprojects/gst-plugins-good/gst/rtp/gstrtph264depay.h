@@ -76,6 +76,11 @@ struct _GstRtpH264Depay
   gboolean request_keyframe;
   gboolean waiting_for_keyframe;
   gboolean requesting_keyframe;
+  guint max_fragmentation_unit_size;
+
+  /* saved RTP buffer for video meta re-application across NAL reassembly */
+  GstBuffer *meta_buf;
+  GstClockTime meta_buf_ts;
 };
 
 struct _GstRtpH264DepayClass

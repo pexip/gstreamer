@@ -29,6 +29,23 @@
 
 G_BEGIN_DECLS
 
+#define LEGACY_FLV_VIDEO_CAPS "video/x-flash-video; \
+        video/x-flash-screen; \
+        video/x-vp6-flash; video/x-vp6-alpha; \
+        video/x-h264, stream-format=avc;"
+
+#define LEGACY_FLV_AUDIO_CAPS "audio/x-adpcm, layout = (string) swf, channels = (int) { 1, 2 }, rate = (int) { 5512, 11025, 22050, 44100 }; \
+        audio/mpeg, mpegversion = (int) 1, layer = (int) 3, channels = (int) { 1, 2 }, rate = (int) { 5512, 8000, 11025, 22050, 44100 }, parsed = (boolean) TRUE; \
+        audio/mpeg, mpegversion = (int) { 4, 2 }, stream-format = (string) raw; \
+        audio/x-nellymoser, channels = (int) { 1, 2 }, rate = (int) { 5512, 8000, 11025, 16000, 22050, 44100 }; \
+        audio/x-raw, format = (string) { U8, S16LE}, layout = (string) interleaved, channels = (int) { 1, 2 }, rate = (int) { 5512, 11025, 22050, 44100 }; \
+        audio/x-alaw, channels = (int) { 1, 2 }, rate = (int) 8000; \
+        audio/x-mulaw, channels = (int) { 1, 2 }, rate = (int) 8000; \
+        audio/x-speex, channels = (int) 1, rate = (int) 16000;"
+
+#define FLV_ENHANCED_VIDEO_CAPS "video/x-h265, stream-format=(string)hvc1, alignment=(string)au; \
+        video/x-av1, stream-format=(string)obu-stream, alignment=(string)tu;"
+
 #define GST_TYPE_FLV_MUX_PAD (gst_flv_mux_pad_get_type())
 #define GST_FLV_MUX_PAD(obj) (G_TYPE_CHECK_INSTANCE_CAST((obj),GST_TYPE_FLV_MUX_PAD, GstFlvMuxPad))
 #define GST_FLV_MUX_PAD_CAST(obj) ((GstFlvMuxPad *)(obj))
@@ -58,14 +75,45 @@ typedef enum {
   GST_FLV_MUX_TRACK_TYPE_VIDEO = 2,
 } GstFlvMuxTrackType;
 
+/**
+ * GstFlvTrackMode:
+ * @GST_FLV_TRACK_MODE_ENHANCED_MULTITRACK: Stream the track with each FLV packet containing a Multitrack.OneTrack type. The track ID is always 0.
+ * @GST_FLV_TRACK_MODE_ENHANCED_NON_MULTITRACK: Stream the track in enhanced FLV, but it is not Multitrack type packet, so there won't be a track ID.
+ * @GST_FLV_TRACK_MODE_LEGACY: Stream the track in the legacy FLV format without any extended header.
+ *
+ * Since: 1.28
+ */
+typedef enum
+{
+  GST_FLV_TRACK_MODE_ENHANCED_MULTITRACK = 0,
+  GST_FLV_TRACK_MODE_ENHANCED_NON_MULTITRACK = 1,
+  GST_FLV_TRACK_MODE_LEGACY = 2,
+} GstFlvTrackMode;
+
 struct _GstFlvMuxPad
 {
   GstAggregatorPad aggregator_pad;
 
-  guint codec;
+  guint32 codec;
+  // used to send in the legacy FLV header
   guint rate;
   guint width;
   guint channels;
+
+  // used to send in the metadata
+  gint audio_samplerate;
+  gint audio_samplesize;
+  gint audio_channels;
+
+  gint video_width;
+  gint video_height;
+  gint video_framerate_n;
+  gint video_framerate_d;
+  gboolean video_have_framerate;
+  gint video_par_n;
+  gint video_par_d;
+  gboolean video_have_par;
+
   GstBuffer *codec_data;
 
   guint bitrate;
@@ -76,9 +124,9 @@ struct _GstFlvMuxPad
 
   gboolean info_changed;
   gboolean drop_deltas;
-  guint32 codec_fourcc;
   gint16 track_id;
   GstFlvMuxTrackType type;
+  guint8 flv_track_mode;
 };
 
 struct _GstFlvMuxPadClass {
@@ -99,7 +147,7 @@ struct _GstFlvMux {
   /* <private> */
   GstFlvMuxState state;
   GList *audio_pads;
-  GstFlvMuxPad *video_pad;
+  GList *video_pads;
   gboolean streamable;
   gchar *metadatacreator;
   gchar *encoder;
@@ -115,6 +163,8 @@ struct _GstFlvMux {
   guint64 last_dts;
 
   gboolean sent_header;
+  guint max_audio_pad_serial;
+  guint max_video_pad_serial;
 };
 
 struct _GstFlvMuxClass {

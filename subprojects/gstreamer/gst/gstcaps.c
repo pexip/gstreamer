@@ -130,6 +130,7 @@ static void gst_caps_transform_to_string (const GValue * src_value,
     GValue * dest_value);
 static gboolean gst_caps_from_string_inplace (GstCaps * caps,
     const gchar * string);
+static void gst_value_set_may_be_leaked (const GValue * value);
 
 GType _gst_caps_type = 0;
 GstCaps *_gst_caps_any;
@@ -553,6 +554,60 @@ gst_caps_new_full_valist (GstStructure * structure, va_list var_args)
 
 G_DEFINE_POINTER_TYPE (GstStaticCaps, gst_static_caps);
 
+static gboolean
+gst_caps_field_set_may_be_leaked (const GstIdStr * fieldname,
+    const GValue * value, gpointer user_data)
+{
+  gst_value_set_may_be_leaked (value);
+  return TRUE;
+}
+
+static void
+gst_caps_set_nested_may_be_leaked (GstCaps * caps)
+{
+  guint i, n = gst_caps_get_size (caps);
+
+  GST_MINI_OBJECT_FLAG_SET (caps, GST_MINI_OBJECT_FLAG_MAY_BE_LEAKED);
+
+  for (i = 0; i < n; i++)
+    gst_structure_foreach_id_str (gst_caps_get_structure (caps, i),
+        gst_caps_field_set_may_be_leaked, NULL);
+}
+
+static void
+gst_value_set_may_be_leaked (const GValue * value)
+{
+  if (GST_VALUE_HOLDS_CAPS (value)) {
+    GstCaps *nested = (GstCaps *) gst_value_get_caps (value);
+
+    if (nested)
+      gst_caps_set_nested_may_be_leaked (nested);
+  } else if (GST_VALUE_HOLDS_LIST (value)) {
+    guint i, n = gst_value_list_get_size (value);
+
+    for (i = 0; i < n; i++)
+      gst_value_set_may_be_leaked (gst_value_list_get_value (value, i));
+  } else if (GST_VALUE_HOLDS_ARRAY (value)) {
+    guint i, n = gst_value_array_get_size (value);
+
+    for (i = 0; i < n; i++)
+      gst_value_set_may_be_leaked (gst_value_array_get_value (value, i));
+  } else if (GST_VALUE_HOLDS_UNIQUE_LIST (value)) {
+    guint i, n = gst_value_unique_list_get_size (value);
+
+    for (i = 0; i < n; i++)
+      gst_value_set_may_be_leaked (gst_value_unique_list_get_value (value, i));
+  } else if (GST_VALUE_HOLDS_STRUCTURE (value)) {
+    gst_structure_foreach_id_str (gst_value_get_structure (value),
+        gst_caps_field_set_may_be_leaked, NULL);
+  } else if (g_type_is_a (G_VALUE_TYPE (value), GST_TYPE_MINI_OBJECT)) {
+    GstMiniObject *obj = g_value_get_boxed (value);
+
+    if (obj)
+      GST_MINI_OBJECT_FLAG_SET (obj, GST_MINI_OBJECT_FLAG_MAY_BE_LEAKED);
+  }
+}
+
 /**
  * gst_static_caps_get:
  * @static_caps: the #GstStaticCaps to convert
@@ -594,8 +649,9 @@ gst_static_caps_get (GstStaticCaps * static_caps)
       goto done;
     }
 
-    /* Caps generated from static caps are usually leaked */
-    GST_MINI_OBJECT_FLAG_SET (*caps, GST_MINI_OBJECT_FLAG_MAY_BE_LEAKED);
+    /* Caps generated from static caps are usually leaked, as are any caps
+     * nested inside them (e.g. a "...=(GstCaps)[...]" field). */
+    gst_caps_set_nested_may_be_leaked (*caps);
 
     GST_CAT_TRACE (GST_CAT_CAPS, "created %p from string %s", static_caps,
         string);
@@ -808,17 +864,15 @@ gst_caps_append_structure (GstCaps * caps, GstStructure * structure)
 {
   g_return_if_fail (GST_IS_CAPS (caps));
   g_return_if_fail (IS_WRITABLE (caps));
+  g_return_if_fail (GST_IS_STRUCTURE (structure));
 
   if (CAPS_IS_ANY (caps)) {
     /* ANY caps will stay as ANY caps */
-    if (structure)
-      gst_structure_free (structure);
+    gst_structure_free (structure);
     return;
   }
 
-  if (G_LIKELY (structure)) {
-    gst_caps_append_structure_unchecked (caps, structure, NULL);
-  }
+  gst_caps_append_structure_unchecked (caps, structure, NULL);
 }
 
 /**
@@ -838,19 +892,17 @@ gst_caps_append_structure_full (GstCaps * caps, GstStructure * structure,
 {
   g_return_if_fail (GST_IS_CAPS (caps));
   g_return_if_fail (IS_WRITABLE (caps));
+  g_return_if_fail (GST_IS_STRUCTURE (structure));
 
   if (CAPS_IS_ANY (caps)) {
     /* ANY caps will stay as ANY caps */
-    if (structure)
-      gst_structure_free (structure);
+    gst_structure_free (structure);
     if (features)
       gst_caps_features_free (features);
     return;
   }
 
-  if (G_LIKELY (structure)) {
-    gst_caps_append_structure_unchecked (caps, structure, features);
-  }
+  gst_caps_append_structure_unchecked (caps, structure, features);
 }
 
 /**
@@ -2495,9 +2547,11 @@ gst_caps_structure_simplify (GstStructure ** result,
       g_free (one);
       g_free (two);
     }
+    gst_id_str_clear (&field.name);
     return ret;
   }
 
+  gst_id_str_clear (&field.name);
   return FALSE;
 }
 
@@ -3065,7 +3119,8 @@ gst_caps_filter_and_map_in_place (GstCaps * caps, GstCapsFilterMapFunc func,
 GstCaps *
 gst_caps_copy (const GstCaps * caps)
 {
-  return GST_CAPS_CAST (gst_mini_object_copy (GST_MINI_OBJECT_CAST (caps)));
+  return
+      GST_CAPS_CAST (gst_mini_object_copy (GST_MINI_OBJECT_CONST_CAST (caps)));
 }
 
 /**

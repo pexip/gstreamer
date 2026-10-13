@@ -250,7 +250,9 @@ gst_download_buffer_class_init (GstDownloadBufferClass * klass)
       g_param_spec_string ("temp-template", "Temporary File Template",
           "File template to store temporary files in, should contain directory "
           "and XXXXXX. (NULL == disabled)",
-          NULL, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+          NULL,
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
+          GST_PARAM_UNTRUSTED_SENSITIVE));
 
   g_object_class_install_property (gobject_class, PROP_TEMP_LOCATION,
       g_param_spec_string ("temp-location", "Temporary File Location",
@@ -277,6 +279,8 @@ gst_download_buffer_class_init (GstDownloadBufferClass * klass)
   gst_element_class_set_static_metadata (gstelement_class, "DownloadBuffer",
       "Generic", "Download Buffer element",
       "Wim Taymans <wim.taymans@gmail.com>");
+
+  gst_element_class_mark_as_untrusted_aware (gstelement_class);
 
   gstelement_class->change_state =
       GST_DEBUG_FUNCPTR (gst_download_buffer_change_state);
@@ -1056,7 +1060,8 @@ gst_download_buffer_handle_sink_event (GstPad * pad, GstObject * parent,
         /* reset rate counters */
         reset_rate_timer (dlbuf);
         gst_pad_start_task (dlbuf->srcpad,
-            (GstTaskFunction) gst_download_buffer_loop, dlbuf->srcpad, NULL);
+            (GstTaskFunction) gst_download_buffer_loop,
+            gst_object_ref (dlbuf->srcpad), gst_object_unref);
         GST_DOWNLOAD_BUFFER_MUTEX_UNLOCK (dlbuf);
       } else {
         GST_DOWNLOAD_BUFFER_MUTEX_LOCK (dlbuf);
@@ -1421,7 +1426,7 @@ gst_download_buffer_handle_src_event (GstPad * pad, GstObject * parent,
         dlbuf->sinkresult = GST_FLOW_OK;
         if (GST_PAD_MODE (pad) == GST_PAD_MODE_PUSH) {
           gst_pad_start_task (pad, (GstTaskFunction) gst_download_buffer_loop,
-              pad, NULL);
+              gst_object_ref (pad), gst_object_unref);
         }
       }
       GST_DOWNLOAD_BUFFER_MUTEX_UNLOCK (dlbuf);
@@ -1735,7 +1740,7 @@ gst_download_buffer_src_activate_push (GstPad * pad, GstObject * parent,
     dlbuf->upstream_size = -1;
     result =
         gst_pad_start_task (pad, (GstTaskFunction) gst_download_buffer_loop,
-        pad, NULL);
+        gst_object_ref (pad), gst_object_unref);
     GST_DOWNLOAD_BUFFER_MUTEX_UNLOCK (dlbuf);
   } else {
     /* unblock loop function */

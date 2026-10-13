@@ -35,33 +35,6 @@ cd $WORK
 
 mkdir -p $OUT/lib/gstreamer-1.0
 
-# build ogg
-pushd $SRC/ogg
-./autogen.sh
-./configure --prefix="$PREFIX" --libdir="$PREFIX/lib"
-make clean
-make -j$(nproc)
-make install
-popd
-
-# build vorbis
-pushd $SRC/vorbis
-./autogen.sh
-./configure --prefix="$PREFIX" --libdir="$PREFIX/lib"
-make clean
-make -j$(nproc)
-make install
-popd
-
-# build theora
-pushd $SRC/theora
-./autogen.sh
-./configure --prefix="$PREFIX" --libdir="$PREFIX/lib"
-make clean
-make -j$(nproc)
-make install
-popd
-
 # Note: We don't use/build orc since it still seems to be problematic
 # with clang and the various sanitizers.
 
@@ -70,7 +43,7 @@ meson \
     --prefix=$PREFIX \
     --libdir=lib \
     --default-library=shared \
-    --force-fallback-for=zlib \
+    --force-fallback-for=zlib,ogg,vorbis,theora \
     -Db_lundef=false \
     -Doss_fuzz=enabled \
     -Dglib:oss_fuzz=enabled \
@@ -79,9 +52,22 @@ meson \
     -Ddoc=disabled \
     -Dexamples=disabled \
     -Dintrospection=disabled \
-    -Dgood=disabled \
+    -Dgood=enabled \
+    -Dgst-plugins-good:auto_features=disabled \
+    -Dgst-plugins-good:isomp4=enabled \
+    -Dgst-plugins-good:matroska=enabled \
+    -Dgst-plugins-good:flv=enabled \
+    -Dgst-plugins-good:avi=enabled \
+    -Dgst-plugins-good:audioparsers=enabled \
+    -Dgst-plugins-good:wavparse=enabled \
+    -Dgst-plugins-good:id3demux=enabled \
+    -Dgst-plugins-good:flac=disabled \
+    -Dbad=enabled \
+    -Dgst-plugins-bad:auto_features=disabled \
+    -Dgst-plugins-bad:mpegtsdemux=enabled \
+    -Dgst-plugins-bad:videoparsers=enabled \
+    -Dgst-plugins-bad:jpegformat=enabled \
     -Dugly=disabled \
-    -Dbad=disabled \
     -Dlibav=disabled \
     -Dges=disabled \
     -Dsharp=disabled \
@@ -93,9 +79,7 @@ meson \
     -Dgst-examples=disabled \
     -Dqt5=disabled \
     -Dorc=disabled \
-    -Dgtk_doc=disabled \
     -Dgstreamer:tracer_hooks=false \
-    -Dgst-plugins-base:opus=disabled \
     -Dgst-plugins-base:pango=disabled \
     _builddir \
     $SRC/gstreamer

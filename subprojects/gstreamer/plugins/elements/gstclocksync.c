@@ -58,6 +58,7 @@ GST_DEBUG_CATEGORY_STATIC (gst_clock_sync_debug);
 #define DEFAULT_TS_OFFSET               0
 #define DEFAULT_SYNC_TO_FIRST           FALSE
 #define DEFAULT_QOS                     FALSE
+#define DEFAULT_RATE                    1.0
 
 enum
 {
@@ -66,10 +67,18 @@ enum
   PROP_TS_OFFSET,
   PROP_SYNC_TO_FIRST,
   PROP_QOS,
+  PROP_RATE,
   PROP_LAST
 };
 
+enum
+{
+  SIGNAL_RESYNC,
+  SIGNAL_LAST
+};
+
 static GParamSpec *properties[PROP_LAST];
+static gint clocksync_signals[SIGNAL_LAST] = { 0, };
 
 static GstStaticPadTemplate sinktemplate = GST_STATIC_PAD_TEMPLATE ("sink",
     GST_PAD_SINK,
@@ -122,6 +131,7 @@ static gboolean gst_clock_sync_src_event (GstPad * pad, GstObject * parent,
 static GstStateChangeReturn gst_clocksync_change_state (GstElement * element,
     GstStateChange transition);
 static GstClock *gst_clocksync_provide_clock (GstElement * element);
+static void gst_clock_sync_resync (GstClockSync * self);
 
 static void
 gst_clock_sync_class_init (GstClockSyncClass * klass)
@@ -184,7 +194,40 @@ gst_clock_sync_class_init (GstClockSyncClass * klass)
       "Generate Quality-of-Service events upstream", DEFAULT_QOS,
       G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS);
 
+  /**
+   * GstClockSync:rate:
+   *
+   * Factor of buffer output speed
+   *
+   * Since: 1.28
+   */
+  properties[PROP_RATE] =
+      g_param_spec_double ("rate", "Rate",
+      "Factor of buffer output speed",
+      0.0, G_MAXDOUBLE, DEFAULT_RATE,
+      G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS | GST_PARAM_MUTABLE_READY);
+
   g_object_class_install_properties (gobject_class, PROP_LAST, properties);
+
+  /**
+   * GstClockSync::resync:
+   * @clocksync: the #GstClockSync
+   *
+   * Request recalculation of the "ts-offset" for the next incoming buffer
+   * without changing the state of clocksync.
+   *
+   * This is useful when "sync-to-first=true" has already established
+   * an initial `ts-offset` but running-time of buffer flow is no longer linear
+   * (e.g., data flow was temporarily blocked by pad probe). In such cases,
+   * a new "ts-offset" may be required so that buffer flow can be throttled
+   * correctly again.
+   *
+   * Since: 1.28
+   */
+  clocksync_signals[SIGNAL_RESYNC] =
+      g_signal_new_class_handler ("resync", G_TYPE_FROM_CLASS (klass),
+      (GSignalFlags) (G_SIGNAL_RUN_LAST | G_SIGNAL_ACTION),
+      G_CALLBACK (gst_clock_sync_resync), NULL, NULL, NULL, G_TYPE_NONE, 0);
 
   gstelement_class->change_state =
       GST_DEBUG_FUNCPTR (gst_clocksync_change_state);
@@ -237,6 +280,7 @@ gst_clock_sync_init (GstClockSync * clocksync)
   clocksync->ts_offset = DEFAULT_TS_OFFSET;
   clocksync->sync = DEFAULT_SYNC;
   clocksync->sync_to_first = DEFAULT_SYNC_TO_FIRST;
+  clocksync->rate = DEFAULT_RATE;
 
   g_atomic_int_set (&clocksync->qos_enabled, DEFAULT_QOS);
   g_cond_init (&clocksync->blocked_cond);
@@ -285,6 +329,9 @@ gst_clock_sync_set_property (GObject * object, guint prop_id,
     case PROP_QOS:
       g_atomic_int_set (&clocksync->qos_enabled, g_value_get_boolean (value));
       break;
+    case PROP_RATE:
+      clocksync->rate = g_value_get_double (value);
+      break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
       break;
@@ -309,6 +356,9 @@ gst_clock_sync_get_property (GObject * object, guint prop_id,
       break;
     case PROP_QOS:
       g_value_set_boolean (value, g_atomic_int_get (&clocksync->qos_enabled));
+      break;
+    case PROP_RATE:
+      g_value_set_double (value, clocksync->rate);
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
@@ -584,6 +634,9 @@ gst_clock_sync_sink_event (GstPad * pad, GstObject * parent, GstEvent * event)
       /* store the event for synching */
       gst_event_copy_segment (event, &clocksync->segment);
 
+      if (clocksync->rate > 0.0)
+        clocksync->segment.rate *= clocksync->rate;
+
       gst_clock_sync_reset_qos (clocksync);
       break;
     case GST_EVENT_GAP:
@@ -618,7 +671,7 @@ gst_clock_sync_sink_event (GstPad * pad, GstObject * parent, GstEvent * event)
       gst_segment_init (&clocksync->segment, GST_FORMAT_UNDEFINED);
       GST_OBJECT_UNLOCK (clocksync);
       gst_clock_sync_reset_qos (clocksync);
-      clocksync->is_first = TRUE;
+      g_atomic_int_set (&clocksync->is_first, TRUE);
       break;
     default:
       break;
@@ -661,8 +714,11 @@ gst_clock_sync_update_ts_offset (GstClockSync * clocksync,
   GstClock *clock;
   GstClockTimeDiff ts_offset = 0;
   GstClockTime running_time;
+  gboolean is_first;
 
-  if (!clocksync->sync_to_first || !clocksync->is_first || !clocksync->sync)
+  is_first = g_atomic_int_get (&clocksync->is_first);
+
+  if (!clocksync->sync_to_first || !is_first || !clocksync->sync)
     return;
 
   GST_OBJECT_LOCK (clocksync);
@@ -683,7 +739,7 @@ gst_clock_sync_update_ts_offset (GstClockSync * clocksync,
       GST_STIME_FORMAT, GST_TIME_ARGS (running_time),
       GST_TIME_ARGS (runtimestamp), GST_STIME_ARGS (ts_offset));
 
-  clocksync->is_first = FALSE;
+  g_atomic_int_set (&clocksync->is_first, FALSE);
   if (ts_offset != clocksync->ts_offset) {
     clocksync->ts_offset = ts_offset;
     g_object_notify_by_pspec (G_OBJECT (clocksync), properties[PROP_TS_OFFSET]);
@@ -842,7 +898,8 @@ gst_clock_sync_src_query (GstPad * pad, GstObject * parent, GstQuery * query)
           "Configured upstream latency = %" GST_TIME_FORMAT,
           GST_TIME_ARGS (clocksync->upstream_latency));
 
-      gst_query_set_latency (query, live || clocksync->sync, min, max);
+      gst_query_set_latency (query, live ||
+          (clocksync->sync && clocksync->rate == 1.0), min, max);
       break;
     }
     default:
@@ -869,7 +926,7 @@ gst_clocksync_change_state (GstElement * element, GstStateChange transition)
       GST_OBJECT_UNLOCK (clocksync);
       if (clocksync->sync)
         no_preroll = TRUE;
-      clocksync->is_first = TRUE;
+      g_atomic_int_set (&clocksync->is_first, TRUE);
       break;
     case GST_STATE_CHANGE_PAUSED_TO_PLAYING:
       GST_OBJECT_LOCK (clocksync);
@@ -928,4 +985,12 @@ gst_clocksync_provide_clock (GstElement * element)
     return NULL;
 
   return gst_system_clock_obtain ();
+}
+
+static void
+gst_clock_sync_resync (GstClockSync * self)
+{
+  GST_DEBUG_OBJECT (self, "Enable resync");
+
+  g_atomic_int_set (&self->is_first, TRUE);
 }

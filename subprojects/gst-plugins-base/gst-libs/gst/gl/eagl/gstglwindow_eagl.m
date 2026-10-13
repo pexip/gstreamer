@@ -171,7 +171,6 @@ _create_gl_window (GstGLWindowEagl * window_eagl)
   view.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
   view.contentMode = UIViewContentModeRedraw;
 
-  priv->internal_view = (__bridge_retained gpointer) view;
   [external_view addSubview:view];
   priv->internal_view = (__bridge_retained gpointer) view;
   priv->layer = (__bridge_retained gpointer) [view layer];
@@ -374,6 +373,37 @@ gst_gl_window_eagl_get_layer (GstGLWindowEagl * window_eagl)
 -(void) setGstWindow:(GstGLWindowEagl *) window
 {
   window_eagl = window;
+}
+
+-(void) didMoveToWindow
+{
+  [super didMoveToWindow];
+  [self updateScale];
+}
+
+-(void) layoutSubviews
+{
+  [super layoutSubviews];
+  [self updateScale];
+
+  if (window_eagl) {
+    GstGLWindow *window = GST_GL_WINDOW (window_eagl);
+    GstGLContext *context = gst_gl_window_get_context (window);
+    if (context) {
+      gst_gl_window_queue_resize (window);
+      gst_object_unref (context);
+    }
+  }
+}
+
+-(void) updateScale
+{
+  CGFloat scale = self.contentScaleFactor;
+  if (self.window) {
+    scale = self.window.screen.scale;
+  }
+  self.layer.contentsScale = scale;
+  self.contentScaleFactor = scale;
 }
 
 @end

@@ -79,6 +79,35 @@
  *      @gst_video_encoder_finish_frame.
  *
  *
+ * ## Adaptive Presets
+ *
+ * #GstVideoEncoder supports adaptive presets, where property values in a
+ * preset file can vary based on the input video resolution and framerate.
+ * This is done using GKeyFile's locale string syntax to define alternative
+ * values for properties.
+ *
+ * For example, a preset file can specify different bitrates for different
+ * resolutions:
+ *
+ * ``` ini
+ * [Profile YouTube]
+ * bitrate=2500
+ * bitrate[1920x1080]=8000
+ * bitrate[1920x1080@48]=12000
+ * bitrate[3840x2160]=40000
+ * bitrate[3840x2160@48]=60000
+ * ```
+ *
+ * When a preset with alternatives is loaded, the best matching
+ * alternative is applied each time the input format changes, before
+ * the subclass @set_format method runs.
+ *
+ * Alternative keys use the format `WxH` (matches when the actual pixel
+ * count >= W*H) or `WxH@FPS` (additionally requires actual fps >= FPS).
+ * The most specific match wins (highest pixel count, then highest fps
+ * threshold). If no alternative matches, the base property value set by
+ * gst_preset_load_preset() remains.
+ *
  * The #GstVideoEncoder:qos property will enable the Quality-of-Service
  * features of the encoder which gather statistics about the real-time
  * performance of the downstream elements. If enabled, subclasses can
@@ -106,6 +135,7 @@
 #include <gst/video/gstvideopool.h>
 
 #include <string.h>
+#include <stdio.h>
 
 GST_DEBUG_CATEGORY (videoencoder_debug);
 #define GST_CAT_DEFAULT videoencoder_debug
@@ -187,6 +217,10 @@ struct _GstVideoEncoderPrivate
   /* qos messages: frames dropped/processed */
   guint dropped;
   guint processed;
+
+  gchar *preset_name;
+  /* List of GstVideoEncoderAdaptiveProperty */
+  GList *adaptive_properties;
 };
 
 typedef struct _ForcedKeyUnitEvent ForcedKeyUnitEvent;
@@ -277,6 +311,8 @@ static gboolean gst_video_encoder_sink_event_default (GstVideoEncoder * encoder,
     GstEvent * event);
 static gboolean gst_video_encoder_src_event_default (GstVideoEncoder * encoder,
     GstEvent * event);
+static gboolean gst_video_encoder_default_prepare_allocator (GstVideoEncoder *
+    encoder, GstCaps * caps);
 static gboolean gst_video_encoder_decide_allocation_default (GstVideoEncoder *
     encoder, GstQuery * query);
 static gboolean gst_video_encoder_propose_allocation_default (GstVideoEncoder *
@@ -297,6 +333,246 @@ static gboolean gst_video_encoder_src_query_default (GstVideoEncoder * encoder,
 
 static gboolean gst_video_encoder_transform_meta_default (GstVideoEncoder *
     encoder, GstVideoCodecFrame * frame, GstMeta * meta);
+
+/* Adaptive preset support: parse WxH[@FPS] alternative names and match
+ * against video info to apply resolution-dependent property values */
+
+typedef struct
+{
+  gchar *alternative_name;      /* e.g. "1920x1080@48" */
+  guint min_pixels;             /* W*H */
+  gdouble min_fps;              /* FPS threshold, or 0 */
+} GstVideoEncoderParsedAlternative;
+
+typedef struct
+{
+  gchar *property_name;
+  GArray *alternatives;         /* array of GstVideoEncoderParsedAlternative */
+} GstVideoEncoderAdaptiveProperty;
+
+typedef gboolean (*LoadPresetFunc) (GstPreset * preset, const gchar * name);
+
+static LoadPresetFunc parent_load_preset = NULL;
+
+/* Parse "WxH" or "WxH@FPS"; reject anything else (trailing chars
+ * included) so unknown alternative-name shapes don't silently match. */
+static gboolean
+parse_alternative (const gchar * alt, GstVideoEncoderParsedAlternative * parsed)
+{
+  guint w, h;
+  guint fps;
+  gchar trailing;
+
+  if (sscanf (alt, "%ux%u@%u%c", &w, &h, &fps, &trailing) == 3) {
+    parsed->alternative_name = g_strdup (alt);
+    parsed->min_pixels = w * h;
+    parsed->min_fps = (gdouble) fps;
+    return TRUE;
+  }
+  if (sscanf (alt, "%ux%u%c", &w, &h, &trailing) == 2) {
+    parsed->alternative_name = g_strdup (alt);
+    parsed->min_pixels = w * h;
+    parsed->min_fps = 0.0;
+    return TRUE;
+  }
+  return FALSE;
+}
+
+static void
+adaptive_property_free (GstVideoEncoderAdaptiveProperty * prop)
+{
+  guint i;
+
+  g_free (prop->property_name);
+  for (i = 0; i < prop->alternatives->len; i++) {
+    GstVideoEncoderParsedAlternative *alt =
+        &g_array_index (prop->alternatives, GstVideoEncoderParsedAlternative,
+        i);
+    g_free (alt->alternative_name);
+  }
+  g_array_free (prop->alternatives, TRUE);
+  g_free (prop);
+}
+
+static void
+gst_video_encoder_clear_adaptive_properties (GstVideoEncoder * encoder)
+{
+  g_free (encoder->priv->preset_name);
+  encoder->priv->preset_name = NULL;
+  g_list_free_full (encoder->priv->adaptive_properties,
+      (GDestroyNotify) adaptive_property_free);
+  encoder->priv->adaptive_properties = NULL;
+}
+
+static gboolean
+gst_video_encoder_load_preset (GstPreset * preset, const gchar * name)
+{
+  GstVideoEncoder *encoder = GST_VIDEO_ENCODER (preset);
+  gboolean result;
+  gchar **props;
+  guint i;
+
+  result = parent_load_preset (preset, name);
+
+  GST_OBJECT_LOCK (encoder);
+  gst_video_encoder_clear_adaptive_properties (encoder);
+
+  if (!result) {
+    GST_OBJECT_UNLOCK (encoder);
+    return FALSE;
+  }
+
+  encoder->priv->preset_name = g_strdup (name);
+
+  /* discover and pre-parse property alternatives */
+  props = gst_preset_get_property_names (preset);
+  if (props) {
+    for (i = 0; props[i]; i++) {
+      gchar **alts =
+          gst_preset_get_property_alternatives (preset, name, props[i]);
+      if (alts) {
+        GstVideoEncoderAdaptiveProperty *adaptive;
+        guint j;
+
+        adaptive = g_new0 (GstVideoEncoderAdaptiveProperty, 1);
+        adaptive->property_name = g_strdup (props[i]);
+        adaptive->alternatives =
+            g_array_new (FALSE, FALSE,
+            sizeof (GstVideoEncoderParsedAlternative));
+
+        for (j = 0; alts[j]; j++) {
+          GstVideoEncoderParsedAlternative parsed;
+          if (parse_alternative (alts[j], &parsed)) {
+            g_array_append_val (adaptive->alternatives, parsed);
+          } else {
+            GST_WARNING_OBJECT (encoder,
+                "Could not parse alternative '%s' for property '%s'",
+                alts[j], props[i]);
+          }
+        }
+        g_strfreev (alts);
+
+        if (adaptive->alternatives->len > 0) {
+          encoder->priv->adaptive_properties =
+              g_list_prepend (encoder->priv->adaptive_properties, adaptive);
+        } else {
+          adaptive_property_free (adaptive);
+        }
+      }
+    }
+    g_strfreev (props);
+  }
+  GST_OBJECT_UNLOCK (encoder);
+
+  return TRUE;
+}
+
+/* Find the best matching alternative for the given video info.
+ * Returns the alternative name, or NULL if no match */
+static const gchar *
+find_best_alternative (GArray * alternatives, GstVideoInfo * info)
+{
+  gint64 actual_pixels;
+  gdouble actual_fps;
+  guint i;
+  const gchar *best_name = NULL;
+  guint best_pixels = 0;
+  gdouble best_fps = -1.0;
+
+  if (!info || info->finfo == NULL
+      || info->finfo->format == GST_VIDEO_FORMAT_UNKNOWN)
+    return NULL;
+
+  actual_pixels = GST_VIDEO_INFO_WIDTH (info) * GST_VIDEO_INFO_HEIGHT (info);
+  actual_fps =
+      (gdouble) GST_VIDEO_INFO_FPS_N (info) / GST_VIDEO_INFO_FPS_D (info);
+
+  for (i = 0; i < alternatives->len; i++) {
+    GstVideoEncoderParsedAlternative *alt =
+        &g_array_index (alternatives, GstVideoEncoderParsedAlternative, i);
+
+    if (actual_pixels < alt->min_pixels)
+      continue;
+    if (alt->min_fps > 0.0 && actual_fps < alt->min_fps)
+      continue;
+
+    /* Pick the most specific match: highest pixel count, then highest fps */
+    if (alt->min_pixels > best_pixels ||
+        (alt->min_pixels == best_pixels && alt->min_fps > best_fps)) {
+      best_name = alt->alternative_name;
+      best_pixels = alt->min_pixels;
+      best_fps = alt->min_fps;
+    }
+  }
+
+  return best_name;
+}
+
+typedef struct
+{
+  gchar *property_name;
+  gchar *key;                   /* "property[alternative]" */
+} GstVideoEncoderAdaptiveMatch;
+
+static void
+gst_video_encoder_apply_adaptive_properties (GstVideoEncoder * encoder,
+    GstVideoInfo * info)
+{
+  GList *l;
+  GList *matches = NULL;
+  gchar *preset_name;
+
+  GST_OBJECT_LOCK (encoder);
+
+  if (!encoder->priv->adaptive_properties) {
+    GST_OBJECT_UNLOCK (encoder);
+    return;
+  }
+
+  g_assert (encoder->priv->preset_name);
+  preset_name = g_strdup (encoder->priv->preset_name);
+
+  for (l = encoder->priv->adaptive_properties; l; l = l->next) {
+    GstVideoEncoderAdaptiveProperty *prop = l->data;
+    const gchar *best = find_best_alternative (prop->alternatives, info);
+    if (best) {
+      GstVideoEncoderAdaptiveMatch *match =
+          g_new0 (GstVideoEncoderAdaptiveMatch, 1);
+      match->property_name = g_strdup (prop->property_name);
+      match->key = g_strdup_printf ("%s[%s]", prop->property_name, best);
+      matches = g_list_prepend (matches, match);
+    }
+  }
+
+  GST_OBJECT_UNLOCK (encoder);
+
+  for (l = matches; l; l = l->next) {
+    GstVideoEncoderAdaptiveMatch *match = l->data;
+    GValue val = G_VALUE_INIT;
+
+    if (gst_preset_get_property (GST_PRESET (encoder), preset_name,
+            match->key, &val)) {
+      GST_DEBUG_OBJECT (encoder,
+          "adaptive preset: setting %s from alternative %s",
+          match->property_name, match->key);
+      g_object_set_property (G_OBJECT (encoder), match->property_name, &val);
+      g_value_unset (&val);
+    }
+    g_free (match->property_name);
+    g_free (match->key);
+    g_free (match);
+  }
+  g_list_free (matches);
+  g_free (preset_name);
+}
+
+static void
+gst_video_encoder_preset_interface_init (GstPresetInterface * iface)
+{
+  parent_load_preset = iface->load_preset;
+  g_assert (parent_load_preset);
+  iface->load_preset = gst_video_encoder_load_preset;
+}
 
 /* we can't use G_DEFINE_ABSTRACT_TYPE because we need the klass in the _init
  * method to get to the padtemplates */
@@ -319,7 +595,7 @@ gst_video_encoder_get_type (void)
       (GInstanceInitFunc) gst_video_encoder_init,
     };
     const GInterfaceInfo preset_interface_info = {
-      NULL,                     /* interface_init */
+      (GInterfaceInitFunc) gst_video_encoder_preset_interface_init,
       NULL,                     /* interface_finalize */
       NULL                      /* interface_data */
     };
@@ -407,6 +683,8 @@ gst_video_encoder_class_init (GstVideoEncoderClass * klass)
 
   klass->sink_event = gst_video_encoder_sink_event_default;
   klass->src_event = gst_video_encoder_src_event_default;
+  klass->prepare_allocator =
+      GST_DEBUG_FUNCPTR (gst_video_encoder_default_prepare_allocator);
   klass->propose_allocation = gst_video_encoder_propose_allocation_default;
   klass->decide_allocation = gst_video_encoder_decide_allocation_default;
   klass->negotiate = gst_video_encoder_negotiate_default;
@@ -766,6 +1044,9 @@ gst_video_encoder_setcaps (GstVideoEncoder * encoder, GstCaps * caps)
     encoder_class->reset (encoder, TRUE);
   }
 
+  /* apply adaptive preset properties based on the new format */
+  gst_video_encoder_apply_adaptive_properties (encoder, &state->info);
+
   /* and subclass should be ready to configure format at any time around */
   if (encoder_class->set_format != NULL)
     ret = encoder_class->set_format (encoder, state);
@@ -1020,6 +1301,8 @@ gst_video_encoder_finalize (GObject * object)
 
   encoder = GST_VIDEO_ENCODER (object);
   g_rec_mutex_clear (&encoder->stream_lock);
+
+  gst_video_encoder_clear_adaptive_properties (encoder);
 
   if (encoder->priv->allocator) {
     gst_object_unref (encoder->priv->allocator);
@@ -1842,12 +2125,9 @@ static gboolean
 gst_video_encoder_negotiate_default (GstVideoEncoder * encoder)
 {
   GstVideoEncoderClass *klass = GST_VIDEO_ENCODER_GET_CLASS (encoder);
-  GstAllocator *allocator;
-  GstAllocationParams params;
   gboolean ret = TRUE;
   GstVideoCodecState *state = encoder->priv->output_state;
   GstVideoInfo *info = &state->info;
-  GstQuery *query = NULL;
   GstVideoCodecFrame *frame;
   GstCaps *prevcaps;
   gchar *colorimetry;
@@ -1973,8 +2253,25 @@ gst_video_encoder_negotiate_default (GstVideoEncoder * encoder)
   if (prevcaps)
     gst_caps_unref (prevcaps);
 
-  if (!ret)
-    goto done;
+  if (ret && klass->prepare_allocator) {
+    ret = klass->prepare_allocator (encoder, state->caps);
+  }
+
+  return ret;
+}
+
+static gboolean
+gst_video_encoder_default_prepare_allocator (GstVideoEncoder * encoder,
+    GstCaps * caps)
+{
+  GstVideoEncoderClass *klass = GST_VIDEO_ENCODER_GET_CLASS (encoder);
+  gboolean ret = TRUE;
+  GstVideoCodecState *state = encoder->priv->output_state;
+  GstQuery *query;
+  GstAllocator *allocator;
+  GstAllocationParams params;
+
+  GST_DEBUG_OBJECT (encoder, "doing allocation query");
 
   query = gst_query_new_allocation (state->allocation_caps, TRUE);
   if (!gst_pad_peer_query (encoder->srcpad, query)) {
@@ -1999,10 +2296,7 @@ gst_video_encoder_negotiate_default (GstVideoEncoder * encoder)
     gst_allocation_params_init (&params);
   }
 
-  if (encoder->priv->allocator)
-    gst_object_unref (encoder->priv->allocator);
-  encoder->priv->allocator = allocator;
-  encoder->priv->params = params;
+  gst_video_encoder_set_allocator (encoder, allocator, &params);
 
 done:
   if (query)
@@ -2016,6 +2310,27 @@ no_decide_allocation:
     GST_WARNING_OBJECT (encoder, "Subclass failed to decide allocation");
     goto done;
   }
+}
+
+/**
+ * gst_video_encoder_set_allocator:
+ * @encoder: a #GstVideoEncoder
+ * @allocator: (transfer full) (nullable): the #GstAllocator
+ * @params: (transfer none) (nullable): the #GstAllocationParams of @allocator
+ *
+ * Allows #GstVideoEncoder sub-classes to set the memory @allocator and
+ * its @params.
+ *
+ * Since: 1.30
+ */
+void
+gst_video_encoder_set_allocator (GstVideoEncoder * encoder,
+    GstAllocator * allocator, const GstAllocationParams * params)
+{
+  if (encoder->priv->allocator)
+    gst_object_unref (encoder->priv->allocator);
+  encoder->priv->allocator = allocator;
+  encoder->priv->params = *params;
 }
 
 static gboolean
@@ -2726,12 +3041,14 @@ gst_video_encoder_finish_frame (GstVideoEncoder * encoder,
   if (encoder_class->pre_push)
     ret = encoder_class->pre_push (encoder, frame);
 
+  if (ret != GST_FLOW_OK)
+    goto done;
+
   gst_video_encoder_transform_meta_unlocked (encoder, frame);
 
   /* Get an additional ref to the buffer, which is going to be pushed
    * downstream, the original ref is owned by the frame */
-  if (ret == GST_FLOW_OK)
-    buffer = gst_buffer_ref (frame->output_buffer);
+  buffer = gst_buffer_ref (frame->output_buffer);
 
   /* Release frame so the buffer is writable when we push it downstream
    * if possible, i.e. if the subclass does not hold additional references
@@ -2740,11 +3057,9 @@ gst_video_encoder_finish_frame (GstVideoEncoder * encoder,
   gst_video_encoder_release_frame_unlocked (encoder, frame);
   frame = NULL;
 
-  if (ret == GST_FLOW_OK) {
-    GST_VIDEO_ENCODER_STREAM_UNLOCK (encoder);
-    ret = gst_pad_push (encoder->srcpad, buffer);
-    GST_VIDEO_ENCODER_STREAM_LOCK (encoder);
-  }
+  GST_VIDEO_ENCODER_STREAM_UNLOCK (encoder);
+  ret = gst_pad_push (encoder->srcpad, buffer);
+  GST_VIDEO_ENCODER_STREAM_LOCK (encoder);
 
 done:
   /* handed out */

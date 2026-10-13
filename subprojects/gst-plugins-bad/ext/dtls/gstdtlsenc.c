@@ -69,6 +69,7 @@ enum
   PROP_SRTP_CIPHER,
   PROP_SRTP_AUTH,
   PROP_CONNECTION_STATE,
+  PROP_VERSION,
   NUM_PROPERTIES
 };
 
@@ -84,6 +85,7 @@ static GParamSpec *properties[NUM_PROPERTIES];
 #define INITIAL_QUEUE_SIZE 64
 
 static void gst_dtls_enc_finalize (GObject *);
+static void gst_dtls_enc_dispose (GObject *);
 static void gst_dtls_enc_set_property (GObject *, guint prop_id,
     const GValue *, GParamSpec *);
 static void gst_dtls_enc_get_property (GObject *, guint prop_id, GValue *,
@@ -96,7 +98,8 @@ static GstPad *gst_dtls_enc_request_new_pad (GstElement *, GstPadTemplate *,
 
 static gboolean src_activate_mode (GstPad *, GstObject *, GstPadMode,
     gboolean active);
-static void src_task_loop (GstPad *);
+static void src_task_loop (GstDtlsEnc *);
+static void clear_signals (GstDtlsEnc *);
 
 static GstFlowReturn sink_chain (GstPad *, GstObject *, GstBuffer *);
 static gboolean sink_event (GstPad * pad, GstObject * parent, GstEvent * event);
@@ -116,6 +119,7 @@ gst_dtls_enc_class_init (GstDtlsEncClass * klass)
   element_class = (GstElementClass *) klass;
 
   gobject_class->finalize = GST_DEBUG_FUNCPTR (gst_dtls_enc_finalize);
+  gobject_class->dispose = GST_DEBUG_FUNCPTR (gst_dtls_enc_dispose);
   gobject_class->set_property = GST_DEBUG_FUNCPTR (gst_dtls_enc_set_property);
   gobject_class->get_property = GST_DEBUG_FUNCPTR (gst_dtls_enc_get_property);
 
@@ -170,6 +174,20 @@ gst_dtls_enc_class_init (GstDtlsEncClass * klass)
       GST_DTLS_TYPE_CONNECTION_STATE,
       GST_DTLS_CONNECTION_STATE_NEW, G_PARAM_READABLE | G_PARAM_STATIC_STRINGS);
 
+  /**
+   * GstDtlsEnc:version:
+   *
+   * The negotiated DTLS protocol version, represented as 2 bytes. Each
+   * component of the version is translated to a byte using `hex(255 -
+   * component)`. For instance if the version is 1.3, the resulting value will
+   * be `0xFEFC`.
+   *
+   * Since: 1.30
+   */
+  properties[PROP_VERSION] =
+      g_param_spec_uint ("version", "DTLS version", "Negotiated version", 0,
+      G_MAXUINT16, 0, G_PARAM_READABLE | G_PARAM_STATIC_STRINGS);
+
   g_object_class_install_properties (gobject_class, NUM_PROPERTIES, properties);
 
   gst_element_class_add_static_pad_template (element_class, &src_template);
@@ -179,7 +197,7 @@ gst_dtls_enc_class_init (GstDtlsEncClass * klass)
       "DTLS Encoder",
       "Encoder/Network/DTLS",
       "Encodes packets with DTLS",
-      "Patrik Oldsberg patrik.oldsberg@ericsson.com");
+      "Patrik Oldsberg <patrik.oldsberg@ericsson.com>");
 }
 
 static void
@@ -193,6 +211,9 @@ gst_dtls_enc_init (GstDtlsEnc * self)
   self->encoder_key = NULL;
   self->srtp_cipher = DEFAULT_SRTP_CIPHER;
   self->srtp_auth = DEFAULT_SRTP_AUTH;
+
+  self->signal_notify_id = 0;
+  self->signal_key_receive_id = 0;
 
   g_queue_init (&self->queue);
   g_mutex_init (&self->queue_lock);
@@ -233,6 +254,36 @@ gst_dtls_enc_finalize (GObject * object)
   GST_LOG_OBJECT (self, "finalized");
 
   G_OBJECT_CLASS (parent_class)->finalize (object);
+}
+
+static void
+gst_dtls_enc_dispose (GObject * object)
+{
+  GstDtlsEnc *self = GST_DTLS_ENC (object);
+
+  if (self->connection) {
+    clear_signals (self);
+    g_object_unref (self->connection);
+    self->connection = NULL;
+  }
+
+  G_OBJECT_CLASS (parent_class)->dispose (object);
+}
+
+static void
+clear_signals (GstDtlsEnc * self)
+{
+  if (self->connection) {
+    if (self->signal_key_receive_id) {
+      g_signal_handler_disconnect (self->connection,
+          self->signal_key_receive_id);
+      self->signal_key_receive_id = 0;
+    }
+    if (self->signal_notify_id) {
+      g_signal_handler_disconnect (self->connection, self->signal_notify_id);
+      self->signal_notify_id = 0;
+    }
+  }
 }
 
 static void
@@ -286,6 +337,13 @@ gst_dtls_enc_get_property (GObject * object, guint prop_id, GValue * value,
       else
         g_value_set_enum (value, GST_DTLS_CONNECTION_STATE_CLOSED);
       break;
+    case PROP_VERSION:
+      if (self->connection)
+        g_object_get_property (G_OBJECT (self->connection), "version", value);
+      else
+        g_value_set_uint (value, 0);
+      break;
+
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (self, prop_id, pspec);
   }
@@ -318,11 +376,11 @@ gst_dtls_enc_change_state (GstElement * element, GstStateChange transition)
           return GST_STATE_CHANGE_FAILURE;
         }
 
-        g_signal_connect_object (self->connection,
-            "on-encoder-key", G_CALLBACK (on_key_received), self, 0);
-        g_signal_connect_object (self->connection,
+        self->signal_key_receive_id = g_signal_connect (self->connection,
+            "on-encoder-key", G_CALLBACK (on_key_received), self);
+        self->signal_notify_id = g_signal_connect (self->connection,
             "notify::connection-state",
-            G_CALLBACK (on_connection_state_changed), self, 0);
+            G_CALLBACK (on_connection_state_changed), self);
         on_connection_state_changed (NULL, NULL, self);
 
         gst_dtls_connection_set_send_callback (self->connection,
@@ -345,6 +403,7 @@ gst_dtls_enc_change_state (GstElement * element, GstStateChange transition)
         gst_dtls_connection_close (self->connection);
         gst_dtls_connection_set_send_callback (self->connection, NULL, NULL,
             NULL);
+        clear_signals (self);
         g_object_unref (self->connection);
         self->connection = NULL;
       }
@@ -418,8 +477,8 @@ src_activate_mode (GstPad * pad, GstObject * parent, GstPadMode mode,
     self->src_ret = GST_FLOW_OK;
     self->send_initial_events = TRUE;
     success =
-        gst_pad_start_task (pad, (GstTaskFunction) src_task_loop, self->src,
-        NULL);
+        gst_pad_start_task (pad, (GstTaskFunction) src_task_loop,
+        gst_object_ref (self), gst_object_unref);
     if (!success) {
       GST_WARNING_OBJECT (self, "failed to activate pad task");
     }
@@ -443,9 +502,8 @@ src_activate_mode (GstPad * pad, GstObject * parent, GstPadMode mode,
 }
 
 static void
-src_task_loop (GstPad * pad)
+src_task_loop (GstDtlsEnc * self)
 {
-  GstDtlsEnc *self = GST_DTLS_ENC (GST_PAD_PARENT (pad));
   GstFlowReturn ret;
   GstBuffer *buffer;
   gboolean check_connection_timeout = FALSE;
@@ -638,6 +696,7 @@ on_key_received (GstDtlsConnection * connection, gpointer key, guint cipher,
     guint auth, GstDtlsEnc * self)
 {
   GstBuffer *new_encoder_key;
+  gsize key_len;
   gchar *key_str;
 
   g_return_if_fail (GST_IS_DTLS_ENC (self));
@@ -646,15 +705,16 @@ on_key_received (GstDtlsConnection * connection, gpointer key, guint cipher,
   self->srtp_cipher = cipher;
   self->srtp_auth = auth;
 
-  new_encoder_key =
-      gst_buffer_new_memdup (key, GST_DTLS_SRTP_MASTER_KEY_LENGTH);
+  key_len = gst_dtls_srtp_master_key_length (cipher);
+
+  new_encoder_key = gst_buffer_new_memdup (key, key_len);
 
   if (self->encoder_key)
     gst_buffer_unref (self->encoder_key);
 
   self->encoder_key = new_encoder_key;
 
-  key_str = g_base64_encode (key, GST_DTLS_SRTP_MASTER_KEY_LENGTH);
+  key_str = g_base64_encode (key, key_len);
   GST_INFO_OBJECT (self, "received key: %s", key_str);
   g_free (key_str);
 

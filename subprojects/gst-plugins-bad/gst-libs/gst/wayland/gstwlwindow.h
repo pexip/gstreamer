@@ -67,16 +67,10 @@ GST_WL_API
 gboolean gst_wl_window_is_toplevel (GstWlWindow * self);
 
 GST_WL_API
-gboolean gst_wl_window_render (GstWlWindow * self, GstWlBuffer * buffer,
-        const GstVideoInfo * info);
+GstFlowReturn gst_wl_window_render (GstWlWindow * self, GstBuffer * buffer);
 
 GST_WL_API
 gboolean gst_wl_window_flush (GstWlWindow * self);
-
-GST_WL_API
-gboolean gst_wl_window_render_hdr (GstWlWindow * self, GstWlBuffer * buffer,
-        const GstVideoInfo * info, const GstVideoMasteringDisplayInfo *minfo,
-        const GstVideoContentLightLevel *linfo);
 
 GST_WL_API
 void gst_wl_window_set_render_rectangle (GstWlWindow * self, gint x, gint y,
@@ -92,5 +86,23 @@ void gst_wl_window_set_rotate_method (GstWlWindow               *self,
 GST_WL_API
 void gst_wl_window_set_force_aspect_ratio (GstWlWindow * self,
         gboolean force_aspect_ratio);
+
+GST_WL_API
+void gst_wl_window_set_source_info (GstWlWindow * self,
+        const GstVideoInfoDmaDrm * drm_info,
+        const GstVideoInfo * video_info,
+        GstCaps * caps,
+        const gchar * drm_device);
+
+GST_WL_API
+void gst_wl_window_register_buffer (GstWlWindow * self, gpointer gstmem,
+    gpointer wlbuffer);
+
+GST_WL_API
+void gst_wl_window_unregister_buffer (GstWlWindow * self, gpointer gstmem);
+
+GST_WL_API
+gpointer gst_wl_window_lookup_buffer (GstWlWindow * self, gpointer gstmem);
+
 
 G_END_DECLS
