@@ -55,6 +55,7 @@
 #include <gst/audio/audio.h>
 #include <gst/riff/riff-media.h>
 #include <gst/tag/tag.h>
+#include <gst/video/video.h>
 #include <gst/pbutils/codec-utils.h>
 
 #include "gstmatroskaelements.h"
@@ -145,8 +146,8 @@ static GstStaticPadTemplate videosink_templ =
         "video/x-vp9, "
         COMMON_VIDEO_CAPS "; "
         "video/x-raw, "
-        "format = (string) { YUY2, I420, YV12, UYVY, AYUV, GRAY8, GRAY10_LE32,"
-        " GRAY16_LE, BGR, RGB, RGBA64_LE, BGRA64_LE }, "
+        "format = (string) { YUY2, I420, YV12, UYVY, AYUV, NV12, A420, GRAY8,"
+        " GRAY10_LE32, GRAY16_LE, BGR, RGB, RGBA64_LE, BGRA64_LE }, "
         COMMON_VIDEO_CAPS "; "
         "video/x-prores, "
         COMMON_VIDEO_CAPS "; "
@@ -509,6 +510,7 @@ gst_matroska_mux_pad_init (GstMatroskaMuxPad * pad)
 {
   pad->frame_duration = DEFAULT_PAD_FRAME_DURATION;
   pad->frame_duration_user = FALSE;
+  gst_video_info_init (&pad->video_info);
 }
 
 /*
@@ -576,6 +578,9 @@ gst_matroska_pad_reset (GstMatroskaMuxPad * pad, gboolean full)
 {
   gchar *name = NULL;
   GstMatroskaTrackType type = 0;
+
+  /* a reused pad must not inherit the previous stream's layout */
+  gst_video_info_init (&pad->video_info);
 
   /* free track information */
   if (pad->track != NULL) {
@@ -1196,6 +1201,7 @@ skip_details:
 
   videocontext->asr_mode = GST_MATROSKA_ASPECT_RATIO_MODE_FREE;
   videocontext->fourcc = 0;
+  gst_video_info_init (&mux_pad->video_info);
 
   /* TODO: - check if we handle all codecs by the spec, i.e. codec private
    *         data and other settings
@@ -1212,6 +1218,13 @@ skip_details:
     const gchar *fstr;
     gst_matroska_mux_set_codec_id (context,
         GST_MATROSKA_CODEC_ID_VIDEO_UNCOMPRESSED);
+    /* V_UNCOMPRESSED is written at the strides the caps imply, so the write
+     * path needs these to spot a buffer that is laid out some other way */
+    if (!gst_video_info_from_caps (&mux_pad->video_info, caps)) {
+      GST_WARNING_OBJECT (mux_pad, "unparsable raw video caps %" GST_PTR_FORMAT,
+          caps);
+      gst_video_info_init (&mux_pad->video_info);
+    }
     fstr = gst_structure_get_string (structure, "format");
     if (fstr) {
       if (strlen (fstr) == 4)
@@ -3980,6 +3993,84 @@ gst_matroska_mux_stop_streamheader (GstMatroskaMux * mux)
   gst_caps_unref (caps);
 }
 
+/* A buffer is only in the layout the caps describe when it says nothing else;
+ * a GstVideoMeta may well describe padding, and a V_UNCOMPRESSED track has
+ * nowhere to record that. */
+static gboolean
+gst_matroska_mux_raw_video_is_packed (GstBuffer * buf, GstVideoInfo * info)
+{
+  GstVideoMeta *meta;
+  guint i;
+
+  if (gst_buffer_get_size (buf) != GST_VIDEO_INFO_SIZE (info))
+    return FALSE;
+
+  meta = gst_buffer_get_video_meta (buf);
+  if (meta == NULL)
+    return TRUE;
+
+  if (meta->n_planes != GST_VIDEO_INFO_N_PLANES (info))
+    return FALSE;
+
+  for (i = 0; i < meta->n_planes; i++) {
+    if (meta->stride[i] != GST_VIDEO_INFO_PLANE_STRIDE (info, i) ||
+        meta->offset[i] != GST_VIDEO_INFO_PLANE_OFFSET (info, i))
+      return FALSE;
+  }
+
+  return TRUE;
+}
+
+/* Consumes @buf and returns the buffer to write, which is a packed copy when
+ * the input was laid out any other way. */
+static GstBuffer *
+gst_matroska_mux_pack_raw_video (GstMatroskaMux * mux,
+    GstMatroskaMuxPad * mux_pad, GstBuffer * buf)
+{
+  GstVideoInfo *info = &mux_pad->video_info;
+  GstVideoFrame src, dst;
+  GstVideoMeta *stale;
+  GstBuffer *packed;
+
+  if (GST_VIDEO_INFO_FORMAT (info) == GST_VIDEO_FORMAT_UNKNOWN ||
+      gst_matroska_mux_raw_video_is_packed (buf, info))
+    return buf;
+
+  packed = gst_buffer_new_allocate (NULL, GST_VIDEO_INFO_SIZE (info), NULL);
+
+  /* The source map follows the buffer's own meta, the destination has none and
+   * so takes the strides of @info. */
+  if (!gst_video_frame_map (&src, info, buf, GST_MAP_READ))
+    goto map_failed;
+  if (!gst_video_frame_map (&dst, info, packed, GST_MAP_WRITE)) {
+    gst_video_frame_unmap (&src);
+    goto map_failed;
+  }
+
+  gst_video_frame_copy (&dst, &src);
+  gst_video_frame_unmap (&dst);
+  gst_video_frame_unmap (&src);
+
+  gst_buffer_copy_into (packed, buf, GST_BUFFER_COPY_METADATA, 0, -1);
+
+  /* copied along with everything else, and it describes the layout that was
+   * just flattened away */
+  stale = gst_buffer_get_video_meta (packed);
+  if (stale != NULL)
+    gst_buffer_remove_meta (packed, (GstMeta *) stale);
+
+  gst_buffer_unref (buf);
+
+  return packed;
+
+map_failed:
+  GST_WARNING_OBJECT (mux_pad, "failed to repack a padded %s frame, writing "
+      "it as it came in", GST_VIDEO_INFO_NAME (info));
+  gst_buffer_unref (packed);
+
+  return buf;
+}
+
 static GstFlowReturn
 gst_matroska_mux_write_data (GstMatroskaMux * mux, GstMatroskaMuxPad * mux_pad,
     GstBuffer * buf)
@@ -3995,6 +4086,7 @@ gst_matroska_mux_write_data (GstMatroskaMux * mux, GstMatroskaMuxPad * mux_pad,
   gboolean is_video_keyframe = FALSE;
   gboolean is_video_invisible = FALSE;
   gboolean is_audio_only = FALSE, is_audio = FALSE;
+  gboolean is_subtitle = FALSE;
   gboolean is_min_duration_reached = FALSE;
   gboolean is_max_duration_exceeded = FALSE;
   gint flags = 0;
@@ -4023,6 +4115,9 @@ gst_matroska_mux_write_data (GstMatroskaMux * mux, GstMatroskaMuxPad * mux_pad,
     /* Remove the 'Frame container atom' header' */
     buf = gst_buffer_make_writable (buf);
     gst_buffer_resize (buf, 8, gst_buffer_get_size (buf) - 8);
+  } else if (!strcmp (mux_pad->track->codec_id,
+          GST_MATROSKA_CODEC_ID_VIDEO_UNCOMPRESSED)) {
+    buf = gst_matroska_mux_pack_raw_video (mux, mux_pad, buf);
   }
 
   buffer_timestamp =
@@ -4083,6 +4178,7 @@ gst_matroska_mux_write_data (GstMatroskaMux * mux, GstMatroskaMuxPad * mux_pad,
   GST_OBJECT_UNLOCK (mux);
 
   is_audio = mux_pad->track->type == GST_MATROSKA_TRACK_TYPE_AUDIO;
+  is_subtitle = mux_pad->track->type == GST_MATROSKA_TRACK_TYPE_SUBTITLE;
 
   is_min_duration_reached = (mux->min_cluster_duration == 0
       || (buffer_timestamp > mux->cluster_time
@@ -4245,7 +4341,8 @@ gst_matroska_mux_write_data (GstMatroskaMux * mux, GstMatroskaMuxPad * mux_pad,
     flags |= 0x08;
 
   if (mux->doctype_version > 1 && !write_duration && !cmeta) {
-    if (is_video_keyframe || is_audio)
+    /* every subtitle frame is a keyframe */
+    if (is_video_keyframe || is_audio || is_subtitle)
       flags |= 0x80;
 
     hdr =
