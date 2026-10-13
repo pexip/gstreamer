@@ -2332,29 +2332,64 @@ gst_rtcp_packet_fb_get_fci_length (GstRTCPPacket * packet)
  * @packet: a valid RTPFB or PSFB #GstRTCPPacket
  *
  * Get the length of the Feedback Control Information attached to a
- * RTPFB or PSFB @packet.
+ * RTPFB or PSFB @packet, without the RTCP padding.
  *
- * Returns: The length of the FCI in bytes.
+ * Returns: The length of the FCI in bytes, or 0 if the padding is invalid
+ * or the length exceeds %G_MAXUINT16. Use
+ * gst_rtcp_packet_fb_get_fci_length_bytes_full() to distinguish invalid
+ * padding from an empty FCI and obtain lengths larger than %G_MAXUINT16.
  */
 guint16
 gst_rtcp_packet_fb_get_fci_length_bytes (GstRTCPPacket * packet)
 {
-  guint16 wordlen;
-  guint16 byteslen;
+  guint size;
 
-  wordlen = gst_rtcp_packet_fb_get_fci_length (packet);
-  byteslen = wordlen * 4;
+  if (!gst_rtcp_packet_fb_get_fci_length_bytes_full (packet, &size)
+      || size > G_MAXUINT16)
+    return 0;
 
-  /* subtract any padding */
+  return (guint16) size;
+}
+
+/**
+ * gst_rtcp_packet_fb_get_fci_length_bytes_full:
+ * @packet: a valid RTPFB or PSFB #GstRTCPPacket
+ * @size: (out) (optional): the length of the FCI in bytes, without padding
+ *
+ * Get the length of the Feedback Control Information attached to a
+ * RTPFB or PSFB @packet, without the RTCP padding.
+ *
+ * Returns: %TRUE on success, %FALSE if the padding count is 0 or larger
+ * than the FCI.
+ */
+gboolean
+gst_rtcp_packet_fb_get_fci_length_bytes_full (GstRTCPPacket * packet,
+  guint * size)
+{
+  guint byteslen;
+
+  g_return_val_if_fail (packet != NULL, FALSE);
+  g_return_val_if_fail (packet->type == GST_RTCP_TYPE_RTPFB ||
+      packet->type == GST_RTCP_TYPE_PSFB, FALSE);
+  g_return_val_if_fail (packet->rtcp != NULL, FALSE);
+  g_return_val_if_fail (packet->rtcp->map.flags & GST_MAP_READ, FALSE);
+
+  byteslen = gst_rtcp_packet_fb_get_fci_length (packet) * 4;
+
   if (packet->padding) {
-    guint8 *data;
-    guint8 pad_bytes;
-    data = packet->rtcp->map.data + packet->offset;
-    pad_bytes = data[4 + packet->length * 4 - 1];
+    guint8 *data = packet->rtcp->map.data + packet->offset;
+    /* the padding count is the last byte of the packet */
+    guint8 pad_bytes = data[4 + packet->length * 4 - 1];
+
+    if (pad_bytes == 0 || pad_bytes > byteslen)
+      return FALSE;
     byteslen -= pad_bytes;
   }
 
-  return byteslen;
+  if (size)
+    *size = byteslen;
+
+  return TRUE;
 }
 
 /**
