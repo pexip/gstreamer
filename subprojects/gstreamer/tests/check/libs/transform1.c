@@ -1107,6 +1107,181 @@ GST_START_TEST (basetransform_stress_pt_ct_alloc_query)
 
 GST_END_TEST;
 
+typedef struct
+{
+  GstBuffer *buffers[2];
+  GstBuffer *output;
+  guint next;
+  gboolean transfer_first;
+  GstFlowReturn drop_return;
+  guint freed[3];
+} PullData;
+
+static void
+pull_buffer_freed (gpointer data, GstMiniObject * object)
+{
+  guint *freed = data;
+
+  (*freed)++;
+}
+
+static GstFlowReturn
+pull_getrange (GstPad * pad, GstObject * parent, guint64 offset,
+    guint length, GstBuffer ** buffer)
+{
+  PullData *data = gst_pad_get_element_private (pad);
+  guint index;
+
+  /* Check explicitly even when the core's GLib checks are disabled. */
+  fail_unless (*buffer == NULL,
+      "unexpected caller-supplied buffer on pull %u", data->next);
+  if (data->next == 1)
+    fail_unless_equals_int (data->freed[0], data->transfer_first ? 1 : 0);
+  if (data->next == G_N_ELEMENTS (data->buffers) ||
+      data->buffers[data->next] == NULL)
+    return GST_FLOW_EOS;
+
+  index = data->next++;
+  if (index == 0 && data->transfer_first) {
+    *buffer = data->buffers[index];
+    data->buffers[index] = NULL;
+  } else {
+    *buffer = gst_buffer_ref (data->buffers[index]);
+  }
+  return GST_FLOW_OK;
+}
+
+static GstFlowReturn
+pull_generate_output (GstBaseTransform * trans, GstBuffer ** outbuf)
+{
+  TestTransData *test = GST_TEST_TRANS (trans)->data;
+  PullData *data = gst_pad_get_element_private (test->srcpad);
+  GstBuffer *input = trans->queued_buf;
+
+  trans->queued_buf = NULL;
+  *outbuf = NULL;
+  if (input == NULL)
+    return GST_FLOW_OK;
+
+  if (GST_BUFFER_PTS (input) == 0) {
+    gst_buffer_unref (input);
+    if (data->output)
+      *outbuf = gst_buffer_ref (data->output);
+    return data->drop_return;
+  }
+
+  *outbuf = input;
+  return GST_FLOW_OK;
+}
+
+GST_START_TEST (basetransform_pull_drop_ownership)
+{
+  TestTransData *trans;
+  PullData data = { 0 };
+  GstBuffer *buffer = NULL;
+  GstCaps *caps;
+  guint i;
+
+  data.transfer_first = (__i__ & 1) != 0;
+  data.drop_return = (__i__ & 2) ?
+      GST_BASE_TRANSFORM_FLOW_DROPPED : GST_FLOW_OK;
+  for (i = 0; i < G_N_ELEMENTS (data.buffers); i++) {
+    data.buffers[i] = gst_buffer_new_allocate (NULL, 1, NULL);
+    GST_BUFFER_PTS (data.buffers[i]) = i * GST_SECOND;
+    gst_mini_object_weak_ref (GST_MINI_OBJECT (data.buffers[i]),
+        pull_buffer_freed, &data.freed[i]);
+  }
+
+  klass_generate_output = pull_generate_output;
+  trans = gst_test_trans_new_full (pull_getrange);
+  gst_pad_set_element_private (trans->srcpad, &data);
+  caps = gst_caps_new_empty_simple ("foo/x-bar");
+  fail_unless (gst_test_trans_setcaps (trans, caps));
+  gst_caps_unref (caps);
+  fail_unless (gst_test_trans_push_segment (trans));
+
+  fail_unless_equals_int (gst_pad_pull_range (trans->sinkpad, 0, 1, &buffer),
+      GST_FLOW_OK);
+  fail_unless_equals_int (data.next, 2);
+  fail_unless (buffer == data.buffers[1]);
+  fail_unless_equals_uint64 (GST_BUFFER_PTS (buffer), GST_SECOND);
+  fail_unless_equals_int (GST_MINI_OBJECT_REFCOUNT_VALUE (buffer), 2);
+  fail_unless_equals_int (data.freed[0], data.transfer_first ? 1 : 0);
+  fail_unless_equals_int (data.freed[1], 0);
+  if (!data.transfer_first)
+    fail_unless_equals_int (GST_MINI_OBJECT_REFCOUNT_VALUE (data.buffers[0]), 1);
+  gst_clear_buffer (&buffer);
+
+  fail_unless_equals_int (gst_pad_pull_range (trans->sinkpad, 2, 1, &buffer),
+      GST_FLOW_EOS);
+  fail_unless (buffer == NULL);
+  gst_test_trans_free (trans);
+  for (i = 0; i < G_N_ELEMENTS (data.buffers); i++) {
+    gst_clear_buffer (&data.buffers[i]);
+    fail_unless_equals_int (data.freed[i], 1);
+  }
+}
+
+GST_END_TEST;
+
+GST_START_TEST (basetransform_pull_discont_ownership)
+{
+  TestTransData *trans;
+  PullData data = { 0 };
+  GstBuffer *buffer = NULL;
+  GstCaps *caps;
+
+  data.buffers[0] = gst_buffer_new_allocate (NULL, 1, NULL);
+  GST_BUFFER_PTS (data.buffers[0]) = 0;
+  GST_BUFFER_FLAG_SET (data.buffers[0], GST_BUFFER_FLAG_DISCONT);
+  gst_mini_object_weak_ref (GST_MINI_OBJECT (data.buffers[0]),
+      pull_buffer_freed, &data.freed[0]);
+  data.output = gst_buffer_new_allocate (NULL, 1, NULL);
+  GST_BUFFER_PTS (data.output) = GST_SECOND;
+  gst_mini_object_weak_ref (GST_MINI_OBJECT (data.output),
+      pull_buffer_freed, &data.freed[1]);
+  data.drop_return = GST_FLOW_OK;
+
+  klass_generate_output = pull_generate_output;
+  trans = gst_test_trans_new_full (pull_getrange);
+  gst_pad_set_element_private (trans->srcpad, &data);
+  caps = gst_caps_new_empty_simple ("foo/x-bar");
+  fail_unless (gst_test_trans_setcaps (trans, caps));
+  gst_caps_unref (caps);
+  fail_unless (gst_test_trans_push_segment (trans));
+
+  /* Return a shared, unflagged output after consuming a DISCONT input. */
+  fail_unless_equals_int (gst_pad_pull_range (trans->sinkpad, 0, 1, &buffer),
+      GST_FLOW_OK);
+  fail_unless_equals_int (data.next, 1);
+  fail_unless (buffer != NULL);
+  fail_unless (buffer != data.output);
+  fail_unless (GST_BUFFER_IS_DISCONT (buffer));
+  fail_if (GST_BUFFER_IS_DISCONT (data.output));
+  fail_unless_equals_uint64 (GST_BUFFER_PTS (buffer), GST_SECOND);
+  fail_unless_equals_uint64 (GST_BUFFER_PTS (data.output), GST_SECOND);
+  fail_unless_equals_int (GST_MINI_OBJECT_REFCOUNT_VALUE (buffer), 1);
+  fail_unless_equals_int (GST_MINI_OBJECT_REFCOUNT_VALUE (data.output), 1);
+  fail_unless_equals_int (GST_MINI_OBJECT_REFCOUNT_VALUE (data.buffers[0]), 1);
+  gst_mini_object_weak_ref (GST_MINI_OBJECT (buffer),
+      pull_buffer_freed, &data.freed[2]);
+  gst_clear_buffer (&buffer);
+  fail_unless_equals_int (data.freed[2], 1);
+  fail_unless_equals_int (data.freed[0], 0);
+  fail_unless_equals_int (data.freed[1], 0);
+
+  fail_unless_equals_int (gst_pad_pull_range (trans->sinkpad, 1, 1, &buffer),
+      GST_FLOW_EOS);
+  fail_unless (buffer == NULL);
+  gst_test_trans_free (trans);
+  gst_clear_buffer (&data.buffers[0]);
+  gst_clear_buffer (&data.output);
+  fail_unless_equals_int (data.freed[0], 1);
+  fail_unless_equals_int (data.freed[1], 1);
+}
+
+GST_END_TEST;
+
 static void
 transform1_setup (void)
 {
@@ -1147,6 +1322,9 @@ gst_basetransform_suite (void)
   tcase_add_test (tc, basetransform_chain_ct1);
   tcase_add_test (tc, basetransform_chain_ct2);
   tcase_add_test (tc, basetransform_chain_ct3);
+  /* pull */
+  tcase_add_loop_test (tc, basetransform_pull_drop_ownership, 0, 4);
+  tcase_add_test (tc, basetransform_pull_discont_ownership);
   /* stress */
   tcase_add_test (tc, basetransform_stress_pt_ip);
   tcase_add_test (tc, basetransform_stress_pt_ct_alloc_query);
