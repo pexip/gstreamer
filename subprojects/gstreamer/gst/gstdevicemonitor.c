@@ -544,15 +544,19 @@ monitor_thread_func (gpointer data)
       if (provider) {
         gst_device_provider_stop (provider);
         gst_clear_object (&provider);
+
+        /* Free the node we prepended above by detaching it from the rest of
+         * the list, which is monitor->priv->started_providers. This is safe
+         * because this is a singly-linked list. */
+        started->next = NULL;
+        g_slist_free (started);
       }
 
       g_queue_clear_full (&pending, gst_object_unref);
 
-      /* Free the list we prepended above by detaching it from the rest of the
-       * list, which is monitor->priv->started_providers. This is safe because
-       * this is a singly-linked list. */
-      started->next = NULL;
-      g_slist_free (started);
+      /* If the provider failed to start, nothing was prepended to started in
+       * this iteration. Either way, the rest of the list has been taken by
+       * gst_device_monitor_stop(), which stops and frees it. */
       started = NULL;
 
       goto done;
