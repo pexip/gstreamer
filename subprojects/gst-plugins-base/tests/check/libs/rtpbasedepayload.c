@@ -1999,7 +1999,7 @@ hdr_ext_aggregate_test (gint n_buffers, gint n_aggregate,
 {
   GstRTPHeaderExtension *ext;
   State *state;
-  guint i;
+  gint i;
 
   state = create_depayloader ("application/x-rtp", NULL);
   gst_rtp_base_depayload_set_aggregate_hdrext_enabled (GST_RTP_BASE_DEPAYLOAD
