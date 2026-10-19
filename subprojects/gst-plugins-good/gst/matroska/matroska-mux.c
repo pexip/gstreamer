@@ -4037,6 +4037,7 @@ gst_matroska_mux_pack_raw_video (GstMatroskaMux * mux,
     return buf;
 
   packed = gst_buffer_new_allocate (NULL, GST_VIDEO_INFO_SIZE (info), NULL);
+  gst_buffer_memset (packed, 0, 0, GST_VIDEO_INFO_SIZE (info));
 
   /* The source map follows the buffer's own meta, the destination has none and
    * so takes the strides of @info. */
