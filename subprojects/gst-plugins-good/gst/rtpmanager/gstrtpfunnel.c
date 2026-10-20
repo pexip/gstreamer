@@ -118,6 +118,19 @@ gst_rtp_funnel_pad_set_media_type (GstRtpFunnelPad * pad,
 }
 
 static gboolean
+gst_rtp_funnel_pad_prepare_list_buffer (GstBuffer ** buf,
+    G_GNUC_UNUSED guint idx, gpointer user_data)
+{
+  GstRtpFunnelPad *pad = user_data;
+
+  *buf = gst_buffer_make_writable (*buf);
+  gst_rtp_funnel_pad_set_buffer_flag (pad, *buf);
+  GST_BUFFER_PTS (*buf) += pad->us_latency;
+
+  return TRUE;
+}
+
+static gboolean
 gst_rtp_funnel_pad_query_latency (GstRtpFunnelPad * pad,
     gboolean * _live, GstClockTime * _max)
 {
@@ -306,6 +319,8 @@ gst_rtp_funnel_sink_chain_object (GstPad * pad, GstRtpFunnel * funnel,
   if (is_list) {
     GstBufferList *list = GST_BUFFER_LIST_CAST (obj);
     list = gst_buffer_list_make_writable (list);
+    gst_buffer_list_foreach (list, gst_rtp_funnel_pad_prepare_list_buffer,
+        fpad);
     res = gst_pad_push_list (funnel->srcpad, list);
   } else {
     GstBuffer *buf = GST_BUFFER_CAST (obj);
