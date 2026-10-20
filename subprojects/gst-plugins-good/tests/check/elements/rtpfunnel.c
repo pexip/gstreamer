@@ -458,6 +458,137 @@ GST_START_TEST (rtpfunnel_terminate_latency)
 
 GST_END_TEST;
 
+GST_START_TEST (rtpfunnel_mark_media_buffer_flags_list)
+{
+  GstHarness *h, *h0, *h1;
+  GstBufferList *list;
+  GstBuffer *buf;
+  guint i;
+
+  h = gst_harness_new_with_padnames ("rtpfunnel", NULL, "src");
+  h0 = gst_harness_new_with_element (h->element, "sink_0", NULL);
+  h1 = gst_harness_new_with_element (h->element, "sink_1", NULL);
+  gst_harness_set_src_caps_str (h0, "application/x-rtp, "
+      "ssrc=(uint)123, media=(string)audio");
+  gst_harness_set_src_caps_str (h1, "application/x-rtp, "
+      "ssrc=(uint)321, media=(string)video");
+
+  list = gst_buffer_list_new ();
+  for (i = 0; i < 3; i++)
+    gst_buffer_list_add (list, generate_test_buffer (i, 123));
+  fail_unless_equals_int (GST_FLOW_OK, gst_pad_push_list (h0->srcpad, list));
+
+  list = gst_buffer_list_new ();
+  for (i = 0; i < 3; i++)
+    gst_buffer_list_add (list, generate_test_buffer (i, 321));
+  fail_unless_equals_int (GST_FLOW_OK, gst_pad_push_list (h1->srcpad, list));
+
+  for (i = 0; i < 3; i++) {
+    buf = gst_harness_pull (h);
+    fail_unless (GST_BUFFER_FLAG_IS_SET (buf,
+            GST_RTP_BUFFER_FLAG_MEDIA_AUDIO));
+    fail_if (GST_BUFFER_FLAG_IS_SET (buf, GST_RTP_BUFFER_FLAG_MEDIA_VIDEO));
+    gst_buffer_unref (buf);
+  }
+  for (i = 0; i < 3; i++) {
+    buf = gst_harness_pull (h);
+    fail_unless (GST_BUFFER_FLAG_IS_SET (buf,
+            GST_RTP_BUFFER_FLAG_MEDIA_VIDEO));
+    fail_if (GST_BUFFER_FLAG_IS_SET (buf, GST_RTP_BUFFER_FLAG_MEDIA_AUDIO));
+    gst_buffer_unref (buf);
+  }
+
+  gst_harness_teardown (h);
+  gst_harness_teardown (h0);
+  gst_harness_teardown (h1);
+}
+
+GST_END_TEST;
+
+GST_START_TEST (rtpfunnel_terminate_latency_list)
+{
+  GstHarness *h, *h0, *h1;
+  GstBufferList *list;
+  GstBuffer *buf;
+  guint i;
+
+  h = gst_harness_new_with_padnames ("rtpfunnel", NULL, "src");
+  h0 = gst_harness_new_with_element (h->element, "sink_0", NULL);
+  h1 = gst_harness_new_with_element (h->element, "sink_1", NULL);
+  gst_harness_set_src_caps_str (h0, "application/x-rtp, "
+      "ssrc=(uint)123, media=(string)audio");
+  gst_harness_set_src_caps_str (h1, "application/x-rtp, "
+      "ssrc=(uint)321, media=(string)video");
+
+  gst_harness_set_upstream_latency (h0, 11 * GST_MSECOND);
+  gst_harness_set_upstream_latency (h1, 12 * GST_MSECOND);
+
+  list = gst_buffer_list_new ();
+  for (i = 0; i < 3; i++)
+    gst_buffer_list_add (list, generate_test_buffer (i, 123));
+  fail_unless_equals_int (GST_FLOW_OK, gst_pad_push_list (h0->srcpad, list));
+
+  list = gst_buffer_list_new ();
+  for (i = 0; i < 3; i++)
+    gst_buffer_list_add (list, generate_test_buffer (i, 321));
+  fail_unless_equals_int (GST_FLOW_OK, gst_pad_push_list (h1->srcpad, list));
+
+  /* every buffer in the list must have the upstream latency added */
+  for (i = 0; i < 3; i++) {
+    buf = gst_harness_pull (h);
+    fail_unless_equals_uint64 (GST_BUFFER_PTS (buf),
+        i * 20 * GST_MSECOND + 11 * GST_MSECOND);
+    gst_buffer_unref (buf);
+  }
+  for (i = 0; i < 3; i++) {
+    buf = gst_harness_pull (h);
+    fail_unless_equals_uint64 (GST_BUFFER_PTS (buf),
+        i * 20 * GST_MSECOND + 12 * GST_MSECOND);
+    gst_buffer_unref (buf);
+  }
+
+  gst_harness_teardown (h);
+  gst_harness_teardown (h0);
+  gst_harness_teardown (h1);
+}
+
+GST_END_TEST;
+
+GST_START_TEST (rtpfunnel_list_does_not_modify_shared_buffers)
+{
+  GstHarness *h, *h0;
+  GstBufferList *list;
+  GstBuffer *orig, *buf;
+
+  h = gst_harness_new_with_padnames ("rtpfunnel", NULL, "src");
+  h0 = gst_harness_new_with_element (h->element, "sink_0", NULL);
+  gst_harness_set_src_caps_str (h0, "application/x-rtp, "
+      "ssrc=(uint)123, media=(string)audio");
+  gst_harness_set_upstream_latency (h0, 11 * GST_MSECOND);
+
+  /* keep our own ref so the buffer in the list is not writable */
+  orig = generate_test_buffer (1, 123);
+  list = gst_buffer_list_new ();
+  gst_buffer_list_add (list, gst_buffer_ref (orig));
+  fail_unless_equals_int (GST_FLOW_OK, gst_pad_push_list (h0->srcpad, list));
+
+  buf = gst_harness_pull (h);
+  fail_unless (GST_BUFFER_FLAG_IS_SET (buf, GST_RTP_BUFFER_FLAG_MEDIA_AUDIO));
+  fail_unless_equals_uint64 (GST_BUFFER_PTS (buf),
+      20 * GST_MSECOND + 11 * GST_MSECOND);
+  gst_buffer_unref (buf);
+
+  /* the caller's buffer is left untouched */
+  fail_if (GST_BUFFER_FLAG_IS_SET (orig, GST_RTP_BUFFER_FLAG_MEDIA_AUDIO));
+  fail_unless_equals_uint64 (GST_BUFFER_PTS (orig), 20 * GST_MSECOND);
+  gst_buffer_unref (orig);
+
+  gst_harness_teardown (h);
+  gst_harness_teardown (h0);
+}
+
+GST_END_TEST;
+
 static Suite *
 rtpfunnel_suite (void)
 {
@@ -477,6 +608,10 @@ rtpfunnel_suite (void)
   tcase_add_test (tc_chain, rtpfunnel_terminate_latency);
 
   tcase_add_test (tc_chain, rtpfunnel_flush);
+
+  tcase_add_test (tc_chain, rtpfunnel_mark_media_buffer_flags_list);
+  tcase_add_test (tc_chain, rtpfunnel_terminate_latency_list);
+  tcase_add_test (tc_chain, rtpfunnel_list_does_not_modify_shared_buffers);
 
   return s;
 }
