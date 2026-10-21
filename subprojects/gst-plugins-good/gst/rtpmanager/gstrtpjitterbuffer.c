@@ -4341,6 +4341,9 @@ pop_and_push_next (GstRtpJitterBuffer * jitterbuffer, guint seqnum)
     GST_LOG_OBJECT (jitterbuffer, "Pushed out #%u, next expected #%u",
         priv->last_popped_seqnum, priv->next_out_seqnum);
   }
+  /* stats are read under the lock, so update them before releasing it */
+  if (type == ITEM_TYPE_BUFFER)
+    priv->num_pushed++;
   msg = check_buffering_percent (jitterbuffer, percent);
 
   if (type == ITEM_TYPE_EVENT && outevent &&
@@ -4368,7 +4371,6 @@ pop_and_push_next (GstRtpJitterBuffer * jitterbuffer, guint seqnum)
           "Pushing buffer %d, dts %" GST_TIME_FORMAT ", pts %" GST_TIME_FORMAT,
           seqnum, GST_TIME_ARGS (GST_BUFFER_DTS (outbuf)),
           GST_TIME_ARGS (GST_BUFFER_PTS (outbuf)));
-      priv->num_pushed++;
       GST_BUFFER_DTS (outbuf) = GST_CLOCK_TIME_NONE;
       result = gst_pad_push (priv->srcpad, outbuf);
 
