@@ -213,6 +213,21 @@ def _g_array_iter(array, element_type):
         pass
 
 
+def gst_id_str_to_string(val):
+    """Returns the string of a GstIdStr, or of a GQuark before 1.26"""
+    if val.type.strip_typedefs().code != gdb.TYPE_CODE_STRUCT:
+        return g_quark_to_string(val)
+    # See GstIdStrPrivate: if the last byte is 0 the string is inline,
+    # otherwise it is a pointer followed by the string length
+    raw = val.address.cast(gdb.lookup_type("unsigned char").pointer())
+    char_p = gdb.lookup_type("char").pointer()
+    if int(raw[val.type.sizeof - 1]) == 0:
+        return raw.cast(char_p).string()
+    length = (raw + val["pointer"].type.sizeof).cast(
+        gdb.lookup_type("unsigned int").pointer()).dereference()
+    return val["pointer"].cast(char_p).string(length=int(length))
+
+
 def _g_value_get_value(val):
     tname = g_type_to_name(val["g_type"])
     fname = g_type_fundamental_name(val["g_type"])
@@ -318,14 +333,18 @@ class GdbCapsFeatures:
     def items(self):
         if long(self.val) == 0:
             return
-        for q in _g_array_iter(self.val["array"], gdb.lookup_type("GQuark")):
+        try:
+            item_type = gdb.lookup_type("GstIdStr")
+        except gdb.error:  # GQuark before 1.26
+            item_type = gdb.lookup_type("GQuark")
+        for q in _g_array_iter(self.val["array"], item_type):
             yield q
 
     def __eq__(self, other):
         if self.size() != other.size():
             return False
-        a1 = list(self.items())
-        a2 = list(other.items())
+        a1 = [gst_id_str_to_string(f) for f in self.items()]
+        a2 = [gst_id_str_to_string(f) for f in other.items()]
         for item in a1:
             if item not in a2:
                 return False
@@ -341,7 +360,7 @@ class GdbCapsFeatures:
             return ""
         s = ""
         for f in self.items():
-            ss = g_quark_to_string(f)
+            ss = gst_id_str_to_string(f)
             if ss != "memory:SystemMemory" or count > 1:
                 s += ", " if s else ""
                 s += ss
@@ -478,7 +497,11 @@ class GdbGstStructure:
 
     @save_memory_access("<inaccessible memory>")
     def name(self):
-        return g_quark_to_string(self.val["s"]["name"])
+        try:
+            name = self.val["name"]
+        except gdb.error:  # GstStructureImpl.name was added in 1.26
+            name = self.val["s"]["name"]
+        return gst_id_str_to_string(name)
 
     @save_memory_access(0)
     def size(self):
@@ -488,7 +511,7 @@ class GdbGstStructure:
         item = self.val["fields"].cast(gdb.lookup_type("GstStructureField").pointer())
         for i in range(self.size()):
             f = item[i]
-            key = g_quark_to_string(f["name"])
+            key = gst_id_str_to_string(f["name"])
             value = GdbGValue(f["value"])
             yield (key, value)
 
@@ -532,7 +555,7 @@ class GdbGstStructure:
 
 class GdbGstSegment:
     def __init__(self, val):
-        t = gdb.lookup_type("GstSegment").pointer().pointer()
+        t = gdb.lookup_type("GstSegment").pointer()
         self.val = val.cast(t).dereference()
         self.fmt = str(self.val["format"]).split("_")[-1].lower()
 
