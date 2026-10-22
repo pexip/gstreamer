@@ -98,6 +98,11 @@ typedef union
 #ifndef DISABLE_ORC
 #include <orc/orc.h>
 #endif
+/* AVX SIMD intrinsics for x86 optimized paths when ORC is disabled */
+#if defined(DISABLE_ORC) && (defined(__GNUC__) || defined(__clang__)) && (defined(__x86_64__) || defined(__i386__))
+#include <immintrin.h>
+#define VIDEO_ORC_HAVE_AVX 1
+#endif
 void video_orc_blend_little (guint8 * ORC_RESTRICT d1,
     const guint8 * ORC_RESTRICT s1, int n);
 void video_orc_blend_big (guint8 * ORC_RESTRICT d1,
@@ -31689,10 +31694,97 @@ video_orc_resample_v_muladdscaletaps4_u8_lq (guint8 * ORC_RESTRICT d1,
 
 /* video_orc_chroma_down_h2_u8 */
 #ifdef DISABLE_ORC
+#ifdef VIDEO_ORC_HAVE_AVX
+__attribute__((target("avx")))
+static void
+video_orc_chroma_down_h2_u8_avx (guint8 * ORC_RESTRICT d1,
+    const guint8 * ORC_RESTRICT s1, int n)
+{
+  int i = 0;
+  orc_union64 *ORC_RESTRICT ptr0 = (orc_union64 *) d1;
+  const orc_union64 *ORC_RESTRICT ptr4 = (const orc_union64 *) s1;
+
+  /*
+   * Each 8-byte element contains two AYUV pixels: [AY0, UV0, AY1, UV1].
+   * We average UV0 (bytes 2,3) with UV1 (bytes 6,7) and store the result
+   * back into UV0, leaving AY0, AY1, and UV1 unchanged.
+   *
+   * The shuffle brings UV1 to the UV0 position so we can use pavgb.
+   * The blend mask selects only the averaged UV0 bytes from the result.
+   */
+  const __m128i shuf_mask = _mm_setr_epi8 (
+      -1, -1, 6, 7, -1, -1, -1, -1,
+      -1, -1, 14, 15, -1, -1, -1, -1);
+  const __m128i blend_mask = _mm_setr_epi8 (
+      0, 0, -1, -1, 0, 0, 0, 0,
+      0, 0, -1, -1, 0, 0, 0, 0);
+
+  /* Process 4 pixel pairs (32 bytes) at a time using AVX 256-bit load/store */
+  for (; i + 4 <= n; i += 4) {
+    __m256i data256 = _mm256_loadu_si256 ((const __m256i *) &ptr4[i]);
+
+    __m128i lo = _mm256_castsi256_si128 (data256);
+    __m128i hi = _mm256_extractf128_si256 (data256, 1);
+
+    __m128i shifted_lo = _mm_shuffle_epi8 (lo, shuf_mask);
+    __m128i avg_lo = _mm_avg_epu8 (lo, shifted_lo);
+    __m128i result_lo = _mm_blendv_epi8 (lo, avg_lo, blend_mask);
+
+    __m128i shifted_hi = _mm_shuffle_epi8 (hi, shuf_mask);
+    __m128i avg_hi = _mm_avg_epu8 (hi, shifted_hi);
+    __m128i result_hi = _mm_blendv_epi8 (hi, avg_hi, blend_mask);
+
+    __m256i result = _mm256_insertf128_si256 (
+        _mm256_castsi128_si256 (result_lo), result_hi, 1);
+    _mm256_storeu_si256 ((__m256i *) &ptr0[i], result);
+  }
+
+  /* Process 2 pixel pairs (16 bytes) using 128-bit SSE */
+  for (; i + 2 <= n; i += 2) {
+    __m128i data = _mm_loadu_si128 ((const __m128i *) &ptr4[i]);
+    __m128i shifted = _mm_shuffle_epi8 (data, shuf_mask);
+    __m128i avg = _mm_avg_epu8 (data, shifted);
+    __m128i result = _mm_blendv_epi8 (data, avg, blend_mask);
+    _mm_storeu_si128 ((__m128i *) &ptr0[i], result);
+  }
+
+  /* Scalar fallback for remaining elements */
+  for (; i < n; i++) {
+    orc_union64 var37;
+    orc_union32 var39, var40;
+    orc_union16 var41, var42, var43, var44;
+    orc_union32 var45;
+    orc_union64 var38;
+
+    var37 = ptr4[i];
+    var39.i = var37.x2[1];
+    var40.i = var37.x2[0];
+    var41.i = var40.x2[1];
+    var42.i = var40.x2[0];
+    var43.i = var39.x2[1];
+    var44.x2[0] =
+        ((orc_uint8) var41.x2[0] + (orc_uint8) var43.x2[0] + 1) >> 1;
+    var44.x2[1] =
+        ((orc_uint8) var41.x2[1] + (orc_uint8) var43.x2[1] + 1) >> 1;
+    var45.x2[0] = var42.i;
+    var45.x2[1] = var44.i;
+    var38.x2[0] = var45.i;
+    var38.x2[1] = var39.i;
+    ptr0[i] = var38;
+  }
+}
+#endif
+
 void
 video_orc_chroma_down_h2_u8 (guint8 * ORC_RESTRICT d1,
     const guint8 * ORC_RESTRICT s1, int n)
 {
+#ifdef VIDEO_ORC_HAVE_AVX
+  if (__builtin_cpu_supports ("avx")) {
+    video_orc_chroma_down_h2_u8_avx (d1, s1, n);
+    return;
+  }
+#endif
   int i;
   orc_union64 *ORC_RESTRICT ptr0;
   const orc_union64 *ORC_RESTRICT ptr4;
@@ -31892,10 +31984,89 @@ video_orc_chroma_down_h2_u8 (guint8 * ORC_RESTRICT d1,
 
 /* video_orc_chroma_down_v2_u8 */
 #ifdef DISABLE_ORC
+#ifdef VIDEO_ORC_HAVE_AVX
+__attribute__((target("avx")))
+static void
+video_orc_chroma_down_v2_u8_avx (guint8 * ORC_RESTRICT d1,
+    const guint8 * ORC_RESTRICT s1, const guint8 * ORC_RESTRICT s2, int n)
+{
+  int i = 0;
+  orc_union32 *ORC_RESTRICT ptr0 = (orc_union32 *) d1;
+  const orc_union32 *ORC_RESTRICT ptr4 = (const orc_union32 *) s1;
+  const orc_union32 *ORC_RESTRICT ptr5 = (const orc_union32 *) s2;
+
+  /*
+   * Each 4-byte element is one AYUV pixel: [AY, UV] (two 16-bit halves).
+   * We average the UV (bytes 2,3) from s1 and s2, keeping AY from s1.
+   *
+   * We average all bytes of s1 and s2, then blend to select only the
+   * averaged UV bytes, taking AY bytes from s1.
+   */
+  const __m128i blend_mask = _mm_setr_epi8 (
+      0, 0, -1, -1, 0, 0, -1, -1,
+      0, 0, -1, -1, 0, 0, -1, -1);
+
+  /* Process 8 pixels (32 bytes) at a time using AVX 256-bit load/store */
+  for (; i + 8 <= n; i += 8) {
+    __m256i s1_data = _mm256_loadu_si256 ((const __m256i *) &ptr4[i]);
+    __m256i s2_data = _mm256_loadu_si256 ((const __m256i *) &ptr5[i]);
+
+    __m128i s1_lo = _mm256_castsi256_si128 (s1_data);
+    __m128i s1_hi = _mm256_extractf128_si256 (s1_data, 1);
+    __m128i s2_lo = _mm256_castsi256_si128 (s2_data);
+    __m128i s2_hi = _mm256_extractf128_si256 (s2_data, 1);
+
+    __m128i avg_lo = _mm_avg_epu8 (s1_lo, s2_lo);
+    __m128i result_lo = _mm_blendv_epi8 (s1_lo, avg_lo, blend_mask);
+
+    __m128i avg_hi = _mm_avg_epu8 (s1_hi, s2_hi);
+    __m128i result_hi = _mm_blendv_epi8 (s1_hi, avg_hi, blend_mask);
+
+    __m256i result = _mm256_insertf128_si256 (
+        _mm256_castsi128_si256 (result_lo), result_hi, 1);
+    _mm256_storeu_si256 ((__m256i *) &ptr0[i], result);
+  }
+
+  /* Process 4 pixels (16 bytes) using 128-bit SSE */
+  for (; i + 4 <= n; i += 4) {
+    __m128i s1_data = _mm_loadu_si128 ((const __m128i *) &ptr4[i]);
+    __m128i s2_data = _mm_loadu_si128 ((const __m128i *) &ptr5[i]);
+    __m128i avg = _mm_avg_epu8 (s1_data, s2_data);
+    __m128i result = _mm_blendv_epi8 (s1_data, avg, blend_mask);
+    _mm_storeu_si128 ((__m128i *) &ptr0[i], result);
+  }
+
+  /* Scalar fallback for remaining elements */
+  for (; i < n; i++) {
+    orc_union32 var35, var36, var37;
+    orc_union16 var38, var39, var40, var41;
+
+    var35 = ptr4[i];
+    var38.i = var35.x2[1];
+    var39.i = var35.x2[0];
+    var36 = ptr5[i];
+    var40.i = var36.x2[1];
+    var41.x2[0] =
+        ((orc_uint8) var38.x2[0] + (orc_uint8) var40.x2[0] + 1) >> 1;
+    var41.x2[1] =
+        ((orc_uint8) var38.x2[1] + (orc_uint8) var40.x2[1] + 1) >> 1;
+    var37.x2[0] = var39.i;
+    var37.x2[1] = var41.i;
+    ptr0[i] = var37;
+  }
+}
+#endif
+
 void
 video_orc_chroma_down_v2_u8 (guint8 * ORC_RESTRICT d1,
     const guint8 * ORC_RESTRICT s1, const guint8 * ORC_RESTRICT s2, int n)
 {
+#ifdef VIDEO_ORC_HAVE_AVX
+  if (__builtin_cpu_supports ("avx")) {
+    video_orc_chroma_down_v2_u8_avx (d1, s1, s2, n);
+    return;
+  }
+#endif
   int i;
   orc_union32 *ORC_RESTRICT ptr0;
   const orc_union32 *ORC_RESTRICT ptr4;
