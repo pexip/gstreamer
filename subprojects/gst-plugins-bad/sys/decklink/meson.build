@@ -65,7 +65,7 @@ else
     if host_system == 'linux'
       decklink_sources += linux_sources
       build_decklink = true
-    elif ['darwin', 'ios'].contains(host_system)
+    elif host_system == 'darwin'
       decklink_sources += osx_sources
       decklink_ldflags = ['-Wl,-framework,CoreFoundation']
       build_decklink = true
@@ -85,6 +85,7 @@ if build_decklink
     link_args : decklink_ldflags + noseh_link_args,
     include_directories : [configinc],
     dependencies : [gstvideo_dep, gstaudio_dep, gstbase_dep, gst_dep] + decklink_libs,
+    override_options : ['cpp_std=c++11'],
     install : true,
     install_dir : plugins_install_dir,
   )

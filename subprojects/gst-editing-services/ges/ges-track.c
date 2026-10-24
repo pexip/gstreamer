@@ -54,8 +54,6 @@
 #include "ges-video-track.h"
 #include "ges-audio-track.h"
 
-#define CHECK_THREAD(track) g_assert(track->priv->valid_thread == g_thread_self())
-
 static GstStaticPadTemplate ges_track_src_pad_template =
 GST_STATIC_PAD_TEMPLATE ("src",
     GST_PAD_SRC,
@@ -99,8 +97,29 @@ struct _GESTrackPrivate
   /* Virtual method to create GstElement that fill gaps */
   GESCreateElementForGapFunc create_element_for_gaps;
 
-  GThread *valid_thread;
+  GMutex timeline_lock;         /* Protects access to timeline pointer */
+  GRecMutex api_lock;           /* Used when track is not in a timeline */
 };
+
+/* Lock macros for GESTrack - similar pattern to GESTimelineElement */
+#define _LOCK(self) \
+  GESTimeline *_locked_timeline; \
+  g_mutex_lock (&self->priv->timeline_lock); \
+  _locked_timeline = self->priv->timeline; \
+  if (_locked_timeline) \
+    gst_object_ref (_locked_timeline); \
+  g_mutex_unlock (&self->priv->timeline_lock); \
+  if (_locked_timeline) \
+    _ges_timeline_lock (_locked_timeline); \
+  else \
+    g_rec_mutex_lock (&self->priv->api_lock)
+
+#define _UNLOCK(self) \
+  if (_locked_timeline) \
+    _ges_timeline_unlock (_locked_timeline); \
+  else \
+    g_rec_mutex_unlock (&self->priv->api_lock); \
+  g_clear_object (&_locked_timeline)
 
 enum
 {
@@ -260,7 +279,7 @@ update_gaps (GESTrack * track)
 
   /* 3- Add a gap at the end of the timeline if needed */
   if (priv->timeline) {
-    g_object_get (priv->timeline, "duration", &timeline_duration, NULL);
+    timeline_duration = ges_timeline_get_duration (priv->timeline);
 
     if (duration < timeline_duration) {
       gap = gap_new (track, duration, timeline_duration - duration);
@@ -447,9 +466,8 @@ ges_track_change_state (GstElement * element, GstStateChange transition)
 {
   GESTrack *track = GES_TRACK (element);
 
-  if (transition == GST_STATE_CHANGE_READY_TO_PAUSED &&
-      track->priv->valid_thread == g_thread_self ())
-    track_resort_and_fill_gaps (GES_TRACK (element));
+  if (transition == GST_STATE_CHANGE_READY_TO_PAUSED)
+    track_resort_and_fill_gaps (track);
 
   return GST_ELEMENT_CLASS (ges_track_parent_class)->change_state (element,
       transition);
@@ -505,6 +523,7 @@ ges_track_handle_message (GstBin * bin, GstMessage * message)
 
         ges_track_select_subtimeline_streams (track, collection,
             GST_ELEMENT (GST_MESSAGE_SRC (message)));
+        gst_object_unref (collection);
 
         GST_INFO_OBJECT (bin,
             "Handled ges-timeline-collection message, dropping");
@@ -531,19 +550,35 @@ ges_track_get_property (GObject * object, guint property_id,
 
   switch (property_id) {
     case ARG_CAPS:
+    {
+      _LOCK (track);
       gst_value_set_caps (value, track->priv->caps);
+      _UNLOCK (track);
       break;
+    }
     case ARG_TYPE:
+    {
+      _LOCK (track);
       g_value_set_flags (value, track->type);
+      _UNLOCK (track);
       break;
+    }
     case ARG_DURATION:
+    {
+      _LOCK (track);
       g_value_set_uint64 (value, track->priv->duration);
+      _UNLOCK (track);
       break;
+    }
     case ARG_RESTRICTION_CAPS:
+    {
+      _LOCK (track);
       gst_value_set_caps (value, track->priv->restriction_caps);
+      _UNLOCK (track);
       break;
+    }
     case ARG_MIXING:
-      g_value_set_boolean (value, track->priv->mixing);
+      g_value_set_boolean (value, ges_track_get_mixing (track));
       break;
     case ARG_ID:
       g_object_get_property (G_OBJECT (track->priv->composition), "id", value);
@@ -564,8 +599,12 @@ ges_track_set_property (GObject * object, guint property_id,
       ges_track_set_caps (track, gst_value_get_caps (value));
       break;
     case ARG_TYPE:
+    {
+      _LOCK (track);
       track->type = g_value_get_flags (value);
+      _UNLOCK (track);
       break;
+    }
     case ARG_RESTRICTION_CAPS:
       ges_track_set_restriction_caps (track, gst_value_get_caps (value));
       break;
@@ -617,6 +656,11 @@ ges_track_dispose (GObject * object)
 static void
 ges_track_finalize (GObject * object)
 {
+  GESTrack *track = GES_TRACK (object);
+
+  g_mutex_clear (&track->priv->timeline_lock);
+  g_rec_mutex_clear (&track->priv->api_lock);
+
   G_OBJECT_CLASS (ges_track_parent_class)->finalize (object);
 }
 
@@ -868,7 +912,9 @@ static void
 ges_track_init (GESTrack * self)
 {
   self->priv = ges_track_get_instance_private (self);
-  self->priv->valid_thread = g_thread_self ();
+
+  g_mutex_init (&self->priv->timeline_lock);
+  g_rec_mutex_init (&self->priv->api_lock);
 
   self->priv->composition = gst_element_factory_make ("nlecomposition", NULL);
   self->priv->capsfilter = gst_element_factory_make ("capsfilter", NULL);
@@ -979,7 +1025,11 @@ ges_track_set_timeline (GESTrack * track, GESTimeline * timeline)
   g_return_if_fail (timeline == NULL || GES_IS_TIMELINE (timeline));
   GST_DEBUG ("track:%p, timeline:%p", track, timeline);
 
-  track->priv->timeline = timeline;
+  /* Take api_lock to protect trackelements_by_start access.
+   * When adding to timeline, track->priv->timeline is NULL, so other
+   * operations using _LOCK would use api_lock anyway.
+   * When removing from timeline, this provides consistent protection. */
+  g_rec_mutex_lock (&track->priv->api_lock);
 
   for (it = g_sequence_get_begin_iter (track->priv->trackelements_by_start);
       g_sequence_iter_is_end (it) == FALSE; it = g_sequence_iter_next (it)) {
@@ -987,7 +1037,14 @@ ges_track_set_timeline (GESTrack * track, GESTimeline * timeline)
         GES_TIMELINE_ELEMENT (g_sequence_get (it));
     ges_timeline_element_set_timeline (trackelement, timeline);
   }
+
+  g_mutex_lock (&track->priv->timeline_lock);
+  track->priv->timeline = timeline;
+  g_mutex_unlock (&track->priv->timeline_lock);
+
   track_resort_and_fill_gaps (track);
+
+  g_rec_mutex_unlock (&track->priv->api_lock);
 }
 
 /**
@@ -1006,7 +1063,6 @@ ges_track_set_caps (GESTrack * track, const GstCaps * caps)
   gint i;
 
   g_return_if_fail (GES_IS_TRACK (track));
-  CHECK_THREAD (track);
 
   GST_DEBUG ("track:%p, caps:%" GST_PTR_FORMAT, track, caps);
   g_return_if_fail (GST_IS_CAPS (caps));
@@ -1040,10 +1096,11 @@ ges_track_set_restriction_caps (GESTrack * track, const GstCaps * caps)
   GESTrackPrivate *priv;
 
   g_return_if_fail (GES_IS_TRACK (track));
-  CHECK_THREAD (track);
 
   GST_DEBUG ("track:%p, restriction caps:%" GST_PTR_FORMAT, track, caps);
   g_return_if_fail (GST_IS_CAPS (caps));
+
+  _LOCK (track);
 
   priv = track->priv;
 
@@ -1056,6 +1113,8 @@ ges_track_set_restriction_caps (GESTrack * track, const GstCaps * caps)
     g_object_set (priv->capsfilter, "caps", caps, NULL);
 
   g_object_notify (G_OBJECT (track), "restriction-caps");
+
+  _UNLOCK (track);
 }
 
 /**
@@ -1087,9 +1146,11 @@ ges_track_update_restriction_caps (GESTrack * self, const GstCaps * caps)
   GstCaps *new_restriction_caps;
 
   g_return_if_fail (GES_IS_TRACK (self));
-  CHECK_THREAD (self);
+
+  _LOCK (self);
 
   if (!self->priv->restriction_caps) {
+    _UNLOCK (self);
     ges_track_set_restriction_caps (self, caps);
     return;
   }
@@ -1109,6 +1170,8 @@ ges_track_update_restriction_caps (GESTrack * self, const GstCaps * caps)
      * copied over? */
   }
 
+  _UNLOCK (self);
+
   ges_track_set_restriction_caps (self, new_restriction_caps);
   gst_caps_unref (new_restriction_caps);
 }
@@ -1124,11 +1187,12 @@ void
 ges_track_set_mixing (GESTrack * track, gboolean mixing)
 {
   g_return_if_fail (GES_IS_TRACK (track));
-  CHECK_THREAD (track);
+
+  _LOCK (track);
 
   if (mixing == track->priv->mixing) {
     GST_DEBUG_OBJECT (track, "Mixing is already set to the same value");
-
+    _UNLOCK (track);
     return;
   }
 
@@ -1141,6 +1205,7 @@ ges_track_set_mixing (GESTrack * track, gboolean mixing)
     if (!ges_nle_composition_add_object (track->priv->composition,
             track->priv->mixing_operation)) {
       GST_WARNING_OBJECT (track, "Could not add the mixer to our composition");
+      _UNLOCK (track);
       return;
     }
   } else {
@@ -1148,6 +1213,7 @@ ges_track_set_mixing (GESTrack * track, gboolean mixing)
             track->priv->mixing_operation)) {
       GST_WARNING_OBJECT (track,
           "Could not remove the mixer from our composition");
+      _UNLOCK (track);
       return;
     }
   }
@@ -1161,6 +1227,8 @@ notify:
   g_object_notify_by_pspec (G_OBJECT (track), properties[ARG_MIXING]);
 
   GST_DEBUG_OBJECT (track, "The track has been set to mixing = %d", mixing);
+
+  _UNLOCK (track);
 }
 
 static gboolean
@@ -1211,6 +1279,7 @@ ges_track_add_element_full (GESTrack * track, GESTrackElement * object,
 {
   GESTimeline *timeline;
   GESTimelineElement *el;
+  gboolean res = FALSE;
 
   g_return_val_if_fail (GES_IS_TRACK (track), FALSE);
   g_return_val_if_fail (GES_IS_TRACK_ELEMENT (object), FALSE);
@@ -1218,15 +1287,15 @@ ges_track_add_element_full (GESTrack * track, GESTrackElement * object,
 
   el = GES_TIMELINE_ELEMENT (object);
 
-  CHECK_THREAD (track);
-
   GST_DEBUG ("track:%p, object:%p", track, object);
+
+  _LOCK (track);
 
   if (G_UNLIKELY (ges_track_element_get_track (object) != NULL)) {
     GST_WARNING ("Object already belongs to another track");
     gst_object_ref_sink (object);
     gst_object_unref (object);
-    return FALSE;
+    goto done;
   }
 
   if (!ges_track_element_set_track (object, track, error)) {
@@ -1234,7 +1303,7 @@ ges_track_add_element_full (GESTrack * track, GESTrackElement * object,
         GES_ARGS (object));
     gst_object_ref_sink (object);
     gst_object_unref (object);
-    return FALSE;
+    goto done;
   }
   ges_timeline_element_set_timeline (el, NULL);
 
@@ -1250,7 +1319,7 @@ ges_track_add_element_full (GESTrack * track, GESTrackElement * object,
           GES_FORMAT, GES_ARGS (object));
     gst_object_ref_sink (object);
     gst_object_unref (object);
-    return FALSE;
+    goto done;
   }
 
   gst_object_ref_sink (object);
@@ -1271,13 +1340,17 @@ ges_track_add_element_full (GESTrack * track, GESTrackElement * object,
         " to the track because it breaks the timeline " "configuration rules",
         GES_ARGS (el));
     remove_element_internal (track, object, FALSE, NULL);
-    return FALSE;
+    goto done;
   }
 
   g_signal_emit (track, ges_track_signals[TRACK_ELEMENT_ADDED], 0,
       GES_TRACK_ELEMENT (object));
 
-  return TRUE;
+  res = TRUE;
+
+done:
+  _UNLOCK (track);
+  return res;
 }
 
 /**
@@ -1312,10 +1385,11 @@ ges_track_get_elements (GESTrack * track)
   GList *ret = NULL;
 
   g_return_val_if_fail (GES_IS_TRACK (track), NULL);
-  CHECK_THREAD (track);
 
+  _LOCK (track);
   g_sequence_foreach (track->priv->trackelements_by_start,
       (GFunc) add_trackelement_to_list_foreach, &ret);
+  _UNLOCK (track);
 
   ret = g_list_reverse (ret);
   return ret;
@@ -1337,15 +1411,17 @@ gboolean
 ges_track_remove_element_full (GESTrack * track, GESTrackElement * object,
     GError ** error)
 {
+  gboolean res;
+
   g_return_val_if_fail (GES_IS_TRACK (track), FALSE);
   g_return_val_if_fail (GES_IS_TRACK_ELEMENT (object), FALSE);
   g_return_val_if_fail (!error || !*error, FALSE);
 
-  if (!track->priv->timeline
-      || !ges_timeline_is_disposed (track->priv->timeline))
-    CHECK_THREAD (track);
+  _LOCK (track);
+  res = remove_element_internal (track, object, TRUE, error);
+  _UNLOCK (track);
 
-  return remove_element_internal (track, object, TRUE, error);
+  return res;
 }
 
 /**
@@ -1369,15 +1445,46 @@ ges_track_remove_element (GESTrack * track, GESTrackElement * object)
  *
  * Get the #GESTrack:caps of the track.
  *
- * Returns: (nullable): The caps of @track.
+ * Returns: (transfer none) (nullable): The caps of @track.
+ *
+ * Deprecated: 1.30: Use ges_track_get_caps_full() instead for MT-safety.
  */
 const GstCaps *
 ges_track_get_caps (GESTrack * track)
 {
-  g_return_val_if_fail (GES_IS_TRACK (track), NULL);
-  CHECK_THREAD (track);
+  const GstCaps *res;
 
-  return track->priv->caps;
+  g_return_val_if_fail (GES_IS_TRACK (track), NULL);
+
+  _LOCK (track);
+  res = track->priv->caps;
+  _UNLOCK (track);
+
+  return res;
+}
+
+/**
+ * ges_track_get_caps_full:
+ * @track: A #GESTrack
+ *
+ * Get the #GESTrack:caps of the track.
+ *
+ * Returns: (transfer full) (nullable): The caps of @track.
+ *
+ * Since: 1.30
+ */
+GstCaps *
+ges_track_get_caps_full (GESTrack * track)
+{
+  GstCaps *res;
+
+  g_return_val_if_fail (GES_IS_TRACK (track), NULL);
+
+  _LOCK (track);
+  res = track->priv->caps ? gst_caps_ref (track->priv->caps) : NULL;
+  _UNLOCK (track);
+
+  return res;
 }
 
 /**
@@ -1388,14 +1495,48 @@ ges_track_get_caps (GESTrack * track)
  *
  * Returns: (nullable): The timeline that @track belongs to, or %NULL if
  * it does not belong to a timeline.
+ *
+ * Deprecated: 1.30: Use ges_track_get_timeline_full() instead for MT-safety.
  */
 const GESTimeline *
 ges_track_get_timeline (GESTrack * track)
 {
-  g_return_val_if_fail (GES_IS_TRACK (track), NULL);
-  CHECK_THREAD (track);
+  const GESTimeline *res;
 
-  return track->priv->timeline;
+  g_return_val_if_fail (GES_IS_TRACK (track), NULL);
+
+  _LOCK (track);
+  res = track->priv->timeline;
+  _UNLOCK (track);
+
+  return res;
+}
+
+/**
+ * ges_track_get_timeline_full:
+ * @track: A #GESTrack
+ *
+ * Get the timeline this track belongs to.
+ *
+ * Returns: (transfer full) (nullable): The timeline that @track belongs to,
+ * or %NULL if it does not belong to a timeline.
+ *
+ * Since: 1.30
+ */
+GESTimeline *
+ges_track_get_timeline_full (GESTrack * track)
+{
+  GESTimeline *res;
+
+  g_return_val_if_fail (GES_IS_TRACK (track), NULL);
+
+  _LOCK (track);
+  res = track->priv->timeline;
+  if (res)
+    gst_object_ref (res);
+  _UNLOCK (track);
+
+  return res;
 }
 
 /**
@@ -1409,9 +1550,15 @@ ges_track_get_timeline (GESTrack * track)
 gboolean
 ges_track_get_mixing (GESTrack * track)
 {
+  gboolean res;
+
   g_return_val_if_fail (GES_IS_TRACK (track), FALSE);
 
-  return track->priv->mixing;
+  _LOCK (track);
+  res = track->priv->mixing;
+  _UNLOCK (track);
+
+  return res;
 }
 
 /**
@@ -1438,12 +1585,16 @@ ges_track_get_mixing (GESTrack * track)
 gboolean
 ges_track_commit (GESTrack * track)
 {
+  gboolean res;
+
   g_return_val_if_fail (GES_IS_TRACK (track), FALSE);
-  CHECK_THREAD (track);
 
+  _LOCK (track);
   track_resort_and_fill_gaps (track);
+  res = ges_nle_object_commit (track->priv->composition, TRUE);
+  _UNLOCK (track);
 
-  return ges_nle_object_commit (track->priv->composition, TRUE);
+  return res;
 }
 
 
@@ -1468,9 +1619,10 @@ ges_track_set_create_element_for_gap_func (GESTrack * track,
     GESCreateElementForGapFunc func)
 {
   g_return_if_fail (GES_IS_TRACK (track));
-  CHECK_THREAD (track);
 
+  _LOCK (track);
   track->priv->create_element_for_gaps = func;
+  _UNLOCK (track);
 }
 
 /**
@@ -1487,14 +1639,16 @@ GstCaps *
 ges_track_get_restriction_caps (GESTrack * track)
 {
   GESTrackPrivate *priv;
+  GstCaps *res = NULL;
 
   g_return_val_if_fail (GES_IS_TRACK (track), NULL);
-  CHECK_THREAD (track);
 
+  _LOCK (track);
   priv = track->priv;
 
   if (priv->restriction_caps)
-    return gst_caps_ref (priv->restriction_caps);
+    res = gst_caps_ref (priv->restriction_caps);
+  _UNLOCK (track);
 
-  return NULL;
+  return res;
 }

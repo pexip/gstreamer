@@ -56,9 +56,9 @@ struct _GstSamiContext
 
 struct _HtmlParser
 {
-  void (*start_element) (HtmlContext * ctx,
+  gboolean (*start_element) (HtmlContext * ctx,
       const gchar * name, const gchar ** attr, gpointer user_data);
-  void (*end_element) (HtmlContext * ctx,
+  gboolean (*end_element) (HtmlContext * ctx,
       const gchar * name, gpointer user_data);
   void (*text) (HtmlContext * ctx,
       const gchar * text, gsize text_len, gpointer user_data);
@@ -459,7 +459,7 @@ unescape_string (const gchar * text)
 static const gchar *
 string_token (const gchar * string, const gchar * delimiter, gchar ** first)
 {
-  gchar *next = strstr (string, delimiter);
+  const gchar *next = strstr (string, delimiter);
   if (next) {
     *first = g_strndup (string, next - string);
   } else {
@@ -468,7 +468,26 @@ string_token (const gchar * string, const gchar * delimiter, gchar ** first)
   return next;
 }
 
-static void
+static gboolean
+is_valid_attribute_name (const char *name)
+{
+  const gchar *p = name;
+
+  while (*p) {
+    /* stop on =, attribute value starts here */
+    if (*p == '=')
+      break;
+
+    /* this is stricter than required by the spec */
+    if (!g_ascii_isalnum (*p))
+      return FALSE;
+    p++;
+  }
+
+  return TRUE;
+}
+
+static gboolean
 html_context_handle_element (HtmlContext * ctxt,
     const gchar * string, gboolean must_close)
 {
@@ -504,6 +523,12 @@ html_context_handle_element (HtmlContext * ctxt,
       g_free (attr_name);
       break;
     }
+    if (!is_valid_attribute_name (attr_name)) {
+      g_free (attr_name);
+      g_strfreev (attrs);
+      g_free (name);
+      return FALSE;
+    }
     next = string_token (next + 1, " ", &attr_value);
 
     /* strip " or ' from attribute value */
@@ -523,17 +548,47 @@ html_context_handle_element (HtmlContext * ctxt,
     attrs[i + 1] = attr_value;
   }
 
-  ctxt->parser->start_element (ctxt, name,
-      (const gchar **) attrs, ctxt->user_data);
+  if (!ctxt->parser->start_element (ctxt, name,
+          (const gchar **) attrs, ctxt->user_data)) {
+    g_strfreev (attrs);
+    g_free (name);
+
+    return FALSE;
+  }
   if (must_close) {
-    ctxt->parser->end_element (ctxt, name, ctxt->user_data);
+    if (!ctxt->parser->end_element (ctxt, name, ctxt->user_data)) {
+      g_strfreev (attrs);
+      g_free (name);
+
+      return FALSE;
+    }
   }
   g_strfreev (attrs);
   g_free (name);
+
+  return TRUE;
 }
 
-static void
-html_context_parse (HtmlContext * ctxt, gchar * text, gsize text_len)
+static gboolean
+is_valid_element_name (const char *name)
+{
+  const gchar *p = name;
+
+  while (*p) {
+    /* stop on space, afterwards attributes start */
+    if (*p == ' ')
+      break;
+
+    if (!g_ascii_isalnum (*p))
+      return FALSE;
+    p++;
+  }
+
+  return TRUE;
+}
+
+static gboolean
+html_context_parse (HtmlContext * ctxt, const gchar * text, gsize text_len)
 {
   const gchar *next = NULL;
 
@@ -545,21 +600,44 @@ html_context_parse (HtmlContext * ctxt, gchar * text, gsize text_len)
       /* find <blahblah> */
       if (!strchr (next, '>')) {
         /* no tag end point. buffer will be process in next time */
-        return;
+        return TRUE;
       }
 
       next = string_token (next, ">", &element);
       next++;
-      if (g_str_has_suffix (element, "/")) {
+      if (g_str_has_prefix (element, "<!")) {
+        /* skip comments, DOCTYPE, [CDATA or similar tags */
+      } else if (g_str_has_suffix (element, "/")) {
         /* handle <blah/> */
         element[strlen (element) - 1] = '\0';
-        html_context_handle_element (ctxt, element + 1, TRUE);
+        if (!is_valid_element_name (element + 1)) {
+          g_free (element);
+          goto error;
+        }
+        if (!html_context_handle_element (ctxt, element + 1, TRUE)) {
+          g_free (element);
+          goto error;
+        }
       } else if (element[1] == '/') {
         /* handle </blah> */
-        ctxt->parser->end_element (ctxt, element + 2, ctxt->user_data);
+        if (!is_valid_element_name (element + 2)) {
+          g_free (element);
+          goto error;
+        }
+        if (!ctxt->parser->end_element (ctxt, element + 2, ctxt->user_data)) {
+          g_free (element);
+          goto error;
+        }
       } else {
         /* handle <blah> */
-        html_context_handle_element (ctxt, element + 1, FALSE);
+        if (!is_valid_element_name (element + 1)) {
+          g_free (element);
+          goto error;
+        }
+        if (!html_context_handle_element (ctxt, element + 1, FALSE)) {
+          g_free (element);
+          goto error;
+        }
       }
       g_free (element);
     } else if (strchr (next, '<')) {
@@ -572,17 +650,20 @@ html_context_parse (HtmlContext * ctxt, gchar * text, gsize text_len)
       g_free (text);
 
     } else {
-      gchar *text = (gchar *) next;
+      gchar *text = g_strdup (next);
       gsize length;
       text = g_strstrip (text);
       length = strlen (text);
       ctxt->parser->text (ctxt, text, length, ctxt->user_data);
       ctxt->buf = g_string_assign (ctxt->buf, "");
-      return;
+      g_free (text);
+      return TRUE;
     }
   }
 
-  ctxt->buf = g_string_assign (ctxt->buf, next);
+error:
+  g_string_truncate (ctxt->buf, 0);
+  return FALSE;
 }
 
 static gchar *
@@ -708,8 +789,7 @@ handle_start_font (GstSamiContext * sctx, const gchar ** atts)
           gchar *r;
 
           /* check if it looks like hex */
-          if (strtol ((const char *) value, &r, 16) >= 0 &&
-              ((gchar *) r == (value + 6) && len == 6)) {
+          if (strtol (value, &r, 16) >= 0 && (len == 6 && r == (value + 6))) {
             sharp = "#";
           }
         }
@@ -743,13 +823,17 @@ handle_start_font (GstSamiContext * sctx, const gchar ** atts)
   }
 }
 
-static void
+static gboolean
 handle_start_element (HtmlContext * ctx, const gchar * name,
     const char **atts, gpointer user_data)
 {
   GstSamiContext *sctx = (GstSamiContext *) user_data;
 
   GST_LOG ("name:%s", name);
+
+  /* Don't allow nesting by more than 64 levels to avoid DoS */
+  if (sctx->state->len > 64)
+    return FALSE;
 
   if (!g_ascii_strcasecmp ("sync", name)) {
     handle_start_sync (sctx, atts);
@@ -772,9 +856,11 @@ handle_start_element (HtmlContext * ctx, const gchar * name,
     sami_context_push_state (sctx, ITALIC_TAG);
   } else if (!g_ascii_strcasecmp ("p", name)) {
   }
+
+  return TRUE;
 }
 
-static void
+static gboolean
 handle_end_element (HtmlContext * ctx, const char *name, gpointer user_data)
 {
   GstSamiContext *sctx = (GstSamiContext *) user_data;
@@ -804,6 +890,8 @@ handle_end_element (HtmlContext * ctx, const char *name, gpointer user_data)
   } else if (!g_ascii_strcasecmp ("i", name)) {
     sami_context_pop_state (sctx, ITALIC_TAG);
   }
+
+  return TRUE;
 }
 
 static void
@@ -880,6 +968,8 @@ sami_context_reset (ParserState * state)
     context->in_sync = FALSE;
     context->time1 = 0;
     context->time2 = 0;
+
+    g_string_truncate (context->htmlctxt->buf, 0);
   }
 }
 
@@ -888,11 +978,17 @@ parse_sami (ParserState * state, const gchar * line)
 {
   gchar *ret = NULL;
   GstSamiContext *context = (GstSamiContext *) state->user_data;
+  gboolean success;
 
   gchar *unescaped = unescape_string (line);
-  html_context_parse (context->htmlctxt, (gchar *) unescaped,
-      strlen (unescaped));
+  success =
+      html_context_parse (context->htmlctxt, unescaped, strlen (unescaped));
   g_free (unescaped);
+
+  if (!success) {
+    sami_context_reset (state);
+    return NULL;
+  }
 
   if (context->has_result) {
     if (context->rubybuf->len) {

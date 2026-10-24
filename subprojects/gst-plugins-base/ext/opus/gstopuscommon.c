@@ -17,6 +17,7 @@
  * Boston, MA 02110-1301, USA.
  */
 
+#include <opus.h>
 #include <stdio.h>
 #include <string.h>
 #include "gstopuscommon.h"
@@ -73,6 +74,20 @@ const GstAudioChannelPosition gst_opus_channel_positions[][8] = {
       GST_AUDIO_CHANNEL_POSITION_LFE1},
 };
 
+/* Taken from opus_multistream_encoder.c.
+ *
+ * These are also the values returned by opus_multistream_surround_encoder_init() */
+const GstOpusVorbisLayout gst_opus_vorbis_channel_map[8] = {
+  {1, 0, {0}},                  /* 1: mono */
+  {1, 1, {0, 1}},               /* 2: stereo */
+  {2, 1, {0, 2, 1}},            /* 3: 1-d surround */
+  {2, 2, {0, 1, 2, 3}},         /* 4: quadraphonic surround */
+  {3, 2, {0, 4, 1, 2, 3}},      /* 5: 5-channel surround */
+  {4, 2, {0, 4, 1, 2, 3, 5}},   /* 6: 5.1 surround */
+  {4, 3, {0, 4, 1, 2, 3, 5, 6}},        /* 7: 6.1 surround */
+  {5, 3, {0, 6, 1, 2, 3, 4, 5, 7}},     /* 8: 7.1 surround */
+};
+
 const char *gst_opus_channel_names[] = {
   "mono",
   "front left",
@@ -108,4 +123,29 @@ gst_opus_common_log_channel_mapping_table (GstElement * element,
 
   GST_CAT_LEVEL_LOG (category, GST_LEVEL_INFO, element, "%s: %s", msg, s->str);
   g_string_free (s, TRUE);
+}
+
+gboolean
+gst_opus_supports_qext (void)
+{
+#ifdef HAVE_LIBOPUS_1_6
+  static gboolean inited = FALSE;
+  static gboolean supported = FALSE;
+
+  if (!g_atomic_int_get (&inited)) {
+    // The library might be compiled without QEXT support and there doesn't
+    // seem to be another way to query that
+    int err = 0;
+    OpusDecoder *dec = opus_decoder_create (96000, 1, &err);
+    if (dec)
+      opus_decoder_destroy (dec);
+
+    supported = dec != 0;
+    g_atomic_int_set (&inited, TRUE);
+  }
+
+  return supported;
+#else
+  return FALSE;
+#endif
 }

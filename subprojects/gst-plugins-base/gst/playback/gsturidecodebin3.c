@@ -529,8 +529,8 @@ gst_uri_decode_bin3_class_init (GstURIDecodeBin3Class * klass)
           DEFAULT_INSTANT_URI, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 
   /**
-   * GstURIDecodebin3::select-stream
-   * @decodebin: a #GstURIDecodebin3
+   * GstURIDecodeBin3::select-stream:
+   * @decodebin: a #GstURIDecodeBin3
    * @collection: a #GstStreamCollection
    * @stream: a #GstStream
    *
@@ -1626,40 +1626,48 @@ gst_uri_decode_bin3_get_property (GObject * object, guint prop_id,
   switch (prop_id) {
     case PROP_URI:
     {
+      PLAY_ITEMS_LOCK (dec);
       GstPlayItem *item = dec->play_items->data;
       /* Return from the head */
       if (item->main_item)
         g_value_set_string (value, item->main_item->uri);
       else
         g_value_set_string (value, NULL);
+      PLAY_ITEMS_UNLOCK (dec);
       break;
     }
     case PROP_CURRENT_URI:
     {
+      PLAY_ITEMS_LOCK (dec);
       if (dec->output_item && dec->output_item->main_item) {
         g_value_set_string (value, dec->output_item->main_item->uri);
       } else {
         g_value_set_string (value, NULL);
       }
+      PLAY_ITEMS_UNLOCK (dec);
       break;
     }
     case PROP_SUBURI:
     {
+      PLAY_ITEMS_LOCK (dec);
       GstPlayItem *item = dec->play_items->data;
       /* Return from the head */
       if (item->sub_item)
         g_value_set_string (value, item->sub_item->uri);
       else
         g_value_set_string (value, NULL);
+      PLAY_ITEMS_UNLOCK (dec);
       break;
     }
     case PROP_CURRENT_SUBURI:
     {
+      PLAY_ITEMS_LOCK (dec);
       if (dec->output_item && dec->output_item->sub_item) {
         g_value_set_string (value, dec->output_item->sub_item->uri);
       } else {
         g_value_set_string (value, NULL);
       }
+      PLAY_ITEMS_UNLOCK (dec);
       break;
     }
     case PROP_CONNECTION_SPEED:
@@ -2031,7 +2039,8 @@ purge_play_items (GstURIDecodeBin3 * dec)
     free_play_item (dec, item);
   }
 
-  dec->output_item = dec->input_item = dec->play_items->data;
+  dec->output_item = dec->input_item =
+      (dec->play_items ? dec->play_items->data : NULL);
   dec->output_item->posted_about_to_finish = FALSE;
   PLAY_ITEMS_UNLOCK (dec);
 }
@@ -2083,8 +2092,12 @@ gst_uri_decode_bin3_change_state (GstElement * element,
   /* ERRORS */
 failure:
   {
-    if (transition == GST_STATE_CHANGE_READY_TO_PAUSED)
+    if (transition == GST_STATE_CHANGE_READY_TO_PAUSED) {
       purge_play_items (uridecodebin);
+      if (uridecodebin->input_item) {
+        uridecodebin->input_item->active = FALSE;
+      }
+    }
     return ret;
   }
 }

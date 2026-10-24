@@ -312,8 +312,11 @@ gst_vulkan_image_buffer_pool_fill_buffer (GstVulkanImageBufferPool * vk_pool,
       width = GST_VIDEO_INFO_WIDTH (&priv->v_info);
       height = GST_VIDEO_INFO_HEIGHT (&priv->v_info);
     } else {
-      width = GST_VIDEO_INFO_COMP_WIDTH (&priv->v_info, i);
-      height = GST_VIDEO_INFO_COMP_HEIGHT (&priv->v_info, i);
+      gint comp[GST_VIDEO_MAX_COMPONENTS];
+
+      gst_video_format_info_component (priv->v_info.finfo, i, comp);
+      width = GST_VIDEO_INFO_COMP_WIDTH (&priv->v_info, comp[0]);
+      height = GST_VIDEO_INFO_COMP_HEIGHT (&priv->v_info, comp[0]);
     }
 
     image_info.format = priv->vk_fmts[i];
@@ -328,7 +331,7 @@ gst_vulkan_image_buffer_pool_fill_buffer (GstVulkanImageBufferPool * vk_pool,
 
     if (buffer) {
       if (i < GST_VIDEO_MAX_PLANES - 1)
-        offset[i + 1] = mem->size;
+        offset[i + 1] = offset[i] + mem->size;
 
       gst_buffer_append_memory (buffer, mem);
     } else {
@@ -423,8 +426,13 @@ gst_vulkan_image_buffer_pool_set_config (GstBufferPool * pool,
   gst_clear_caps (&decode_caps);
   gst_clear_caps (&encode_caps);
 
-  no_multiplane = !(GST_VIDEO_INFO_IS_YUV (&priv->v_info) &&
-      _is_video_usage (requested_usage));
+  gboolean want_multiplanar_opt = gst_buffer_pool_config_has_option (config,
+      GST_BUFFER_POOL_OPTION_VULKAN_IMAGE_MULTIPLANAR_YUV);
+  /* Composite YUV VkImage on two paths: Vulkan Video usage
+   * (traditional), or explicit opt-in for non-video consumers
+   * (DMABUF importers, compute colour-convert, external encoders). */
+  no_multiplane = !(GST_VIDEO_INFO_IS_YUV (&priv->v_info)
+      && (_is_video_usage (requested_usage) || want_multiplanar_opt));
 
   tiling = priv->raw_caps ? VK_IMAGE_TILING_LINEAR : VK_IMAGE_TILING_OPTIMAL;
   found = gst_vulkan_format_from_video_info_2 (vk_pool->device,
@@ -442,9 +450,10 @@ gst_vulkan_image_buffer_pool_set_config (GstBufferPool * pool,
 
     if (sampleable && !_is_video_usage (requested_usage)) {
       vkmap = gst_vulkan_format_get_map (GST_VIDEO_INFO_FORMAT (&priv->v_info));
+      const gboolean is_per_plane_alloc = vkmap->vkfrmt != priv->vk_fmts[0];
       priv->img_flags = VK_IMAGE_CREATE_ALIAS_BIT;
       if (GST_VIDEO_INFO_N_PLANES (&priv->v_info) > 1
-          && vkmap->vkfrmt != priv->vk_fmts[0]) {
+          && (is_per_plane_alloc || want_multiplanar_opt)) {
         priv->img_flags |= VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT
             | VK_IMAGE_CREATE_EXTENDED_USAGE_BIT;
       }
@@ -510,7 +519,6 @@ static gboolean
 prepare_buffer (GstVulkanImageBufferPool * vk_pool, GstBuffer * buffer)
 {
   GstVulkanImageBufferPoolPrivate *priv = GET_PRIV (vk_pool);
-  GArray *barriers = NULL;
   GError *error = NULL;
 
   if (priv->initial_layout == VK_IMAGE_LAYOUT_UNDEFINED ||
@@ -539,39 +547,28 @@ prepare_buffer (GstVulkanImageBufferPool * vk_pool, GstBuffer * buffer)
     return FALSE;
 
   if (!gst_vulkan_operation_begin (priv->exec, &error))
-    goto error;
+    goto reset_and_error;
 
   if (!gst_vulkan_operation_add_frame_barrier (priv->exec, buffer,
           VK_PIPELINE_STAGE_NONE_KHR, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
           priv->initial_access, priv->initial_layout, NULL))
-    goto error;
+    goto reset_and_error;
 
-  barriers = gst_vulkan_operation_retrieve_image_barriers (priv->exec);
-  if (barriers->len > 0) {
-    if (gst_vulkan_operation_use_sync2 (priv->exec)) {
-#if defined(VK_KHR_synchronization2)
-      VkDependencyInfoKHR dependency_info = {
-        .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO_KHR,
-        .pImageMemoryBarriers = (gpointer) barriers->data,
-        .imageMemoryBarrierCount = barriers->len,
-      };
-
-      gst_vulkan_operation_pipeline_barrier2 (priv->exec, &dependency_info);
-#endif
-    } else {
-      gst_vulkan_command_buffer_lock (priv->exec->cmd_buf);
-      vkCmdPipelineBarrier (priv->exec->cmd_buf->cmd,
-          VK_PIPELINE_STAGE_NONE_KHR, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 0,
-          NULL, 0, NULL, barriers->len, (gpointer) barriers->data);
-      gst_vulkan_command_buffer_unlock (priv->exec->cmd_buf);
-    }
-  }
-  g_array_unref (barriers);
+  GstVulkanBarrierState *barriers =
+      gst_vulkan_operation_get_barriers (priv->exec);
+  gst_vulkan_barrier_state_pipeline_barrier (barriers, priv->exec->cmd_buf, 0);
 
   if (!gst_vulkan_operation_end (priv->exec, &error))
-    goto error;
+    goto reset_and_error;
 
   return TRUE;
+
+reset_and_error:
+  {
+    gst_vulkan_operation_reset (priv->exec);
+    GST_WARNING_OBJECT (vk_pool, "Failed barrier operation");
+    /* fallback to error */
+  }
 
 error:
   {
@@ -602,7 +599,8 @@ gst_vulkan_image_buffer_pool_alloc (GstBufferPool * pool, GstBuffer ** buffer,
   if (!gst_vulkan_image_buffer_pool_fill_buffer (vk_pool, tiling, offset, buf))
     goto mem_create_failed;
 
-  prepare_buffer (vk_pool, buf);
+  if (!prepare_buffer (vk_pool, buf))
+    goto mem_create_failed;
 
   if (priv->add_videometa) {
     gsize *off = (priv->n_imgs == 1) ? priv->v_info.offset : offset;
@@ -621,7 +619,7 @@ gst_vulkan_image_buffer_pool_alloc (GstBufferPool * pool, GstBuffer ** buffer,
   /* ERROR */
 no_buffer:
   {
-    GST_WARNING_OBJECT (pool, "can't create image");
+    GST_WARNING_OBJECT (pool, "Could not create image");
     return GST_FLOW_ERROR;
   }
 mem_create_failed:
@@ -636,12 +634,11 @@ mem_create_failed:
 static gboolean
 gst_vulkan_image_buffer_pool_stop (GstBufferPool * pool)
 {
-#if defined(VK_KHR_synchronization2)
   GstVulkanImageBufferPool *vk_pool = GST_VULKAN_IMAGE_BUFFER_POOL_CAST (pool);
   GstVulkanImageBufferPoolPrivate *priv = GET_PRIV (vk_pool);
+
   if (priv->exec)
     gst_vulkan_operation_wait (priv->exec);
-#endif
 
   return GST_BUFFER_POOL_CLASS (parent_class)->stop (pool);
 }
@@ -666,7 +663,11 @@ gst_vulkan_image_buffer_pool_reset_buffer (GstBufferPool * pool,
 static const gchar **
 gst_vulkan_image_buffer_pool_get_options (GstBufferPool * pool)
 {
-  static const gchar *options[] = { GST_BUFFER_POOL_OPTION_VIDEO_META, NULL };
+  static const gchar *options[] = {
+    GST_BUFFER_POOL_OPTION_VIDEO_META,
+    GST_BUFFER_POOL_OPTION_VULKAN_IMAGE_MULTIPLANAR_YUV,
+    NULL,
+  };
   return options;
 }
 

@@ -70,7 +70,7 @@ BLACKLIST = [('validate.file.transcode.to_vorbis_and_vp8_in_webm.GH1_00094_1920x
              ]
 
 
-def add_accurate_seek_tests(test_manager, media_dir, extra_data):
+def add_accurate_seek_tests(test_manager, media_dir, extra_data, media_info_dir=None):
     accurate_seeks_media_infos = []
     for f in [
             'mp4/timecoded_jpeg_23976fps.mp4.media_info.skipped',
@@ -88,23 +88,32 @@ def add_accurate_seek_tests(test_manager, media_dir, extra_data):
         dirname = os.path.join(media_dir, "defaults", os.path.dirname(f))
         filename = os.path.basename(f)
         media_info = os.path.join(dirname, filename)
+        media_file_path = None
+
+        if media_info_dir and not os.path.exists(media_info):
+            override = os.path.join(media_info_dir, f)
+            if os.path.exists(override):
+                media_file_path = os.path.join(dirname, re.sub(r"\.media_info.*", "", filename))
+                media_info = override
+
         reference_frames_dir = os.path.join(dirname, re.sub(r"\.media_info.*", "_reference_frames", filename).replace('.', '_'))
-        accurate_seeks_media_infos.append((media_info, reference_frames_dir))
+        accurate_seeks_media_infos.append((media_info, reference_frames_dir, media_file_path))
 
     test_manager.add_generators(
         test_manager.GstValidateCheckAccurateSeekingTestGenerator(
             'accurate_seeks',
             test_manager,
-            [(os.path.join(media_dir, media_info), os.path.join(media_dir, reference_frames_dir)) for media_info, reference_frames_dir in accurate_seeks_media_infos],
+            [(os.path.join(media_dir, media_info), os.path.join(media_dir, reference_frames_dir), media_file_path)
+             for media_info, reference_frames_dir, media_file_path in accurate_seeks_media_infos],
             extra_data=extra_data)
     )
 
 
 def setup_tests(test_manager: GstValidateTestManager, options: LauncherConfig):
     testsuite_dir = os.path.realpath(os.path.join(os.path.dirname(__file__)))
-    media_dir = os.path.realpath(os.path.join(testsuite_dir, os.path.pardir, "medias"))
+    media_dir = os.path.realpath(os.path.join(testsuite_dir, os.path.pardir, "media"))
 
-    assets_dir = os.path.realpath(os.path.join(testsuite_dir, os.path.pardir, "medias", "defaults"))
+    assets_dir = os.path.realpath(os.path.join(testsuite_dir, os.path.pardir, "media", "defaults"))
     if options.sync:
         if not utils.USING_SUBPROJECT:
             if not update_assets(options, assets_dir):
@@ -114,20 +123,25 @@ def setup_tests(test_manager: GstValidateTestManager, options: LauncherConfig):
             subprocess.check_call(['git', 'submodule', 'update', '--init'],
                                 cwd=utils.DEFAULT_GST_QA_ASSETS)
             subprocess.check_call(['git', 'lfs', 'pull', '--exclude='],
-                                cwd=pathlib.Path(utils.DEFAULT_GST_QA_ASSETS) / 'medias')
+                                cwd=pathlib.Path(utils.DEFAULT_GST_QA_ASSETS) / 'media')
 
     options.add_paths(assets_dir)
     options.set_http_server_dir(media_dir)
     test_manager.set_default_blacklist(BLACKLIST)
 
+    media_info_dir = os.path.realpath(os.path.join(testsuite_dir, os.path.pardir, "media_info"))
+    if os.path.isdir(media_info_dir) and not options.media_info_dir:
+        options.media_info_dir = media_info_dir
+
     extra_data = {
         "config_path": os.path.dirname(testsuite_dir),
-        "medias": media_dir,
+        "media": media_dir,
         "validate-flow-expectations-dir": os.path.join(testsuite_dir, "validate", "flow-expectations"),
         "validate-flow-actual-results-dir": test_manager.options.logsdir,
         "ssim-results-dir": os.path.join(test_manager.options.logsdir, "ssim-results"),
     }
-    add_accurate_seek_tests(test_manager, media_dir, extra_data)
+    add_accurate_seek_tests(test_manager, media_dir, extra_data,
+                            media_info_dir=options.media_info_dir)
 
     test_manager.add_generators(
         GstValidateSimpleTestsGenerator("simple", test_manager,

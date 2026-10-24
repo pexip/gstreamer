@@ -32,6 +32,7 @@
 #include <string.h>
 
 #include "gstvulkanelements.h"
+#include "gstvkutils.h"
 #include "vkdownload.h"
 
 GST_DEBUG_CATEGORY (gst_debug_vulkan_download);
@@ -176,6 +177,24 @@ _image_to_raw_decide_allocation (gpointer impl, GstQuery * query)
         GST_BUFFER_POOL_OPTION_VIDEO_META);
   }
 
+  {
+    VkPhysicalDeviceMemoryProperties *mem_props =
+        &raw->download->device->physical_device->memory_properties;
+    VkMemoryPropertyFlags mem_flags =
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+        VK_MEMORY_PROPERTY_HOST_CACHED_BIT;
+    VkBufferUsageFlags usage_flags =
+        VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+    guint32 i;
+    for (i = 0; i < mem_props->memoryTypeCount; i++) {
+      if ((mem_props->memoryTypes[i].propertyFlags & mem_flags) == mem_flags) {
+        gst_vulkan_buffer_pool_config_set_allocation_params (config,
+            usage_flags, mem_flags);
+        break;
+      }
+    }
+  }
+
   if (!gst_buffer_pool_set_config (pool, config)) {
     gst_clear_object (&pool);
     GST_ERROR_OBJECT (raw->download, "Failed to set buffer pool config");
@@ -199,9 +218,18 @@ _image_to_raw_perform (gpointer impl, GstBuffer * inbuf, GstBuffer ** outbuf)
   GstVulkanCommandBuffer *cmd_buf;
   GError *error = NULL;
   GstFlowReturn ret;
-  GArray *barriers = NULL;
+  GstVulkanBarrierState *barriers = NULL;
   int i, n_mems, n_planes;
+  gboolean one_mem_per_plane, single_multiplanar;
   VkImageLayout dst_layout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+
+  n_mems = gst_buffer_n_memory (inbuf);
+  if (n_mems > GST_VIDEO_MAX_PLANES) {
+    GST_ERROR_OBJECT (raw->download,
+        "Input buffer has %d memories, but at most %d are supported", n_mems,
+        GST_VIDEO_MAX_PLANES);
+    goto error;
+  }
 
   if (!raw->exec) {
     GstVulkanCommandPool *cmd_pool;
@@ -229,11 +257,9 @@ _image_to_raw_perform (gpointer impl, GstBuffer * inbuf, GstBuffer ** outbuf)
               NULL)) != GST_FLOW_OK)
     goto out;
 
+again:
   if (!gst_vulkan_operation_begin (raw->exec, &error))
     goto error;
-
-  n_mems = gst_buffer_n_memory (inbuf);
-  g_assert (n_mems < GST_VIDEO_MAX_PLANES);
 
   if (!gst_vulkan_operation_add_dependency_frame (raw->exec, inbuf,
           VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT))
@@ -247,83 +273,104 @@ _image_to_raw_perform (gpointer impl, GstBuffer * inbuf, GstBuffer ** outbuf)
           NULL))
     goto unlock_error;
 
-  barriers = gst_vulkan_operation_retrieve_image_barriers (raw->exec);
-  if (barriers->len == 0) {
-    ret = GST_FLOW_ERROR;
+  barriers = gst_vulkan_operation_get_barriers (raw->exec);
+  gst_vulkan_barrier_state_pipeline_barrier (barriers, cmd_buf, 0);
+  dst_layout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+
+  n_planes = GST_VIDEO_INFO_N_PLANES (&raw->out_info);
+  one_mem_per_plane = n_mems == n_planes;
+  single_multiplanar = n_mems == 1;
+
+  if (!one_mem_per_plane && !single_multiplanar) {
+    GST_ERROR_OBJECT (raw->download,
+        "Unsupported Vulkan image layout with %d planes mapped to %d memories",
+        n_planes, n_mems);
     goto unlock_error;
   }
 
-  if (gst_vulkan_operation_use_sync2 (raw->exec)) {
-#if defined(VK_KHR_synchronization2)
-    VkDependencyInfoKHR dependency_info = {
-      .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO_KHR,
-      .pImageMemoryBarriers = (gpointer) barriers->data,
-      .imageMemoryBarrierCount = barriers->len,
-    };
-
-    gst_vulkan_operation_pipeline_barrier2 (raw->exec, &dependency_info);
-    dst_layout =
-        g_array_index (barriers, VkImageMemoryBarrier2KHR, 0).newLayout;
-#endif
-  } else {
-    gst_vulkan_command_buffer_lock (cmd_buf);
-    vkCmdPipelineBarrier (cmd_buf->cmd,
-        VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
-        VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, NULL, 0, NULL, barriers->len,
-        (gpointer) barriers->data);
-    gst_vulkan_command_buffer_unlock (cmd_buf);
-
-    dst_layout = g_array_index (barriers, VkImageMemoryBarrier, 0).newLayout;
+  if (single_multiplanar && n_planes > 3) {
+    GST_ERROR_OBJECT (raw->download,
+        "Unsupported multi-planar Vulkan image layout with %d planes",
+        n_planes);
+    goto unlock_error;
   }
-  g_clear_pointer (&barriers, g_array_unref);
-
-  n_planes = GST_VIDEO_INFO_N_PLANES (&raw->out_info);
 
   for (i = 0; i < n_planes; i++) {
     VkBufferImageCopy region;
-    GstMemory *out_mem;
+    GstMemory *mem;
     GstVulkanBufferMemory *buf_mem;
     GstVulkanImageMemory *img_mem;
-    gint idx;
+    gsize skip = 0;
+    /* Two input layouts are supported here:
+     *
+     * - one memory per video plane: each plane is a separate single-plane
+     *   image, so use VK_IMAGE_ASPECT_COLOR_BIT and require the plane to start
+     *   at offset 0 within the resolved GstMemory
+     * - one memory containing all planes: a native multi-planar image, so
+     *   planes are addressed with VK_IMAGE_ASPECT_PLANE_n_BIT and later planes
+     *   may legitimately resolve to a non-zero offset within that single
+     *   GstMemory
+     *
+     * Other plane-to-memory layouts are rejected above.
+     */
     const VkImageAspectFlags aspects[] = { VK_IMAGE_ASPECT_PLANE_0_BIT,
       VK_IMAGE_ASPECT_PLANE_1_BIT, VK_IMAGE_ASPECT_PLANE_2_BIT,
     };
     VkImageAspectFlags plane_aspect;
+    guint32 width, height, row, img_h;
 
-    idx = MIN (i, n_mems - 1);
-    img_mem = (GstVulkanImageMemory *) gst_buffer_peek_memory (inbuf, idx);
-
-    out_mem = gst_buffer_peek_memory (*outbuf, i);
-    if (!gst_is_vulkan_buffer_memory (out_mem)) {
-      GST_WARNING_OBJECT (raw->download,
-          "Output is not a GstVulkanBufferMemory");
+    mem = gst_vulkan_buffer_peek_plane_memory (inbuf, &raw->in_info, i, &skip);
+    if (!mem)
+      goto unlock_error;
+    if (one_mem_per_plane && skip != 0) {
+      GST_ERROR_OBJECT (raw->download,
+          "Plane %d starts at offset %" G_GSIZE_FORMAT " in its backing "
+          "memory, expected 0 for a one-memory-per-plane layout", i, skip);
       goto unlock_error;
     }
-    buf_mem = (GstVulkanBufferMemory *) out_mem;
+    if (!gst_is_vulkan_image_memory (mem)) {
+      GST_WARNING_OBJECT (raw->download, "Input buffer is not a Vulkan image");
+      goto unlock_error;
+    }
+    img_mem = (GstVulkanImageMemory *) mem;
 
-    if (n_planes == n_mems)
+    mem =
+        gst_vulkan_buffer_peek_plane_memory (*outbuf, &raw->out_info, i, NULL);
+    if (!mem)
+      goto unlock_error;
+    if (!gst_is_vulkan_buffer_memory (mem)) {
+      GST_WARNING_OBJECT (raw->download,
+          "Output buffer is not a Vulkan buffer");
+      goto unlock_error;
+    }
+    buf_mem = (GstVulkanBufferMemory *) mem;
+
+    if (one_mem_per_plane)
       plane_aspect = VK_IMAGE_ASPECT_COLOR_BIT;
     else
       plane_aspect = aspects[i];
 
+    gst_vulkan_buffer_get_plane_dimensions (*outbuf, &raw->out_info, i, &width,
+        &height, &row, &img_h);
+
     /* *INDENT-OFF* */
     region = (VkBufferImageCopy) {
-        .bufferOffset = 0,
-        .bufferRowLength = GST_VIDEO_INFO_COMP_WIDTH (&raw->in_info, i),
-        .bufferImageHeight = GST_VIDEO_INFO_COMP_HEIGHT (&raw->in_info, i),
-        .imageSubresource = {
-             /* XXX: each plane is a buffer */
-          .aspectMask = plane_aspect,
-            .mipLevel = 0,
-            .baseArrayLayer = 0,
-            .layerCount = 1,
-        },
-        .imageOffset = { .x = 0, .y = 0, .z = 0, },
-        .imageExtent = {
-            .width = GST_VIDEO_INFO_COMP_WIDTH (&raw->out_info, i),
-            .height = GST_VIDEO_INFO_COMP_HEIGHT (&raw->out_info, i),
-            .depth = 1,
-        }
+      .bufferOffset = 0,
+      .bufferRowLength = row,
+      .bufferImageHeight = img_h,
+      .imageSubresource = {
+        /* XXX: each plane is a buffer */
+        .aspectMask = plane_aspect,
+        .mipLevel = 0,
+        .baseArrayLayer = 0,
+        .layerCount = 1,
+      },
+      .imageOffset = { .x = 0, .y = 0, .z = 0, },
+      .imageExtent = {
+        .width = width,
+        .height = height,
+        .depth = 1,
+      }
     };
     /* *INDENT-ON* */
 
@@ -333,8 +380,15 @@ _image_to_raw_perform (gpointer impl, GstBuffer * inbuf, GstBuffer ** outbuf)
     gst_vulkan_command_buffer_unlock (cmd_buf);
   }
 
-  if (!gst_vulkan_operation_end (raw->exec, &error))
+  if (!gst_vulkan_operation_end (raw->exec, &error)) {
+    if (g_error_matches (error, GST_VULKAN_ERROR, VK_ERROR_OUT_OF_DATE_KHR)) {
+      GST_DEBUG_OBJECT (raw->download,
+          "Detected a synchronisation hazard, retrying");
+      g_clear_error (&error);
+      goto again;
+    }
     goto error;
+  }
 
   /* XXX: STALL!
    * Need to have the buffer gst_memory_map() wait for this fence before
@@ -347,7 +401,6 @@ out:
   return ret;
 
 unlock_error:
-  g_clear_pointer (&barriers, g_array_unref);
   gst_vulkan_operation_reset (raw->exec);
 
 error:
@@ -485,8 +538,9 @@ gst_vulkan_download_class_init (GstVulkanDownloadClass * klass)
   gstbasetransform_class = (GstBaseTransformClass *) klass;
 
   gst_element_class_set_static_metadata (gstelement_class, "Vulkan Downloader",
-      "Filter/Video", "A Vulkan data downloader",
+      "Filter/Video/Downloader", "A Vulkan data downloader",
       "Matthew Waters <matthew@centricular.com>");
+  gst_element_class_mark_as_untrusted_aware (gstelement_class);
 
   {
     GstCaps *caps;
@@ -557,6 +611,12 @@ gst_vulkan_download_query (GstBaseTransform * bt, GstPadDirection direction,
 
   switch (GST_QUERY_TYPE (query)) {
     case GST_QUERY_CONTEXT:{
+      if (gst_vulkan_requested_extensions_handle_context_query (GST_ELEMENT
+              (vk_download), query,
+              direction == GST_PAD_SINK ? GST_PAD_SRC : GST_PAD_SINK,
+              vk_download->instance))
+        return TRUE;
+
       if (gst_vulkan_handle_context_query (GST_ELEMENT (vk_download), query,
               NULL, vk_download->instance, vk_download->device))
         return TRUE;

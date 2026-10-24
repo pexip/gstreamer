@@ -42,7 +42,10 @@ RUN choco install -y 7zip
 RUN choco install -y python3 --installargs 'AssociateFiles=1 PrependPath=1 Include_pip=1 Include_dev=1'
 RUN choco install -y msys2 --params '/NoPath /NoUpdate /InstallDir:C:\\msys64'
 
-# Install Wix v5 (complete install, no NuGet) from MSI
+# Install Inno Setup, our default installer tool since 1.28
+RUN choco install -y innosetup
+
+# Install Wix v5, our old installer tool (complete install, no NuGet) using the MSI
 RUN Invoke-WebRequest -Uri https://download.visualstudio.microsoft.com/download/pr/78caa28b-2982-43ed-8b9c-20e3369f0795/c771e9fd12a67068436115cf295740f7/dotnet-runtime-6.0.16-win-x86.exe -OutFile C:\TEMP\dotnet-runtime-6.0.16-win-x86.exe
 RUN C:\TEMP\dotnet-runtime-6.0.16-win-x86.exe /quiet
 RUN Invoke-WebRequest -Uri https://download.visualstudio.microsoft.com/download/pr/456fdf02-f100-4664-916d-fd46c192efea/619bbd8426537632b7598b4c7c467cf1/dotnet-runtime-6.0.16-win-x64.exe -OutFile C:\TEMP\dotnet-runtime-6.0.16-win-x64.exe
@@ -60,7 +63,9 @@ RUN C:\upgrade_msys2.ps1
 
 RUN C:\msys64\msys2_shell.cmd -ucrt64 -defterm -here -no-start -use-full-path -lc 'pacman -S --noconfirm mingw-w64-ucrt-x86_64-toolchain ninja openssh'
 
-RUN python -m pip install meson==1.9.0 python-gitlab setuptools wheel
+# Setuptools 81.0.0 removes the dry-run param which breaks gobject-introspection
+# NOTE: When updating meson make sure to check for and remove any overrides in .gitlab-ci.yml
+RUN python -m pip install meson==1.9.0 python-gitlab setuptools==80.10.2 wheel
 
 RUN 'git config --global user.email "cirunner@gstreamer.freedesktop.org"; git config --global user.name "GStreamer CI system"'
 

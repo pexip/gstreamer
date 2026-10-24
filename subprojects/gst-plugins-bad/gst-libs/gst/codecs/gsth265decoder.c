@@ -89,6 +89,9 @@ struct _GstH265DecoderPrivate
   const GstH265SPS *active_sps;
   const GstH265PPS *active_pps;
 
+  // Store extended sps for each sps ids
+  GArray *sps_ext;
+
   guint32 SpsMaxLatencyPictures;
 
   /* Picture currently being processed/decoded */
@@ -227,6 +230,8 @@ gst_h265_decoder_init (GstH265Decoder * self)
 
   self->priv = priv = gst_h265_decoder_get_instance_private (self);
 
+  priv->sps_ext = g_array_sized_new (FALSE, TRUE, sizeof (GstH265SPSEXT),
+      GST_H265_MAX_SPS_COUNT);
   priv->last_output_poc = G_MININT32;
 
   priv->ref_pic_list_tmp = g_array_sized_new (FALSE, TRUE,
@@ -257,6 +262,7 @@ gst_h265_decoder_finalize (GObject * object)
   g_array_unref (priv->ref_pic_list1);
   g_array_unref (priv->nalu);
   g_array_unref (priv->split_nalu);
+  g_array_unref (priv->sps_ext);
   gst_vec_deque_free (priv->output_queue);
 
   G_OBJECT_CLASS (parent_class)->finalize (object);
@@ -460,6 +466,10 @@ static const GstH265LevelLimits level_limits[] = {
   {  "6",     GST_H265_LEVEL_L6,    35651584 },
   {  "6.1",   GST_H265_LEVEL_L6_1,  35651584 },
   {  "6.2",   GST_H265_LEVEL_L6_2,  35651584 },
+  {  "6.3",   GST_H265_LEVEL_L6_3,  80216064 },
+  {  "7",     GST_H265_LEVEL_L7,    142606336 },
+  {  "7.1",   GST_H265_LEVEL_L7_1,  142606336 },
+  {  "7.2",   GST_H265_LEVEL_L7_2,  142606336 },
 };
 /* *INDENT-ON* */
 
@@ -909,12 +919,13 @@ gst_h265_decoder_parse_slice (GstH265Decoder * self, GstH265NalUnit * nalu)
   GstH265DecoderPrivate *priv = self->priv;
   GstH265ParserResult pres;
   GstH265Slice slice;
+  GstH265SPSEXT sps_ext;
   GstH265DecoderNalUnit decoder_nalu;
 
   memset (&slice, 0, sizeof (GstH265Slice));
 
-  pres = gst_h265_parser_parse_slice_hdr (priv->preproc_parser,
-      nalu, &slice.header);
+  pres = gst_h265_parser_parse_slice_hdr_ext (priv->preproc_parser,
+      nalu, &slice.header, &sps_ext);
   if (pres != GST_H265_PARSER_OK)
     return pres;
 
@@ -962,6 +973,10 @@ gst_h265_decoder_parse_slice (GstH265Decoder * self, GstH265NalUnit * nalu)
 
   g_array_append_val (priv->nalu, decoder_nalu);
 
+  if (nalu->type == GST_H265_NAL_SPS)
+    g_array_index (priv->sps_ext, GstH265SPSEXT, decoder_nalu.unit.sps.id)
+        = sps_ext;
+
   return GST_H265_PARSER_OK;
 }
 
@@ -971,12 +986,25 @@ gst_h265_decoder_parse_nalu (GstH265Decoder * self, GstH265NalUnit * nalu)
   GstH265DecoderPrivate *priv = self->priv;
   GstH265VPS vps;
   GstH265SPS sps;
+  GstH265SPSEXT sps_ext;
   GstH265PPS pps;
   GstH265ParserResult ret = GST_H265_PARSER_OK;
   GstH265DecoderNalUnit decoder_nalu;
 
   GST_LOG_OBJECT (self, "Parsed nal type: %d, offset %d, size %d",
       nalu->type, nalu->offset, nalu->size);
+
+  if (nalu->layer_id != 0) {
+    /* 7.4.2.1
+     * decoders conforming to a profile specified in Annex A and not
+     * supporting the independent non-base layer decoding (INBLD) capability
+     * specified in Annex F shall ignore (i.e., remove from the bitstream
+     * and discard) all NAL units with values of nuh_layer_id not equal to 0
+     */
+    GST_LOG_OBJECT (self, "Skip nalu type %d with layer id %d",
+        nalu->type, nalu->layer_id);
+    return GST_H265_PARSER_OK;
+  }
 
   memset (&decoder_nalu, 0, sizeof (GstH265DecoderNalUnit));
   decoder_nalu.nalu_type = nalu->type;
@@ -991,11 +1019,14 @@ gst_h265_decoder_parse_nalu (GstH265Decoder * self, GstH265NalUnit * nalu)
       g_array_append_val (priv->nalu, decoder_nalu);
       break;
     case GST_H265_NAL_SPS:
-      ret = gst_h265_parser_parse_sps (priv->preproc_parser, nalu, &sps, TRUE);
+      ret =
+          gst_h265_parser_parse_sps_ext (priv->preproc_parser, nalu, &sps,
+          &sps_ext, TRUE);
       if (ret != GST_H265_PARSER_OK)
         break;
 
       decoder_nalu.unit.sps = sps;
+      g_array_index (priv->sps_ext, GstH265SPSEXT, sps.id) = sps_ext;
       g_array_append_val (priv->nalu, decoder_nalu);
       break;
     case GST_H265_NAL_PPS:
@@ -1165,6 +1196,18 @@ gst_h265_decoder_parse_codec_data (GstH265Decoder * self, const guint8 * data,
 
     for (j = 0; j < array->nalu->len; j++) {
       GstH265NalUnit *nalu = &g_array_index (array->nalu, GstH265NalUnit, j);
+
+      if (nalu->layer_id != 0) {
+        /* 7.4.2.1
+         * decoders conforming to a profile specified in Annex A and not
+         * supporting the independent non-base layer decoding (INBLD) capability
+         * specified in Annex F shall ignore (i.e., remove from the bitstream
+         * and discard) all NAL units with values of nuh_layer_id not equal to 0
+         */
+        GST_DEBUG_OBJECT (self, "Skip nalu type %d with layer id %d",
+            nalu->type, nalu->layer_id);
+        continue;
+      }
 
       switch (nalu->type) {
         case GST_H265_NAL_VPS:
@@ -2056,10 +2099,14 @@ gst_h265_decoder_finish_current_picture (GstH265Decoder * self,
   if (klass->end_picture) {
     flow_ret = klass->end_picture (self, priv->current_picture);
     if (flow_ret != GST_FLOW_OK) {
-      GST_WARNING_OBJECT (self, "End picture failed");
+      if (flow_ret == GST_FLOW_FLUSHING)
+        GST_DEBUG_OBJECT (self, "Picture decode aborted.");
+      else
+        GST_WARNING_OBJECT (self, "End picture failed");
 
       /* continue to empty dpb */
       UPDATE_FLOW_RETURN (ret, flow_ret);
+      priv->current_picture->output_flag = FALSE;
     }
   }
 
@@ -2245,4 +2292,22 @@ gst_h265_decoder_get_picture (GstH265Decoder * decoder,
     guint32 system_frame_number)
 {
   return gst_h265_dpb_get_picture (decoder->priv->dpb, system_frame_number);
+}
+
+/**
+ * gst_h265_decoder_get_sps_ext:
+ * @decoder: a #GstH265Decoder
+ * @sps : the #GstH265SPS matching the requested #GstH265SPSEXT
+ *
+ * Retrieve the extended SPS values attached to the given #GstH265SPS
+ *
+ * Returns: (transfer none) (nullable): a #GstH265SPSEXT if successful, or %NULL otherwise
+ *
+ * Since: 1.28
+ */
+const GstH265SPSEXT *
+gst_h265_decoder_get_sps_ext (const GstH265Decoder * decoder,
+    const GstH265SPS * sps)
+{
+  return &g_array_index (decoder->priv->sps_ext, GstH265SPSEXT, sps->id);
 }

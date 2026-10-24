@@ -845,6 +845,8 @@ gst_multi_queue_class_init (GstMultiQueueClass * klass)
   gst_element_class_set_static_metadata (gstelement_class,
       "MultiQueue",
       "Generic", "Multiple data queue", "Edward Hervey <edward@fluendo.com>");
+
+  gst_element_class_mark_as_untrusted_aware (gstelement_class);
   gst_element_class_add_static_pad_template_with_gtype (gstelement_class,
       &sinktemplate, GST_TYPE_MULTIQUEUE_PAD);
   gst_element_class_add_static_pad_template_with_gtype (gstelement_class,
@@ -1338,7 +1340,8 @@ gst_single_queue_start (GstMultiQueue * mq, GstSingleQueue * sq)
 
   if (srcpad) {
     res = gst_pad_start_task (srcpad,
-        (GstTaskFunction) gst_multi_queue_loop, srcpad, NULL);
+        (GstTaskFunction) gst_multi_queue_loop, gst_object_ref (srcpad),
+        gst_object_unref);
     gst_object_unref (srcpad);
   }
 
@@ -1959,7 +1962,7 @@ get_running_time (GstSegment * segment, GstMiniObject * object, gboolean end)
       if (new_segment->format == GST_FORMAT_TIME) {
         time =
             my_segment_to_running_time ((GstSegment *) new_segment,
-            new_segment->start);
+            (new_segment->rate > 0.0) ? new_segment->start : new_segment->stop);
       }
     } else if (GST_EVENT_TYPE (event) == GST_EVENT_GAP) {
       GstClockTime ts, dur;
@@ -2727,7 +2730,14 @@ gst_multi_queue_sink_event (GstPad * pad, GstObject * parent, GstEvent * event)
 
     default:
       if (!(GST_EVENT_IS_SERIALIZED (event))) {
+        gboolean was_sticky = GST_EVENT_IS_STICKY (event);
+
         res = gst_pad_push_event (srcpad, event);
+        if (!res && was_sticky) {
+          GST_DEBUG_ID (sq->debug_id,
+              "Ignoring failure to forward sticky non-serialized event");
+          res = TRUE;
+        }
         goto done;
       }
       break;

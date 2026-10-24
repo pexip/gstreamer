@@ -256,12 +256,7 @@ gst_matroska_parse_reset (GstElement * element)
   }
 
   parse->seek_index = NULL;
-  parse->seek_entry = 0;
-
-  if (parse->close_segment) {
-    gst_event_unref (parse->close_segment);
-    parse->close_segment = NULL;
-  }
+  parse->seek_entry_idx = 0;
 
   if (parse->new_segment) {
     gst_event_unref (parse->new_segment);
@@ -1320,7 +1315,7 @@ gst_matroska_parse_handle_seek_event (GstMatroskaParse * parse,
   /* check sanity before we start flushing and all that */
   GST_OBJECT_LOCK (parse);
   if ((entry = gst_matroska_read_common_do_index_seek (&parse->common, track,
-              seeksegment.position, &parse->seek_index, &parse->seek_entry,
+              seeksegment.position, &parse->seek_index, &parse->seek_entry_idx,
               snap_dir)) == NULL) {
     /* pull mode without index can scan later on */
     GST_DEBUG_OBJECT (parse, "No matching seek entry in index");
@@ -2863,12 +2858,8 @@ gst_matroska_parse_loop (GstPad * pad)
   guint64 length;
   guint needed;
 
-  /* If we have to close a segment, send a new segment to do this now */
+  /* If we have to send a new segment, do this now */
   if (G_LIKELY (parse->common.state == GST_MATROSKA_READ_STATE_DATA)) {
-    if (G_UNLIKELY (parse->close_segment)) {
-      gst_matroska_parse_send_event (parse, parse->close_segment);
-      parse->close_segment = NULL;
-    }
     if (G_UNLIKELY (parse->new_segment)) {
       gst_matroska_parse_send_event (parse, parse->new_segment);
       parse->new_segment = NULL;

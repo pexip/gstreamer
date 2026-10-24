@@ -72,14 +72,14 @@
 #include <gst/base/gstbitreader.h>
 #include <gst/base/gstbitwriter.h>
 #include <gst/codecparsers/gstav1parser.h>
+#include <gst/codecparsers/gstav1bitwriter.h>
 #include <gst/video/video.h>
 #include <gst/pbutils/pbutils.h>
 #include "gstvideoparserselements.h"
+#include "gstvideoparseutils.h"
 #include "gstav1parse.h"
 
 #include <string.h>
-
-#define GST_AV1_MAX_LEB_128_SIZE 8
 
 GST_DEBUG_CATEGORY (av1_parse_debug);
 #define GST_CAT_DEFAULT av1_parse_debug
@@ -95,9 +95,14 @@ typedef enum
   GST_AV1_PARSE_ALIGN_OBU,
   GST_AV1_PARSE_ALIGN_FRAME,
   GST_AV1_PARSE_ALIGN_TEMPORAL_UNIT,
-  GST_AV1_PARSE_ALIGN_TEMPORAL_UNIT_ANNEX_B,
-  GST_AV1_PARSE_ALIGN_ANNEX_B,
 } GstAV1ParseAligment;
+
+typedef enum
+{
+  GST_AV1_PARSE_STREAM_FORMAT_ERROR = -1,
+  GST_AV1_PARSE_STREAM_FORMAT_OBU,
+  GST_AV1_PARSE_STREAM_FORMAT_ANNEX_B,
+} GstAV1ParseStreamFormat;
 
 struct _GstAV1Parse
 {
@@ -124,10 +129,13 @@ struct _GstAV1Parse
   gboolean has_input_fps;
 
   GstAV1ParseAligment in_align;
+  GstAV1ParseStreamFormat in_stream_format;
   gboolean detect_annex_b;
   GstAV1ParseAligment align;
+  GstAV1ParseStreamFormat stream_format;
 
   GstAV1Parser *parser;
+  GstAV1Parser *config_record_parser;
   GstAdapter *cache_out;
   guint last_parsed_offset;
   GstAdapter *frame_cache;
@@ -141,6 +149,8 @@ struct _GstAV1Parse
   gboolean keyframe;
   gboolean show_frame;
   gboolean seen_non_padding;
+  gboolean lcevc;
+  GstVideoParseUserData user_data;
 
   GstClockTime buffer_pts;
   GstClockTime buffer_dts;
@@ -151,6 +161,8 @@ struct _GstAV1Parse
 
   GstVideoContentLightLevel content_light_level;
   guint content_light_level_state;
+
+  GstBuffer *seq_hdr_obu;
 };
 
 enum
@@ -223,7 +235,8 @@ _obu_name (GstAV1OBUType type)
 }
 
 static guint32
-_read_leb128 (guint8 * data, GstAV1ParserResult * retval, guint32 * comsumed)
+_read_leb128 (guint8 * data, gsize size, GstAV1ParserResult * retval,
+    guint32 * consumed)
 {
   guint8 leb128_byte = 0;
   guint64 value = 0;
@@ -232,10 +245,10 @@ _read_leb128 (guint8 * data, GstAV1ParserResult * retval, guint32 * comsumed)
   GstBitReader br;
   guint32 cur_pos;
 
-  gst_bit_reader_init (&br, data, 8);
+  gst_bit_reader_init (&br, data, size);
 
   cur_pos = gst_bit_reader_get_pos (&br);
-  for (i = 0; i < 8; i++) {
+  for (i = 0; i < GST_AV1_LEB128_MAX_SIZE; i++) {
     leb128_byte = 0;
     result = gst_bit_reader_get_bits_uint8 (&br, &leb128_byte, 8);
     if (result == FALSE) {
@@ -243,14 +256,19 @@ _read_leb128 (guint8 * data, GstAV1ParserResult * retval, guint32 * comsumed)
       return 0;
     }
 
-    value |= (((gint) leb128_byte & 0x7f) << (i * 7));
+    value |= (((guint64) leb128_byte & 0x7f) << (i * 7));
     if (!(leb128_byte & 0x80))
       break;
+
+    if (i == 7 && leb128_byte & 0x80) {
+      *retval = GST_AV1_PARSER_BITSTREAM_ERROR;
+      return 0;
+    }
   }
 
-  *comsumed = (gst_bit_reader_get_pos (&br) - cur_pos) / 8;
+  *consumed = (gst_bit_reader_get_pos (&br) - cur_pos) / 8;
   /* check for bitstream conformance see chapter4.10.5 */
-  if (value < G_MAXUINT32) {
+  if (value <= GST_AV1_LEB128_MAX_VALUE) {
     *retval = GST_AV1_PARSER_OK;
     return (guint32) value;
   } else {
@@ -260,39 +278,23 @@ _read_leb128 (guint8 * data, GstAV1ParserResult * retval, guint32 * comsumed)
   }
 }
 
-static gsize
-_leb_size_in_bytes (guint64 value)
+static GstBuffer *
+av1_decoder_config_record_get_seq_hdr_obu (const GstAV1DecoderConfigRecord *
+    config)
 {
-  gsize size = 0;
-  do {
-    ++size;
-  } while ((value >>= 7) != 0);
-
-  return size;
-}
-
-static gboolean
-_write_leb128 (guint8 * data, guint * len, guint64 value)
-{
-  guint leb_size = _leb_size_in_bytes (value);
   guint i;
 
-  if (value > G_MAXUINT32 || leb_size > GST_AV1_MAX_LEB_128_SIZE)
-    return FALSE;
+  if (!config || !config->config_obus)
+    return NULL;
 
-  for (i = 0; i < leb_size; ++i) {
-    guint8 byte = value & 0x7f;
-    value >>= 7;
+  for (i = 0; i < config->config_obus->len; i++) {
+    GstAV1OBU *obu = &g_array_index (config->config_obus, GstAV1OBU, i);
 
-    /* Signal that more bytes follow. */
-    if (value != 0)
-      byte |= 0x80;
-
-    *(data + i) = byte;
+    if (obu->obu_type == GST_AV1_OBU_SEQUENCE_HEADER)
+      return gst_av1_build_obu_buffer (obu, TRUE);
   }
 
-  *len = leb_size;
-  return TRUE;
+  return NULL;
 }
 
 static gboolean gst_av1_parse_start (GstBaseParse * parse);
@@ -339,6 +341,8 @@ gst_av1_parse_reset (GstAV1Parse * self)
   self->bit_depth = 0;
   self->align = GST_AV1_PARSE_ALIGN_NONE;
   self->in_align = GST_AV1_PARSE_ALIGN_NONE;
+  self->stream_format = GST_AV1_PARSE_STREAM_FORMAT_OBU;
+  self->in_stream_format = GST_AV1_PARSE_STREAM_FORMAT_OBU;
   self->detect_annex_b = FALSE;
   self->discont = TRUE;
   self->header = FALSE;
@@ -348,9 +352,12 @@ gst_av1_parse_reset (GstAV1Parse * self)
   self->highest_spatial_id = 0;
   self->first_frame = TRUE;
   self->seen_non_padding = FALSE;
+  self->lcevc = FALSE;
+  gst_video_clear_user_data (&self->user_data);
   gst_av1_parse_reset_obu_data_state (self);
   g_clear_pointer (&self->colorimetry, g_free);
   g_clear_pointer (&self->parser, gst_av1_parser_free);
+  g_clear_pointer (&self->config_record_parser, gst_av1_parser_free);
   gst_adapter_clear (self->cache_out);
   gst_adapter_clear (self->frame_cache);
   gst_av1_parse_reset_tu_timestamp (self);
@@ -358,6 +365,7 @@ gst_av1_parse_reset (GstAV1Parse * self)
   self->mastering_display_info_state = GST_AV1_PARSE_OBU_EXPIRED;
   gst_video_content_light_level_init (&self->content_light_level);
   self->content_light_level_state = GST_AV1_PARSE_OBU_EXPIRED;
+  gst_clear_buffer (&self->seq_hdr_obu);
 }
 
 static void
@@ -365,6 +373,7 @@ gst_av1_parse_init (GstAV1Parse * self)
 {
   gst_base_parse_set_pts_interpolation (GST_BASE_PARSE (self), FALSE);
   gst_base_parse_set_infer_ts (GST_BASE_PARSE (self), FALSE);
+  gst_base_parse_set_allow_duplicated_pts (GST_BASE_PARSE (self), TRUE);
 
   GST_PAD_SET_ACCEPT_INTERSECT (GST_BASE_PARSE_SINK_PAD (self));
   GST_PAD_SET_ACCEPT_TEMPLATE (GST_BASE_PARSE_SINK_PAD (self));
@@ -420,6 +429,7 @@ gst_av1_parse_start (GstBaseParse * parse)
 
   gst_av1_parse_reset (self);
   self->parser = gst_av1_parser_new ();
+  self->config_record_parser = gst_av1_parser_new ();
 
   /* At least the OBU header. */
   gst_base_parse_set_min_frame_size (parse, 1);
@@ -434,6 +444,7 @@ gst_av1_parse_stop (GstBaseParse * parse)
 
   GST_DEBUG_OBJECT (self, "stop");
   g_clear_pointer (&self->parser, gst_av1_parser_free);
+  g_clear_pointer (&self->config_record_parser, gst_av1_parser_free);
 
   return TRUE;
 }
@@ -546,24 +557,17 @@ gst_av1_parse_profile_from_string (const gchar * profile)
 }
 
 static const gchar *
-gst_av1_parse_alignment_to_steam_format_string (GstAV1ParseAligment align)
+gst_av1_parse_stream_format_to_string (GstAV1ParseStreamFormat stream_format)
 {
-  switch (align) {
-    case GST_AV1_PARSE_ALIGN_BYTE:
+  switch (stream_format) {
+    case GST_AV1_PARSE_STREAM_FORMAT_OBU:
       return "obu-stream";
-    case GST_AV1_PARSE_ALIGN_OBU:
-    case GST_AV1_PARSE_ALIGN_TEMPORAL_UNIT:
-    case GST_AV1_PARSE_ALIGN_FRAME:
-      return "obu-stream";
-    case GST_AV1_PARSE_ALIGN_ANNEX_B:
-    case GST_AV1_PARSE_ALIGN_TEMPORAL_UNIT_ANNEX_B:
+    case GST_AV1_PARSE_STREAM_FORMAT_ANNEX_B:
       return "annexb";
     default:
-      GST_WARNING ("Unrecognized steam format");
+      return "unrecognized stream format";
       break;
   }
-
-  return NULL;
 }
 
 static const gchar *
@@ -571,183 +575,168 @@ gst_av1_parse_alignment_to_string (GstAV1ParseAligment align)
 {
   switch (align) {
     case GST_AV1_PARSE_ALIGN_BYTE:
-    case GST_AV1_PARSE_ALIGN_ANNEX_B:
       return "byte";
     case GST_AV1_PARSE_ALIGN_OBU:
       return "obu";
     case GST_AV1_PARSE_ALIGN_TEMPORAL_UNIT:
-    case GST_AV1_PARSE_ALIGN_TEMPORAL_UNIT_ANNEX_B:
       return "tu";
     case GST_AV1_PARSE_ALIGN_FRAME:
       return "frame";
     default:
-      GST_WARNING ("Unrecognized alignment");
+      return "unrecognized alignment";
       break;
   }
+}
 
-  return NULL;
+static GstAV1ParseStreamFormat
+gst_av1_parse_stream_format_from_string (const gchar * stream_format)
+{
+  /* OBU stream is the default stream format. */
+  if (!stream_format)
+    return GST_AV1_PARSE_STREAM_FORMAT_OBU;
+
+  if (g_strcmp0 (stream_format, "annexb") == 0) {
+    return GST_AV1_PARSE_STREAM_FORMAT_ANNEX_B;
+  } else if (g_strcmp0 (stream_format, "obu-stream") == 0) {
+    return GST_AV1_PARSE_STREAM_FORMAT_OBU;
+  }
+
+  /* Unrecognized stream format. */
+  return GST_AV1_PARSE_STREAM_FORMAT_ERROR;
 }
 
 static GstAV1ParseAligment
-gst_av1_parse_alignment_from_string (const gchar * align,
-    const gchar * stream_format)
+gst_av1_parse_alignment_from_string (const gchar * align)
 {
-  if (!align && !stream_format)
+  if (!align)
     return GST_AV1_PARSE_ALIGN_NONE;
 
-  if (stream_format) {
-    if (g_strcmp0 (stream_format, "annexb") == 0) {
-      if (align && g_strcmp0 (align, "tu") == 0) {
-        return GST_AV1_PARSE_ALIGN_TEMPORAL_UNIT_ANNEX_B;
-      } else if (align && g_strcmp0 (align, "none") == 0) {
-        return GST_AV1_PARSE_ALIGN_ANNEX_B;
-      } else {
-        return GST_AV1_PARSE_ALIGN_ERROR;
-      }
-    } else if (g_strcmp0 (stream_format, "obu-stream") != 0) {
-      /* unrecognized */
-      return GST_AV1_PARSE_ALIGN_NONE;
-    }
-
-    /* stream-format is obu-stream, depends on align */
+  if (g_strcmp0 (align, "byte") == 0) {
+    return GST_AV1_PARSE_ALIGN_BYTE;
+  } else if (g_strcmp0 (align, "obu") == 0) {
+    return GST_AV1_PARSE_ALIGN_OBU;
+  } else if (g_strcmp0 (align, "tu") == 0) {
+    return GST_AV1_PARSE_ALIGN_TEMPORAL_UNIT;
+  } else if (g_strcmp0 (align, "frame") == 0) {
+    return GST_AV1_PARSE_ALIGN_FRAME;
   }
 
-  if (align) {
-    if (g_strcmp0 (align, "byte") == 0) {
-      return GST_AV1_PARSE_ALIGN_BYTE;
-    } else if (g_strcmp0 (align, "obu") == 0) {
-      return GST_AV1_PARSE_ALIGN_OBU;
-    } else if (g_strcmp0 (align, "tu") == 0) {
-      return GST_AV1_PARSE_ALIGN_TEMPORAL_UNIT;
-    } else if (g_strcmp0 (align, "frame") == 0) {
-      return GST_AV1_PARSE_ALIGN_FRAME;
-    } else {
-      /* unrecognized */
-      return GST_AV1_PARSE_ALIGN_NONE;
-    }
-  }
-
-  return GST_AV1_PARSE_ALIGN_NONE;
+  /* Unrecognized alignment. */
+  return GST_AV1_PARSE_ALIGN_ERROR;
 }
 
 static gboolean
-gst_av1_parse_caps_has_alignment (GstCaps * caps, GstAV1ParseAligment alignment)
+gst_av1_parse_caps_has_tu_alignment (GstAV1Parse * self, GstCaps * caps)
 {
-  guint i, j, caps_size;
-  const gchar *cmp_align_str = NULL;
-  const gchar *cmp_stream_str = NULL;
+  gboolean ret;
+  GstCaps *tu_caps = gst_caps_from_string
+      ("video/x-av1,alignment=(string)tu,stream-format=(string)obu-stream");
 
-  GST_DEBUG ("Try to find alignment %d in caps: %" GST_PTR_FORMAT,
-      alignment, caps);
+  GST_DEBUG_OBJECT (self, "Try to find tu alignment and obu stream format "
+      "in caps: %" GST_PTR_FORMAT, caps);
 
-  caps_size = gst_caps_get_size (caps);
-  if (caps_size == 0)
-    return FALSE;
+  ret = gst_caps_can_intersect (caps, tu_caps);
 
-  switch (alignment) {
-    case GST_AV1_PARSE_ALIGN_BYTE:
-      cmp_align_str = "byte";
-      cmp_stream_str = "obu-stream";
-      break;
-    case GST_AV1_PARSE_ALIGN_OBU:
-      cmp_align_str = "obu";
-      cmp_stream_str = "obu-stream";
-      break;
-    case GST_AV1_PARSE_ALIGN_FRAME:
-      cmp_align_str = "frame";
-      cmp_stream_str = "obu-stream";
-      break;
-    case GST_AV1_PARSE_ALIGN_TEMPORAL_UNIT:
-      cmp_align_str = "tu";
-      cmp_stream_str = "obu-stream";
-      break;
-    case GST_AV1_PARSE_ALIGN_TEMPORAL_UNIT_ANNEX_B:
-      cmp_align_str = "tu";
-      cmp_stream_str = "annexb";
-      break;
-    case GST_AV1_PARSE_ALIGN_ANNEX_B:
-      cmp_align_str = "none";
-      cmp_stream_str = "annexb";
-      break;
-    default:
-      return FALSE;
+  gst_caps_unref (tu_caps);
+
+  return ret;
+}
+
+static GstAV1ParseStreamFormat
+gst_av1_parse_stream_format_from_caps (GstCaps * caps, gboolean * use_default)
+{
+  GstAV1ParseStreamFormat stream_format = GST_AV1_PARSE_STREAM_FORMAT_OBU;
+  gboolean has_stream_format = FALSE;
+
+  if (caps && gst_caps_get_size (caps) > 0) {
+    GstStructure *s = gst_caps_get_structure (caps, 0);
+    const gchar *str_stream = gst_structure_get_string (s, "stream-format");
+    if (str_stream)
+      has_stream_format = TRUE;
+
+    stream_format = gst_av1_parse_stream_format_from_string (str_stream);
   }
 
-  for (i = 0; i < caps_size; i++) {
-    GstStructure *s = gst_caps_get_structure (caps, i);
-    const GValue *alignment_value = gst_structure_get_value (s, "alignment");
-    const GValue *stream_value = gst_structure_get_value (s, "stream-format");
+  if (use_default)
+    *use_default = !has_stream_format;
 
-    if (!alignment_value || !stream_value)
-      continue;
-
-    if (G_VALUE_HOLDS_STRING (alignment_value)) {
-      const gchar *align_str = g_value_get_string (alignment_value);
-
-      if (g_strcmp0 (align_str, cmp_align_str) != 0)
-        continue;
-    } else if (GST_VALUE_HOLDS_LIST (alignment_value)) {
-      guint num_values = gst_value_list_get_size (alignment_value);
-
-      for (j = 0; j < num_values; j++) {
-        const GValue *v = gst_value_list_get_value (alignment_value, j);
-        const gchar *align_str = g_value_get_string (v);
-
-        if (g_strcmp0 (align_str, cmp_align_str) == 0)
-          break;
-      }
-
-      if (j == num_values)
-        continue;
-    }
-
-    if (G_VALUE_HOLDS_STRING (stream_value)) {
-      const gchar *stream_str = g_value_get_string (stream_value);
-
-      if (g_strcmp0 (stream_str, cmp_stream_str) != 0)
-        continue;
-    } else if (GST_VALUE_HOLDS_LIST (stream_value)) {
-      guint num_values = gst_value_list_get_size (stream_value);
-
-      for (j = 0; j < num_values; j++) {
-        const GValue *v = gst_value_list_get_value (stream_value, j);
-        const gchar *stream_str = g_value_get_string (v);
-
-        if (g_strcmp0 (stream_str, cmp_stream_str) == 0)
-          break;
-      }
-
-      if (j == num_values)
-        continue;
-    }
-
-    return TRUE;
-  }
-
-  return FALSE;
+  return stream_format;
 }
 
 static GstAV1ParseAligment
 gst_av1_parse_alignment_from_caps (GstCaps * caps)
 {
-  GstAV1ParseAligment align;
-
-  align = GST_AV1_PARSE_ALIGN_NONE;
-
-  GST_DEBUG ("parsing caps: %" GST_PTR_FORMAT, caps);
+  GstAV1ParseAligment align = GST_AV1_PARSE_ALIGN_NONE;
 
   if (caps && gst_caps_get_size (caps) > 0) {
     GstStructure *s = gst_caps_get_structure (caps, 0);
-    const gchar *str_align = NULL;
-    const gchar *str_stream = NULL;
+    const gchar *str_align = gst_structure_get_string (s, "alignment");
 
-    str_align = gst_structure_get_string (s, "alignment");
-    str_stream = gst_structure_get_string (s, "stream-format");
-
-    align = gst_av1_parse_alignment_from_string (str_align, str_stream);
+    align = gst_av1_parse_alignment_from_string (str_align);
   }
 
   return align;
+}
+
+static gboolean
+gst_av1_parse_buffer_equals (GstBuffer * a, GstBuffer * b)
+{
+  GstMapInfo map_a;
+  gboolean equal = FALSE;
+
+  if (a == NULL || b == NULL)
+    return FALSE;
+
+  if (a == b)
+    return TRUE;
+
+  if (!gst_buffer_map (a, &map_a, GST_MAP_READ))
+    return FALSE;
+
+  equal = (map_a.size == gst_buffer_get_size (b) &&
+      gst_buffer_memcmp (b, 0, map_a.data, map_a.size) == 0);
+
+  gst_buffer_unmap (a, &map_a);
+
+  return equal;
+}
+
+static GstAV1DecoderConfigRecord *
+gst_av1_parse_build_decoder_config_record (GstAV1Parse * self, GstCaps * caps)
+{
+  GstAV1DecoderConfigRecord *config;
+  gint presentation_delay = -1;
+
+  config = g_new0 (GstAV1DecoderConfigRecord, 1);
+  config->version = 1;
+  config->seq_profile = self->profile;
+  config->seq_level_idx_0 = self->seq_level_idx;
+  config->seq_tier_0 = self->seq_tier;
+  config->high_bitdepth = self->bit_depth > 8;
+  config->twelve_bit = self->bit_depth == 12;
+  config->monochrome = self->mono_chrome;
+  config->chroma_subsampling_x = self->subsampling_x;
+  config->chroma_subsampling_y = self->subsampling_y;
+  config->chroma_sample_position = 0;
+
+  if (caps) {
+    GstStructure *s = gst_caps_get_structure (caps, 0);
+
+    if (s
+        && gst_structure_get_int (s, "presentation-delay", &presentation_delay)
+        && presentation_delay != -1) {
+      if (presentation_delay >= 0 && presentation_delay <= 0xF) {
+        config->initial_presentation_delay_present = TRUE;
+        config->initial_presentation_delay_minus_one = presentation_delay;
+      } else {
+        GST_WARNING_OBJECT (self,
+            "Ignoring out-of-range presentation-delay %d (expected -1 or 0..15)",
+            presentation_delay);
+      }
+    }
+  }
+
+  return config;
 }
 
 static void
@@ -785,14 +774,8 @@ gst_av1_parse_update_src_caps (GstAV1Parse * self, GstCaps * caps)
 
   final_caps = gst_caps_copy (sink_caps);
 
-  if (s && gst_structure_has_field (s, "width") &&
-      gst_structure_has_field (s, "height")) {
-    gst_structure_get_int (s, "width", &width);
-    gst_structure_get_int (s, "height", &height);
-  } else {
-    width = self->width;
-    height = self->height;
-  }
+  width = self->width;
+  height = self->height;
 
   if (width > 0 && height > 0)
     gst_caps_set_simple (final_caps, "width", G_TYPE_INT, width,
@@ -843,10 +826,11 @@ gst_av1_parse_update_src_caps (GstAV1Parse * self, GstCaps * caps)
     gst_caps_set_simple (final_caps,
         "colorimetry", G_TYPE_STRING, self->colorimetry, NULL);
 
-  g_assert (self->align > GST_AV1_PARSE_ALIGN_NONE);
+  g_assert (self->align > GST_AV1_PARSE_ALIGN_NONE &&
+      self->align <= GST_AV1_PARSE_ALIGN_TEMPORAL_UNIT);
   gst_caps_set_simple (final_caps, "parsed", G_TYPE_BOOLEAN, TRUE,
       "stream-format", G_TYPE_STRING,
-      gst_av1_parse_alignment_to_steam_format_string (self->align),
+      gst_av1_parse_stream_format_to_string (self->stream_format),
       "alignment", G_TYPE_STRING,
       gst_av1_parse_alignment_to_string (self->align), NULL);
 
@@ -861,6 +845,44 @@ gst_av1_parse_update_src_caps (GstAV1Parse * self, GstCaps * caps)
   tier = gst_av1_parse_tier_to_string (self->seq_tier);
   if (tier)
     gst_caps_set_simple (final_caps, "tier", G_TYPE_STRING, tier, NULL);
+
+  if ((self->align == GST_AV1_PARSE_ALIGN_TEMPORAL_UNIT ||
+          self->align == GST_AV1_PARSE_ALIGN_FRAME) &&
+      self->stream_format == GST_AV1_PARSE_STREAM_FORMAT_OBU) {
+    if (self->seq_hdr_obu) {
+      GstBuffer *av1c = NULL;
+      GstAV1DecoderConfigRecord *config = NULL;
+
+      config = gst_av1_parse_build_decoder_config_record (self, final_caps);
+      GstMapInfo map = { 0, };
+
+      if (!gst_buffer_map (self->seq_hdr_obu, &map, GST_MAP_READ)) {
+        GST_WARNING_OBJECT (self, "Failed to map sequence header OBU");
+      } else {
+        gst_av1_parser_reset (self->config_record_parser, FALSE);
+        if (!gst_av1_parser_create_decoder_config_record_from_sequence_header
+            (self->config_record_parser, map.data, map.size, &config)) {
+          GST_WARNING_OBJECT (self, "Failed to create/update AV1 decoder"
+              " config from sequence header OBU");
+        }
+      }
+      av1c = gst_av1_create_decoder_config_record_buffer (config);
+      gst_av1_decoder_config_record_free (config);
+      if (map.data)
+        gst_buffer_unmap (self->seq_hdr_obu, &map);
+
+      if (av1c) {
+        gst_caps_set_simple (final_caps, "codec_data", GST_TYPE_BUFFER, av1c,
+            NULL);
+        gst_buffer_unref (av1c);
+      } else {
+        GST_WARNING_OBJECT (self,
+            "Failed to build AV1 codec_data from sequence header");
+      }
+    } else if (!(s && gst_structure_has_field (s, "codec_data"))) {
+      GST_INFO_OBJECT (self, "No codec_data found in caps.");
+    }
+  }
 
   if ((self->max_seq_tier != self->seq_tier)
       || (self->max_seq_level_idx != self->seq_level_idx)) {
@@ -894,7 +916,7 @@ gst_av1_parse_update_src_caps (GstAV1Parse * self, GstCaps * caps)
 
   if (s)
     cll_str = gst_structure_get_string (s, "content-light-level");
-  if (mdi_str) {
+  if (cll_str) {
     gst_caps_set_simple (final_caps, "content-light-level", G_TYPE_STRING,
         cll_str, NULL);
   } else if (self->content_light_level_state != GST_AV1_PARSE_OBU_EXPIRED &&
@@ -902,6 +924,15 @@ gst_av1_parse_update_src_caps (GstAV1Parse * self, GstCaps * caps)
       (&self->content_light_level, final_caps)) {
     GST_WARNING_OBJECT (self, "Couldn't set content light level to caps");
   }
+
+  if (self->user_data.has_hdr10_plus_data) {
+    gst_caps_set_simple (final_caps,
+        "hdr-format", G_TYPE_STRING,
+        gst_video_hdr_format_to_string (GST_VIDEO_HDR_FORMAT_HDR10_PLUS), NULL);
+  }
+
+  if (self->user_data.lcevc_enhancement_data || self->lcevc)
+    gst_caps_set_simple (final_caps, "lcevc", G_TYPE_BOOLEAN, TRUE, NULL);
 
   src_caps = gst_pad_get_current_caps (GST_BASE_PARSE_SRC_PAD (self));
 
@@ -917,12 +948,43 @@ gst_av1_parse_update_src_caps (GstAV1Parse * self, GstCaps * caps)
   self->update_caps = FALSE;
 }
 
+static gboolean
+is_valid_align_and_stream_format (GstAV1ParseAligment align,
+    GstAV1ParseStreamFormat stream_format, GstPadDirection direction)
+{
+  if (direction == GST_PAD_SRC) {
+    if (align <= GST_AV1_PARSE_ALIGN_NONE)
+      return FALSE;
+  } else {
+    /* NONE is allowed for input to guess. */
+    if (align == GST_AV1_PARSE_ALIGN_ERROR)
+      return FALSE;
+  }
+
+  if (stream_format == GST_AV1_PARSE_STREAM_FORMAT_ERROR)
+    return FALSE;
+
+  /* We only output annex-b stream in TU alignment */
+  if (direction == GST_PAD_SRC &&
+      stream_format == GST_AV1_PARSE_STREAM_FORMAT_ANNEX_B &&
+      align != GST_AV1_PARSE_ALIGN_TEMPORAL_UNIT)
+    return FALSE;
+
+  /* Unknow input alignment with stream format of annex-b is not allowed */
+  if (direction == GST_PAD_SINK && align == GST_AV1_PARSE_ALIGN_NONE &&
+      stream_format == GST_AV1_PARSE_STREAM_FORMAT_ANNEX_B)
+    return FALSE;
+
+  return TRUE;
+}
+
 /* check downstream caps to configure format and alignment */
 static void
 gst_av1_parse_negotiate (GstAV1Parse * self, GstCaps * in_caps)
 {
   GstCaps *caps;
   GstAV1ParseAligment align;
+  GstAV1ParseStreamFormat stream_format;
 
   caps = gst_pad_get_allowed_caps (GST_BASE_PARSE_SRC_PAD (self));
   GST_DEBUG_OBJECT (self, "allowed caps: %" GST_PTR_FORMAT, caps);
@@ -934,25 +996,26 @@ gst_av1_parse_negotiate (GstAV1Parse * self, GstCaps * in_caps)
     GST_DEBUG_OBJECT (self, "negotiating with caps: %" GST_PTR_FORMAT, caps);
   }
 
-  /* prefer TU as default */
-  if (gst_av1_parse_caps_has_alignment (caps,
-          GST_AV1_PARSE_ALIGN_TEMPORAL_UNIT)) {
+  /* prefer TU alignment with obu-stream format as the default */
+  if (caps && gst_av1_parse_caps_has_tu_alignment (self, caps)) {
     self->align = GST_AV1_PARSE_ALIGN_TEMPORAL_UNIT;
+    self->stream_format = GST_AV1_PARSE_STREAM_FORMAT_OBU;
     goto done;
   }
 
-  /* Both upsteam and downstream support, best */
+  /* Both upstream and downstream support, best */
   if (in_caps && caps) {
     if (gst_caps_can_intersect (in_caps, caps)) {
       GstCaps *common_caps = NULL;
 
       common_caps = gst_caps_intersect (in_caps, caps);
       align = gst_av1_parse_alignment_from_caps (common_caps);
+      stream_format = gst_av1_parse_stream_format_from_caps (common_caps, NULL);
       gst_clear_caps (&common_caps);
 
-      if (align != GST_AV1_PARSE_ALIGN_NONE
-          && align != GST_AV1_PARSE_ALIGN_ERROR) {
+      if (is_valid_align_and_stream_format (align, stream_format, GST_PAD_SRC)) {
         self->align = align;
+        self->stream_format = stream_format;
         goto done;
       }
     }
@@ -963,19 +1026,23 @@ gst_av1_parse_negotiate (GstAV1Parse * self, GstCaps * in_caps)
     /* fixate to avoid ambiguity with lists when parsing */
     caps = gst_caps_fixate (caps);
     align = gst_av1_parse_alignment_from_caps (caps);
+    stream_format = gst_av1_parse_stream_format_from_caps (caps, NULL);
 
-    if (align != GST_AV1_PARSE_ALIGN_NONE && align != GST_AV1_PARSE_ALIGN_ERROR) {
+    if (is_valid_align_and_stream_format (align, stream_format, GST_PAD_SRC)) {
       self->align = align;
+      self->stream_format = stream_format;
       goto done;
     }
   }
 
   /* default */
   self->align = GST_AV1_PARSE_ALIGN_TEMPORAL_UNIT;
+  self->stream_format = GST_AV1_PARSE_STREAM_FORMAT_OBU;
 
 done:
-  GST_INFO_OBJECT (self, "selected alignment %s",
-      gst_av1_parse_alignment_to_string (self->align));
+  GST_INFO_OBJECT (self, "selected alignment: %s, stream format: %s",
+      gst_av1_parse_alignment_to_string (self->align),
+      gst_av1_parse_stream_format_to_string (self->stream_format));
 
   gst_clear_caps (&caps);
 }
@@ -1032,14 +1099,18 @@ gst_av1_parse_set_sink_caps (GstBaseParse * parse, GstCaps * caps)
   GstAV1Parse *self = GST_AV1_PARSE (parse);
   GstStructure *str;
   GstAV1ParseAligment align;
+  GstAV1ParseStreamFormat stream_format;
+  gboolean default_stream_format;
   GstCaps *in_caps = NULL;
   const gchar *profile;
+  const GValue *codec_data_value;
 
   str = gst_caps_get_structure (caps, 0);
 
   /* accept upstream info if provided */
   gst_structure_get_int (str, "width", &self->width);
   gst_structure_get_int (str, "height", &self->height);
+  gst_structure_get_boolean (str, "lcevc", &self->lcevc);
   profile = gst_structure_get_string (str, "profile");
   if (profile)
     self->profile = gst_av1_parse_profile_from_string (profile);
@@ -1053,21 +1124,58 @@ gst_av1_parse_set_sink_caps (GstBaseParse * parse, GstCaps * caps)
     self->has_input_fps = FALSE;
   }
 
-  /* get upstream align from caps */
+  /* get upstream align and stream format from caps */
   align = gst_av1_parse_alignment_from_caps (caps);
-  if (align == GST_AV1_PARSE_ALIGN_ERROR) {
-    GST_ERROR_OBJECT (self, "Sink caps %" GST_PTR_FORMAT " set stream-format"
-        " and alignment conflict.", caps);
+  stream_format =
+      gst_av1_parse_stream_format_from_caps (caps, &default_stream_format);
+  if (!is_valid_align_and_stream_format (align, stream_format, GST_PAD_SINK)) {
+    GST_ERROR_OBJECT (self, "Sink caps %" GST_PTR_FORMAT " has invalid "
+        "alignment(%s) or stream format(%s) setting.", caps,
+        gst_av1_parse_alignment_to_string (align),
+        gst_av1_parse_stream_format_to_string (stream_format));
     return FALSE;
   }
 
   in_caps = gst_caps_copy (caps);
   /* default */
   if (align == GST_AV1_PARSE_ALIGN_NONE) {
+    g_assert (stream_format == GST_AV1_PARSE_STREAM_FORMAT_OBU);
     align = GST_AV1_PARSE_ALIGN_BYTE;
     gst_caps_set_simple (in_caps, "alignment", G_TYPE_STRING,
         gst_av1_parse_alignment_to_string (align),
         "stream-format", G_TYPE_STRING, "obu-stream", NULL);
+  }
+
+  if ((codec_data_value = gst_structure_get_value (str, "codec_data"))) {
+    GstBuffer *codec_data = gst_value_get_buffer (codec_data_value);
+
+    if (codec_data) {
+      GstMapInfo map;
+
+      if (gst_buffer_map (codec_data, &map, GST_MAP_READ)) {
+        GstAV1ParserResult parse_res;
+        GstAV1DecoderConfigRecord *config = NULL;
+        gst_av1_parser_reset (self->config_record_parser, FALSE);
+        parse_res = gst_av1_parser_parse_decoder_config_record
+            (self->config_record_parser, map.data, map.size, &config);
+        if (parse_res != GST_AV1_PARSER_OK) {
+          GST_WARNING_OBJECT (self,
+              "Decoder config record parse failure (%d)", parse_res);
+        } else {
+          GstBuffer *seq_hdr;
+
+          seq_hdr = av1_decoder_config_record_get_seq_hdr_obu (config);
+          if (seq_hdr) {
+            gst_buffer_replace (&self->seq_hdr_obu, seq_hdr);
+            gst_buffer_unref (seq_hdr);
+          }
+        }
+        gst_av1_decoder_config_record_free (config);
+        gst_buffer_unmap (codec_data, &map);
+      } else {
+        GST_WARNING_OBJECT (self, "Failed to map the codec data.");
+      }
+    }
   }
 
   /* negotiate with downstream, set output align */
@@ -1083,17 +1191,17 @@ gst_av1_parse_set_sink_caps (GstBaseParse * parse, GstCaps * caps)
   gst_caps_unref (in_caps);
 
   self->in_align = align;
+  self->in_stream_format = stream_format;
 
+  /* Some upstream element such as ivfparse may fail to recognize the
+     stream format. We can infer it in TU alignment by detecting the
+     first input data. */
   if (self->in_align == GST_AV1_PARSE_ALIGN_TEMPORAL_UNIT
-      || self->in_align == GST_AV1_PARSE_ALIGN_ANNEX_B)
+      && default_stream_format)
     self->detect_annex_b = TRUE;
 
-  if (self->in_align == GST_AV1_PARSE_ALIGN_TEMPORAL_UNIT_ANNEX_B
-      || self->in_align == GST_AV1_PARSE_ALIGN_ANNEX_B) {
-    gst_av1_parser_reset (self->parser, TRUE);
-  } else {
-    gst_av1_parser_reset (self->parser, FALSE);
-  }
+  gst_av1_parser_reset (self->parser,
+      self->in_stream_format == GST_AV1_PARSE_STREAM_FORMAT_ANNEX_B);
 
   return TRUE;
 }
@@ -1108,11 +1216,12 @@ gst_av1_parse_push_data (GstAV1Parse * self, GstBaseParseFrame * frame,
   GstFlowReturn ret = GST_FLOW_OK;
 
   /* Need to generate the final TU annex-b format */
-  if (self->align == GST_AV1_PARSE_ALIGN_TEMPORAL_UNIT_ANNEX_B) {
-    guint8 size_data[GST_AV1_MAX_LEB_128_SIZE];
+  if (self->stream_format == GST_AV1_PARSE_STREAM_FORMAT_ANNEX_B) {
+    guint8 size_data[GST_AV1_LEB128_MAX_SIZE];
     guint size_len = 0;
     guint len;
 
+    g_assert (self->align == GST_AV1_PARSE_ALIGN_TEMPORAL_UNIT);
     /* When push a TU, it must also be a frame end. */
     g_assert (frame_finished);
 
@@ -1122,7 +1231,8 @@ gst_av1_parse_push_data (GstAV1Parse * self, GstBaseParseFrame * frame,
       buf = gst_adapter_take_buffer (self->frame_cache, len);
 
       /* frame_unit_size */
-      _write_leb128 (size_data, &size_len, len);
+      gst_av1_bit_writer_write_leb128 (size_data, sizeof (size_data), &size_len,
+          len);
       header_buf = gst_buffer_new_memdup (size_data, size_len);
       GST_BUFFER_PTS (header_buf) = GST_BUFFER_PTS (buf);
       GST_BUFFER_DTS (header_buf) = GST_BUFFER_DTS (buf);
@@ -1137,7 +1247,8 @@ gst_av1_parse_push_data (GstAV1Parse * self, GstBaseParseFrame * frame,
       buf = gst_adapter_take_buffer (self->cache_out, len);
 
       /* temporal_unit_size */
-      _write_leb128 (size_data, &size_len, len);
+      gst_av1_bit_writer_write_leb128 (size_data, sizeof (size_data), &size_len,
+          len);
       header_buf = gst_buffer_new_memdup (size_data, size_len);
       GST_BUFFER_PTS (header_buf) = GST_BUFFER_PTS (buf);
       GST_BUFFER_DTS (header_buf) = GST_BUFFER_DTS (buf);
@@ -1213,7 +1324,7 @@ static void
 gst_av1_parse_convert_to_annexb (GstAV1Parse * self, GstBuffer * buffer,
     GstAV1OBU * obu, gboolean frame_complete)
 {
-  guint8 size_data[GST_AV1_MAX_LEB_128_SIZE];
+  guint8 size_data[GST_AV1_LEB128_MAX_SIZE];
   guint size_len = 0;
   GstBitWriter bs;
   GstBuffer *buf, *buf2;
@@ -1221,7 +1332,7 @@ gst_av1_parse_convert_to_annexb (GstAV1Parse * self, GstBuffer * buffer,
   guint len, len2, offset;
 
   /* obu_length */
-  _write_leb128 (size_data, &size_len,
+  gst_av1_bit_writer_write_leb128 (size_data, sizeof (size_data), &size_len,
       obu->obu_size + 1 + obu->header.obu_extention_flag);
 
   gst_bit_writer_init_with_size (&bs, 128, FALSE);
@@ -1274,7 +1385,8 @@ gst_av1_parse_convert_to_annexb (GstAV1Parse * self, GstBuffer * buffer,
     buf2 = gst_adapter_take_buffer (self->frame_cache, len2);
 
     /* frame_unit_size */
-    _write_leb128 (size_data, &size_len, len2);
+    gst_av1_bit_writer_write_leb128 (size_data, sizeof (size_data), &size_len,
+        len2);
     buf = gst_buffer_new_memdup (size_data, size_len);
     GST_BUFFER_PTS (buf) = GST_BUFFER_PTS (buf2);
     GST_BUFFER_DTS (buf) = GST_BUFFER_DTS (buf2);
@@ -1291,84 +1403,30 @@ static void
 gst_av1_parse_convert_from_annexb (GstAV1Parse * self, GstBuffer * buffer,
     GstAV1OBU * obu)
 {
-  guint8 size_data[GST_AV1_MAX_LEB_128_SIZE];
-  guint size_len = 0;
   GstBuffer *buf;
-  guint len, offset;
-  guint8 *data;
-  GstBitWriter bs;
 
-  _write_leb128 (size_data, &size_len, obu->obu_size);
-
-  /* obu_header */
-  len = 1;
-  if (obu->header.obu_extention_flag)
-    len += 1;
-  len += size_len;
-  len += obu->obu_size;
-
-  gst_bit_writer_init_with_size (&bs, 128, FALSE);
-  /* obu_forbidden_bit */
-  gst_bit_writer_put_bits_uint8 (&bs, 0, 1);
-  /* obu_type */
-  gst_bit_writer_put_bits_uint8 (&bs, obu->obu_type, 4);
-  /* obu_extension_flag */
-  gst_bit_writer_put_bits_uint8 (&bs, obu->header.obu_extention_flag, 1);
-  /* obu_has_size_field */
-  gst_bit_writer_put_bits_uint8 (&bs, 1, 1);
-  /* obu_reserved_1bit */
-  gst_bit_writer_put_bits_uint8 (&bs, 0, 1);
-  if (obu->header.obu_extention_flag) {
-    /* temporal_id */
-    gst_bit_writer_put_bits_uint8 (&bs, obu->header.obu_temporal_id, 3);
-    /* spatial_id */
-    gst_bit_writer_put_bits_uint8 (&bs, obu->header.obu_spatial_id, 2);
-    /* extension_header_reserved_3bits */
-    gst_bit_writer_put_bits_uint8 (&bs, 0, 3);
-  }
-  g_assert (GST_BIT_WRITER_BIT_SIZE (&bs) % 8 == 0);
-
-  data = g_malloc (len);
-  offset = 0;
-  memcpy (data + offset, GST_BIT_WRITER_DATA (&bs),
-      GST_BIT_WRITER_BIT_SIZE (&bs) / 8);
-  offset += GST_BIT_WRITER_BIT_SIZE (&bs) / 8;
-
-  memcpy (data + offset, size_data, size_len);
-  offset += size_len;
-
-  memcpy (data + offset, obu->data, obu->obu_size);
-
-  buf = gst_buffer_new_wrapped (data, len);
+  buf = gst_av1_build_obu_buffer (obu, TRUE);
   GST_BUFFER_PTS (buf) = GST_BUFFER_PTS (buffer);
   GST_BUFFER_DTS (buf) = GST_BUFFER_DTS (buffer);
   GST_BUFFER_DURATION (buf) = GST_BUFFER_DURATION (buffer);
 
   gst_adapter_push (self->cache_out, buf);
-
-  gst_bit_writer_reset (&bs);
 }
 
 static void
 gst_av1_parse_cache_one_obu (GstAV1Parse * self, GstBuffer * buffer,
     GstAV1OBU * obu, guint8 * data, guint32 size, gboolean frame_complete)
 {
-  gboolean need_convert = FALSE;
   GstBuffer *buf;
 
-  if (self->in_align != self->align
-      && (self->in_align == GST_AV1_PARSE_ALIGN_TEMPORAL_UNIT_ANNEX_B
-          || self->align == GST_AV1_PARSE_ALIGN_TEMPORAL_UNIT_ANNEX_B))
-    need_convert = TRUE;
-
-  if (need_convert) {
-    if (self->in_align == GST_AV1_PARSE_ALIGN_TEMPORAL_UNIT_ANNEX_B) {
+  if (self->in_stream_format != self->stream_format) {
+    if (self->in_stream_format == GST_AV1_PARSE_STREAM_FORMAT_ANNEX_B) {
       gst_av1_parse_convert_from_annexb (self, buffer, obu);
     } else {
       gst_av1_parse_convert_to_annexb (self, buffer, obu, frame_complete);
     }
-  } else if (self->align == GST_AV1_PARSE_ALIGN_TEMPORAL_UNIT_ANNEX_B) {
-    g_assert (self->in_align == GST_AV1_PARSE_ALIGN_TEMPORAL_UNIT_ANNEX_B);
+  } else if (self->stream_format == GST_AV1_PARSE_STREAM_FORMAT_ANNEX_B) {
+    g_assert (self->in_stream_format == GST_AV1_PARSE_STREAM_FORMAT_ANNEX_B);
     gst_av1_parse_convert_to_annexb (self, buffer, obu, frame_complete);
   } else {
     buf = gst_buffer_new_memdup (data, size);
@@ -1413,6 +1471,7 @@ gst_av1_parse_handle_sequence_obu (GstAV1Parse * self, GstAV1OBU * obu)
 {
   GstAV1SequenceHeaderOBU seq_header;
   GstAV1ParserResult res;
+  GstBuffer *seq_hdr_buf;
   guint i;
   guint val;
 
@@ -1517,6 +1576,18 @@ gst_av1_parse_handle_sequence_obu (GstAV1Parse * self, GstAV1OBU * obu)
       self->highest_spatial_id = i;
   }
 
+  if ((self->align == GST_AV1_PARSE_ALIGN_TEMPORAL_UNIT ||
+          self->align == GST_AV1_PARSE_ALIGN_FRAME) &&
+      self->stream_format == GST_AV1_PARSE_STREAM_FORMAT_OBU) {
+    seq_hdr_buf = gst_av1_build_obu_buffer (obu, TRUE);
+    if (!self->seq_hdr_obu
+        || !gst_av1_parse_buffer_equals (self->seq_hdr_obu, seq_hdr_buf)) {
+      gst_buffer_replace (&self->seq_hdr_obu, seq_hdr_buf);
+      self->update_caps = TRUE;
+    }
+    gst_buffer_unref (seq_hdr_buf);
+  }
+
   return GST_AV1_PARSER_OK;
 }
 
@@ -1588,6 +1659,42 @@ fixed_scale (guint in, guint fracbits, guint scale, guint max_bits)
     out = MIN (out, G_MAXUINT32);
 
   return out;
+}
+
+static void
+gst_av1_parse_process_itut_t35 (GstAV1Parse * self,
+    GstAV1MetadataITUT_T35 * itut_t35)
+{
+  guint16 provider_code;
+  GstByteReader br;
+
+  switch (itut_t35->itu_t_t35_country_code) {
+    case ITU_T_T35_COUNTRY_CODE_UK:
+    case ITU_T_T35_COUNTRY_CODE_US:
+      break;
+    default:
+      GST_LOG_OBJECT (self, "Unsupported country code %d",
+          itut_t35->itu_t_t35_country_code);
+      return;
+  }
+
+  if (itut_t35->itu_t_t35_payload_bytes == NULL
+      || itut_t35->itu_t_t35_payload_size < 2) {
+    return;
+  }
+
+  gst_byte_reader_init (&br, itut_t35->itu_t_t35_payload_bytes,
+      itut_t35->itu_t_t35_payload_size);
+
+  provider_code = gst_byte_reader_get_uint16_be_unchecked (&br);
+
+  gst_video_parse_user_data (GST_ELEMENT (self), &self->user_data, &br,
+      GST_VIDEO_PARSE_UTILS_FIELD_1, provider_code);
+
+  if (!self->lcevc && self->user_data.lcevc_enhancement_data != NULL) {
+    self->lcevc = TRUE;
+    self->update_caps = TRUE;
+  }
 }
 
 /* frame_complete will be set true if it is the frame edge. */
@@ -1804,6 +1911,9 @@ gst_av1_parse_handle_one_obu (GstAV1Parse * self, GstAV1OBU * obu,
         self->mastering_display_info_state = GST_AV1_PARSE_OBU_PARSED;
         break;
       }
+      case GST_AV1_METADATA_TYPE_ITUT_T35:
+        gst_av1_parse_process_itut_t35 (self, &metadata.itut_t35);
+        break;
       default:
         break;
     }
@@ -1945,7 +2055,6 @@ gst_av1_parse_handle_to_small_and_equal_align (GstBaseParse * parse,
   GstBuffer *buffer = gst_buffer_ref (frame->buffer);
   guint32 offset, consumed_before_push, consumed;
   gboolean frame_complete;
-  GstBaseParseFrame subframe;
 
   if (!gst_buffer_map (buffer, &map_info, GST_MAP_READ)) {
     GST_ERROR_OBJECT (parse, "Couldn't map incoming buffer");
@@ -1978,9 +2087,11 @@ again:
 
     if ((self->align == GST_AV1_PARSE_ALIGN_OBU) ||
         (self->align == GST_AV1_PARSE_ALIGN_FRAME && frame_complete)) {
+      GstBaseParseFrame subframe;
       gst_av1_parse_create_subframe (frame, &subframe, buffer);
       ret = gst_av1_parse_push_data (self, &subframe,
           consumed_before_push, frame_complete);
+      gst_base_parse_frame_free (&subframe);
       if (ret != GST_FLOW_OK)
         goto out;
 
@@ -1993,20 +2104,40 @@ again:
 
   if (res == GST_AV1_PARSER_BITSTREAM_ERROR ||
       res == GST_AV1_PARSER_MISSING_OBU_REFERENCE) {
-    /* Discard the whole frame */
+    /* Input is annex-b but alignment is less than TU, we do not know
+       how many bytes to skip and so just get a error. */
+    if (self->in_stream_format == GST_AV1_PARSE_STREAM_FORMAT_ANNEX_B &&
+        self->in_align < GST_AV1_PARSE_ALIGN_TEMPORAL_UNIT) {
+      GST_ERROR_OBJECT (parse, "Parse annex-b format get error %d", res);
+      *skipsize = 0;
+      ret = GST_FLOW_ERROR;
+      goto out;
+    }
+
+    /* Discard the whole frame or TU */
     *skipsize = map_info.size;
     GST_WARNING_OBJECT (parse, "Parse obu error, discard %d", *skipsize);
-    if (self->in_align == GST_AV1_PARSE_ALIGN_TEMPORAL_UNIT_ANNEX_B)
+    if (self->in_stream_format == GST_AV1_PARSE_STREAM_FORMAT_ANNEX_B)
       gst_av1_parser_reset_annex_b (self->parser);
     gst_av1_parse_reset_obu_data_state (self);
     ret = GST_FLOW_OK;
     goto out;
   } else if (res == GST_AV1_PARSER_NO_MORE_DATA) {
+    /* Input is annex-b but alignment is less than TU, we do not know
+       how many bytes to skip and so just get a error. */
+    if (self->in_stream_format == GST_AV1_PARSE_STREAM_FORMAT_ANNEX_B &&
+        self->in_align < GST_AV1_PARSE_ALIGN_TEMPORAL_UNIT) {
+      GST_ERROR_OBJECT (parse, "Parse annex-b format get error %d", res);
+      *skipsize = 0;
+      ret = GST_FLOW_ERROR;
+      goto out;
+    }
+
     /* Discard the whole buffer */
     *skipsize = map_info.size;
     GST_WARNING_OBJECT (parse, "Parse obu need more data, discard %d.",
         *skipsize);
-    if (self->in_align == GST_AV1_PARSE_ALIGN_TEMPORAL_UNIT_ANNEX_B)
+    if (self->in_stream_format == GST_AV1_PARSE_STREAM_FORMAT_ANNEX_B)
       gst_av1_parser_reset_annex_b (self->parser);
 
     gst_av1_parse_reset_obu_data_state (self);
@@ -2094,13 +2225,14 @@ again:
       break;
     }
 
-    if (self->align == GST_AV1_PARSE_ALIGN_TEMPORAL_UNIT ||
+    if (self->stream_format == GST_AV1_PARSE_STREAM_FORMAT_ANNEX_B) {
+      g_assert (self->align == GST_AV1_PARSE_ALIGN_TEMPORAL_UNIT);
+      gst_av1_parse_convert_to_annexb (self, buffer, &obu, frame_complete);
+    } else if (self->align == GST_AV1_PARSE_ALIGN_TEMPORAL_UNIT ||
         self->align == GST_AV1_PARSE_ALIGN_FRAME) {
       GstBuffer *buf = gst_buffer_copy_region (buffer, GST_BUFFER_COPY_ALL,
           self->last_parsed_offset, consumed);
       gst_adapter_push (self->cache_out, buf);
-    } else if (self->align == GST_AV1_PARSE_ALIGN_TEMPORAL_UNIT_ANNEX_B) {
-      gst_av1_parse_convert_to_annexb (self, buffer, &obu, frame_complete);
     } else {
       g_assert_not_reached ();
     }
@@ -2258,7 +2390,7 @@ again:
     goto out;
   }
 
-  tu_sz = _read_leb128 (map_info.data, &res, &consumed);
+  tu_sz = _read_leb128 (map_info.data, map_info.size, &res, &consumed);
   if (tu_sz == 0 || res != GST_AV1_PARSER_OK) {
     /* error to get the TU size, should not be annex b. */
     goto out;
@@ -2271,7 +2403,7 @@ again:
   }
 
   GST_INFO_OBJECT (self, "Detect the annex-b format");
-  self->in_align = GST_AV1_PARSE_ALIGN_TEMPORAL_UNIT_ANNEX_B;
+  self->in_stream_format = GST_AV1_PARSE_STREAM_FORMAT_ANNEX_B;
   self->detect_annex_b = FALSE;
   gst_av1_parser_reset (self->parser, TRUE);
   ret = TRUE;
@@ -2328,55 +2460,72 @@ gst_av1_parse_handle_frame (GstBaseParse * parse,
     upstream_caps =
         gst_pad_peer_query_caps (GST_BASE_PARSE_SINK_PAD (self), NULL);
     if (upstream_caps) {
-      gboolean detect_annex_b = FALSE;
+      gboolean default_stream_format = FALSE;
+
+      GST_DEBUG_OBJECT (self, "upstream caps: %" GST_PTR_FORMAT, upstream_caps);
 
       if (!gst_caps_is_empty (upstream_caps)
           && !gst_caps_is_any (upstream_caps)) {
         GstAV1ParseAligment align;
-
-        GST_LOG_OBJECT (self, "upstream caps: %" GST_PTR_FORMAT, upstream_caps);
+        GstAV1ParseStreamFormat stream_format;
 
         /* fixate to avoid ambiguity with lists when parsing */
         upstream_caps = gst_caps_fixate (upstream_caps);
         align = gst_av1_parse_alignment_from_caps (upstream_caps);
-        if (align == GST_AV1_PARSE_ALIGN_ERROR) {
-          GST_ERROR_OBJECT (self, "upstream caps %" GST_PTR_FORMAT
-              " set stream-format and alignment conflict.", upstream_caps);
+        stream_format = gst_av1_parse_stream_format_from_caps (upstream_caps,
+            &default_stream_format);
+
+        if (!is_valid_align_and_stream_format (align, stream_format,
+                GST_PAD_SINK)) {
+          GST_ERROR_OBJECT (self, "upstream caps %" GST_PTR_FORMAT " has "
+              "invalid alignment(%s) or stream format(%s) setting.",
+              upstream_caps, gst_av1_parse_alignment_to_string (align),
+              gst_av1_parse_stream_format_to_string (stream_format));
 
           gst_caps_unref (upstream_caps);
           return GST_FLOW_ERROR;
         }
 
         self->in_align = align;
+        self->in_stream_format = stream_format;
       }
 
       gst_caps_unref (upstream_caps);
 
-      if (self->in_align == GST_AV1_PARSE_ALIGN_TEMPORAL_UNIT_ANNEX_B
-          || self->in_align == GST_AV1_PARSE_ALIGN_ANNEX_B)
-        detect_annex_b = TRUE;
+      gst_av1_parser_reset (self->parser,
+          self->in_stream_format == GST_AV1_PARSE_STREAM_FORMAT_ANNEX_B);
 
-      gst_av1_parser_reset (self->parser, detect_annex_b);
+      /* Some upstream element such as ivfparse may fail to recognize the
+         stream format. We can infer it in TU alignment by detecting the
+         first input data. */
+      if (self->in_align == GST_AV1_PARSE_ALIGN_TEMPORAL_UNIT
+          && default_stream_format)
+        self->detect_annex_b = TRUE;
     }
 
     if (self->in_align != GST_AV1_PARSE_ALIGN_NONE) {
-      GST_LOG_OBJECT (self, "Query the upstream get the alignment %s",
-          gst_av1_parse_alignment_to_string (self->in_align));
+      GST_LOG_OBJECT (self, "Query the upstream get the alignment %s, "
+          "stream format %s",
+          gst_av1_parse_alignment_to_string (self->in_align),
+          gst_av1_parse_stream_format_to_string (self->in_stream_format));
     } else {
       self->in_align = GST_AV1_PARSE_ALIGN_BYTE;
-      GST_DEBUG_OBJECT (self, "alignment set to default %s",
-          gst_av1_parse_alignment_to_string (GST_AV1_PARSE_ALIGN_BYTE));
+      self->in_stream_format = GST_AV1_PARSE_STREAM_FORMAT_OBU;
+      GST_DEBUG_OBJECT (self, "set alignment to default %s, stream format "
+          "to default %s", gst_av1_parse_alignment_to_string (self->in_align),
+          gst_av1_parse_stream_format_to_string (self->in_stream_format));
     }
   }
 
-  if ((self->in_align == GST_AV1_PARSE_ALIGN_TEMPORAL_UNIT
-          || self->in_align == GST_AV1_PARSE_ALIGN_ANNEX_B)
-      && self->detect_annex_b) {
+  if (self->detect_annex_b) {
+    g_assert (self->in_align == GST_AV1_PARSE_ALIGN_TEMPORAL_UNIT);
+
     /* Only happend at the first time of handle_frame, try to
        recognize the annex b stream format. */
     if (gst_av1_parse_detect_stream_format (parse, frame)) {
-      GST_INFO_OBJECT (self, "Input alignment %s",
-          gst_av1_parse_alignment_to_string (self->in_align));
+      GST_INFO_OBJECT (self, "Input alignment %s, stream format %s.",
+          gst_av1_parse_alignment_to_string (self->in_align),
+          gst_av1_parse_stream_format_to_string (self->in_stream_format));
     } else {
       /* Because the input is already TU aligned, we should skip
          the whole problematic TU and check the next one. */
@@ -2392,11 +2541,7 @@ gst_av1_parse_handle_frame (GstBaseParse * parse,
     gst_av1_parse_negotiate (self, NULL);
 
   in_level = self->in_align;
-  if (self->in_align == GST_AV1_PARSE_ALIGN_TEMPORAL_UNIT_ANNEX_B)
-    in_level = GST_AV1_PARSE_ALIGN_TEMPORAL_UNIT;
   out_level = self->align;
-  if (self->align == GST_AV1_PARSE_ALIGN_TEMPORAL_UNIT_ANNEX_B)
-    out_level = GST_AV1_PARSE_ALIGN_TEMPORAL_UNIT;
 
   if (self->in_align <= GST_AV1_PARSE_ALIGN_OBU
       && self->align == GST_AV1_PARSE_ALIGN_OBU) {
@@ -2415,8 +2560,6 @@ static GstFlowReturn
 gst_av1_parse_pre_push_frame (GstBaseParse * parse, GstBaseParseFrame * frame)
 {
   GstAV1Parse *self = GST_AV1_PARSE (parse);
-
-  frame->flags |= GST_BASE_PARSE_FRAME_FLAG_CLIP;
 
   if (!frame->buffer)
     return GST_FLOW_OK;
@@ -2481,6 +2624,9 @@ gst_av1_parse_pre_push_frame (GstBaseParse * parse, GstBaseParseFrame * frame)
       GST_TIME_ARGS (GST_BUFFER_DTS (frame->buffer)),
       GST_TIME_ARGS (GST_BUFFER_PTS (frame->buffer)),
       GST_TIME_ARGS (GST_BUFFER_DURATION (frame->buffer)));
+
+  gst_video_push_user_data (GST_ELEMENT (self), &self->user_data,
+      frame->buffer);
 
   return GST_FLOW_OK;
 }

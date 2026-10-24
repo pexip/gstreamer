@@ -52,6 +52,7 @@
 
 #include "vacompat.h"
 #include "gstvabaseenc.h"
+#include "gstvadisplay_priv.h"
 #include "gstvaencoder.h"
 #include "gstvaprofile.h"
 #include "gstvapluginutils.h"
@@ -141,7 +142,7 @@ struct _GstVaAV1GFGroup
   /* Be different from group_frame_num, include repeat */
   gint output_frame_num;
   gint last_pushed_num;
-  gint last_poped_index;
+  gint last_popped_index;
   guint8 highest_level;
   gboolean use_alt;
   gboolean intra_only;
@@ -600,8 +601,8 @@ _av1_print_gf_group (GstVaAV1Enc * self, GstVaAV1GFGroup * gf_group)
       " GF Group ===========================\n");
   g_string_append_printf (str, " start:%d,  size:%d  ",
       gf_group->start_frame_offset, gf_group->group_frame_num);
-  g_string_append_printf (str, "pushed:%d,  poped:%d  ",
-      pushed_frame_num, gf_group->last_poped_index + 1);
+  g_string_append_printf (str, "pushed:%d,  popped:%d  ",
+      pushed_frame_num, gf_group->last_popped_index + 1);
   g_string_append_printf (str, "\n ALT: %s  max level: %d  output num: %d",
       gf_group->use_alt ? "yes" : "no", gf_group->highest_level,
       gf_group->output_frame_num);
@@ -867,7 +868,7 @@ _av1_init_gf_group (GstVaAV1GFGroup * gf_group, GQueue * reorder_list)
   gf_group->last_pushed_num = -1;
   gf_group->use_alt = FALSE;
   gf_group->intra_only = FALSE;
-  gf_group->last_poped_index = -1;
+  gf_group->last_popped_index = -1;
   gf_group->output_frame_num = 0;
 
   for (i = 0; i < MAX_GF_GROUP_SIZE * 2; i++) {
@@ -913,11 +914,11 @@ _av1_start_gf_group (GstVaAV1Enc * self, GstVideoCodecFrame * gf_frame)
   gf_group->use_alt = use_alt;
   gf_group->intra_only = intra_only;
 
-  gf_group->last_poped_index = -1;
+  gf_group->last_popped_index = -1;
   /* An already encoded frame as the GF,
      for example, the ALT of the previous GF group. */
   if (frame->flags & FRAME_FLAG_ALREADY_ENCODED)
-    gf_group->last_poped_index = 0;
+    gf_group->last_popped_index = 0;
 
   for (i = 0; i < MAX_GF_GROUP_SIZE * 2; i++) {
     gf_group->frame_types[i] = FRAME_TYPE_INVALID;
@@ -1006,7 +1007,7 @@ _av1_gf_group_push_frame (GstVaAV1GFGroup * gf_group,
 
   if (gf_group->use_alt)
     /* If we already begin pop, no more push again. */
-    g_return_val_if_fail (gf_group->last_poped_index <= 0, FALSE);
+    g_return_val_if_fail (gf_group->last_popped_index <= 0, FALSE);
 
   g_queue_push_tail (gf_group->reorder_list,
       gst_video_codec_frame_ref (gst_frame));
@@ -1032,10 +1033,10 @@ _av1_gf_group_pop_frame (GstVaAV1GFGroup * gf_group,
     goto no_frame;
 
   if (!gf_group->use_alt) {
-    g_assert (gf_group->last_poped_index < pushed_frame_num);
+    g_assert (gf_group->last_popped_index < pushed_frame_num);
 
-    if (gf_group->last_poped_index + 1 < pushed_frame_num) {
-      gf_group->last_poped_index++;
+    if (gf_group->last_popped_index + 1 < pushed_frame_num) {
+      gf_group->last_popped_index++;
       goto find_frame;
     }
 
@@ -1043,8 +1044,8 @@ _av1_gf_group_pop_frame (GstVaAV1GFGroup * gf_group,
   }
 
   /* The first frame of a GF group has no backward ref, pop immediately. */
-  if (gf_group->last_poped_index < 0) {
-    gf_group->last_poped_index++;
+  if (gf_group->last_popped_index < 0) {
+    gf_group->last_popped_index++;
     goto find_frame;
   }
 
@@ -1052,8 +1053,8 @@ _av1_gf_group_pop_frame (GstVaAV1GFGroup * gf_group,
   if (pushed_frame_num < gf_group->group_frame_num)
     goto no_frame;
 
-  gf_group->last_poped_index++;
-  g_assert (gf_group->last_poped_index < gf_group->output_frame_num);
+  gf_group->last_popped_index++;
+  g_assert (gf_group->last_popped_index < gf_group->output_frame_num);
 
 find_frame:
   vaframe = NULL;
@@ -1061,7 +1062,7 @@ find_frame:
 
   /* If repeating some frame, it should be in reference list,
      or it should be in reorder list. */
-  if (gf_group->frame_types[gf_group->last_poped_index] == FRAME_TYPE_REPEAT) {
+  if (gf_group->frame_types[gf_group->last_popped_index] == FRAME_TYPE_REPEAT) {
     for (i = 0; i < GST_AV1_NUM_REF_FRAMES; i++) {
       GstVaAV1EncFrame *vaf;
 
@@ -1070,7 +1071,7 @@ find_frame:
 
       vaf = _enc_frame (ref_list[i]);
       if (vaf->frame_num == gf_group->start_frame_offset +
-          gf_group->frame_offsets[gf_group->last_poped_index]) {
+          gf_group->frame_offsets[gf_group->last_popped_index]) {
         vaframe = vaf;
         frame = ref_list[i];
         break;
@@ -1089,7 +1090,7 @@ find_frame:
       f = g_queue_peek_nth (gf_group->reorder_list, i);
       vaf = _enc_frame (f);
       if (vaf->frame_num == gf_group->start_frame_offset +
-          gf_group->frame_offsets[gf_group->last_poped_index]) {
+          gf_group->frame_offsets[gf_group->last_popped_index]) {
         vaframe = vaf;
         frame = f;
         break;
@@ -1100,10 +1101,10 @@ find_frame:
     /* Clear that frame from reorder list. */
     g_queue_pop_nth (gf_group->reorder_list, i);
 
-    vaframe->type = gf_group->frame_types[gf_group->last_poped_index];
+    vaframe->type = gf_group->frame_types[gf_group->last_popped_index];
     vaframe->pyramid_level =
-        gf_group->pyramid_levels[gf_group->last_poped_index];
-    vaframe->flags = gf_group->flags[gf_group->last_poped_index];
+        gf_group->pyramid_levels[gf_group->last_popped_index];
+    vaframe->flags = gf_group->flags[gf_group->last_popped_index];
 
     /* unref frame popped from reorder queue */
     gst_video_codec_frame_unref (frame);
@@ -1129,7 +1130,7 @@ _av1_finish_current_gf_group (GstVaAV1Enc * self, GstVaAV1GFGroup * gf_group)
   g_assert (pushed_frame_num <= gf_group->group_frame_num);
 
   /* Alt comes and already finished. */
-  if (gf_group->use_alt && gf_group->last_poped_index > 0)
+  if (gf_group->use_alt && gf_group->last_popped_index > 0)
     return;
 
   /* Already pushed all frames. */
@@ -1141,7 +1142,7 @@ _av1_finish_current_gf_group (GstVaAV1Enc * self, GstVaAV1GFGroup * gf_group)
     gf_group->use_alt = FALSE;
 
   if (gf_group->use_alt == FALSE) {
-    g_assert (gf_group->last_poped_index < pushed_frame_num);
+    g_assert (gf_group->last_popped_index < pushed_frame_num);
 
     gf_group->group_frame_num = pushed_frame_num;
 
@@ -1214,15 +1215,15 @@ _av1_gf_group_is_empty (GstVaAV1GFGroup * gf_group)
     return TRUE;
 
   if (gf_group->use_alt == FALSE) {
-    g_assert (gf_group->last_poped_index + 1 <= pushed_frame_num);
-    if (gf_group->last_poped_index + 1 == pushed_frame_num)
+    g_assert (gf_group->last_popped_index + 1 <= pushed_frame_num);
+    if (gf_group->last_popped_index + 1 == pushed_frame_num)
       return TRUE;
 
     return FALSE;
   }
 
-  g_assert (gf_group->last_poped_index < gf_group->output_frame_num);
-  if (gf_group->last_poped_index == gf_group->output_frame_num - 1)
+  g_assert (gf_group->last_popped_index < gf_group->output_frame_num);
+  if (gf_group->last_popped_index == gf_group->output_frame_num - 1)
     return TRUE;
 
   return FALSE;
@@ -1231,8 +1232,8 @@ _av1_gf_group_is_empty (GstVaAV1GFGroup * gf_group)
 static inline gboolean
 _av1_gf_group_is_finished (GstVaAV1GFGroup * gf_group)
 {
-  g_assert (gf_group->last_poped_index < gf_group->output_frame_num);
-  if (gf_group->last_poped_index == gf_group->output_frame_num - 1)
+  g_assert (gf_group->last_popped_index < gf_group->output_frame_num);
+  if (gf_group->last_popped_index == gf_group->output_frame_num - 1)
     return TRUE;
 
   return FALSE;
@@ -1354,7 +1355,7 @@ gst_va_av1_enc_reorder_frame (GstVaBaseEnc * base, GstVideoCodecFrame * frame,
     if (_av1_gf_group_is_finished (&self->gop.current_group)) {
       g_assert (_av1_gf_group_is_empty (&self->gop.current_group));
 
-      /* Already poped all of the last group,
+      /* Already popped all of the last group,
          so begin a new group with this keyframe. */
       _av1_start_gf_group (self, frame);
     } else {
@@ -1908,7 +1909,7 @@ _av1_get_rtformat (GstVaAV1Enc * self, GstVideoFormat format,
 #define update_property_bool(obj, old_val, new_val, prop_id)    \
   update_property (bool, obj, old_val, new_val, prop_id)
 
-static gboolean
+static VAProfile
 _av1_decide_profile (GstVaAV1Enc * self, guint rt_format,
     guint depth, guint chrome)
 {
@@ -1986,7 +1987,7 @@ _av1_decide_profile (GstVaAV1Enc * self, guint rt_format,
     if (!gst_va_encoder_has_profile (base->encoder, p))
       continue;
 
-    if ((rt_format & gst_va_encoder_get_rtformat (base->encoder,
+    if ((rt_format & gst_va_display_get_rtformat (base->display,
                 p, GST_VA_BASE_ENC_ENTRYPOINT (base))) == 0)
       continue;
 
@@ -2015,7 +2016,7 @@ _av1_init_packed_headers (GstVaAV1Enc * self)
 
   self->packed_headers = 0;
 
-  if (!gst_va_encoder_get_packed_headers (base->encoder, base->profile,
+  if (!gst_va_display_get_packed_headers (base->display, base->profile,
           GST_VA_BASE_ENC_ENTRYPOINT (base), &packed_headers))
     return FALSE;
 
@@ -2048,7 +2049,7 @@ _av1_generate_gop_structure (GstVaAV1Enc * self)
   if (self->gop.gf_group_size >= self->gop.keyframe_interval)
     self->gop.gf_group_size = self->gop.keyframe_interval - 1;
 
-  if (!gst_va_encoder_get_max_num_reference (base->encoder, base->profile,
+  if (!gst_va_display_get_max_num_reference (base->display, base->profile,
           GST_VA_BASE_ENC_ENTRYPOINT (base), &list0, &list1)) {
     GST_INFO_OBJECT (self, "Failed to get the max num reference");
     list0 = 1;
@@ -2432,7 +2433,7 @@ _av1_setup_encoding_features (GstVaAV1Enc * self)
 
     self->partition.tile_size_bytes_minus_1 = 3;
     self->features.obu_size_bytes = 4;
-    self->features.tx_mode_support = GST_AV1_TX_MODE_LARGEST;
+    self->features.tx_mode_support = 1 << GST_AV1_TX_MODE_LARGEST;
     self->partition.max_tile_num = 1;
   } else {
     VAConfigAttribValEncAV1Ext2 features_ext2;
@@ -2511,6 +2512,9 @@ _av1_calculate_coded_size (GstVaAV1Enc * self)
      We do not calculate SpeedAdj and do not consider still_picture. */
   base->codedbuf_size = un_compressed_size / self->cr;
 
+  base->codedbuf_size = gst_va_base_enc_adjust_coded_buffer_size (base,
+      base->codedbuf_size, self->rc.rc_ctrl_mode, self->rc.target_bitrate_bits);
+
   GST_INFO_OBJECT (self, "Calculate codedbuf size: %u", base->codedbuf_size);
 }
 
@@ -2573,7 +2577,7 @@ _av1_ensure_rate_control (GstVaAV1Enc * self)
    *    rate. If "cpb-size" is not set, it is set to the size of
    *    caching 2 second coded data. Encoder will try its best to make
    *    the QP with in the ["max-qp", "min-qp"] range. "mbbrc" can
-   *    enable bit rate control in macro block level. Other paramters
+   *    enable bit rate control in macro block level. Other parameters
    *    are ignored.
    *
    * 3. VBR mode: "rate-control=VBR", then the "bitrate" specify the
@@ -2585,12 +2589,12 @@ _av1_ensure_rate_control (GstVaAV1Enc * self)
    *    set, the target bit rate will be calculated by the picture
    *    resolution and frame rate. Encoder will try its best to make
    *    the QP with in the ["max-qp", "min-qp"] range. "mbbrc" can
-   *    enable bit rate control in macro block level. Other paramters
+   *    enable bit rate control in macro block level. Other parameters
    *    are ignored.
    *
    * 4. VCM mode: "rate-control=VCM", then the "bitrate" specify the
    *    target bit rate, and encoder will try its best to make the QP
-   *    with in the ["max-qp", "min-qp"] range. Other paramters are
+   *    with in the ["max-qp", "min-qp"] range. Other parameters are
    *    ignored.
    *
    * 5. ICQ mode: "rate-control=ICQ", which is similar to CQP mode
@@ -2609,7 +2613,7 @@ _av1_ensure_rate_control (GstVaAV1Enc * self)
   guint bitrate;
   guint32 rc_ctrl, rc_mode, quality_level;
 
-  quality_level = gst_va_encoder_get_quality_level (base->encoder,
+  quality_level = gst_va_display_get_quality_level (base->display,
       base->profile, GST_VA_BASE_ENC_ENTRYPOINT (base));
   if (self->rc.target_usage > quality_level) {
     GST_INFO_OBJECT (self, "User setting target-usage: %d is not supported, "
@@ -2625,7 +2629,7 @@ _av1_ensure_rate_control (GstVaAV1Enc * self)
   GST_OBJECT_UNLOCK (self);
 
   if (rc_ctrl != VA_RC_NONE) {
-    rc_mode = gst_va_encoder_get_rate_control_mode (base->encoder,
+    rc_mode = gst_va_display_get_rate_control_mode (base->display,
         base->profile, GST_VA_BASE_ENC_ENTRYPOINT (base));
     if (!(rc_mode & rc_ctrl)) {
       guint32 defval =
@@ -2777,31 +2781,19 @@ gst_va_av1_enc_reconfig (GstVaBaseEnc * base)
   GstVaBaseEncClass *klass = GST_VA_BASE_ENC_GET_CLASS (base);
   GstVideoEncoder *venc = GST_VIDEO_ENCODER (base);
   GstVaAV1Enc *self = GST_VA_AV1_ENC (base);
-  GstCaps *out_caps, *reconf_caps = NULL;
+  GstCaps *out_caps;
   GstVideoCodecState *output_state;
-  GstVideoFormat format, reconf_format = GST_VIDEO_FORMAT_UNKNOWN;
+  GstVideoFormat format;
   VAProfile profile;
-  gboolean do_renegotiation = TRUE, do_reopen, need_negotiation, rc_same;
-  guint max_ref_frames, max_surfaces = 0,
-      rt_format, depth = 0, chrome = 0, codedbuf_size, latency_num;
+  gboolean do_renegotiation = TRUE;
+  guint max_ref_frames, rt_format, depth = 0, chrome = 0, latency_num;
   gint width, height;
   GstClockTime latency;
 
   width = GST_VIDEO_INFO_WIDTH (&base->in_info);
   height = GST_VIDEO_INFO_HEIGHT (&base->in_info);
   format = GST_VIDEO_INFO_FORMAT (&base->in_info);
-  codedbuf_size = base->codedbuf_size;
   latency_num = base->preferred_output_delay + self->gop.gf_group_size - 1;
-
-  need_negotiation =
-      !gst_va_encoder_get_reconstruct_pool_config (base->encoder, &reconf_caps,
-      &max_surfaces);
-  if (!need_negotiation && reconf_caps) {
-    GstVideoInfo vi;
-    if (!gst_video_info_from_caps (&vi, reconf_caps))
-      return FALSE;
-    reconf_format = GST_VIDEO_INFO_FORMAT (&vi);
-  }
 
   rt_format = _av1_get_rtformat (self, format, &depth, &chrome);
   if (!rt_format) {
@@ -2812,19 +2804,6 @@ gst_va_av1_enc_reconfig (GstVaBaseEnc * base)
   profile = _av1_decide_profile (self, rt_format, depth, chrome);
   if (profile == VAProfileNone)
     return FALSE;
-
-  GST_OBJECT_LOCK (self);
-  rc_same = (self->prop.rc_ctrl == self->rc.rc_ctrl_mode);
-  GST_OBJECT_UNLOCK (self);
-
-  /* first check */
-  do_reopen = !(base->profile == profile && base->rt_format == rt_format
-      && format == reconf_format && width == base->width
-      && height == base->height && rc_same && depth == self->depth
-      && chrome == self->chrome);
-
-  if (do_reopen && gst_va_encoder_is_open (base->encoder))
-    gst_va_encoder_close (base->encoder);
 
   gst_va_base_enc_reset_state (base);
 
@@ -2880,7 +2859,6 @@ gst_va_av1_enc_reconfig (GstVaBaseEnc * base)
 
   /* Let the downstream know the new latency. */
   if (latency_num != base->preferred_output_delay + self->gop.gf_group_size - 1) {
-    need_negotiation = TRUE;
     latency_num = base->preferred_output_delay + self->gop.gf_group_size - 1;
   }
 
@@ -2895,14 +2873,7 @@ gst_va_av1_enc_reconfig (GstVaBaseEnc * base)
   base->min_buffers = max_ref_frames;
   max_ref_frames += 3 /* scratch frames */ ;
 
-  /* second check after calculations */
-  do_reopen |=
-      !(max_ref_frames == max_surfaces && codedbuf_size == base->codedbuf_size);
-  if (do_reopen && gst_va_encoder_is_open (base->encoder))
-    gst_va_encoder_close (base->encoder);
-
-  if (!gst_va_encoder_is_open (base->encoder)
-      && !gst_va_encoder_open (base->encoder, base->profile,
+  if (!gst_va_encoder_open (base->encoder, base->profile,
           GST_VIDEO_INFO_FORMAT (&base->in_info), base->rt_format,
           base->width, base->height, base->codedbuf_size, max_ref_frames,
           self->rc.rc_ctrl_mode, self->packed_headers)) {
@@ -2925,17 +2896,15 @@ gst_va_av1_enc_reconfig (GstVaBaseEnc * base)
       "height", G_TYPE_INT, base->height, "alignment", G_TYPE_STRING, "tu",
       "stream-format", G_TYPE_STRING, "obu-stream", NULL);
 
-  if (!need_negotiation) {
-    output_state = gst_video_encoder_get_output_state (venc);
-    do_renegotiation = TRUE;
-    if (output_state) {
-      do_renegotiation = !gst_caps_is_subset (output_state->caps, out_caps);
-      gst_video_codec_state_unref (output_state);
-    }
-    if (!do_renegotiation) {
-      gst_caps_unref (out_caps);
-      return TRUE;
-    }
+  output_state = gst_video_encoder_get_output_state (venc);
+  do_renegotiation = TRUE;
+  if (output_state) {
+    do_renegotiation = !gst_caps_is_subset (output_state->caps, out_caps);
+    gst_video_codec_state_unref (output_state);
+  }
+  if (!do_renegotiation) {
+    gst_caps_unref (out_caps);
+    return TRUE;
   }
 
   GST_DEBUG_OBJECT (self, "output caps is %" GST_PTR_FORMAT, out_caps);
@@ -4001,8 +3970,9 @@ _av1_create_tu_output_buffer (GstVaAV1Enc * self,
   GstVaAV1EncFrame *frame_enc;
   GstBuffer *buf = NULL;
   guint num;
+  gboolean corrupt = FALSE;
 
-  g_assert ((_enc_frame (last_frame)->flags & FRAME_TYPE_REPEAT) == 0);
+  g_assert ((_enc_frame (last_frame)->type & FRAME_TYPE_REPEAT) == 0);
   g_assert ((_enc_frame (last_frame)->flags & FRAME_FLAG_NOT_SHOW) == 0);
   g_assert (self->frames_in_tu_num <= GST_AV1_NUM_REF_FRAMES - 1);
 
@@ -4032,10 +4002,15 @@ _av1_create_tu_output_buffer (GstVaAV1Enc * self,
       goto error;
     }
 
+    if (frame_enc->base.picture->corrupt)
+      corrupt = TRUE;
+
     offset += frame_size;
   }
 
   frame_enc = _enc_frame (last_frame);
+  /* If any frame is corrupt, make the whole TU as corrupt. */
+  frame_enc->base.picture->corrupt |= corrupt;
 
   if (frame_enc->cached_frame_header_size > 0) {
     memcpy (data + offset, frame_enc->cached_frame_header,

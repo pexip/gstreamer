@@ -1,7 +1,5 @@
 /* GStreamer
  * Copyright (C) 2019 Josh Matthews <josh@joshmatthews.net>
- * Copyright (c) 2024, Pexip AS
- *  @author: Tulio Beloqui <tulio@pexip.com>
  *
  * avfdeviceprovider.h: AVF device probing and monitoring
  *
@@ -30,6 +28,7 @@
 #endif
 
 #include <gst/gst.h>
+#include <gst/gstdeviceprovider.h>
 #include "avfvideosrc.h"
 
 G_BEGIN_DECLS
@@ -44,17 +43,16 @@ typedef struct _GstAVFDeviceProviderClass GstAVFDeviceProviderClass;
 #define GST_AVF_DEVICE_PROVIDER_GET_CLASS(obj)       (G_TYPE_INSTANCE_GET_CLASS ((obj), GST_TYPE_AVF_DEVICE_PROVIDER, GstAVFDeviceProviderClass))
 #define GST_AVF_DEVICE_PROVIDER(obj)                 (G_TYPE_CHECK_INSTANCE_CAST ((obj), GST_TYPE_AVF_DEVICE_PROVIDER, GstAVFDeviceProvider))
 #define GST_AVF_DEVICE_PROVIDER_CLASS(klass)         (G_TYPE_CHECK_CLASS_CAST ((klass), GST_TYPE_DEVICE_PROVIDER, GstAVFDeviceProviderClass))
-#define GST_AVF_DEVICE_PROVIDER_CAST(obj)            ((GstAVFDeviceProvider *)(obj))
+#define GST_AVF_DEVICE_PROVIDER_CAST(obj)            ((GstAvfDeviceProvider *)(obj))
 
 struct _GstAVFDeviceProvider {
   GstDeviceProvider parent;
-
-  gpointer impl;
 };
 
 typedef enum {
   GST_AVF_DEVICE_TYPE_INVALID = 0,
   GST_AVF_DEVICE_TYPE_VIDEO_SOURCE,
+  GST_AVF_DEVICE_TYPE_SCREEN_SOURCE,
 } GstAvfDeviceType;
 
 struct _GstAVFDeviceProviderClass {
@@ -62,6 +60,7 @@ struct _GstAVFDeviceProviderClass {
 };
 
 GType gst_avf_device_provider_get_type (void);
+GST_DEVICE_PROVIDER_REGISTER_DECLARE (avfdeviceprovider);
 
 
 typedef struct _GstAvfDevice GstAvfDevice;
@@ -80,7 +79,7 @@ struct _GstAvfDevice {
   GstDevice         parent;
 
   GstAvfDeviceType  type;
-  int               device_index;
+  gchar            *unique_id;
   const gchar      *element;
 };
 

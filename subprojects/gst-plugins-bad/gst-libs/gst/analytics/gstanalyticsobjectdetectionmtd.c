@@ -28,6 +28,9 @@
 #include <gst/video/video.h>
 #include <math.h>
 
+GST_DEBUG_CATEGORY_EXTERN (gst_analytics_relation_meta_debug);
+#define GST_CAT_DEFAULT gst_analytics_relation_meta_debug
+
 /**
  * SECTION:gstanalyticsobjectdetectionmtd
  * @title: GstAnalyticsODMtd
@@ -75,7 +78,50 @@ static gboolean
 gst_analytics_od_mtd_meta_transform (GstBuffer * transbuf,
     GstAnalyticsMtd * transmtd, GstBuffer * buffer, GQuark type, gpointer data)
 {
-  if (GST_VIDEO_META_TRANSFORM_IS_SCALE (type)) {
+  if (GST_VIDEO_META_TRANSFORM_IS_MATRIX (type)) {
+    GstVideoMetaTransformMatrix *trans = data;
+    GstAnalyticsODMtdData *oddata =
+        gst_analytics_relation_meta_get_mtd_data (transmtd->meta,
+        transmtd->id);
+    GstVideoRectangle rect = { oddata->x, oddata->y, oddata->w, oddata->h };
+
+    gboolean is_diagonal =
+        G_APPROX_VALUE (trans->matrix[0][1], 0.0f, 1e-6f) &&
+        G_APPROX_VALUE (trans->matrix[1][0], 0.0f, 1e-6f);
+    gboolean is_antidiagonal =
+        G_APPROX_VALUE (trans->matrix[0][0], 0.0f, 1e-6f) &&
+        G_APPROX_VALUE (trans->matrix[1][1], 0.0f, 1e-6f);
+
+    if (!is_diagonal && !is_antidiagonal) {
+      GST_WARNING ("Transformation not possible from buffer %" GST_PTR_FORMAT
+          " to buffer %" GST_PTR_FORMAT, buffer, transbuf);
+      return FALSE;
+    } else if (is_diagonal) {
+      if (G_APPROX_VALUE (trans->matrix[0][0], 0.0f, 1e-6f) ||
+          G_APPROX_VALUE (trans->matrix[1][1], 0.0f, 1e-6f)) {
+        GST_WARNING ("Transformation not possible from buffer %" GST_PTR_FORMAT
+            " to buffer %" GST_PTR_FORMAT, buffer, transbuf);
+        return FALSE;
+      }
+    } else {
+      if (G_APPROX_VALUE (trans->matrix[0][1], 0.0f, 1e-6f) ||
+          G_APPROX_VALUE (trans->matrix[1][0], 0.0f, 1e-6f)) {
+        GST_WARNING ("Transformation not possible from buffer %" GST_PTR_FORMAT
+            " to buffer %" GST_PTR_FORMAT, buffer, transbuf);
+        return FALSE;
+      }
+    }
+
+    if (!gst_video_meta_transform_matrix_rectangle (trans, &rect))
+      return FALSE;
+
+    oddata->x = rect.x;
+    oddata->y = rect.y;
+    oddata->w = rect.w;
+    oddata->h = rect.h;
+
+    return TRUE;
+  } else if (GST_VIDEO_META_TRANSFORM_IS_SCALE (type)) {
     GstVideoMetaTransform *trans = data;
     gint ow, oh, nw, nh;
     GstAnalyticsODMtdData *oddata;
@@ -99,9 +145,14 @@ gst_analytics_od_mtd_meta_transform (GstBuffer * transbuf,
 
     oddata->h *= nh;
     oddata->h /= oh;
+
+    return TRUE;
+  } else if (GST_META_TRANSFORM_IS_COPY (type)) {
+    // Data already copied by generic transform function, nothing to do.
+    return TRUE;
   }
 
-  return TRUE;
+  return FALSE;
 }
 
 static const GstAnalyticsMtdImpl od_impl = {

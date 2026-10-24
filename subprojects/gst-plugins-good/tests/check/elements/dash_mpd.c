@@ -6358,6 +6358,72 @@ GST_START_TEST (dash_mpdparser_check_mpd_client_set_methods)
 GST_END_TEST;
 
 /*
+ * Test parsing SegmentTemplate with neither duration nor SegmentTimeline
+ *
+ */
+GST_START_TEST
+    (dash_mpdparser_representation_segmentTemplate_no_duration_or_SegmentTimeline)
+{
+  const gchar *xml =
+      "<?xml version=\"1.0\"?>"
+      "<MPD xmlns=\"urn:mpeg:dash:schema:mpd:2011\""
+      "     profiles=\"urn:mpeg:dash:profile:isoff-main:2011\">"
+      "  <Period>"
+      "    <AdaptationSet>"
+      "      <Representation id=\"1\" bandwidth=\"250000\">"
+      "        <SegmentTemplate></SegmentTemplate>"
+      "      </Representation></AdaptationSet></Period></MPD>";
+
+  gboolean ret;
+  GstMPDClient2 *mpdclient = gst_mpd_client2_new ();
+
+  /* XML data is invalid as per ISO/IEC 23009-1 5.3.9.2.1 */
+  ret = gst_mpd_client2_parse (mpdclient, xml, (gint) strlen (xml));
+  assert_equals_int (ret, FALSE);
+
+  gst_mpd_client2_free (mpdclient);
+}
+
+GST_END_TEST;
+
+/*
+ * Test parsing SegmentTemplate with zero timescale
+ *
+ */
+GST_START_TEST (dash_mpdparser_segmentBase_with_zero_timescale)
+{
+  const gchar *xml =
+      "<?xml version=\"1.0\"?>"
+      "<MPD xmlns=\"urn:mpeg:dash:schema:mpd:2011\""
+      "     profiles=\"urn:mpeg:dash:profile:isoff-main:2011\">"
+      "  <Period>"
+      "    <SegmentTemplate duration=\"10\""
+      "                     timescale=\"0\">"
+      "    </SegmentTemplate></Period></MPD>";
+
+  gboolean ret;
+  GstMPDClient2 *mpdclient = gst_mpd_client2_new ();
+  GstMPDPeriodNode *periodNode;
+  GstMPDSegmentTemplateNode *segmentTemplate;
+  GstMPDSegmentBaseNode *segmentBase;
+
+
+  ret = gst_mpd_client2_parse (mpdclient, xml, (gint) strlen (xml));
+  assert_equals_int (ret, TRUE);
+
+  periodNode = (GstMPDPeriodNode *) mpdclient->mpd_root_node->Periods->data;
+  segmentTemplate = periodNode->SegmentTemplate;
+  segmentBase = GST_MPD_MULT_SEGMENT_BASE_NODE (segmentTemplate)->SegmentBase;
+
+  /* 0 should get replaced with 1 in timescale */
+  assert_equals_uint64 (segmentBase->timescale, 1);
+
+  gst_mpd_client2_free (mpdclient);
+}
+
+GST_END_TEST;
+
+/*
  * create a test suite containing all dash testcases
  */
 static Suite *
@@ -6497,6 +6563,7 @@ dash_suite (void)
   tcase_add_test (tc_simpleMPD, dash_mpdparser_bitstreamSwitching_inheritance);
   tcase_add_test (tc_simpleMPD, dash_mpdparser_various_duration_formats);
   tcase_add_test (tc_simpleMPD, dash_mpdparser_default_presentation_delay);
+  tcase_add_test (tc_simpleMPD, dash_mpdparser_segmentBase_with_zero_timescale);
 
   /* tests checking the MPD management
    * (eg. setting active streams, obtaining attributes values)
@@ -6549,6 +6616,8 @@ dash_suite (void)
       dash_mpdparser_negative_mediaPresentationDuration);
   tcase_add_test (tc_negativeTests,
       dash_mpdparser_unmatched_segmentTimeline_segmentURL);
+  tcase_add_test (tc_negativeTests,
+      dash_mpdparser_representation_segmentTemplate_no_duration_or_SegmentTimeline);
 
   tcase_add_test (tc_stringTests, dash_mpdparser_whitespace_strings);
   tcase_add_test (tc_stringTests, dash_mpdparser_rfc1738_strings);

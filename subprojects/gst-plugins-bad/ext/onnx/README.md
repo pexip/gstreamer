@@ -34,3 +34,147 @@ cmake -Donnxruntime_BUILD_SHARED_LIB=ON -DBUILD_TESTING=OFF -Donnxruntime_BUILD_
 ```
 cmake -Donnxruntime_BUILD_SHARED_LIB=ON -DBUILD_TESTING=OFF -Donnxruntime_BUILD_UNIT_TESTS=OFF -Donnxruntime_USE_DNNL=ON -Donnxruntime_DNNL_GPU_RUNTIME=ocl -Donnxruntime_DNNL_OPENCL_ROOT=$SRC_DIR/OpenCL-SDK/install  $SRC_DIR/onnxruntime/cmake && make -j$(nproc) && sudo make install
 ```
+
+4. ROCm (AMD GPU)
+
+On Fedora 45+, the ROCm execution provider is available as a pre-built package:
+
+```
+sudo dnf install onnxruntime-rocm-devel
+```
+
+The ROCm onnxruntime libraries are installed to `/usr/lib64/rocm/lib/`,
+
+```
+PKG_CONFIG_PATH=/usr/lib64/rocm/lib/pkgconfig:$PKG_CONFIG_PATH \
+LD_LIBRARY_PATH=/usr/lib64/rocm/lib:$LD_LIBRARY_PATH \
+meson setup <builddir>
+```
+
+Missing abseil linkage (onnxruntime-rocm <= 1.22.2):
+`libonnxruntime_providers_rocm.so` uses abseil symbols but does not declare the dependency on
+`libabsl_raw_hash_set`. This causes a runtime error when loading the ROCm provider:
+
+Temporary hack:
+Meson sets `LD_PRELOAD` to work around this when the ROCm
+onnxruntime is detected. No manual action is required when building with meson devenv.
+
+Selecting the GPU at runtime:
+
+If the system has multiple GPUs (e.g. a discrete AMD GPU and an integrated Vega), set
+`HIP_VISIBLE_DEVICES` to select the correct device before running the pipeline:
+
+```
+export HIP_VISIBLE_DEVICES=0   # 0 = first GPU reported by rocm-smi
+```
+
+Without this, ROCm may pick the wrong device. Verify GPU usage during inference with:
+
+```
+rocm-smi --showpids
+```
+
+5. MIGraphX (AMD GPU)
+
+MIGraphX EP is not available as a pre-built package and must be compiled from source.
+
+5.1 Install MIGraphX and ROCm dependencies:
+
+```
+sudo dnf install migraphx-devel miopen-devel rocblas-devel patch
+```
+
+5.2 Clone and build onnxruntime with the MIGraphX EP:
+
+```
+git clone --recursive --branch v1.22.2 https://github.com/microsoft/onnxruntime.git
+cd onnxruntime
+./build.sh \
+    --config Release \
+    --parallel \
+    --build_shared_lib \
+    --use_migraphx \
+    --migraphx_home /usr \
+    --skip_submodule_sync \
+    --compile_no_warning_as_error \
+    --allow_running_as_root \
+    --cmake_extra_defines \
+        CMAKE_INSTALL_PREFIX=/usr/local \
+        CMAKE_INSTALL_LIBDIR=lib64
+cmake --install build/Linux/Release --prefix /usr/local
+sudo ldconfig
+```
+
+Note: `--compile_no_warning_as_error` is required on GCC 16+ due to stricter check
+`--migraphx_home /usr` matches the Fedora RPM install layout for MIGraphX.
+
+5.3 Configure GStreamer pointing to the onnxruntime install:
+
+```
+PKG_CONFIG_PATH=/usr/local/lib64/pkgconfig:$PKG_CONFIG_PATH \
+LD_LIBRARY_PATH=/usr/local/lib64:$LD_LIBRARY_PATH \
+meson setup <builddir> -Dgst-plugins-bad:onnx=enabled -Dgst-plugins-bad:onnx-require-eps=migraphx
+```
+
+When onnxruntime is detected in `/usr/local`, meson automatically sets `PKG_CONFIG_PATH`,
+`LD_LIBRARY_PATH`, and `HIP_VISIBLE_DEVICES=0` in the devenv. No manual action is required
+when building with meson devenv.
+
+5.4 Note that if `ORT_MIGRAPHX_MODEL_CACHE_PATH` is set, it overrides the
+model-cache-dir option since the env var is read directly by the MIGraphX
+implementation.
+
+6. Vitis AI (AMD NPU)
+
+Similar to MIGraphX, the Vitis AI EP is not available as a pre-built package
+and must be compiled from source. Follow steps 5.2 and 5.3 above with these
+changes:
+
+* Download and extract the RyzenAI SDK which provides the Vitis AI
+  runtime dependencies.
+* Clone onnxruntime
+* Pass `--use_vitisai` to `./build.sh`
+  - Remove the migraphx options if you don't want to build that
+* Pass `-Dgst-plugins-bad:onnx-require-eps=vitisai` to the GStreamer `meson setup`
+  command.
+
+6.1 Set the `vitisai-config-file` property to pass a Vitis AI configuration
+file to the execution provider, for example:
+
+```
+onnxinference execution-provider=vitisai \
+    vitisai-config-file=/path/to/vaip_config.json
+```
+
+7. HIP (AMD GPU, dynamically loaded EP)
+
+The HIP EP is not built into onnxruntime. It is shipped as a separate
+execution provider library and loaded dynamically at runtime, which
+requires onnxruntime >= 1.22.
+
+7.1 Install the HIP EP, then point `MORPHIZEN_EP_LIB` at the EP library
+before running the pipeline:
+
+```
+export MORPHIZEN_EP_LIB=/opt/hip-ep/lib/libhipgpu.so
+```
+
+7.2 On a multi-GPU system, select the GPU with the `device` property
+(card index, e.g. `device=1`). Without it, all detected HIP GPUs are
+passed to the EP.
+
+8. Windows ML
+
+On Windows, the plugin can be built against the Microsoft-provided ONNX Runtime
+using the onnx-winml option:
+```
+meson setup <builddir> -Dgst-plugins-bad:onnx-winml=enabled
+```
+
+Windows has its own `onnxruntime.dll` in `System32`, which is searched before
+`PATH` for unpackaged applications. Because of this, adding the Windows ML
+runtime directory to `PATH`, including via meson devenv, is not enough.
+
+For testing, copy the Windows ML `onnxruntime.dll` next to the executable being
+used, such as gst-launch-1.0.exe. Applications using the ONNX plugin need to
+deploy the Windows ML `onnxruntime.dll` next to their executable as well.

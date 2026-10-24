@@ -1068,6 +1068,16 @@ struct _GstElementClass
 
   /* request/release pads */
   /* FIXME 2.0 harmonize naming with gst_element_request_pad */
+  /**
+   * GstElementClass::request_new_pad:
+   * @element: a #GstElement to find a request pad of.
+   * @templ: a #GstPadTemplate of which we want a pad of.
+   * @name: (transfer none) (nullable): the name of the request #GstPad
+   * to retrieve.
+   * @caps: (transfer none) (nullable): the caps of the pad we want to request.
+   *
+   * Returns: (transfer none) (nullable): the requested #GstPad.
+   */
   GstPad*               (*request_new_pad)      (GstElement *element, GstPadTemplate *templ,
                                                  const gchar* name, const GstCaps *caps);
 
@@ -1140,6 +1150,12 @@ void                    gst_element_class_add_metadata          (GstElementClass
 GST_API
 void                    gst_element_class_add_static_metadata   (GstElementClass * klass,
                                                                  const gchar * key, const gchar * value);
+GST_API
+void                    gst_element_class_mark_as_untrusted_aware (GstElementClass * klass);
+
+GST_API
+gboolean                gst_element_class_is_untrusted_aware    (GstElementClass * klass);
+
 GST_API
 const gchar *           gst_element_class_get_metadata          (GstElementClass * klass,
                                                                  const gchar * key);

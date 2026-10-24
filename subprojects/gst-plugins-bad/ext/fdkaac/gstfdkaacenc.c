@@ -30,7 +30,6 @@
 
 /* TODO:
  * - Add support for other AOT / profiles
- * - Signal encoder delay
  * - LOAS / LATM support
  */
 
@@ -549,9 +548,19 @@ gst_fdkaacenc_set_format (GstAudioEncoder * enc, GstAudioInfo * info)
   gst_audio_encoder_set_frame_max (enc, 1);
   gst_audio_encoder_set_frame_samples_min (enc, enc_info.frameLength);
   gst_audio_encoder_set_frame_samples_max (enc, enc_info.frameLength);
+
+  self->encoder_delay = enc_info.nDelay;
+  gst_audio_encoder_set_latency (enc, gst_util_uint64_scale (enc_info.nDelay,
+          GST_SECOND, GST_AUDIO_INFO_RATE (info)),
+      gst_util_uint64_scale (enc_info.nDelay + enc_info.frameLength,
+          GST_SECOND, GST_AUDIO_INFO_RATE (info)));
+
   gst_audio_encoder_set_hard_min (enc, FALSE);
   self->outbuf_size = enc_info.maxOutBufBytes;
   self->samples_per_frame = enc_info.frameLength;
+  self->delay_samples = enc_info.nDelay;
+  self->samples_in = 0;
+  self->samples_out = 0;
 
   src_caps = gst_caps_new_simple ("audio/mpeg",
       "mpegversion", G_TYPE_INT, mpegversion,
@@ -611,6 +620,8 @@ gst_fdkaacenc_handle_frame (GstAudioEncoder * enc, GstBuffer * inbuf)
   gint in_id = IN_AUDIO_DATA, out_id = OUT_BITSTREAM_DATA;
   gint in_sizes, out_sizes;
   gint in_el_sizes, out_el_sizes;
+  gboolean draining = inbuf == NULL;
+  guint64 trim_start = 0, trim_end = 0;
   AACENC_ERROR err;
 
   info = gst_audio_encoder_get_audio_info (enc);
@@ -627,6 +638,7 @@ gst_fdkaacenc_handle_frame (GstAudioEncoder * enc, GstBuffer * inbuf)
     }
 
     in_args.numInSamples = imap.size / GST_AUDIO_INFO_BPS (info);
+    self->samples_in += imap.size / GST_AUDIO_INFO_BPF (info);
 
     in_sizes = imap.size;
     in_el_sizes = GST_AUDIO_INFO_BPS (info);
@@ -685,7 +697,41 @@ gst_fdkaacenc_handle_frame (GstAudioEncoder * enc, GstBuffer * inbuf)
   gst_buffer_unmap (outbuf, &omap);
   gst_buffer_set_size (outbuf, out_args.numOutBytes);
 
-  ret = gst_audio_encoder_finish_frame (enc, outbuf, self->samples_per_frame);
+  self->samples_out += self->samples_per_frame;
+
+  /* Report the non-priming sample count to the base class for correct
+   * timestamps, and record the priming samples (and, when draining, the
+   * padding added to fill the last frame) as clipping meta so muxers can take
+   * them into account. */
+  gint nsamples;
+  if (self->encoder_delay >= self->samples_per_frame) {
+    nsamples = 0;
+    trim_start = self->samples_per_frame;
+    self->encoder_delay -= self->samples_per_frame;
+  } else if (self->encoder_delay) {
+    nsamples = self->samples_per_frame - self->encoder_delay;
+    trim_start = self->encoder_delay;
+    self->encoder_delay = 0;
+  } else {
+    nsamples = self->samples_per_frame;
+  }
+
+  if (draining) {
+    guint64 valid_samples = self->samples_in + self->delay_samples;
+
+    if (self->samples_out > valid_samples)
+      trim_end = MIN (self->samples_per_frame,
+          self->samples_out - valid_samples);
+  }
+
+  if (trim_start || trim_end) {
+    GST_DEBUG_OBJECT (self, "Adding clipping meta: start %" G_GUINT64_FORMAT
+        " end %" G_GUINT64_FORMAT, trim_start, trim_end);
+    gst_buffer_add_audio_clipping_meta (outbuf, GST_FORMAT_DEFAULT, trim_start,
+        trim_end);
+  }
+
+  ret = gst_audio_encoder_finish_frame (enc, outbuf, nsamples);
   outbuf = NULL;
 
 out:
@@ -723,6 +769,7 @@ gst_fdkaacenc_init (GstFdkAacEnc * self)
   self->enc = NULL;
   self->is_drained = TRUE;
   self->afterburner = FALSE;
+  self->encoder_delay = 0;
   self->peak_bitrate = DEFAULT_PEAK_BITRATE;
   self->rate_control = DEFAULT_RATE_CONTROL;
   self->vbr_preset = DEFAULT_VBR_PRESET;

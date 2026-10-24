@@ -125,8 +125,8 @@ _check_sdp_crypto (SDPSource source, GstWebRTCSessionDescription * sdp,
     if (direction == GST_WEBRTC_RTP_TRANSCEIVER_DIRECTION_INACTIVE)
       continue;
 
-    if (!IS_EMPTY_SDP_ATTRIBUTE (message_fingerprint)
-        && !IS_EMPTY_SDP_ATTRIBUTE (media_fingerprint)) {
+    if (IS_EMPTY_SDP_ATTRIBUTE (message_fingerprint)
+        && IS_EMPTY_SDP_ATTRIBUTE (media_fingerprint)) {
       g_set_error (error, GST_WEBRTC_ERROR,
           GST_WEBRTC_ERROR_FINGERPRINT_FAILURE,
           "No fingerprint lines in sdp for media %u", i);
@@ -437,6 +437,8 @@ _get_kind_from_media (const GstSDPMedia * media)
     kind = GST_WEBRTC_KIND_AUDIO;
   else if (!g_strcmp0 (gst_sdp_media_get_media (media), "video"))
     kind = GST_WEBRTC_KIND_VIDEO;
+  else if (!g_strcmp0 (gst_sdp_media_get_media (media), "application"))
+    kind = GST_WEBRTC_KIND_APPLICATION;
   return kind;
 }
 
@@ -749,6 +751,52 @@ _generate_fingerprint_from_certificate (gchar * certificate,
   return g_string_free (fingerprint, FALSE);
 }
 
+static char *
+parse_fingerprint (const char *fingerprint, GChecksumType * checksum)
+{
+  const char *loc = g_strstr_len (fingerprint, -1, " ");
+  if (!loc)
+    return NULL;
+
+  char *checksum_s = g_strndup (fingerprint, loc - fingerprint);
+  GChecksumType our_checksum = _g_checksum_from_webrtc_string (checksum_s);
+  g_clear_pointer (&checksum_s, g_free);
+
+  if (!our_checksum)
+    return NULL;
+
+  if (!loc || loc[0] == '\0')
+    return NULL;
+
+  *checksum = our_checksum;
+  return g_strdup (&loc[1]);
+}
+
+gchar *
+_get_fingerprint_from_sdp_media (GstSDPMessage * sdp, guint media_idx,
+    GChecksumType * checksum_type)
+{
+  {
+    /* search in the corresponding media section */
+    const GstSDPMedia *media = gst_sdp_message_get_media (sdp, media_idx);
+    const gchar *fp = gst_sdp_media_get_attribute_val (media, "fingerprint");
+    if (fp) {
+      return parse_fingerprint (fp, checksum_type);
+    }
+  }
+
+  /* then in the sdp message itself */
+  for (int i = 0; i < gst_sdp_message_attributes_len (sdp); i++) {
+    const GstSDPAttribute *attr = gst_sdp_message_get_attribute (sdp, i);
+
+    if (g_strcmp0 (attr->key, "fingerprint") == 0) {
+      return parse_fingerprint (attr->value, checksum_type);
+    }
+  }
+
+  return NULL;
+}
+
 #define DEFAULT_ICE_UFRAG_LEN 32
 #define DEFAULT_ICE_PASSWORD_LEN 32
 static const gchar *ice_credential_chars =
@@ -855,6 +903,12 @@ _message_media_is_datachannel (const GstSDPMessage * msg, guint media_id)
 
   media = gst_sdp_message_get_media (msg, media_id);
 
+  return _media_is_datachannel (media);
+}
+
+gboolean
+_media_is_datachannel (const GstSDPMedia * media)
+{
   if (g_strcmp0 (gst_sdp_media_get_media (media), "application") != 0)
     return FALSE;
 

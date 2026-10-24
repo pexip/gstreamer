@@ -124,6 +124,7 @@ gst_accurip_class_init (GstAccuripClass * klass)
       "AccurateRip(TM) CRC element",
       "Filter/Analyzer/Audio",
       "Computes an AccurateRip CRC", "Christophe Fergeau <teuf@gnome.org>");
+  gst_element_class_mark_as_untrusted_aware (GST_ELEMENT_CLASS (klass));
 
   caps = gst_caps_from_string (PAD_CAPS);
   gst_audio_filter_class_add_pad_templates (GST_AUDIO_FILTER_CLASS (klass),
@@ -368,6 +369,7 @@ accurip_element_init (GstPlugin * plugin)
 static gboolean
 plugin_init (GstPlugin * plugin)
 {
+  gst_plugin_set_static_features_flag (plugin);
   return GST_ELEMENT_REGISTER (accurip, plugin);
 }
 

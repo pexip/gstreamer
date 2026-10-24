@@ -6,6 +6,9 @@ gst_allocators_headers = files([
   'gstdmabuf.h',
   'gstdrmdumb.h',
   'gstshmallocator.h',
+  'gstudmabufallocator.h',
+  'gstahardwarebuffer.h',
+  'gstiosurface.h',
 ])
 install_headers(gst_allocators_headers, subdir : 'gstreamer-1.0/gst/allocators/')
 
@@ -15,6 +18,9 @@ gst_allocators_sources = files([
   'gstfdmemory.c',
   'gstphysmemory.c',
   'gstshmallocator.c',
+  'gstudmabufallocator.c',
+  'gstahardwarebuffer.c',
+  'gstiosurface.c',
 ])
 
 doc_sources = []
@@ -40,6 +46,12 @@ if cc.has_function('memfd_create')
 elif cc.has_function('shm_open')
   gst_allocators_cargs += [
     '-DHAVE_SHM_OPEN',
+  ]
+endif
+
+if cc.has_function('getpagesize')
+  gst_allocators_cargs += [
+    '-DHAVE_GETPAGESIZE',
   ]
 endif
 

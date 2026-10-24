@@ -1343,8 +1343,9 @@ load_egl_module (gpointer user_data)
 #else
   /* On Linux the .so is only in -dev packages, try with a real soname
    * Proper compilers will optimize away the strcmp */
-  if (g_strcmp0 (G_MODULE_SUFFIX, "so") == 0)
-    module_egl = g_module_open ("libEGL.so.1", G_MODULE_BIND_LAZY);
+#ifdef __linux__
+  module_egl = g_module_open ("libEGL.so.1", G_MODULE_BIND_LAZY);
+#endif
 
   /* This automatically handles the suffix and even .la files */
   if (!module_egl)
@@ -1539,9 +1540,6 @@ static void
 _print_all_dma_formats (GstGLContext * context, GArray * dma_formats)
 {
 #ifndef GST_DISABLE_GST_DEBUG
-  GstGLDmaFormat *dma_fmt;
-  GstGLDmaModifier *dma_modifier;
-  const gchar *fmt_str, *gst_fmt_str;
   GString *str;
   guint i, j;
 
@@ -1557,22 +1555,24 @@ _print_all_dma_formats (GstGLContext * context, GArray * dma_formats)
       "========================|");
 
   for (i = 0; i < dma_formats->len; i++) {
-    dma_fmt = &g_array_index (dma_formats, GstGLDmaFormat, i);
+    GstGLDmaFormat *dma_fmt = &g_array_index (dma_formats, GstGLDmaFormat, i);
 
-    gst_fmt_str = gst_video_format_to_string
+    const gchar *gst_fmt_str = gst_video_format_to_string
         (gst_video_dma_drm_format_to_gst_format (dma_fmt->fourcc, 0));
 
     g_string_append_printf (str, "\n");
 
     if (!dma_fmt->modifiers) {
-      fmt_str = gst_video_dma_drm_fourcc_to_string (dma_fmt->fourcc, 0);
+      gchar *fmt_str = gst_video_dma_drm_fourcc_to_string (dma_fmt->fourcc, 0);
       g_string_append_printf (str, "| %-12s |", gst_fmt_str);
       g_string_append_printf (str, " %-23s |", fmt_str);
       g_string_append_printf (str, " %-13s |\n", "external only");
+      g_free (fmt_str);
     } else {
       for (j = 0; j < dma_fmt->modifiers->len; j++) {
         GstVideoFormat gst_fmt;
-        dma_modifier = &g_array_index (dma_fmt->modifiers, GstGLDmaModifier, j);
+        GstGLDmaModifier *dma_modifier =
+            &g_array_index (dma_fmt->modifiers, GstGLDmaModifier, j);
 
         gst_fmt = gst_video_dma_drm_format_to_gst_format (dma_fmt->fourcc,
             dma_modifier->modifier);
@@ -1583,12 +1583,13 @@ _print_all_dma_formats (GstGLContext * context, GArray * dma_formats)
         else
           g_string_append_printf (str, "| %-12s |", gst_fmt_str);
 
-        fmt_str = gst_video_dma_drm_fourcc_to_string (dma_fmt->fourcc,
+        gchar *fmt_str = gst_video_dma_drm_fourcc_to_string (dma_fmt->fourcc,
             dma_modifier->modifier);
 
         g_string_append_printf (str, " %-23s |", fmt_str);
         g_string_append_printf (str, " %-13s |\n", dma_modifier->external_only ?
             "external only" : "");
+        g_free (fmt_str);
       }
     }
 
@@ -1837,8 +1838,6 @@ gst_gl_context_egl_get_format_modifiers (GstGLContext * context, gint fourcc,
     goto beach;
 
   format = &g_array_index (egl->dma_formats, GstGLDmaFormat, index);
-  if (!format)
-    goto beach;
 
   *modifiers = format->modifiers;
   ret = TRUE;
@@ -1922,13 +1921,24 @@ gst_gl_context_egl_append_all_drm_formats (GstGLContext * context,
   if (!egl->dma_formats)
     goto beach;
 
-  for (gint i = 0; i < egl->dma_formats->len; i++) {
+  for (guint i = 0; i < egl->dma_formats->len; i++) {
     GstGLDmaFormat *format;
+    GstGLDmaModifier *mods, linear_modifier = { 0, FALSE };
+    guint len;
+
     format = &g_array_index (egl->dma_formats, GstGLDmaFormat, i);
 
-    for (gint j = 0; j < format->modifiers->len; j++) {
+    if (format->modifiers) {
+      mods = (GstGLDmaModifier *) format->modifiers->data;
+      len = format->modifiers->len;
+    } else {
+      mods = &linear_modifier;
+      len = 1;
+    }
+
+    for (guint j = 0; j < len; j++) {
       GstGLDmaModifier *modifier;
-      modifier = &g_array_index (format->modifiers, GstGLDmaModifier, j);
+      modifier = &mods[j];
 
       if (modifier->external_only && !include_external)
         continue;

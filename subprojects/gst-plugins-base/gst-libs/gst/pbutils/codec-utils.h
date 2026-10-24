@@ -54,6 +54,32 @@ gboolean      gst_codec_utils_aac_caps_set_level_and_profile (GstCaps      * cap
 
 /* H.264 */
 
+/**
+ * GstH264LevelLimits:
+ * @name: the level name (e.g. "3.1", "4", "4.2")
+ * @level_idc: the level_idc value
+ * @max_mbps: maximum macroblock processing rate (MB/s)
+ * @max_fs: maximum frame size (MB)
+ * @max_dpb_mbs: maximum decoded picture buffer size (MB)
+ * @max_br: maximum video bit rate (kbps)
+ * @max_cpb: maximum CPB size (kbits)
+ * @min_cr: minimum compression ratio
+ *
+ * H.264 level limits from Table A-1 of the specification.
+ *
+ * Since: 1.30
+ */
+typedef struct {
+  const gchar *name;
+  guint8 level_idc;
+  guint32 max_mbps;
+  guint32 max_fs;
+  guint32 max_dpb_mbs;
+  guint32 max_br;
+  guint32 max_cpb;
+  guint32 min_cr;
+} GstH264LevelLimits;
+
 GST_PBUTILS_API
 const gchar * gst_codec_utils_h264_get_profile (const guint8 * sps, guint len);
 
@@ -74,6 +100,15 @@ gboolean      gst_codec_utils_h264_get_profile_flags_level (const guint8 * codec
                                                             guint8 * profile,
                                                             guint8 * flags,
                                                             guint8 * level);
+
+GST_PBUTILS_API
+const GstH264LevelLimits * gst_codec_utils_h264_get_level_limits (gint         width,
+                                                                  gint         height,
+                                                                  gint         fps_n,
+                                                                  gint         fps_d,
+                                                                  guint        bitrate,
+                                                                  guint        max_dec_frame_buffering,
+                                                                  guint8       profile_idc);
 
 /* H.265 */
 
@@ -118,6 +153,17 @@ GST_PBUTILS_API
 gboolean      gst_codec_utils_h266_caps_set_level_tier_and_profile (GstCaps      * caps,
                                                                     const guint8 * decoder_configuration,
                                                                     guint          len);
+
+/* VP9 */
+
+GST_PBUTILS_API
+const gchar * gst_codec_utils_vp9_get_level (guint8 level_idc);
+
+GST_PBUTILS_API
+guint8 gst_codec_utils_vp9_get_level_idc                (const gchar * level);
+
+GST_PBUTILS_API
+guint8 gst_codec_utils_vp9_estimate_level_idc_from_caps (const GstCaps * caps);
 
 /* AV1 */
 
@@ -182,6 +228,29 @@ gboolean  gst_codec_utils_opus_parse_header (GstBuffer * header,
                                              guint8      channel_mapping[256],
                                              guint16   * pre_skip,
                                              gint16    * output_gain);
+
+/* VP8 / VP9 */
+GST_PBUTILS_API
+gboolean gst_codec_utils_vpx_caps_set_format_fields (GstCaps * caps,
+                                                     gint      profile,
+                                                     gint      level,
+                                                     gint      bit_depth,
+                                                     gint      chroma_subsampling);
+
+GST_PBUTILS_API
+gboolean gst_codec_utils_vpx_caps_get_config (GstCaps  * caps,
+                                              gint     * vpx_version,
+                                              guint8   * profile,
+                                              guint8   * level,
+                                              guint8   * bit_depth,
+                                              guint8   * chroma_subsampling,
+                                              gboolean * video_full_range,
+                                              guint8   * colour_primaries,
+                                              guint8   * transfer_characteristics,
+                                              guint8   * matrix_coefficients);
+
+GST_PBUTILS_API
+GstBuffer * gst_codec_utils_vpx_create_vpcc_from_caps (GstCaps *caps);
 
 /* AV1 */
 GST_PBUTILS_API

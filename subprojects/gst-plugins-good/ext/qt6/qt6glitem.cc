@@ -71,6 +71,8 @@ struct _Qt6GLVideoItemPrivate
   GstBuffer *buffer;
   GstCaps *new_caps;
   GstCaps *caps;
+  gboolean caps_change;
+
   GstVideoInfo new_v_info;
   GstVideoInfo v_info;
   GstVideoRectangle v_rect;
@@ -326,6 +328,7 @@ Qt6GLVideoItem::updatePaintNode(QSGNode * oldNode,
         QSGTexture::Filtering::Nearest);
     texNode->setMaterial(tex);
     texNode->setFlag(QSGGeometryNode::OwnsMaterial);
+    this->priv->caps_change = TRUE;
   }
 
   if ((old_buffer = tex->getBuffer(&was_bound))) {
@@ -335,6 +338,7 @@ Qt6GLVideoItem::updatePaintNode(QSGNode * oldNode,
     } else if (!was_bound) {
       GST_TRACE ("old buffer %p was not bound yet, unreffing", old_buffer);
       gst_buffer_unref (old_buffer);
+      texNode->markDirty(QSGNode::DirtyMaterial);
     } else {
       texNode->markDirty(QSGNode::DirtyMaterial);
 
@@ -361,7 +365,10 @@ Qt6GLVideoItem::updatePaintNode(QSGNode * oldNode,
     old_buffer = NULL;
   }
 
-  tex->setCaps (this->priv->caps);
+  if (this->priv->caps_change) {
+    tex->setCaps (this->priv->caps);
+    this->priv->caps_change = FALSE;
+  }
   tex->setBuffer (this->priv->buffer);
 
   if (this->priv->force_aspect_ratio && this->priv->caps) {
@@ -700,6 +707,7 @@ Qt6GLVideoItemInterface::setBuffer (GstBuffer * buffer)
     GST_DEBUG ("%p caps change from %" GST_PTR_FORMAT " to %" GST_PTR_FORMAT,
         this, qt_item->priv->caps, qt_item->priv->new_caps);
     gst_caps_take (&qt_item->priv->caps, qt_item->priv->new_caps);
+    qt_item->priv->caps_change = TRUE;
     qt_item->priv->new_caps = NULL;
     qt_item->priv->v_info = qt_item->priv->new_v_info;
 
@@ -859,13 +867,18 @@ Qt6GLVideoItemInterface::setCaps (GstCaps * caps)
   if (qt_item == NULL)
     return FALSE;
 
-  if (qt_item->priv->caps && gst_caps_is_equal_fixed (qt_item->priv->caps, caps))
-    return TRUE;
-
-  if (!gst_video_info_from_caps (&v_info, caps))
-    return FALSE;
-
   g_mutex_lock (&qt_item->priv->lock);
+
+  GstCaps *current_caps = qt_item->priv->new_caps ? qt_item->priv->new_caps : qt_item->priv->caps;
+  if (current_caps && gst_caps_is_equal_fixed (current_caps, caps)) {
+    g_mutex_unlock (&qt_item->priv->lock);
+    return TRUE;
+  }
+
+  if (!gst_video_info_from_caps (&v_info, caps)) {
+    g_mutex_unlock (&qt_item->priv->lock);
+    return FALSE;
+  }
 
   GST_DEBUG ("%p set caps %" GST_PTR_FORMAT, qt_item, caps);
 

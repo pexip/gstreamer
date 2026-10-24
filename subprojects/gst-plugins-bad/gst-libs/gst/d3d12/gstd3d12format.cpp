@@ -206,11 +206,11 @@ struct FormatBuilder : public GstD3D12Format
       GstVideoFormat Format
     )
   {
-    DXGI_FORMAT resource_format[] = { DXGI_FORMAT_UNKNOWN, DXGI_FORMAT_UNKNOWN,
-        DXGI_FORMAT_UNKNOWN, DXGI_FORMAT_UNKNOWN };
-    return FormatBuilder (Format, GST_D3D12_FORMAT_FLAG_NONE,
+    DXGI_FORMAT resource_format[] = { DXGI_FORMAT_R32_TYPELESS,
+        DXGI_FORMAT_UNKNOWN, DXGI_FORMAT_UNKNOWN, DXGI_FORMAT_UNKNOWN };
+    return FormatBuilder (Format, GST_D3D12_FORMAT_FLAG_OUTPUT_UAV,
         D3D12_RESOURCE_DIMENSION_BUFFER, DXGI_FORMAT_UNKNOWN, resource_format,
-        D3D12_FORMAT_SUPPORT1_NONE, D3D12_FORMAT_SUPPORT2_NONE);
+        D3D12_FORMAT_SUPPORT1_BUFFER, D3D12_FORMAT_SUPPORT2_NONE);
   }
 };
 
@@ -241,10 +241,8 @@ static const GstD3D12Format g_format_map[] = {
       DXGI_FORMAT_R8G8B8A8_UNORM),
   FormatBuilder::RgbPacked (GST_VIDEO_FORMAT_ABGR,
       DXGI_FORMAT_R8G8B8A8_UNORM),
-  FormatBuilder::YuvPacked (GST_VIDEO_FORMAT_RGB,
-      DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_FORMAT_R8G8B8A8_UNORM),
-  FormatBuilder::YuvPacked (GST_VIDEO_FORMAT_BGR,
-      DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_FORMAT_R8G8B8A8_UNORM),
+  FormatBuilder::Buffer (GST_VIDEO_FORMAT_RGB),
+  FormatBuilder::Buffer (GST_VIDEO_FORMAT_BGR),
   FormatBuilder::Planar (GST_VIDEO_FORMAT_Y41B),
   FormatBuilder::Planar (GST_VIDEO_FORMAT_Y42B),
   FormatBuilder::YuvPacked (GST_VIDEO_FORMAT_YVYU,
@@ -273,12 +271,12 @@ static const GstD3D12Format g_format_map[] = {
       DXGI_FORMAT_B5G5R5A1_UNORM),
   FormatBuilder::RgbPacked (GST_VIDEO_FORMAT_BGR15,
       DXGI_FORMAT_B5G5R5A1_UNORM),
-  FormatBuilder::Buffer (GST_VIDEO_FORMAT_UYVP),
+  FormatBuilder::NotSupported (GST_VIDEO_FORMAT_UYVP),
   FormatBuilder::PlanarFull (GST_VIDEO_FORMAT_A420),
-  FormatBuilder::Buffer (GST_VIDEO_FORMAT_RGB8P),
+  FormatBuilder::NotSupported (GST_VIDEO_FORMAT_RGB8P),
   FormatBuilder::Planar (GST_VIDEO_FORMAT_YUV9),
   FormatBuilder::Planar (GST_VIDEO_FORMAT_YVU9),
-  FormatBuilder::Buffer (GST_VIDEO_FORMAT_IYU1),
+  FormatBuilder::NotSupported (GST_VIDEO_FORMAT_IYU1),
   FormatBuilder::RgbPacked (GST_VIDEO_FORMAT_ARGB64,
       DXGI_FORMAT_R16G16B16A16_UNORM),
   FormatBuilder::RgbPacked (GST_VIDEO_FORMAT_AYUV64,
@@ -427,6 +425,37 @@ static const GstD3D12Format g_format_map[] = {
   FormatBuilder::YuvPacked (GST_VIDEO_FORMAT_Y416_LE,
       DXGI_FORMAT_Y416, DXGI_FORMAT_R16G16B16A16_UNORM),
   FormatBuilder::NotSupported(GST_VIDEO_FORMAT_Y416_BE),
+  FormatBuilder::NotSupported(GST_VIDEO_FORMAT_GRAY10_LE16),
+  FormatBuilder::NotSupported(GST_VIDEO_FORMAT_NV16_10LE40),
+  FormatBuilder::NotSupported(GST_VIDEO_FORMAT_BGR10x2_LE),
+  FormatBuilder::NotSupported(GST_VIDEO_FORMAT_RGB10x2_LE),
+  FormatBuilder::NotSupported(GST_VIDEO_FORMAT_AHARDWARE_BUFFER),
+  FormatBuilder::RgbPacked(GST_VIDEO_FORMAT_RGBA_F16LE,
+      DXGI_FORMAT_R16G16B16A16_FLOAT),
+  FormatBuilder::NotSupported(GST_VIDEO_FORMAT_RGBA_F16BE),
+  FormatBuilder::RgbPacked(GST_VIDEO_FORMAT_RGBA_F32LE,
+      DXGI_FORMAT_R32G32B32A32_FLOAT),
+  FormatBuilder::NotSupported(GST_VIDEO_FORMAT_RGBA_F32BE),
+  FormatBuilder::RgbPacked(GST_VIDEO_FORMAT_ARGB_F32,
+      DXGI_FORMAT_R32G32B32A32_FLOAT),
+  FormatBuilder::Planar (GST_VIDEO_FORMAT_RGBP_F16LE,
+      DXGI_FORMAT_R16_FLOAT),
+  FormatBuilder::NotSupported(GST_VIDEO_FORMAT_RGBP_F16BE),
+  FormatBuilder::Planar (GST_VIDEO_FORMAT_RGBP_F32LE,
+      DXGI_FORMAT_R32_FLOAT),
+  FormatBuilder::NotSupported(GST_VIDEO_FORMAT_RGBP_F32BE),
+  FormatBuilder::Buffer (GST_VIDEO_FORMAT_RGB_F16LE),
+  FormatBuilder::NotSupported(GST_VIDEO_FORMAT_RGB_F16BE),
+  FormatBuilder::Buffer (GST_VIDEO_FORMAT_RGB_F32LE),
+  FormatBuilder::NotSupported(GST_VIDEO_FORMAT_RGB_F32BE),
+  FormatBuilder::RgbPacked (GST_VIDEO_FORMAT_AYUV_F32,
+      DXGI_FORMAT_R32G32B32A32_FLOAT),
+  FormatBuilder::Gray (GST_VIDEO_FORMAT_GRAY_F16LE,
+      DXGI_FORMAT_R16_FLOAT),
+  FormatBuilder::NotSupported(GST_VIDEO_FORMAT_GRAY_F16BE),
+  FormatBuilder::Gray (GST_VIDEO_FORMAT_GRAY_F32LE,
+      DXGI_FORMAT_R32_FLOAT),
+  FormatBuilder::NotSupported(GST_VIDEO_FORMAT_GRAY_F32BE),
 };
 /* *INDENT-ON* */
 
@@ -454,6 +483,10 @@ gst_d3d12_dxgi_format_to_gst (DXGI_FORMAT format)
       return GST_VIDEO_FORMAT_P010_10LE;
     case DXGI_FORMAT_P016:
       return GST_VIDEO_FORMAT_P016_LE;
+    case DXGI_FORMAT_R16G16B16A16_FLOAT:
+      return GST_VIDEO_FORMAT_RGBA_F16LE;
+    case DXGI_FORMAT_R32G32B32A32_FLOAT:
+      return GST_VIDEO_FORMAT_RGBA_F32LE;
     default:
       break;
   }
@@ -651,10 +684,12 @@ gst_d3d12_color_range_adjust_matrix_unorm (const GstVideoInfo * in_info,
     const GstVideoInfo * out_info, GstD3D12ColorMatrix * matrix)
 {
   gboolean in_rgb, out_rgb;
-  gint in_offset[GST_VIDEO_MAX_COMPONENTS];
-  gint in_scale[GST_VIDEO_MAX_COMPONENTS];
-  gint out_offset[GST_VIDEO_MAX_COMPONENTS];
-  gint out_scale[GST_VIDEO_MAX_COMPONENTS];
+  gdouble in_offset[GST_VIDEO_MAX_COMPONENTS];
+  gdouble in_scale[GST_VIDEO_MAX_COMPONENTS];
+  gdouble out_offset[GST_VIDEO_MAX_COMPONENTS];
+  gdouble out_scale[GST_VIDEO_MAX_COMPONENTS];
+  gdouble in_depth[GST_VIDEO_MAX_COMPONENTS];
+  gdouble out_depth[GST_VIDEO_MAX_COMPONENTS];
   GstVideoColorRange in_range;
   GstVideoColorRange out_range;
   gdouble src_fullscale, dst_fullscale;
@@ -698,12 +733,13 @@ gst_d3d12_color_range_adjust_matrix_unorm (const GstVideoInfo * in_info,
       out_range = GST_VIDEO_COLOR_RANGE_16_235;
   }
 
-  src_fullscale = (gdouble) ((1 << in_info->finfo->depth[0]) - 1);
-  dst_fullscale = (gdouble) ((1 << out_info->finfo->depth[0]) - 1);
+  gst_video_color_range_offsets_full (in_range,
+      in_info->finfo, in_offset, in_scale, in_depth);
+  gst_video_color_range_offsets_full (out_range,
+      out_info->finfo, out_offset, out_scale, out_depth);
 
-  gst_video_color_range_offsets (in_range, in_info->finfo, in_offset, in_scale);
-  gst_video_color_range_offsets (out_range,
-      out_info->finfo, out_offset, out_scale);
+  src_fullscale = in_depth[0];
+  dst_fullscale = out_depth[0];
 
   matrix->min[0] = matrix->min[1] = matrix->min[2] =
       (gdouble) out_offset[0] / dst_fullscale;
@@ -772,7 +808,7 @@ gboolean
 gst_d3d12_yuv_to_rgb_matrix_unorm (const GstVideoInfo * in_yuv_info,
     const GstVideoInfo * out_rgb_info, GstD3D12ColorMatrix * matrix)
 {
-  gint offset[4], scale[4];
+  gdouble offset[4], scale[4], depth[4];
   gdouble Kr, Kb, Kg;
 
   g_return_val_if_fail (in_yuv_info != nullptr, FALSE);
@@ -863,12 +899,12 @@ gst_d3d12_yuv_to_rgb_matrix_unorm (const GstVideoInfo * in_yuv_info,
   for (guint i = 0; i < 3; i++)
     matrix->max[i] = 1.0;
 
-  gst_video_color_range_offsets (in_yuv_info->colorimetry.range,
-      in_yuv_info->finfo, offset, scale);
+  gst_video_color_range_offsets_full (in_yuv_info->colorimetry.range,
+      in_yuv_info->finfo, offset, scale, depth);
 
   if (gst_video_color_matrix_get_Kr_Kb (in_yuv_info->colorimetry.matrix,
           &Kr, &Kb)) {
-    guint S;
+    gdouble S;
     gdouble Sy, Suv;
     gdouble Oy, Ouv;
     gdouble vecR[3], vecG[3], vecB[3];
@@ -888,7 +924,7 @@ gst_d3d12_yuv_to_rgb_matrix_unorm (const GstVideoInfo * in_yuv_info,
     vecB[2] = 0;
 
     /* Assume all components has the same bitdepth */
-    S = (1 << in_yuv_info->finfo->depth[0]) - 1;
+    S = depth[0];
     Sy = (gdouble) S / scale[0];
     Suv = (gdouble) S / scale[1];
     Oy = -((gdouble) offset[0] / scale[0]);
@@ -973,7 +1009,7 @@ gboolean
 gst_d3d12_rgb_to_yuv_matrix_unorm (const GstVideoInfo * in_rgb_info,
     const GstVideoInfo * out_yuv_info, GstD3D12ColorMatrix * matrix)
 {
-  gint offset[4], scale[4];
+  gdouble offset[4], scale[4], depth[4];
   gdouble Kr, Kb, Kg;
 
   g_return_val_if_fail (in_rgb_info != nullptr, FALSE);
@@ -1042,12 +1078,12 @@ gst_d3d12_rgb_to_yuv_matrix_unorm (const GstVideoInfo * in_rgb_info,
   for (guint i = 0; i < 3; i++)
     matrix->max[i] = 1.0;
 
-  gst_video_color_range_offsets (out_yuv_info->colorimetry.range,
-      out_yuv_info->finfo, offset, scale);
+  gst_video_color_range_offsets_full (out_yuv_info->colorimetry.range,
+      out_yuv_info->finfo, offset, scale, depth);
 
   if (gst_video_color_matrix_get_Kr_Kb (out_yuv_info->colorimetry.matrix,
           &Kr, &Kb)) {
-    guint S;
+    gdouble S;
     gdouble Sy, Suv;
     gdouble Oy, Ouv;
     gdouble vecY[3], vecU[3], vecV[3];
@@ -1067,7 +1103,7 @@ gst_d3d12_rgb_to_yuv_matrix_unorm (const GstVideoInfo * in_rgb_info,
     vecV[2] = -0.5 * Kb / (1 - Kr);
 
     /* Assume all components has the same bitdepth */
-    S = (1 << out_yuv_info->finfo->depth[0]) - 1;
+    S = depth[0];
     Sy = (gdouble) scale[0] / S;
     Suv = (gdouble) scale[1] / S;
     Oy = (gdouble) offset[0] / S;

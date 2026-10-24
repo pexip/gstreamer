@@ -280,6 +280,10 @@ gst_mpdparser_parse_seg_base_type_ext (GstMPDSegmentBaseNode ** pointer,
   GST_LOG ("attributes of SegmentBaseType extension:");
   if (gst_xml_helper_get_prop_unsigned_integer (a_node, "timescale", 1,
           &intval)) {
+    if (intval == 0) {
+      GST_WARNING ("SegmentBase timescale can not be 0, using 1 instead");
+      intval = 1;
+    }
     seg_base_type->timescale = intval;
   }
   if (gst_xml_helper_get_prop_unsigned_integer_64 (a_node,
@@ -418,6 +422,7 @@ gst_mpdparser_parse_mult_seg_base_node (GstMPDMultSegmentBaseNode *
   if (xmlStrcmp (a_node->parent->name, (xmlChar *) "Representation") == 0
       && !has_duration && !has_timeline) {
     GST_ERROR ("segment has neither duration nor timeline");
+    return FALSE;
   }
 
   return TRUE;

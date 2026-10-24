@@ -417,7 +417,11 @@ rtp_source_reset (RTPSource * src)
   src->bye_reason = NULL;
   src->sent_bye = FALSE;
   g_hash_table_remove_all (src->reported_in_sr_of);
+
+  g_mutex_lock (&src->received_rr_lock);
   g_hash_table_remove_all (src->received_rr);
+  g_mutex_unlock (&src->received_rr_lock);
+
   g_queue_foreach (src->retained_feedback, (GFunc) gst_buffer_unref, NULL);
   g_queue_clear (src->retained_feedback);
   src->last_rtptime = -1;
@@ -446,6 +450,9 @@ rtp_source_reset (RTPSource * src)
   src->stats.sent_fir_count = 0;
   src->stats.sent_nack_count = 0;
   src->stats.recv_nack_count = 0;
+
+  g_hash_table_remove_all (src->csrcs);
+  g_queue_clear (&src->csrc_queue);
 }
 
 static void
@@ -474,14 +481,19 @@ rtp_source_init (RTPSource * src)
   src->nack_deadlines = g_array_new (FALSE, FALSE, sizeof (GstClockTime));
 
   src->reported_in_sr_of = g_hash_table_new (g_direct_hash, g_direct_equal);
+  g_mutex_init (&src->received_rr_lock);
   src->received_rr =
       g_hash_table_new_full (g_direct_hash, g_direct_equal, NULL, g_free);
 
   src->last_keyframe_request = GST_CLOCK_TIME_NONE;
 
+  src->csrcs = g_hash_table_new (g_direct_hash, g_direct_equal);
+  g_queue_init (&src->csrc_queue);
+
   rtp_source_reset (src);
 
   src->pt_set = FALSE;
+  src->lru_link = NULL;
 }
 
 void
@@ -521,7 +533,14 @@ rtp_source_finalize (GObject * object)
     g_object_unref (src->rtcp_from);
 
   g_hash_table_unref (src->reported_in_sr_of);
+
+  g_mutex_lock (&src->received_rr_lock);
   g_hash_table_unref (src->received_rr);
+  g_mutex_unlock (&src->received_rr_lock);
+  g_mutex_clear (&src->received_rr_lock);
+
+  g_hash_table_unref (src->csrcs);
+  g_queue_clear (&src->csrc_queue);
 
   G_OBJECT_CLASS (rtp_source_parent_class)->finalize (object);
 }
@@ -585,7 +604,9 @@ rtp_source_get_rr_stats (RTPSource * src, GstStructure * s)
 {
   GValue rr_list = G_VALUE_INIT;
   g_value_init (&rr_list, GST_TYPE_LIST);
+  g_mutex_lock (&src->received_rr_lock);
   g_hash_table_foreach (src->received_rr, (GHFunc) _create_rr_entry, &rr_list);
+  g_mutex_unlock (&src->received_rr_lock);
 
   gst_structure_take_value (s, "received-rr", &rr_list);
 }
@@ -856,12 +877,13 @@ rtp_source_get_property (GObject * object, guint prop_id,
  * Returns: a new #RTPSource. Use g_object_unref() after usage.
  */
 RTPSource *
-rtp_source_new (guint32 ssrc)
+rtp_source_new (guint32 ssrc, guint max_csrcs)
 {
   RTPSource *src;
 
   src = g_object_new (RTP_TYPE_SOURCE, NULL);
   src->ssrc = ssrc;
+  src->max_csrcs = max_csrcs;
 
   return src;
 }
@@ -908,16 +930,97 @@ rtp_source_get_ssrc (RTPSource * src)
 /**
  * rtp_source_set_as_csrc:
  * @src: an #RTPSource
+ * @ssrc: the SSRC this source is a contributor to
  *
  * Configure @src as a CSRC, this will also validate @src.
  */
 void
-rtp_source_set_as_csrc (RTPSource * src)
+rtp_source_set_as_csrc (RTPSource * src, guint32 ssrc)
 {
   g_return_if_fail (RTP_IS_SOURCE (src));
 
   src->validated = TRUE;
   src->is_csrc = TRUE;
+  src->csrc_ssrc = ssrc;
+}
+
+/**
+ * rtp_source_add_csrc:
+ * @src: an #RTPSource
+ * @csrc: the CSRC of the contributing source
+ *
+ * Track that csrc is a contributor to this source
+ */
+void
+rtp_source_add_csrc (RTPSource * src, guint32 csrc)
+{
+  g_return_if_fail (RTP_IS_SOURCE (src));
+  GList *existing;
+
+  if (g_hash_table_steal_extended (src->csrcs, GUINT_TO_POINTER (csrc), NULL,
+          (gpointer *) & existing)) {
+    g_queue_delete_link (&src->csrc_queue, existing);
+  }
+
+  g_queue_push_tail (&src->csrc_queue, GUINT_TO_POINTER (csrc));
+  g_hash_table_insert (src->csrcs, GUINT_TO_POINTER (csrc),
+      src->csrc_queue.tail);
+}
+
+/**
+ * rtp_source_remove_csrc:
+ * @src: an #RTPSource
+ * @csrc: the CSRC of the contributing source
+ *
+ * Untrack that csrc is a contributor to this source
+ */
+void
+rtp_source_remove_csrc (RTPSource * src, guint32 csrc)
+{
+  g_return_if_fail (RTP_IS_SOURCE (src));
+  GList *existing;
+
+  if (g_hash_table_steal_extended (src->csrcs, GUINT_TO_POINTER (csrc), NULL,
+          (gpointer *) & existing)) {
+    g_queue_delete_link (&src->csrc_queue, existing);
+  }
+}
+
+/**
+ * rtp_source_has_max_csrcs:
+ * @src: an #RTPSource
+ *
+ * Check if @src has reached its max CSRC number (DoS prevention).
+ *
+ * Returns: %TRUE if @src can't accept more CRSCs.
+ */
+gboolean
+rtp_source_has_max_csrcs (RTPSource * src)
+{
+  g_return_val_if_fail (RTP_IS_SOURCE (src), FALSE);
+
+  return g_queue_get_length (&src->csrc_queue) >= src->max_csrcs;
+}
+
+/**
+ * rtp_source_pop_csrc:
+ * @src: an #RTPSource
+ *
+ * Pop the oldest csrc and return it. Only call if rtp_source_has_max_csrcs() is TRUE,
+ * return value may otherwise be a valid identifier (0)
+ */
+guint32
+rtp_source_pop_csrc (RTPSource * src)
+{
+  gpointer existing;
+
+  g_return_val_if_fail (RTP_IS_SOURCE (src), 0);
+  g_return_val_if_fail (g_queue_get_length (&src->csrc_queue) > 0, 0);
+
+  existing = g_queue_pop_head (&src->csrc_queue);
+  g_hash_table_remove (src->csrcs, existing);
+
+  return GPOINTER_TO_UINT (existing);
 }
 
 /**
@@ -1343,33 +1446,35 @@ init_seq (RTPSource * src, guint16 seq)
 #define BITRATE_INTERVAL (2 * GST_SECOND)
 
 static void
-do_bitrate_estimation (RTPSource * src, GstClockTime running_time,
+do_bitrate_estimation (RTPSource * src, GstClockTime time,
     guint64 * bytes_handled)
 {
   guint64 elapsed;
 
-  if (src->prev_rtime) {
-    elapsed = running_time - src->prev_rtime;
+  if (src->prev_time) {
+    if (time > src->prev_time) {
+      elapsed = time - src->prev_time;
 
-    if (elapsed > BITRATE_INTERVAL) {
-      guint64 rate;
+      if (elapsed > BITRATE_INTERVAL) {
+        guint64 rate;
 
-      rate = gst_util_uint64_scale (*bytes_handled, 8 * GST_SECOND, elapsed);
+        rate = gst_util_uint64_scale (*bytes_handled, 8 * GST_SECOND, elapsed);
 
-      GST_LOG ("Elapsed %" G_GUINT64_FORMAT ", bytes %" G_GUINT64_FORMAT
-          ", rate %" G_GUINT64_FORMAT, elapsed, *bytes_handled, rate);
+        GST_LOG ("Elapsed %" G_GUINT64_FORMAT ", bytes %" G_GUINT64_FORMAT
+            ", rate %" G_GUINT64_FORMAT, elapsed, *bytes_handled, rate);
 
-      if (src->bitrate == 0)
-        src->bitrate = rate;
-      else
-        src->bitrate = ((src->bitrate * 3) + rate) / 4;
+        if (src->bitrate == 0)
+          src->bitrate = rate;
+        else
+          src->bitrate = ((src->bitrate * 3) + rate) / 4;
 
-      src->prev_rtime = running_time;
-      *bytes_handled = 0;
+        src->prev_time = time;
+        *bytes_handled = 0;
+      }
     }
   } else {
     GST_LOG ("Reset bitrate measurement");
-    src->prev_rtime = running_time;
+    src->prev_time = time;
     src->bitrate = 0;
   }
 }
@@ -1716,6 +1821,7 @@ rtp_source_send_rtp (RTPSource * src, RTPPacketInfo * pinfo)
 
   /* we are a sender now */
   src->is_sender = TRUE;
+  src->is_rtx = pinfo->is_rtx;
 
   /* we are also a receiver of our packets */
   if (!update_receiver_stats (src, pinfo, FALSE))
@@ -1736,7 +1842,9 @@ rtp_source_send_rtp (RTPSource * src, RTPPacketInfo * pinfo)
 
   running_time = pinfo->running_time;
 
-  if (GST_CLOCK_TIME_IS_VALID (running_time))
+  if (pinfo->is_rtx)
+    do_bitrate_estimation (src, pinfo->current_time, &src->bytes_sent);
+  else if (GST_CLOCK_TIME_IS_VALID (running_time))
     do_bitrate_estimation (src, running_time, &src->bytes_sent);
 
   rtptime = pinfo->rtptime;
@@ -1904,8 +2012,10 @@ rtp_source_process_rb (RTPSource * src, guint32 ssrc, guint32 sender_ssrc,
     /* Make a copy to store in the received rr's hash table, but only for
      * internal sources to track which remote sources sent reports for this source */
     RTPReceiverReport *copy = g_memdup2 (curr, sizeof (RTPReceiverReport));
+    g_mutex_lock (&src->received_rr_lock);
     g_hash_table_replace (src->received_rr, GUINT_TO_POINTER (sender_ssrc),
         copy);
+    g_mutex_unlock (&src->received_rr_lock);
   }
 }
 

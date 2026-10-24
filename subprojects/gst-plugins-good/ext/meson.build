@@ -24,7 +24,7 @@ soup_dlopen_target_kwargs = {}
 soup_required = get_option('soup').enabled() or get_option('adaptivedemux2').enabled()
 if get_option('soup').allowed() or get_option('adaptivedemux2').allowed()
   if soup_ver_opt in ['auto', '2']
-    libsoup2_dep = dependency('libsoup-2.4', version: '>=2.48',
+    libsoup2_dep = dependency('libsoup-2.4', version: '>=2.68',
                               include_type: 'system',
                               required: soup_ver_opt == '2' and soup_lookup_dep and soup_required)
   endif
@@ -52,7 +52,7 @@ if get_option('soup').allowed() or get_option('adaptivedemux2').allowed()
   # add that for deps that are in the list of dependencies. We also need to add
   # install_rpath to cover the installation case. Every other dep is loaded via
   # absolute LC_LOAD_DYLIB entries.
-  if host_system == 'darwin'
+  if host_system == 'darwin' and subsystem == 'macos'
     foreach dep : [libsoup3_dep, libsoup2_dep]
       if not dep.found()
         continue
@@ -68,7 +68,6 @@ if get_option('soup').allowed() or get_option('adaptivedemux2').allowed()
   endif
 endif
 
-subdir('aalib')
 subdir('adaptivedemux2')
 subdir('amrnb')
 subdir('amrwbdec')
@@ -79,7 +78,6 @@ subdir('gtk')
 subdir('jack')
 subdir('jpeg')
 subdir('lame')
-subdir('libcaca')
 subdir('dv')
 subdir('libpng')
 subdir('mpg123')

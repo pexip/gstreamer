@@ -1,13 +1,14 @@
 <!-- This file was automatically generated from C sources - DO NOT EDIT!
 To affect the contents of this file, edit the original C definitions,
 and/or use gtk-doc annotations.  -->
-<repository xmlns="http://www.gtk.org/introspection/core/1.0" xmlns:c="http://www.gtk.org/introspection/c/1.0" xmlns:glib="http://www.gtk.org/introspection/glib/1.0" version="1.2">
+<repository xmlns="http://www.gtk.org/introspection/core/1.0" xmlns:c="http://www.gtk.org/introspection/c/1.0" xmlns:doc="http://www.gtk.org/introspection/doc/1.0" xmlns:glib="http://www.gtk.org/introspection/glib/1.0" version="1.2">
   <include name="Gst" version="1.0"/>
   <include name="GstBase" version="1.0"/>
   <include name="GstGL" version="1.0"/>
   <include name="GstVideo" version="1.0"/>
   <package name="gstreamer-gl-egl-1.0"/>
   <c:include name="gst/gl/egl/egl.h"/>
+  <doc:format name="unknown"/>
   <namespace name="GstGLEGL" version="1.0" shared-library="libgstgl-1.0.so.0" c:identifier-prefixes="Gst" c:symbol-prefixes="gst">
     <record name="EGLImage" c:type="GstEGLImage" glib:type-name="GstEGLImage" glib:get-type="gst_egl_image_get_type" c:symbol-prefix="egl_image">
       <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/gl/egl/gsteglimage.c">#GstEGLImage represents and holds an `EGLImage` handle.
@@ -119,6 +120,43 @@ external-only or not at all.</doc>
           <parameter name="format" transfer-ownership="none">
             <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/gl/egl/gsteglimage.c">a #GstVideoFormat</doc>
             <type name="GstVideo.VideoFormat" c:type="GstVideoFormat"/>
+          </parameter>
+        </parameters>
+      </function>
+      <function name="create" c:identifier="gst_egl_image_create" version="1.30">
+        <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/gl/egl/gsteglimage.h"/>
+        <return-value transfer-ownership="full" nullable="1">
+          <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/gl/egl/gsteglimage.c">a #GstEGLImage wrapping @client_buffer or %NULL on failure</doc>
+          <type name="EGLImage" c:type="GstEGLImage*"/>
+        </return-value>
+        <parameters>
+          <parameter name="context" transfer-ownership="none">
+            <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/gl/egl/gsteglimage.c">a #GstGLContext (must be an EGL context)</doc>
+            <type name="GstGL.GLContext" c:type="GstGLContext*"/>
+          </parameter>
+          <parameter name="target" transfer-ownership="none">
+            <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/gl/egl/gsteglimage.c">a #GstGLTextureTarget</doc>
+            <type name="guint" c:type="guint"/>
+          </parameter>
+          <parameter name="format" transfer-ownership="none">
+            <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/gl/egl/gsteglimage.c">a #GstGLFormat</doc>
+            <type name="GstGL.GLFormat" c:type="GstGLFormat"/>
+          </parameter>
+          <parameter name="client_buffer" transfer-ownership="none" nullable="1" allow-none="1">
+            <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/gl/egl/gsteglimage.c">an EGLClientBuffer</doc>
+            <type name="gpointer" c:type="gpointer"/>
+          </parameter>
+          <parameter name="attribs" transfer-ownership="none">
+            <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/gl/egl/gsteglimage.c">additional attributes to add to the `eglCreateImage`() call.</doc>
+            <type name="guintptr" c:type="guintptr*"/>
+          </parameter>
+          <parameter name="user_data" transfer-ownership="none" nullable="1" allow-none="1" scope="notified">
+            <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/gl/egl/gsteglimage.c">user data</doc>
+            <type name="gpointer" c:type="gpointer"/>
+          </parameter>
+          <parameter name="destroy_notify" transfer-ownership="none" scope="async" destroy="5">
+            <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/gl/egl/gsteglimage.c">called when @user_data is no longer needed</doc>
+            <type name="GLib.DestroyNotify" c:type="GDestroyNotify"/>
           </parameter>
         </parameters>
       </function>
@@ -748,6 +786,43 @@ external-only or not at all.</doc>
         <parameter name="format" transfer-ownership="none">
           <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/gl/egl/gsteglimage.c">a #GstVideoFormat</doc>
           <type name="GstVideo.VideoFormat" c:type="GstVideoFormat"/>
+        </parameter>
+      </parameters>
+    </function>
+    <function name="egl_image_create" c:identifier="gst_egl_image_create" moved-to="EGLImage.create" version="1.30">
+      <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/gl/egl/gsteglimage.h"/>
+      <return-value transfer-ownership="full" nullable="1">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/gl/egl/gsteglimage.c">a #GstEGLImage wrapping @client_buffer or %NULL on failure</doc>
+        <type name="EGLImage" c:type="GstEGLImage*"/>
+      </return-value>
+      <parameters>
+        <parameter name="context" transfer-ownership="none">
+          <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/gl/egl/gsteglimage.c">a #GstGLContext (must be an EGL context)</doc>
+          <type name="GstGL.GLContext" c:type="GstGLContext*"/>
+        </parameter>
+        <parameter name="target" transfer-ownership="none">
+          <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/gl/egl/gsteglimage.c">a #GstGLTextureTarget</doc>
+          <type name="guint" c:type="guint"/>
+        </parameter>
+        <parameter name="format" transfer-ownership="none">
+          <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/gl/egl/gsteglimage.c">a #GstGLFormat</doc>
+          <type name="GstGL.GLFormat" c:type="GstGLFormat"/>
+        </parameter>
+        <parameter name="client_buffer" transfer-ownership="none" nullable="1" allow-none="1">
+          <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/gl/egl/gsteglimage.c">an EGLClientBuffer</doc>
+          <type name="gpointer" c:type="gpointer"/>
+        </parameter>
+        <parameter name="attribs" transfer-ownership="none">
+          <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/gl/egl/gsteglimage.c">additional attributes to add to the `eglCreateImage`() call.</doc>
+          <type name="guintptr" c:type="guintptr*"/>
+        </parameter>
+        <parameter name="user_data" transfer-ownership="none" nullable="1" allow-none="1" scope="notified">
+          <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/gl/egl/gsteglimage.c">user data</doc>
+          <type name="gpointer" c:type="gpointer"/>
+        </parameter>
+        <parameter name="destroy_notify" transfer-ownership="none" scope="async" destroy="5">
+          <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/gl/egl/gsteglimage.c">called when @user_data is no longer needed</doc>
+          <type name="GLib.DestroyNotify" c:type="GDestroyNotify"/>
         </parameter>
       </parameters>
     </function>

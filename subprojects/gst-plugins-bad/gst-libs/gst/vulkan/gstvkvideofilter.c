@@ -54,9 +54,6 @@ static gboolean gst_vulkan_video_filter_set_caps (GstBaseTransform * bt,
 static GstCaps *gst_vulkan_video_filter_transform_caps (GstBaseTransform *
     bt, GstPadDirection direction, GstCaps * caps, GstCaps * filter);
 static gboolean
-gst_vulkan_video_filter_propose_allocation (GstBaseTransform * bt,
-    GstQuery * decide_query, GstQuery * query);
-static gboolean
 gst_vulkan_video_filter_decide_allocation (GstBaseTransform * bt,
     GstQuery * query);
 
@@ -102,8 +99,6 @@ gst_vulkan_video_filter_class_init (GstVulkanVideoFilterClass * klass)
   gstbasetransform_class->set_caps = gst_vulkan_video_filter_set_caps;
   gstbasetransform_class->transform_caps =
       gst_vulkan_video_filter_transform_caps;
-  gstbasetransform_class->propose_allocation =
-      gst_vulkan_video_filter_propose_allocation;
   gstbasetransform_class->decide_allocation =
       gst_vulkan_video_filter_decide_allocation;
 }
@@ -132,6 +127,12 @@ gst_vulkan_video_filter_query (GstBaseTransform * bt,
 
   switch (GST_QUERY_TYPE (query)) {
     case GST_QUERY_CONTEXT:{
+      if (gst_vulkan_requested_extensions_handle_context_query (GST_ELEMENT
+              (render), query,
+              direction == GST_PAD_SINK ? GST_PAD_SRC : GST_PAD_SINK,
+              render->instance))
+        return TRUE;
+
       if (gst_vulkan_handle_context_query (GST_ELEMENT (render), query,
               NULL, render->instance, render->device))
         return TRUE;
@@ -202,14 +203,6 @@ gst_vulkan_video_filter_set_caps (GstBaseTransform * bt,
 }
 
 static gboolean
-gst_vulkan_video_filter_propose_allocation (GstBaseTransform * bt,
-    GstQuery * decide_query, GstQuery * query)
-{
-  /* FIXME: */
-  return FALSE;
-}
-
-static gboolean
 gst_vulkan_video_filter_decide_allocation (GstBaseTransform * bt,
     GstQuery * query)
 {
@@ -247,6 +240,10 @@ gst_vulkan_video_filter_decide_allocation (GstBaseTransform * bt,
   config = gst_buffer_pool_get_config (pool);
 
   gst_buffer_pool_config_set_params (config, caps, size, min, max);
+
+  if (gst_buffer_pool_has_option (pool, GST_BUFFER_POOL_OPTION_VIDEO_META))
+    gst_buffer_pool_config_add_option (config,
+        GST_BUFFER_POOL_OPTION_VIDEO_META);
 
   if (!gst_buffer_pool_set_config (pool, config)) {
     gst_object_unref (pool);

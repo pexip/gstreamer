@@ -1,0 +1,14 @@
+<file duration="5005006257" frame-detection="0" skip-parsers="0" uri="file:///../../media/defaults/mp4/timecoded_jpeg_23976fps.mp4" seekable="true">
+  <streams caps="video/quicktime">
+    <stream type="video" caps="image/jpeg, parsed=(boolean)true, width=(int)640, height=(int)380, sof-marker=(int)0, colorspace=(string)sYUV, sampling=(string)YCbCr-4:2:0, colorimetry=(string)2:4:5:4, interlace-mode=(string)progressive, framerate=(fraction)24000/1001, pixel-aspect-ratio=(fraction)1/1" id="/001">
+      <segments>
+      </segments>
+      <tags>
+        <tag content="taglist, bitrate=(uint)2685458, container-specific-track-id=(string)1, video-codec=(string)&quot;JPEG\ still\ images&quot;;"/>
+      </tags>
+    </stream>
+  </streams>
+  <tags>
+    <tag content="taglist, bitrate=(uint)2685458, container-format=(string)Quicktime, container-specific-track-id=(string)1, datetime=(datetime)2020-01-30T20:42:32Z, video-codec=(string)&quot;JPEG\ still\ images&quot;;"/>
+  </tags>
+</file>

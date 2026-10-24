@@ -72,6 +72,18 @@ typedef enum
   GST_D3D_PLUGIN_CS_WEAVE_INTERLACE_1,
   GST_D3D_PLUGIN_CS_WEAVE_INTERLACE_2,
   GST_D3D_PLUGIN_CS_WEAVE_INTERLACE_4,
+  GST_D3D_PLUGIN_CS_NV12_TO_R8_LOAD,
+  GST_D3D_PLUGIN_CS_NV12_TO_R8_SAMPLE,
+  GST_D3D_PLUGIN_CS_P010_TO_A420_10_LOAD,
+  GST_D3D_PLUGIN_CS_P010_TO_A420_10_SAMPLE,
+  GST_D3D_PLUGIN_CS_BUFFER_COPY_2D,
+  GST_D3D_PLUGIN_CS_BUFFER_COPY_2D_UNALIGNED,
+  GST_D3D_PLUGIN_CS_TEXTURE_COPY_2D_U8,
+  GST_D3D_PLUGIN_CS_TEXTURE_SCALE_2D_U8,
+  GST_D3D_PLUGIN_CS_TEXTURE_COPY_2D_F32,
+  GST_D3D_PLUGIN_CS_TEXTURE_SCALE_2D_F32,
+  GST_D3D_PLUGIN_CS_BUFFER_SCALE_2D_U8,
+  GST_D3D_PLUGIN_CS_BUFFER_SCALE_2D_F32,
 
   GST_D3D_PLUGIN_CS_LAST,
 } GstD3DPluginCS;
@@ -141,6 +153,12 @@ gboolean gst_d3d_converter_shader_get_cs_blob (GstVideoFormat in_format,
                                                GstVideoFormat out_format,
                                                GstD3DShaderModel shader_model,
                                                GstD3DConverterCSByteCode * byte_code);
+
+GST_D3D_SHADER_API
+gboolean gst_d3d_converter_shader_get_cs_blob_d3d11 (GstVideoFormat in_format,
+                                                     GstVideoFormat out_format,
+                                                     GstD3DShaderModel shader_model,
+                                                     GstD3DConverterCSByteCode * byte_code);
 
 GST_D3D_SHADER_API
 guint   gst_d3d_converter_shader_get_ps_blob (GstVideoFormat in_format,

@@ -119,8 +119,8 @@ struct _GstMXFDemuxEssenceTrack
   MXFUMID source_package_uid;
 
   /* Position and duration in edit units */
-  gint64 position;
-  gint64 duration;
+  guint64 position;
+  guint64 duration;
 
   GArray *offsets;
 
@@ -134,7 +134,10 @@ struct _GstMXFDemuxEssenceTrack
   GstTagList *tags;
 
   GstCaps *caps;
+  gboolean is_video;
   gboolean intra_only;
+  gboolean is_audio;
+  gboolean need_reorder;
 
   MXFEssenceWrapping wrapping;
 
@@ -146,7 +149,7 @@ struct _GstMXFDemuxEssenceTrack
 
 typedef struct
 {
-  /* absolute byte offset excluding run_in, 0 if uninitialized */
+  /* absolute byte offset excluding run_in */
   guint64 offset;
 
   /* PTS edit unit number or G_MAXUINT64 */
@@ -196,10 +199,8 @@ struct _GstMXFDemuxPad
   guint32 track_id;
   gboolean need_segment;
 
-  GstClockTime position;
-  gdouble position_accumulated_error;
   /* Current position in the material track (in edit units) */
-  gint64 current_material_track_position;
+  guint64 current_material_track_position;
 
   gboolean eos, discont;
 
@@ -214,15 +215,25 @@ struct _GstMXFDemuxPad
   MXFMetadataSourceClip *current_component;
 
   /* Position in the material track where this component started */
-  gint64 current_component_start_position;
+  guint64 current_component_start_position;
 
   /* Position/duration in the source track */
-  gint64 current_component_start;
-  gint64 current_component_duration;
+  guint64 current_component_start;
+  guint64 current_component_duration;
 
   /* Current essence track and position (in edit units) */
   GstMXFDemuxEssenceTrack *current_essence_track;
-  gint64 current_essence_track_position;
+  guint64 current_essence_track_position;
+
+  /* reverse playback related */
+  gboolean chunk_complete;
+  GstClockTime prev_chunk_min_stream_time;
+  GstClockTime cur_chunk_min_stream_time;
+
+  /* reverse playback queue for unencoded stream
+   * buffers & gap events are prepended to this queue
+   * and pushed on DISCONT or at the end of current chunk */
+  GQueue reorder_queue;
 };
 
 struct _GstMXFDemuxPadClass
@@ -250,8 +261,6 @@ struct _GstMXFDemux
   GstSegment segment;
   guint32 seqnum;
 
-  GstEvent *close_seg_event;
-
   guint64 offset;
 
   gboolean random_access;
@@ -265,6 +274,8 @@ struct _GstMXFDemux
   /* MXF file state */
   GList *partitions;
   GstMXFDemuxPartition *current_partition;
+  /* for reverse playback */
+  guint64 chunk_start_ts;
 
   GPtrArray *essence_tracks;
 

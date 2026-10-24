@@ -15,7 +15,13 @@ var default_peer_id;
 // Override with your own STUN servers if you want
 var rtc_configuration = {iceServers: [{urls: "stun:stun.l.google.com:19302"}]};
 // The default constraints that will be attempted. Can be overriden by the user.
-var default_constraints = {video: true, audio: true};
+var default_constraints = {
+  video: {
+    width: { ideal: 1280 },
+    height: { ideal: 720 }
+  },
+  audio: true
+};
 
 var connect_attempts = 0;
 var peer_connection = new RTCPeerConnection(rtc_configuration);
@@ -35,6 +41,16 @@ function setConnectButtonState(value) {
 
 function wantRemoteOfferer() {
    return document.getElementById("remote-offerer").checked;
+}
+
+function wantDataChannel() {
+   return document.getElementById("data-channel").checked;
+}
+
+function onRemoteOffererChanged() {
+    var disabled = wantRemoteOfferer();
+    document.getElementById("data-channel").disabled = disabled;
+    document.getElementById("data-channel-label").style.color = disabled ? "gray" : "";
 }
 
 function onConnectClicked() {
@@ -77,11 +93,26 @@ function handleIncomingError(error) {
 }
 
 function getVideoElement() {
-    var div = document.getElementById("video");
+    var div = document.getElementById("incoming");
     var video_tag = document.createElement("video");
+    video_tag.id = "incoming-video"
     video_tag.textContent = "Your browser doesn't support video";
     video_tag.autoplay = true;
     video_tag.playsinline = true;
+    div.appendChild(video_tag);
+    return video_tag
+}
+
+function getPreviewElement() {
+    var div = document.getElementById("preview");
+    var preview_text = div.querySelector('div');
+    preview_text.hidden = false;
+    var video_tag = document.createElement("video");
+    video_tag.id = "preview-video"
+    video_tag.textContent = "Your browser doesn't support video";
+    video_tag.autoplay = true;
+    video_tag.playsinline = true;
+    video_tag.muted = true;
     div.appendChild(video_tag);
     return video_tag
 }
@@ -113,7 +144,11 @@ function resetVideo() {
     }
 
     // Remove all video players
-    document.getElementById("video").innerHTML = "";
+    document.querySelectorAll("video").forEach(el => el.remove());
+    // Reset preview text
+    var div = document.getElementById("preview");
+    var preview_text = div.querySelector('div');
+    preview_text.hidden = true;
 }
 
 function onIncomingSDP(sdp) {
@@ -187,14 +222,14 @@ function onServerMessage(event) {
                 return;
             }
             if (!callCreateTriggered) {
-                createCall();
+                createCall(true);
                 setStatus("Created peer connection for call, waiting for SDP");
             }
             return;
         case "OFFER_REQUEST":
             // The peer wants us to set up and then send an offer
             if (!callCreateTriggered)
-                createCall();
+                createCall(true);
             return;
         default:
             if (event.data.startsWith("ERROR")) {
@@ -215,7 +250,7 @@ function onServerMessage(event) {
 
             // Incoming JSON signals the beginning of a call
             if (!callCreateTriggered)
-                createCall(msg);
+                createCall(false);
 
             if (msg.sdp != null) {
                 onIncomingSDP(msg.sdp);
@@ -235,7 +270,10 @@ function onServerClose(event) {
         peer_connection.close();
         peer_connection = new RTCPeerConnection(rtc_configuration);
     }
+    send_channel = null;
     callCreateTriggered = false;
+    makingOffer = false;
+    isSettingRemoteAnswerPending = false;
 
     // Reset after a second
     window.setTimeout(websocketServerConnect, 1000);
@@ -345,17 +383,24 @@ function onDataChannel(event) {
     receiveChannel.onmessage = handleDataChannelMessageReceived;
     receiveChannel.onerror = handleDataChannelError;
     receiveChannel.onclose = handleDataChannelClose;
+    // Use the incoming channel to send replies when we didn't create our own
+    if (!send_channel)
+        send_channel = receiveChannel;
 }
 
-function createCall() {
+function createCall(isOfferer) {
     callCreateTriggered = true;
     console.log('Configuring RTCPeerConnection');
-    send_channel = peer_connection.createDataChannel('label', null);
-    send_channel.onopen = handleDataChannelOpen;
-    send_channel.onmessage = handleDataChannelMessageReceived;
-    send_channel.onerror = handleDataChannelError;
-    send_channel.onclose = handleDataChannelClose;
+    // Always accept an incoming data channel if the remote offers one
     peer_connection.ondatachannel = onDataChannel;
+    // Only create our own data channel when we're the one making the offer
+    if (isOfferer && wantDataChannel()) {
+        send_channel = peer_connection.createDataChannel('label', null);
+        send_channel.onopen = handleDataChannelOpen;
+        send_channel.onmessage = handleDataChannelMessageReceived;
+        send_channel.onerror = handleDataChannelError;
+        send_channel.onclose = handleDataChannelClose;
+    }
 
     peer_connection.ontrack = ({track, streams}) => {
         console.log("ontrack triggered");
@@ -417,8 +462,11 @@ function createCall() {
         for (const track of stream.getTracks()) {
             peer_connection.addTrack(track, stream);
         }
+        var previewElem = getPreviewElement();
+        previewElem.srcObject = stream;
         return stream;
     }).catch(setError);
+
 
     setConnectButtonState("Disconnect");
 }

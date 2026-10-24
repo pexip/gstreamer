@@ -194,6 +194,85 @@ GST_START_TEST (test_class)
 
 GST_END_TEST;
 
+static gint rank_notify_count = 0;
+
+static void
+rank_notify_cb (GObject * object, GParamSpec * pspec, gpointer user_data)
+{
+  rank_notify_count++;
+}
+
+GST_START_TEST (test_plugin_feature_rank_property)
+{
+  GstPluginFeature *feature;
+  gint rank;
+
+  feature = g_object_new (GST_TYPE_ELEMENT_FACTORY, NULL);
+  fail_unless (feature != NULL);
+
+  g_object_get (feature, "rank", &rank, NULL);
+  fail_unless_equals_int (rank, GST_RANK_NONE);
+
+  g_signal_connect (feature, "notify::rank", G_CALLBACK (rank_notify_cb), NULL);
+
+  g_object_set (feature, "rank", GST_RANK_PRIMARY, NULL);
+  g_object_get (feature, "rank", &rank, NULL);
+  fail_unless_equals_int (rank, GST_RANK_PRIMARY);
+  fail_unless_equals_int (rank_notify_count, 1);
+  gst_plugin_feature_set_rank (feature, GST_RANK_SECONDARY);
+  fail_unless_equals_int (gst_plugin_feature_get_rank (feature),
+      GST_RANK_SECONDARY);
+  fail_unless_equals_int (rank_notify_count, 2);
+
+  gst_plugin_feature_set_rank (feature, GST_RANK_SECONDARY);
+  fail_unless_equals_int (rank_notify_count, 2);
+
+  gst_plugin_feature_set_rank (feature, GST_RANK_MARGINAL);
+  fail_unless_equals_int (gst_plugin_feature_get_rank (feature),
+      GST_RANK_MARGINAL);
+  fail_unless_equals_int (rank_notify_count, 3);
+
+  /* Non-enum rank values must be accepted: the rank is a plain integer,
+   * not restricted to the GstRank enum members. */
+  g_object_set (feature, "rank", GST_RANK_MARGINAL - 1, NULL);
+  g_object_get (feature, "rank", &rank, NULL);
+  fail_unless_equals_int (rank, GST_RANK_MARGINAL - 1);
+  fail_unless_equals_int (rank_notify_count, 4);
+
+  gst_object_unref (feature);
+}
+
+GST_END_TEST;
+
+GST_START_TEST (test_plugin_feature_rank_bumps_registry_cookie)
+{
+  GstRegistry *registry = gst_registry_get ();
+  GstPluginFeature *feature = gst_registry_find_feature (registry, "identity",
+      GST_TYPE_ELEMENT_FACTORY);
+  guint rank, cookie_before;
+
+  fail_unless (feature != NULL);
+
+  rank = gst_plugin_feature_get_rank (feature);
+  cookie_before = gst_registry_get_feature_list_cookie (registry);
+
+  /* Real change: cookie must bump so decodebin / parsebin / ... re-scan. */
+  gst_plugin_feature_set_rank (feature, rank + 1);
+  fail_unless (gst_registry_get_feature_list_cookie (registry) !=
+      cookie_before);
+
+  /* No-op change: same rank, cookie stays put. */
+  cookie_before = gst_registry_get_feature_list_cookie (registry);
+  gst_plugin_feature_set_rank (feature, rank + 1);
+  fail_unless_equals_int (gst_registry_get_feature_list_cookie (registry),
+      cookie_before);
+
+  /* Restore to avoid leaking a rank bump to later tests. */
+  gst_plugin_feature_set_rank (feature, rank);
+  gst_clear_object (&feature);
+}
+
+GST_END_TEST;
 
 static Suite *
 gst_element_factory_suite (void)
@@ -207,6 +286,8 @@ gst_element_factory_suite (void)
   tcase_add_test (tc_chain, test_element_factory);
   tcase_add_test (tc_chain, test_can_sink_any_caps);
   tcase_add_test (tc_chain, test_can_sink_all_caps);
+  tcase_add_test (tc_chain, test_plugin_feature_rank_property);
+  tcase_add_test (tc_chain, test_plugin_feature_rank_bumps_registry_cookie);
 
   return s;
 }

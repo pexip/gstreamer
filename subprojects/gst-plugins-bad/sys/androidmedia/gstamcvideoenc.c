@@ -41,10 +41,6 @@
 #define orc_memcpy memcpy
 #endif
 
-#ifdef HAVE_JNI_H
-#include "gstjniutils.h"
-#endif
-
 #include "gstamcvideoenc.h"
 #include "gstamc-constants.h"
 
@@ -240,6 +236,22 @@ create_amc_format (GstAmcVideoEnc * encoder, GstVideoCodecState * input_state,
     mime = "video/x-vnd.on2.vp9";
   } else if (strcmp (name, "video/x-av1") == 0) {
     mime = "video/av01";
+  } else if (strcmp (name, "video/x-wmv") == 0) {
+    const gchar *format;
+    gint wmvversion = -1;
+
+    gst_structure_get_int (s, "wmvversion", &wmvversion);
+    format = gst_structure_get_string (s, "format");
+    if (wmvversion == 1)
+      mime = "video/x-ms-wmv7";
+    else if (wmvversion == 2)
+      mime = "video/x-ms-wmv8";
+    else if (wmvversion == 3)
+      mime = "video/x-ms-wmv";
+    else if (!format || strcmp (format, "WMV3") == 0)
+      mime = "video/x-ms-wmv";
+    else if (strcmp (format, "WVC1") == 0)
+      mime = "video/wvc1";
   } else {
     GST_ERROR_OBJECT (encoder, "Failed to convert caps(%s/...) to any mime",
         name);
@@ -296,21 +308,10 @@ create_amc_format (GstAmcVideoEnc * encoder, GstVideoCodecState * input_state,
   }
 
   /* On Android N_MR1 and higher, i-frame-interval can be a float value */
-#ifdef HAVE_JNI_H
-  if (gst_amc_jni_get_android_level () >= 25) {
-    GST_LOG_OBJECT (encoder, "Setting i-frame-interval to %f",
-        encoder->i_frame_int);
-    gst_amc_format_set_float (format, "i-frame-interval", encoder->i_frame_int,
-        &err);
-  } else
-#endif
-  {
-    int i_frame_int = encoder->i_frame_int;
-    /* Round a fractional interval to 1 per sec on older Android */
-    if (encoder->i_frame_int > 0 && encoder->i_frame_int < 1.0)
-      i_frame_int = 1;
-    gst_amc_format_set_int (format, "i-frame-interval", i_frame_int, &err);
-  }
+  GST_LOG_OBJECT (encoder, "Setting i-frame-interval to %f",
+      encoder->i_frame_int);
+  gst_amc_format_set_float (format, "i-frame-interval", encoder->i_frame_int,
+      &err);
   if (err)
     GST_ELEMENT_WARNING_FROM_ERROR (encoder, err);
 
@@ -532,7 +533,8 @@ gst_amc_video_enc_base_init (gpointer g_class)
   longname = g_strdup_printf ("Android MediaCodec %s", codec_info->name);
   gst_element_class_set_metadata (element_class,
       codec_info->name,
-      "Codec/Encoder/Video/Hardware",
+      gst_amc_codec_info_is_hardware (codec_info) ?
+      "Codec/Encoder/Video/Hardware" : "Codec/Encoder/Video",
       longname, "Sebastian Dröge <sebastian.droege@collabora.co.uk>");
   g_free (longname);
 }
@@ -1528,7 +1530,8 @@ gst_amc_video_enc_set_format (GstVideoEncoder * encoder,
   self->flushing = FALSE;
   self->downstream_flow_ret = GST_FLOW_OK;
   gst_pad_start_task (GST_VIDEO_ENCODER_SRC_PAD (self),
-      (GstTaskFunction) gst_amc_video_enc_loop, encoder, NULL);
+      (GstTaskFunction) gst_amc_video_enc_loop, gst_object_ref (encoder),
+      gst_object_unref);
 
   r = TRUE;
 
@@ -1576,7 +1579,8 @@ gst_amc_video_enc_flush (GstVideoEncoder * encoder)
   self->drained = TRUE;
   self->downstream_flow_ret = GST_FLOW_OK;
   gst_pad_start_task (GST_VIDEO_ENCODER_SRC_PAD (self),
-      (GstTaskFunction) gst_amc_video_enc_loop, encoder, NULL);
+      (GstTaskFunction) gst_amc_video_enc_loop, gst_object_ref (encoder),
+      gst_object_unref);
 
   GST_DEBUG_OBJECT (self, "Flush encoder");
 
@@ -1689,8 +1693,6 @@ again:
   memset (&buffer_info, 0, sizeof (buffer_info));
   buffer_info.offset = 0;
   buffer_info.size = MIN (self->color_format_info.frame_size, buf->size);
-  gst_amc_buffer_set_position_and_limit (buf, NULL, buffer_info.offset,
-      buffer_info.size);
 
   if (!gst_amc_video_enc_fill_buffer (self, frame->input_buffer, buf,
           &buffer_info)) {
@@ -1746,8 +1748,14 @@ again:
 
 downstream_error:
   {
-    GST_ERROR_OBJECT (self, "Downstream returned %s",
-        gst_flow_get_name (self->downstream_flow_ret));
+    if (self->downstream_flow_ret == GST_FLOW_NOT_LINKED
+        || self->downstream_flow_ret < GST_FLOW_EOS) {
+      GST_ERROR_OBJECT (self, "Downstream returned %s",
+          gst_flow_get_name (self->downstream_flow_ret));
+    } else {
+      GST_DEBUG_OBJECT (self, "Downstream returned %s",
+          gst_flow_get_name (self->downstream_flow_ret));
+    }
 
     gst_video_codec_frame_unref (frame);
     return self->downstream_flow_ret;
@@ -1850,7 +1858,6 @@ gst_amc_video_enc_drain (GstAmcVideoEnc * self)
           gst_util_uint64_scale (self->last_upstream_ts, 1, GST_USECOND);
       buffer_info.flags |= BUFFER_FLAG_END_OF_STREAM;
 
-      gst_amc_buffer_set_position_and_limit (buf, NULL, 0, 0);
       gst_amc_buffer_free (buf);
       buf = NULL;
 

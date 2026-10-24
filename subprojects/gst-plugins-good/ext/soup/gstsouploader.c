@@ -73,7 +73,7 @@ typedef struct _GstSoupVTable
 
   /* *INDENT-OFF* */
 
-  /* Symbols present only in libsoup 3 */
+  /* Symbols present only in libsoup 3. */
 #if GLIB_CHECK_VERSION(2, 66, 0)
   GUri *(*_soup_message_get_uri_3)(SoupMessage * msg);
 #endif
@@ -93,6 +93,16 @@ typedef struct _GstSoupVTable
   void (*_soup_message_body_append_2) (SoupMessageBody *, SoupMemoryUse,
     gconstpointer, gsize);
   void (*_soup_uri_free_2) (SoupURI *);
+#if defined(LINK_SOUP) && LINK_SOUP == 2
+  const gchar *(*_soup_uri_get_scheme_2) (SoupURI *);
+  const gchar *(*_soup_uri_get_host_2) (SoupURI *);
+  guint (*_soup_uri_get_port_2) (SoupURI *);
+#elif !defined(LINK_SOUP)
+  /* SoupURI is opaque in the stub, so use gpointer here */
+  const gchar *(*_soup_uri_get_scheme_2) (gpointer);
+  const gchar *(*_soup_uri_get_host_2) (gpointer);
+  guint (*_soup_uri_get_port_2) (gpointer);
+#endif
   void (*_soup_session_cancel_message_2) (SoupSession *, SoupMessage *, guint);
 
   /* Symbols present in libsoup 2 and libsoup 3 */
@@ -124,6 +134,7 @@ typedef struct _GstSoupVTable
   void (*_soup_session_abort) (SoupSession * session);
   void (*_soup_session_add_feature) (SoupSession * session, SoupSessionFeature * feature);
   void (*_soup_session_add_feature_by_type) (SoupSession * session, GType feature_type);
+  SoupSessionFeature *(*_soup_session_get_feature) (SoupSession * session, GType feature_type);
   GType (*_soup_session_get_type) (void);
 
   void (*_soup_auth_authenticate) (SoupAuth * auth, const char *username,
@@ -138,8 +149,8 @@ typedef struct _GstSoupVTable
   GInputStream *(*_soup_session_send) (SoupSession * session, SoupMessage * msg,
     GCancellable * cancellable, GError ** error);
   SoupCookie* (*_soup_cookie_parse) (const char* header, gpointer origin_uri);
-  void (*_soup_cookies_to_request) (GSList* cookies, SoupMessage* msg);
-  void (*_soup_cookies_free) (GSList *cookies);
+  void (*_soup_cookie_jar_add_cookie_full) (SoupCookieJar * jar, SoupCookie * cookie, gpointer uri, gpointer first_party);
+  void (*_soup_cookie_free) (SoupCookie * cookie);
 
   /* *INDENT-ON* */
 } GstSoupVTable;
@@ -147,6 +158,60 @@ typedef struct _GstSoupVTable
 static GstSoupVTable gst_soup_vtable = { 0, };
 
 #define SOUP_NAMES 2
+
+/* Helper functions for accessing SoupURI fields when LINK_SOUP == 2.
+ * Used via vtable for runtime loading of libsoup 2. */
+#if defined(LINK_SOUP) && LINK_SOUP == 2
+static const gchar *
+_soup_uri_get_scheme_2 (SoupURI * uri)
+{
+  return uri->scheme;
+}
+
+static const gchar *
+_soup_uri_get_host_2 (SoupURI * uri)
+{
+  return uri->host;
+}
+
+static guint
+_soup_uri_get_port_2 (SoupURI * uri)
+{
+  return uri->port;
+}
+#elif !defined(LINK_SOUP)
+/* When SoupURI is opaque (gpointer) in the stub, we define a struct here
+ * that matches the libsoup 2 SoupURI layout. */
+typedef struct
+{
+  const gchar *scheme;
+  gchar *user;
+  gchar *password;
+  gchar *host;
+  guint port;
+} _SoupURI2Fields;
+
+static const gchar *
+_soup_uri_get_scheme_2 (gpointer uri)
+{
+  _SoupURI2Fields *fields = (_SoupURI2Fields *) uri;
+  return fields->scheme;
+}
+
+static const gchar *
+_soup_uri_get_host_2 (gpointer uri)
+{
+  _SoupURI2Fields *fields = (_SoupURI2Fields *) uri;
+  return fields->host;
+}
+
+static guint
+_soup_uri_get_port_2 (gpointer uri)
+{
+  _SoupURI2Fields *fields = (_SoupURI2Fields *) uri;
+  return fields->port;
+}
+#endif
 
 gboolean
 gst_soup_load_library (void)
@@ -206,6 +271,9 @@ gst_soup_load_library (void)
         LOAD_VERSIONED_SYMBOL (2, soup_message_get_uri);
         LOAD_VERSIONED_SYMBOL (2, soup_session_cancel_message);
         LOAD_VERSIONED_SYMBOL (2, soup_session_send_async);
+        vtable->_soup_uri_get_scheme_2 = _soup_uri_get_scheme_2;
+        vtable->_soup_uri_get_host_2 = _soup_uri_get_host_2;
+        vtable->_soup_uri_get_port_2 = _soup_uri_get_port_2;
       } else {
         vtable->lib_version = 3;
         LOAD_VERSIONED_SYMBOL (3, soup_logger_new);
@@ -215,6 +283,9 @@ gst_soup_load_library (void)
 #if GLIB_CHECK_VERSION(2, 66, 0)
         LOAD_VERSIONED_SYMBOL (3, soup_message_get_uri);
 #endif
+        /* The #else case (old GLib) leaves the symbol NULL. The runtime
+         * fallbacks in gst_soup_message_uri_to_string() asserts, as libsoup 3
+         * requires GLib >= 2.69.1. */
         LOAD_VERSIONED_SYMBOL (3, soup_message_get_method);
         LOAD_VERSIONED_SYMBOL (3, soup_message_get_reason_phrase);
         LOAD_VERSIONED_SYMBOL (3, soup_message_get_status);
@@ -244,12 +315,13 @@ gst_soup_load_library (void)
       LOAD_SYMBOL (soup_session_abort);
       LOAD_SYMBOL (soup_session_add_feature);
       LOAD_SYMBOL (soup_session_add_feature_by_type);
+      LOAD_SYMBOL (soup_session_get_feature);
       LOAD_SYMBOL (soup_session_get_type);
       LOAD_SYMBOL (soup_session_send);
       LOAD_SYMBOL (soup_session_send_finish);
       LOAD_SYMBOL (soup_cookie_parse);
-      LOAD_SYMBOL (soup_cookies_to_request);
-      LOAD_SYMBOL (soup_cookies_free);
+      LOAD_SYMBOL (soup_cookie_jar_add_cookie_full);
+      LOAD_SYMBOL (soup_cookie_free);
 
       vtable->loaded = TRUE;
       goto beach;
@@ -342,22 +414,37 @@ GstSoupUri *
 gst_soup_uri_new (const char *uri_string)
 {
   GstSoupUri *uri = g_new0 (GstSoupUri, 1);
+  gboolean parsed;
 #ifdef LINK_SOUP
 #if LINK_SOUP == 2
   uri->soup_uri = soup_uri_new (uri_string);
+  parsed = (uri->soup_uri != NULL);
 #else
   uri->uri = g_uri_parse (uri_string, SOUP_HTTP_URI_FLAGS, NULL);
+  parsed = (uri->uri != NULL);
 #endif
 #else
   if (gst_soup_vtable.lib_version == 2) {
     g_assert (gst_soup_vtable._soup_uri_new_2 != NULL);
     uri->soup_uri = gst_soup_vtable._soup_uri_new_2 (uri_string);
+    parsed = (uri->soup_uri != NULL);
   } else {
+    /* libsoup 3 path */
 #if GLIB_CHECK_VERSION(2, 66, 0)
     uri->uri = g_uri_parse (uri_string, SOUP_HTTP_URI_FLAGS, NULL);
+    parsed = (uri->uri != NULL);
+#else
+    /* libsoup 3 requires GLib >= 2.69.1, unreachable with old GLib */
+    g_assert_not_reached ();
+    parsed = FALSE;
 #endif
   }
 #endif
+
+  if (!parsed) {
+    g_free (uri);
+    return NULL;
+  }
   return uri;
 }
 
@@ -388,6 +475,8 @@ gst_soup_uri_free (GstSoupUri * uri)
 char *
 gst_soup_uri_to_string (GstSoupUri * uri)
 {
+  g_return_val_if_fail (uri != NULL, NULL);
+
 #if (defined(LINK_SOUP) && LINK_SOUP == 3) || (!defined(LINK_SOUP) && GLIB_CHECK_VERSION(2, 66, 0))
   if (uri->uri) {
     return g_uri_to_string_partial (uri->uri, G_URI_HIDE_PASSWORD);
@@ -409,6 +498,91 @@ gst_soup_uri_to_string (GstSoupUri * uri)
 
   g_assert_not_reached ();
   return NULL;
+}
+
+const gchar *
+gst_soup_uri_get_scheme (GstSoupUri * uri)
+{
+  g_return_val_if_fail (uri != NULL, NULL);
+
+#if (defined(LINK_SOUP) && LINK_SOUP == 3) || (!defined(LINK_SOUP) && GLIB_CHECK_VERSION(2, 66, 0))
+  if (uri->uri)
+    return g_uri_get_scheme (uri->uri);
+#endif
+
+#if defined(LINK_SOUP)
+#if LINK_SOUP == 2
+  if (uri->soup_uri)
+    return uri->soup_uri->scheme;
+#endif
+#else /* !LINK_SOUP */
+  /* dlopen build: libsoup 2 fills soup_uri at runtime */
+  if (uri->soup_uri) {
+    g_assert (gst_soup_vtable._soup_uri_get_scheme_2 != NULL);
+    return gst_soup_vtable._soup_uri_get_scheme_2 ((gpointer) uri->soup_uri);
+  }
+#endif
+
+  return NULL;
+}
+
+const gchar *
+gst_soup_uri_get_host (GstSoupUri * uri)
+{
+  g_return_val_if_fail (uri != NULL, NULL);
+
+#if (defined(LINK_SOUP) && LINK_SOUP == 3) || (!defined(LINK_SOUP) && GLIB_CHECK_VERSION(2, 66, 0))
+  if (uri->uri)
+    return g_uri_get_host (uri->uri);
+#endif
+
+#if defined(LINK_SOUP)
+#if LINK_SOUP == 2
+  if (uri->soup_uri)
+    return uri->soup_uri->host;
+#endif
+#else /* !LINK_SOUP */
+  /* dlopen build: libsoup 2 fills soup_uri at runtime */
+  if (uri->soup_uri) {
+    g_assert (gst_soup_vtable._soup_uri_get_host_2 != NULL);
+    return gst_soup_vtable._soup_uri_get_host_2 ((gpointer) uri->soup_uri);
+  }
+#endif
+
+  return NULL;
+}
+
+guint
+gst_soup_uri_get_port (GstSoupUri * uri)
+{
+  g_return_val_if_fail (uri != NULL, 0);
+
+#if (defined(LINK_SOUP) && LINK_SOUP == 3) || (!defined(LINK_SOUP) && GLIB_CHECK_VERSION(2, 66, 0))
+  if (uri->uri) {
+    gint port = g_uri_get_port (uri->uri);
+    /* g_uri_get_port() returns -1 when no port was specified and
+     * G_URI_FLAGS_SCHEME_NORMALIZE was not set (GLib < 2.68).
+     * Map to 0 for consistency. */
+    if (port == -1)
+      return 0;
+    return port;
+  }
+#endif
+
+#if defined(LINK_SOUP)
+#if LINK_SOUP == 2
+  if (uri->soup_uri)
+    return uri->soup_uri->port;
+#endif
+#else /* !LINK_SOUP */
+  /* dlopen build: libsoup 2 fills soup_uri at runtime */
+  if (uri->soup_uri) {
+    g_assert (gst_soup_vtable._soup_uri_get_port_2 != NULL);
+    return gst_soup_vtable._soup_uri_get_port_2 ((gpointer) uri->soup_uri);
+  }
+#endif
+
+  return 0;
 }
 
 char *
@@ -661,6 +835,17 @@ _soup_session_add_feature_by_type (SoupSession * session, GType feature_type)
 #endif
 }
 
+SoupSessionFeature *
+_soup_session_get_feature (SoupSession * session, GType feature_type)
+{
+#ifdef LINK_SOUP
+  return soup_session_get_feature (session, feature_type);
+#else
+  g_assert (gst_soup_vtable._soup_session_get_feature != NULL);
+  return gst_soup_vtable._soup_session_get_feature (session, feature_type);
+#endif
+}
+
 void
 _soup_message_headers_foreach (SoupMessageHeaders * hdrs,
     SoupMessageHeadersForeachFunc func, gpointer user_data)
@@ -898,35 +1083,74 @@ gst_soup_session_cancel_message (SoupSession * session, SoupMessage * msg,
 }
 
 SoupCookie *
-_soup_cookie_parse (const char *header)
+_soup_cookie_parse (const char *header, const GstSoupUri * origin)
 {
 #ifdef LINK_SOUP
-  return soup_cookie_parse (header, NULL);
+#if LINK_SOUP == 2
+  return soup_cookie_parse (header, origin ? origin->soup_uri : NULL);
+#else
+  return soup_cookie_parse (header, origin ? origin->uri : NULL);
+#endif
 #else
   g_assert (gst_soup_vtable._soup_cookie_parse != NULL);
-  return gst_soup_vtable._soup_cookie_parse (header, NULL);
+
+  if (origin == NULL)
+    return gst_soup_vtable._soup_cookie_parse (header, NULL);
+
+  if (gst_soup_vtable.lib_version == 2)
+    return gst_soup_vtable._soup_cookie_parse (header, origin->soup_uri);
+
+  /* libsoup 3 path */
+#if GLIB_CHECK_VERSION(2, 66, 0)
+  return gst_soup_vtable._soup_cookie_parse (header, origin->uri);
+#else
+  /* libsoup 3 requires GLib >= 2.69.1, unreachable with old GLib */
+  g_assert_not_reached ();
+  return NULL;
+#endif
 #endif
 }
 
-
 void
-_soup_cookies_to_request (GSList * cookies, SoupMessage * msg)
+_soup_cookie_jar_add_cookie_full (SoupCookieJar * jar, SoupCookie * cookie,
+    const GstSoupUri * origin)
 {
 #ifdef LINK_SOUP
-  soup_cookies_to_request (cookies, msg);
+#if LINK_SOUP == 2
+  soup_cookie_jar_add_cookie_full (jar, cookie,
+      origin ? origin->soup_uri : NULL, NULL);
 #else
-  g_assert (gst_soup_vtable._soup_cookies_to_request != NULL);
-  gst_soup_vtable._soup_cookies_to_request (cookies, msg);
+  soup_cookie_jar_add_cookie_full (jar, cookie, origin ? origin->uri : NULL,
+      NULL);
+#endif
+#else
+  g_assert (gst_soup_vtable._soup_cookie_jar_add_cookie_full != NULL);
+
+  gpointer uri = NULL;
+  if (origin != NULL) {
+    if (gst_soup_vtable.lib_version == 2)
+      uri = origin->soup_uri;
+    else {
+      /* libsoup 3 path */
+#if GLIB_CHECK_VERSION(2, 66, 0)
+      uri = origin->uri;
+#else
+      /* libsoup 3 requires GLib >= 2.69.1, unreachable with old GLib */
+      g_assert_not_reached ();
+#endif
+    }
+  }
+  gst_soup_vtable._soup_cookie_jar_add_cookie_full (jar, cookie, uri, NULL);
 #endif
 }
 
 void
-_soup_cookies_free (GSList * cookies)
+_soup_cookie_free (SoupCookie * cookie)
 {
 #ifdef LINK_SOUP
-  soup_cookies_free (cookies);
+  soup_cookie_free (cookie);
 #else
-  g_assert (gst_soup_vtable._soup_cookies_free != NULL);
-  gst_soup_vtable._soup_cookies_free (cookies);
+  g_assert (gst_soup_vtable._soup_cookie_free != NULL);
+  gst_soup_vtable._soup_cookie_free (cookie);
 #endif
 }

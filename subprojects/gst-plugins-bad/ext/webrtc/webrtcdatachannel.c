@@ -139,6 +139,7 @@ webrtc_error_ignore_bin_handle_message (GstBin * bin, GstMessage * message)
       _channel_store_error (self->data_channel, error);
       _channel_enqueue_task (self->data_channel, (ChannelTask) _close_procedure,
           NULL, NULL);
+      gst_message_unref (message);
       break;
     }
     default:
@@ -1106,6 +1107,7 @@ gst_webrtc_data_channel_constructed (GObject * object)
       (GstPadProbeCallback) on_appsrc_data, channel, NULL);
 
   channel->src_bin = webrtc_error_ignore_bin_new (channel, channel->appsrc);
+  gst_object_ref_sink (channel->src_bin);
 
   channel->appsink = gst_element_factory_make ("appsink", NULL);
   gst_object_ref_sink (channel->appsink);
@@ -1115,6 +1117,7 @@ gst_webrtc_data_channel_constructed (GObject * object)
       channel, NULL);
 
   channel->sink_bin = webrtc_error_ignore_bin_new (channel, channel->appsink);
+  gst_object_ref_sink (channel->sink_bin);
 
   gst_object_unref (pad);
   gst_caps_unref (caps);
@@ -1148,6 +1151,8 @@ gst_webrtc_data_channel_finalize (GObject * object)
 
   g_clear_object (&channel->appsrc);
   g_clear_object (&channel->appsink);
+  g_clear_object (&channel->src_bin);
+  g_clear_object (&channel->sink_bin);
 
   g_weak_ref_clear (&channel->webrtcbin_weak);
 

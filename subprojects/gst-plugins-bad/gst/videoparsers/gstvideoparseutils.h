@@ -58,7 +58,10 @@
 #define ITU_T_T35_MANUFACTURER_US_ATSC     	0x31
 #define ITU_T_T35_MANUFACTURER_US_DIRECTV  	0x2F
 #define ITU_T_T35_MANUFACTURER_UK_LCEVC  	0x50
+#define ITU_T_T35_MANUFACTURER_US_ST2094_40     0x3c
 
+/* provider oriented code */
+#define ITU_T_T35_MANUFACTURER_US_PROVIDER_ORIENTED_CODE_ST2094_40     0x0001
 /*
  * GstVideoAFDAspectRatio:
  * @GST_VIDEO_AFD_ASPECT_RATIO_UNDEFINED: aspect ratio is undefined
@@ -171,6 +174,12 @@ typedef struct
   /* pending LCEVC data */
   GstBuffer *lcevc_enhancement_data;
 
+  /* pending hdr plus data */
+  guint8 hdr10_plus_data[GST_VIDEO_HDR10_PLUS_MAX_BYTES];
+  guint hdr10_plus_data_size;
+  gboolean has_hdr10_plus_data;
+  GstVideoHDR10Plus hdr10_plus_parsed;
+
 } GstVideoParseUserData;
 
 /*
@@ -207,8 +216,7 @@ void gst_video_push_user_data (GstElement            * elt,
                                GstVideoParseUserData * user_data,
                                GstBuffer             * buf);
 
-void gst_video_clear_user_data (GstVideoParseUserData * user_data,
-                                gboolean                free);
+void gst_video_clear_user_data (GstVideoParseUserData * user_data);
 
 
 void gst_video_parse_user_data_unregistered (GstElement                        * elt,

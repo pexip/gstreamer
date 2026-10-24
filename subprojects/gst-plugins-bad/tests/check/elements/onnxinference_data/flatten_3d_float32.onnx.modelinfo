@@ -1,0 +1,16 @@
+[modelinfo]
+version=1.0
+group-id=flatten_3d_float32-group
+
+[input_3d]
+id=input-0
+type=float32
+dims=3,4,4
+dir=input
+ranges=0.0,255.0;0.0,255.0;0.0,255.0
+
+[output_3d]
+id=output-0
+type=float32
+dims=3,16
+dir=output

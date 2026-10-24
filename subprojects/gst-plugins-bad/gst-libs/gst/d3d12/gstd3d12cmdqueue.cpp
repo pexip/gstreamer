@@ -419,6 +419,9 @@ gst_d3d12_cmd_queue_gc_thread (GstD3D12CmdQueue * self)
 
   GST_INFO_OBJECT (self, "Entering GC thread");
 
+  /* temporary storage to release GC data without priv->lock taken */
+  std::vector < GCDataPtr > completed_data;
+
   while (true) {
     GCDataPtr gc_data;
 
@@ -434,7 +437,7 @@ gst_d3d12_cmd_queue_gc_thread (GstD3D12CmdQueue * self)
       while (!priv->gc_list.empty ()) {
         auto top = priv->gc_list.top ();
         if (top->fence_val > completed) {
-          gc_data = top;
+          gc_data = std::move (top);
           priv->gc_list.pop ();
           break;
         }
@@ -443,9 +446,12 @@ gst_d3d12_cmd_queue_gc_thread (GstD3D12CmdQueue * self)
             G_GUINT64_FORMAT ", fence value %" G_GUINT64_FORMAT,
             completed, top->fence_val);
 
+        completed_data.push_back (std::move (top));
         priv->gc_list.pop ();
       }
     }
+
+    completed_data.clear ();
 
     if (gc_data) {
       GST_LOG_OBJECT (self, "Waiting for fence data %" G_GUINT64_FORMAT,
@@ -493,8 +499,9 @@ gst_d3d12_cmd_queue_set_notify (GstD3D12CmdQueue * queue,
 
   auto priv = queue->priv;
 
-  std::lock_guard < std::mutex > elk (priv->execute_lock);
   auto gc_data = std::make_shared < GCData > (fence_data, notify, fence_value);
+
+  std::lock_guard < std::mutex > lk (priv->lock);
   if (!priv->gc_thread) {
     priv->gc_thread = g_thread_new ("GstD3D12Gc",
         (GThreadFunc) gst_d3d12_cmd_queue_gc_thread, queue);
@@ -502,7 +509,6 @@ gst_d3d12_cmd_queue_set_notify (GstD3D12CmdQueue * queue,
 
   GST_LOG_OBJECT (queue, "Pushing GC data %" G_GUINT64_FORMAT, fence_value);
 
-  std::lock_guard < std::mutex > lk (priv->lock);
   priv->gc_list.push (std::move (gc_data));
   priv->cond.notify_one ();
 }
@@ -546,13 +552,8 @@ gst_d3d12_cmd_queue_drain (GstD3D12CmdQueue * queue)
     }
 
     {
-      if (priv->gc_thread != g_thread_self ()) {
-        std::lock_guard < std::mutex > lk (priv->lock);
-        gc_list = priv->gc_list;
-        priv->gc_list = { };
-      } else {
-        priv->gc_list = { };
-      }
+      std::lock_guard < std::mutex > lk (priv->lock);
+      gc_list.swap (priv->gc_list);
     }
   }
 

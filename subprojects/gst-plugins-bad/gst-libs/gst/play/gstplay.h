@@ -50,6 +50,15 @@ GType        gst_play_message_get_type              (void);
  */
 #define      GST_TYPE_PLAY_MESSAGE                  (gst_play_message_get_type ())
 
+GST_PLAY_API
+GType        gst_play_loop_get_type                 (void);
+
+/**
+ * GST_TYPE_PLAY_LOOP:
+ * Since: 1.28
+ */
+#define      GST_TYPE_PLAY_LOOP                     (gst_play_loop_get_type ())
+
 /**
  * GstPlayState:
  * @GST_PLAY_STATE_STOPPED: the play is stopped.
@@ -83,6 +92,7 @@ typedef enum
  * @GST_PLAY_MESSAGE_VOLUME_CHANGED: The volume of the audio ouput has changed
  * @GST_PLAY_MESSAGE_MUTE_CHANGED: Audio muting flag has been toggled
  * @GST_PLAY_MESSAGE_SEEK_DONE: Any pending seeking operation has been completed
+ * @GST_PLAY_MESSAGE_TRACKS_SELECTED: A new track selection has been applied (Since: 1.30).
  *
  * Since: 1.20
  *
@@ -105,14 +115,39 @@ typedef enum
   GST_PLAY_MESSAGE_MEDIA_INFO_UPDATED,
   GST_PLAY_MESSAGE_VOLUME_CHANGED,
   GST_PLAY_MESSAGE_MUTE_CHANGED,
-  GST_PLAY_MESSAGE_SEEK_DONE
+  GST_PLAY_MESSAGE_SEEK_DONE,
+
+  /**
+   * GST_PLAY_MESSAGE_TRACKS_SELECTED:
+   *
+   * A new track selection has been applied.
+   *
+   * Since: 1.30
+   */
+  GST_PLAY_MESSAGE_TRACKS_SELECTED
 } GstPlayMessage;
+
+/**
+ * GstPlayLoop:
+ * @GST_PLAY_LOOP_NONE: Don't loop.
+ * @GST_PLAY_LOOP_TRACK: Loop over the current track.
+ *
+ * Since: 1.28
+ */
+typedef enum
+{
+  GST_PLAY_LOOP_NONE,
+  GST_PLAY_LOOP_TRACK,
+} GstPlayLoop;
 
 GST_PLAY_API
 const gchar *gst_play_state_get_name                (GstPlayState state);
 
 GST_PLAY_API
 const gchar *gst_play_message_get_name              (GstPlayMessage message_type);
+
+GST_PLAY_API
+const gchar *gst_play_loop_get_name                 (GstPlayLoop loop);
 
 GST_PLAY_API
 GQuark       gst_play_error_quark                   (void);
@@ -413,6 +448,13 @@ GST_PLAY_API
 gboolean       gst_play_config_get_seek_accurate (const GstStructure * config);
 
 GST_PLAY_API
+void           gst_play_config_set_loop (GstStructure *config,
+                                         GstPlayLoop   loop);
+
+GST_PLAY_API
+GstPlayLoop    gst_play_config_get_loop (const GstStructure * config);
+
+GST_PLAY_API
 void           gst_play_config_set_pipeline_dump_in_error_details (GstStructure * config,
                                                                    gboolean       value);
 
@@ -501,6 +543,9 @@ void           gst_play_message_parse_muted_changed              (GstMessage *ms
 
 GST_PLAY_API
 void           gst_play_message_parse_seek_done                  (GstMessage *msg, GstClockTime *position);
+
+GST_PLAY_API
+void           gst_play_message_parse_tracks_selected            (GstMessage *msg, gchar **audio_track_id, gchar **video_track_id, gchar **subtitle_track_id);
 
 G_END_DECLS
 

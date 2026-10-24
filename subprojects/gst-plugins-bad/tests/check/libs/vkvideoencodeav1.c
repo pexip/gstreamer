@@ -106,7 +106,8 @@ check_av1_obu (guint8 * bitstream, gsize size, GstAV1OBU * obu)
         fail_unless (tile_group.num_tiles > 0);
         break;
       }
-
+      case GST_AV1_OBU_PADDING:
+        break;
       default:
         GST_ERROR ("Unknown OBU type: %d", obu->obu_type);
         fail_unless (0);
@@ -160,6 +161,10 @@ check_av1_session_params (GstVulkanEncoder * enc)
 
   fail_unless (gst_vulkan_encoder_video_session_parameters_overrides (enc,
           NULL, NULL, &bitstream_size, (gpointer *) & bitstream, &err));
+
+  /* no override were posted */
+  if (!bitstream)
+    return;
 
   assert_equals_int (check_av1_obu (bitstream, bitstream_size, &obu),
       GST_AV1_OBU_SEQUENCE_HEADER);
@@ -273,7 +278,6 @@ setup_av1_encoder (guint32 width, gint32 height, int gop_size)
   StdVideoAV1ColorConfig av1_color_config;
   StdVideoEncodeAV1DecoderModelInfo av1_model_info;
   StdVideoEncodeAV1OperatingPointInfo av1_operating_point_info;
-  GstVulkanEncoderQualityProperties quality_props;
 
   /* *INDENT-OFF* */
   profile = (GstVulkanVideoProfile) {
@@ -296,13 +300,6 @@ setup_av1_encoder (guint32 width, gint32 height, int gop_size)
       .sType = VK_STRUCTURE_TYPE_VIDEO_ENCODE_AV1_PROFILE_INFO_KHR,
       .stdProfile = av1_profile,
     }
-  };
-
-  quality_props = (GstVulkanEncoderQualityProperties) {
-    .quality_level = -1,
-    .codec.av1 = {
-      .sType = VK_STRUCTURE_TYPE_VIDEO_ENCODE_AV1_QUALITY_LEVEL_PROPERTIES_KHR,
-    },
   };
   /* *INDENT-ON* */
 
@@ -327,11 +324,9 @@ setup_av1_encoder (guint32 width, gint32 height, int gop_size)
     return NULL;
   }
 
-  fail_unless (gst_vulkan_encoder_quality_level (enc) == -1);
+  fail_unless (gst_vulkan_encoder_quality_level (enc) == 0);
 
-  fail_unless (gst_vulkan_encoder_start (enc, &profile, &quality_props, &err));
-
-  fail_unless (gst_vulkan_encoder_quality_level (enc) > -1);
+  fail_unless (gst_vulkan_encoder_start (enc, &profile, NULL, &err));
 
   fail_unless (gst_vulkan_encoder_is_started (enc));
 
@@ -613,8 +608,10 @@ tear_down_encoder (GstVulkanEncoder * enc)
   }
   gst_clear_object (&video_queue);
   gst_clear_object (&graphics_queue);
-  gst_av1_parser_free (parser);
-  parser = NULL;
+  if (parser) {
+    gst_av1_parser_free (parser);
+    parser = NULL;
+  }
 }
 
 static void
@@ -839,4 +836,8 @@ vkvideo_suite (void)
   return s;
 }
 
+#ifdef __APPLE__
+GST_CHECK_MAIN_NOFORK (vkvideo);
+#else
 GST_CHECK_MAIN (vkvideo);
+#endif

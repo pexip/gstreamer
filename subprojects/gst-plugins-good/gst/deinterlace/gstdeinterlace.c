@@ -527,6 +527,7 @@ gst_deinterlace_class_init (GstDeinterlaceClass * klass)
       "Deinterlace Methods ported from DScaler/TvTime",
       "Martin Eikermann <meiker@upb.de>, "
       "Sebastian Dröge <sebastian.droege@collabora.co.uk>");
+  gst_element_class_mark_as_untrusted_aware (element_class);
 
   gobject_class->set_property = gst_deinterlace_set_property;
   gobject_class->get_property = gst_deinterlace_get_property;
@@ -2679,11 +2680,11 @@ gst_deinterlace_do_bufferpool (GstDeinterlace * self, GstCaps * outcaps)
 {
   GstQuery *query;
   gboolean result = TRUE;
-  GstBufferPool *pool;
+  GstBufferPool *pool = NULL;
   GstAllocator *allocator;
   GstAllocationParams params;
   GstStructure *config;
-  guint size, min, max;
+  guint size, min, max, n_pools;
 
   if (self->passthrough) {
     /* we are in passthrough, the input buffer is never copied and always passed
@@ -2716,22 +2717,50 @@ gst_deinterlace_do_bufferpool (GstDeinterlace * self, GstCaps * outcaps)
     gst_allocation_params_init (&params);
   }
 
-  if (gst_query_get_n_allocation_pools (query) > 0)
-    gst_query_parse_nth_allocation_pool (query, 0, &pool, &size, &min, &max);
-  else {
+  n_pools = gst_query_get_n_allocation_pools (query);
+  for (guint i = 0; i < n_pools; i++) {
+    gst_query_parse_nth_allocation_pool (query, i, &pool, &size, &min, &max);
+
+    if (!pool)
+      continue;
+
+    config = gst_buffer_pool_get_config (pool);
+    gst_buffer_pool_config_set_params (config, outcaps, size, min, max);
+    gst_buffer_pool_config_set_allocator (config, allocator, &params);
+    gst_buffer_pool_config_add_option (config,
+        GST_BUFFER_POOL_OPTION_VIDEO_META);
+    if (gst_buffer_pool_has_option (pool,
+            GST_BUFFER_POOL_OPTION_VIDEO_ALIGNMENT))
+      gst_buffer_pool_config_add_option (config,
+          GST_BUFFER_POOL_OPTION_VIDEO_ALIGNMENT);
+
+    if (!gst_buffer_pool_set_config (pool, config)) {
+      config = gst_buffer_pool_get_config (pool);
+
+      if (!gst_buffer_pool_config_validate_params (config, outcaps, size, min,
+              max)) {
+        g_clear_object (&pool);
+        continue;
+      }
+
+      if (gst_buffer_pool_set_config (pool, config))
+        break;
+
+      g_clear_object (&pool);
+    }
+  }
+
+  if (!pool) {
     GstVideoInfo out_info;
 
     gst_video_info_from_caps (&out_info, outcaps);
 
-    pool = NULL;
     size = GST_VIDEO_INFO_SIZE (&out_info);
     min =
         MAX ((gst_deinterlace_method_get_fields_required (self->method) +
             1) / 2 + 1, 4);
     max = 0;
-  }
 
-  if (pool == NULL) {
     /* no pool, we can make our own */
     GST_DEBUG_OBJECT (self, "no pool, making new pool");
     pool = gst_video_buffer_pool_new ();
@@ -2740,14 +2769,14 @@ gst_deinterlace_do_bufferpool (GstDeinterlace * self, GstCaps * outcaps)
       g_object_set (pool, "name", name, NULL);
       g_free (name);
     }
-  }
 
-  /* now configure */
-  config = gst_buffer_pool_get_config (pool);
-  gst_buffer_pool_config_set_params (config, outcaps, size, min, max);
-  gst_buffer_pool_config_set_allocator (config, allocator, &params);
-  gst_buffer_pool_config_add_option (config, GST_BUFFER_POOL_OPTION_VIDEO_META);
-  gst_buffer_pool_set_config (pool, config);
+    config = gst_buffer_pool_get_config (pool);
+    gst_buffer_pool_config_set_params (config, outcaps, size, min, max);
+    gst_buffer_pool_config_set_allocator (config, allocator, &params);
+    gst_buffer_pool_config_add_option (config,
+        GST_BUFFER_POOL_OPTION_VIDEO_META);
+    gst_buffer_pool_set_config (pool, config);
+  }
 
   /* now store */
   result = gst_deinterlace_set_allocation (self, pool, allocator, &params);
@@ -3229,7 +3258,12 @@ gst_deinterlace_sink_query (GstPad * pad, GstObject * parent, GstQuery * query)
       break;
     }
     case GST_QUERY_ALLOCATION:
-      if (self->passthrough)
+      /* If the input is mixed interlacing, there is no guaranteed whether we
+       * will need to actually deinterlace the content or not. To be on the safe
+       * side, forward the allocation query. */
+      if (self->passthrough
+          || (GST_VIDEO_INFO_INTERLACE_MODE (&self->vinfo) ==
+              GST_VIDEO_INTERLACE_MODE_MIXED))
         res = gst_pad_peer_query (self->srcpad, query);
       else
         res = gst_deinterlace_propose_allocation (self, query);
@@ -3389,6 +3423,8 @@ deinterlace_element_init (GstPlugin * plugin)
 static gboolean
 plugin_init (GstPlugin * plugin)
 {
+  gst_plugin_set_static_features_flag (plugin);
+
   return GST_ELEMENT_REGISTER (deinterlace, plugin);
 }
 

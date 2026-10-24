@@ -41,7 +41,6 @@
 #include "gstsubparseelements.h"
 
 #define DEFAULT_ENCODING   NULL
-#define ATTRIBUTE_REGEX "\\s?[a-zA-Z0-9\\. \t\\(\\)]*"
 static const gchar *allowed_srt_tags[] = { "i", "b", "u", NULL };
 static const gchar *allowed_vtt_tags[] =
     { "i", "b", "c", "u", "v", "ruby", "rt", NULL };
@@ -524,8 +523,13 @@ parse_mdvdsub (ParserState * state, const gchar * line)
   }
 
   /* skip the {%u}{%u} part */
-  line = strchr (line, '}') + 1;
-  line = strchr (line, '}') + 1;
+  line = strchr (line, '}');
+  if (!line)
+    return NULL;
+  line = strchr (line + 1, '}');
+  if (!line)
+    return NULL;
+  line++;
 
   /* see if there's a first line with a framerate */
   if (start_frame == 1 && end_frame == 1) {
@@ -534,7 +538,7 @@ parse_mdvdsub (ParserState * state, const gchar * line)
     rest = g_strdup (line);
     g_strdelimit (rest, ",", '.');
     fps = g_ascii_strtod (rest, &end);
-    if (end != rest) {
+    if (end != rest && fps >= 0.001 && fps <= 1000.0) {
       gst_util_double_to_fraction (fps, &state->fps_n, &state->fps_d);
       GST_INFO ("framerate from file: %d/%d ('%s')", state->fps_n,
           state->fps_d, rest);
@@ -578,7 +582,12 @@ parse_mdvdsub (ParserState * state, const gchar * line)
       line = strchr (line, '}') + 1;
     }
     if (sscanf (line, "{s:%u}", &fontsize) == 1) {
-      line = strchr (line, '}') + 1;
+      line = strchr (line, '}');
+      if (!line) {
+        g_string_free (markup, TRUE);
+        return NULL;
+      }
+      line++;
     }
     /* forward slashes at beginning/end signify italics too */
     if (g_str_has_prefix (line, "/")) {
@@ -639,50 +648,112 @@ strip_trailing_newlines (gchar * txt)
  * escaping everything (the text between these simple markers isn't
  * necessarily escaped, so it seems best to do it like this) */
 static void
-subrip_unescape_formatting (gchar * txt, gconstpointer allowed_tags_ptr,
+subrip_unescape_formatting (gchar * txt, gchar ** allowed_tags,
     gboolean allows_tag_attributes)
 {
-  gchar *res;
-  GRegex *tag_regex;
-  gchar *allowed_tags_pattern, *search_pattern;
-  const gchar *replace_pattern;
+  const gchar *p;
+  GString *out;
 
   /* No processing needed if no escaped tag marker found in the string. */
   if (strstr (txt, "&lt;") == NULL)
     return;
 
-  /* Build a list of alternates for our regexp.
-   * FIXME: Could be built once and stored */
-  allowed_tags_pattern = g_strjoinv ("|", (gchar **) allowed_tags_ptr);
-  /* Look for starting/ending escaped tags with optional attributes. */
-  search_pattern = g_strdup_printf ("&lt;(/)?\\ *(%s)(%s)&gt;",
-      allowed_tags_pattern, ATTRIBUTE_REGEX);
-  /* And unescape appropriately */
-  if (allows_tag_attributes) {
-    replace_pattern = "<\\1\\2\\3>";
-  } else {
-    replace_pattern = "<\\1\\2>";
+  out = g_string_new ("");
+  p = txt;
+
+  while (*p) {
+    const gchar *lt;
+    const gchar *gt;
+
+    /* Find next &lt; */
+    lt = strstr (p, "&lt;");
+    if (!lt) {
+      /* No more &lt; found - copy remainder and done */
+      g_string_append (out, p);
+      break;
+    }
+
+    /* Copy everything before &lt; */
+    g_string_append_len (out, p, lt - p);
+
+    /* Skip &lt; */
+    lt += 4;
+
+    /* Find matching &gt; */
+    gt = strstr (lt, "&gt;");
+    if (!gt) {
+      /* No closing &gt; - copy everything until the end as is and end */
+      g_string_append (out, lt - 4);
+      break;
+    }
+
+    /* Check for optional closing tag / */
+    gboolean is_closing = FALSE;
+    const gchar *tag_start = lt;
+    if (*tag_start == '/') {
+      is_closing = TRUE;
+      tag_start++;
+    }
+
+    /* Skip optional whitespace before tag name */
+    while (*tag_start == ' ' || *tag_start == '\t')
+      tag_start++;
+
+    /* Extract tag name */
+    const gchar *tag_end = tag_start;
+    while (g_ascii_isalnum (*tag_end))
+      tag_end++;
+    gsize tag_len = tag_end - tag_start;
+
+    /* Check if tag is allowed */
+    gboolean allowed = FALSE;
+    gchar **tag_ptr;
+    for (tag_ptr = allowed_tags; *tag_ptr; tag_ptr++) {
+      if (strlen (*tag_ptr) == tag_len &&
+          strncmp (*tag_ptr, tag_start, tag_len) == 0) {
+        allowed = TRUE;
+        break;
+      }
+    }
+
+    if (!allowed) {
+      /* Tag not allowed - copy everything between and including &lt;...&gt; as is */
+      g_string_append_len (out, lt - 4, gt + 4 - (lt - 4));
+      p = gt + 4;
+      continue;
+    }
+
+    /* Otherwise handle allowed tag by unescaping < */
+    g_string_append_c (out, '<');
+    if (is_closing)
+      g_string_append_c (out, '/');
+    g_string_append_len (out, tag_start, tag_len);
+
+    /* If attributes allowed then copy them over, otherwise ignore them */
+    if (allows_tag_attributes) {
+      /* Scan for optional attributes */
+      const gchar *attr_start = tag_end;
+
+      /* Find attributes end */
+      while (tag_end < gt &&
+          (g_ascii_isalnum (*tag_end) || *tag_end == '.' ||
+              *tag_end == ' ' || *tag_end == '\t' ||
+              *tag_end == '(' || *tag_end == ')'))
+        tag_end++;
+
+      /* Copy attributes */
+      g_string_append_len (out, attr_start, tag_end - attr_start);
+    }
+
+    /* Append closing > and skip to next */
+    g_string_append_c (out, '>');
+    p = gt + 4;
   }
 
-  tag_regex = g_regex_new (search_pattern, 0, 0, NULL);
-  res = g_regex_replace (tag_regex, txt, strlen (txt), 0,
-      replace_pattern, 0, NULL);
-
-  /* Replacing can fail. Return an empty string in that case. */
-  if (!res) {
-    strcpy (txt, "");
-    return;
-  }
-
-  /* res will always be shorter than the input or identical, so this
+  /* out will always be shorter than the input or identical, so this
    * copy is OK */
-  strcpy (txt, res);
-
-  g_free (res);
-  g_free (search_pattern);
-  g_free (allowed_tags_pattern);
-
-  g_regex_unref (tag_regex);
+  strcpy (txt, out->str);
+  g_string_free (out, TRUE);
 }
 
 
@@ -727,19 +798,11 @@ subrip_remove_unhandled_tags (gchar * txt)
  * input! This function adds missing closing markup tags and removes
  * broken closing tags for tags that have never been opened. */
 static void
-subrip_fix_up_markup (gchar ** p_txt, gconstpointer allowed_tags_ptr)
+subrip_fix_up_markup (gchar ** p_txt, gchar ** allowed_tags)
 {
   gchar *cur, *next_tag;
   GPtrArray *open_tags = NULL;
   guint num_open_tags = 0;
-  const gchar *iter_tag;
-  guint offset = 0;
-  guint index;
-  gchar *cur_tag;
-  gchar *end_tag;
-  GRegex *tag_regex;
-  GMatchInfo *match_info;
-  gchar **allowed_tags = (gchar **) allowed_tags_ptr;
 
   g_assert (*p_txt != NULL);
 
@@ -749,67 +812,94 @@ subrip_fix_up_markup (gchar ** p_txt, gconstpointer allowed_tags_ptr)
     next_tag = strchr (cur, '<');
     if (next_tag == NULL)
       break;
-    offset = 0;
-    index = 0;
-    while (index < g_strv_length (allowed_tags)) {
-      iter_tag = allowed_tags[index];
-      /* Look for a white listed tag */
-      cur_tag = g_strconcat ("<", iter_tag, ATTRIBUTE_REGEX, ">", NULL);
-      tag_regex = g_regex_new (cur_tag, 0, 0, NULL);
-      (void) g_regex_match (tag_regex, next_tag, 0, &match_info);
 
-      if (g_match_info_matches (match_info)) {
-        gint start_pos, end_pos;
-        gchar *word = g_match_info_fetch (match_info, 0);
-        g_match_info_fetch_pos (match_info, 0, &start_pos, &end_pos);
-        if (start_pos == 0) {
-          offset = strlen (word);
+    /* Look for allowed tag */
+    guint offset = 0;
+    gboolean is_closing = FALSE;
+    for (gchar ** tag_ptr = allowed_tags; *tag_ptr; tag_ptr++) {
+      const gchar *tag_start = next_tag + 1;
+
+      is_closing = (*tag_start == '/');
+      if (is_closing)
+        tag_start++;
+
+      /* Skip optional whitespace before tag start */
+      while (*tag_start == ' ' || *tag_start == '\t')
+        tag_start++;
+
+      /* Extract tag name length */
+      const gchar *tag_end = tag_start;
+      while (g_ascii_isalnum (*tag_end))
+        tag_end++;
+      gsize tag_len = tag_end - tag_start;
+
+      /* Check if tag name matches */
+      if (strlen (*tag_ptr) == tag_len &&
+          g_ascii_strncasecmp (*tag_ptr, tag_start, tag_len) == 0) {
+        /* Found allowed tag - calculate offset to position after tag */
+
+        /* Check for optional attributes */
+        if (*tag_end == ' ' || *tag_end == '\t' || *tag_end == '.') {
+          while (*tag_end && *tag_end != '>' &&
+              (g_ascii_isalnum (*tag_end) || *tag_end == '.' ||
+                  *tag_end == ' ' || *tag_end == '\t' ||
+                  *tag_end == '(' || *tag_end == ')')) {
+            tag_end++;
+          }
         }
-        g_free (word);
+
+        /* Check for closing >, if not found skip over this */
+        if (*tag_end == '>') {
+          offset = tag_end - (next_tag + 1);
+
+          /* Full opening tag found, let's keep track of it and continue */
+          if (!is_closing) {
+            g_ptr_array_add (open_tags, g_ascii_strdown (*tag_ptr, -1));
+            ++num_open_tags;
+          }
+          break;
+        }
       }
-      g_match_info_free (match_info);
-      g_regex_unref (tag_regex);
-      g_free (cur_tag);
-      index++;
-      if (offset) {
-        /* OK we found a tag, let's keep track of it */
-        g_ptr_array_add (open_tags, g_ascii_strdown (iter_tag, -1));
-        ++num_open_tags;
-        break;
-      }
+
+      /* No closing > found, continue */
+      offset = 0;
     }
 
-    if (offset) {
+    /* Not a valid tag - skip to next */
+    if (offset == 0) {
+      ++next_tag;
+      cur = next_tag;
+      continue;
+    }
+
+    /* Not a closing tag - skip to the next */
+    if (!is_closing) {
       next_tag += offset;
       cur = next_tag;
       continue;
     }
 
-    if (*next_tag == '<' && *(next_tag + 1) == '/') {
-      end_tag = strchr (next_tag, '>');
-      if (end_tag) {
-        const gchar *last = NULL;
-        if (num_open_tags > 0)
-          last = g_ptr_array_index (open_tags, num_open_tags - 1);
-        if (num_open_tags == 0
-            || g_ascii_strncasecmp (end_tag - 1, last, strlen (last))) {
-          GST_LOG ("broken input, closing tag '%s' is not open", next_tag);
-          /* Move everything after the tag end, including closing \0 */
-          memmove (next_tag, end_tag + 1, strlen (end_tag));
-          cur = next_tag;
-          continue;
-        } else {
-          --num_open_tags;
-          g_ptr_array_remove_index (open_tags, num_open_tags);
-          cur = end_tag + 1;
-          continue;
-        }
-      }
+    /* Otherwise a closing tag */
+    gchar *tag_end = strchr (next_tag, '>');
+    const gchar *last = NULL;
+    if (num_open_tags > 0)
+      last = g_ptr_array_index (open_tags, num_open_tags - 1);
+    /* Check if the closing tag is the last tag that was opened */
+    if (num_open_tags == 0
+        || g_ascii_strncasecmp (next_tag + 2, last, strlen (last)) != 0) {
+      GST_LOG ("broken input, closing tag '%s' is not open", next_tag);
+      /* Skip over the tag by moving everything after the tag end, including closing \0 */
+      memmove (next_tag, tag_end + 1, strlen (tag_end + 1) + 1);
+      cur = next_tag;
+      continue;
     }
-    ++next_tag;
-    cur = next_tag;
+
+    --num_open_tags;
+    g_ptr_array_remove_index (open_tags, num_open_tags);
+    cur = tag_end + 1;
   }
 
+  /* if there are still open tags, close them all at the end */
   if (num_open_tags > 0) {
     GString *s;
 
@@ -915,56 +1005,53 @@ static void
 parse_webvtt_cue_settings (ParserState * state, const gchar * settings)
 {
   gchar **splitted_settings = g_strsplit_set (settings, " \t", -1);
-  gint i = 0;
   gint16 text_position, text_size;
   gint16 line_position;
   gboolean vertical_found = FALSE;
   gboolean alignment_found = FALSE;
 
-  while (i < g_strv_length (splitted_settings)) {
+  for (gchar ** setting_ptr = splitted_settings; *setting_ptr; setting_ptr++) {
     gboolean valid_tag = FALSE;
-    switch (splitted_settings[i][0]) {
+    switch ((*setting_ptr)[0]) {
       case 'T':
-        if (sscanf (splitted_settings[i], "T:%" G_GINT16_FORMAT "%%",
+        if (sscanf (*setting_ptr, "T:%" G_GINT16_FORMAT "%%",
                 &text_position) > 0) {
           state->text_position = (guint8) text_position;
           valid_tag = TRUE;
         }
         break;
       case 'D':
-        if (strlen (splitted_settings[i]) > 2) {
+        if (strlen (*setting_ptr) > 2) {
           vertical_found = TRUE;
           g_free (state->vertical);
-          state->vertical = g_strdup (splitted_settings[i] + 2);
+          state->vertical = g_strdup (*setting_ptr + 2);
           valid_tag = TRUE;
         }
         break;
       case 'L':
-        if (g_str_has_suffix (splitted_settings[i], "%")) {
-          if (sscanf (splitted_settings[i], "L:%" G_GINT16_FORMAT "%%",
+        if (g_str_has_suffix (*setting_ptr, "%")) {
+          if (sscanf (*setting_ptr, "L:%" G_GINT16_FORMAT "%%",
                   &line_position) > 0) {
             state->line_position = line_position;
             valid_tag = TRUE;
           }
         } else {
-          if (sscanf (splitted_settings[i], "L:%" G_GINT16_FORMAT,
-                  &line_position) > 0) {
+          if (sscanf (*setting_ptr, "L:%" G_GINT16_FORMAT, &line_position) > 0) {
             state->line_number = line_position;
             valid_tag = TRUE;
           }
         }
         break;
       case 'S':
-        if (sscanf (splitted_settings[i], "S:%" G_GINT16_FORMAT "%%",
-                &text_size) > 0) {
+        if (sscanf (*setting_ptr, "S:%" G_GINT16_FORMAT "%%", &text_size) > 0) {
           state->text_size = (guint8) text_size;
           valid_tag = TRUE;
         }
         break;
       case 'A':
-        if (strlen (splitted_settings[i]) > 2) {
+        if (strlen (*setting_ptr) > 2) {
           g_free (state->alignment);
-          state->alignment = g_strdup (splitted_settings[i] + 2);
+          state->alignment = g_strdup (*setting_ptr + 2);
           alignment_found = TRUE;
           valid_tag = TRUE;
         }
@@ -973,10 +1060,8 @@ parse_webvtt_cue_settings (ParserState * state, const gchar * settings)
         break;
     }
     if (!valid_tag) {
-      GST_LOG ("Invalid or unrecognised setting found: %s",
-          splitted_settings[i]);
+      GST_LOG ("Invalid or unrecognised setting found: %s", *setting_ptr);
     }
-    i++;
   }
   g_strfreev (splitted_settings);
   if (!vertical_found) {
@@ -1014,7 +1099,7 @@ parse_subrip (ParserState * state, const gchar * line)
     case 1:
     {
       GstClockTime ts_start, ts_end;
-      gchar *end_time;
+      const gchar *end_time;
 
       /* looking for start_time --> end_time */
       if ((end_time = strstr (line, " --> ")) &&
@@ -1121,8 +1206,8 @@ parse_webvtt (ParserState * state, const gchar * line)
    * already at the start --> end time marker */
   if (state->state == 0 || state->state == 1) {
     GstClockTime ts_start, ts_end;
-    gchar *end_time;
-    gchar *cue_settings = NULL;
+    const gchar *end_time;
+    const gchar *cue_settings = NULL;
 
     /* looking for start_time --> end_time */
     if ((end_time = strstr (line, " --> ")) &&
@@ -1546,16 +1631,9 @@ static void
 xml_text (GMarkupParseContext * context,
     const gchar * text, gsize text_len, gpointer user_data, GError ** error)
 {
-  gchar **accum = (gchar **) user_data;
-  gchar *concat;
+  GString *accum = user_data;
 
-  if (*accum) {
-    concat = g_strconcat (*accum, text, NULL);
-    g_free (*accum);
-    *accum = concat;
-  } else {
-    *accum = g_strdup (text);
-  }
+  g_string_append_len (accum, text, text_len);
 }
 
 static gchar *
@@ -1563,10 +1641,10 @@ strip_pango_markup (gchar * markup, GError ** error)
 {
   GMarkupParser parser = { 0, };
   GMarkupParseContext *context;
-  gchar *accum = NULL;
+  GString *accum = g_string_new (NULL);
 
   parser.text = xml_text;
-  context = g_markup_parse_context_new (&parser, 0, &accum, NULL);
+  context = g_markup_parse_context_new (&parser, 0, accum, NULL);
 
   g_markup_parse_context_parse (context, "<root>", 6, NULL);
   g_markup_parse_context_parse (context, markup, strlen (markup), error);
@@ -1580,10 +1658,10 @@ strip_pango_markup (gchar * markup, GError ** error)
 
 done:
   g_markup_parse_context_free (context);
-  return accum;
+  return accum ? g_string_free (accum, FALSE) : NULL;
 
 error:
-  g_free (accum);
+  g_string_free (accum, TRUE);
   accum = NULL;
   goto done;
 }
@@ -1726,6 +1804,7 @@ handle_buffer (GstSubParse * self, GstBuffer * buf)
         } else {
           GST_WARNING_OBJECT (self, "Failed to strip pango markup: %s",
               error->message);
+          g_clear_error (&error);
         }
       }
 

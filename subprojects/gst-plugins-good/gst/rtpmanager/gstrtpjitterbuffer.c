@@ -650,7 +650,7 @@ static void do_handle_sync_rtp_info (GstRtpJitterBuffer * jitterbuffer,
 
 static void unschedule_current_timer (GstRtpJitterBuffer * jitterbuffer);
 
-static void timer_thread_func (GstRtpJitterBuffer * jitterbuffer);
+static gpointer timer_thread_func (GstRtpJitterBuffer * jitterbuffer);
 
 static GstStructure *gst_rtp_jitter_buffer_create_stats (GstRtpJitterBuffer *
     jitterbuffer);
@@ -1837,9 +1837,7 @@ gst_jitter_buffer_sink_parse_caps (GstRtpJitterBuffer * jitterbuffer,
           hostname = g_strdup (host);
 
         if (use_system_clock) {
-          clock =
-              g_object_new (GST_TYPE_SYSTEM_CLOCK, "clock-type",
-              GST_CLOCK_TYPE_REALTIME, NULL);
+          clock = gst_system_clock_new (NULL, GST_CLOCK_TYPE_REALTIME);
           /* difference between UNIX epoch and NTP epoch */
           clock_correction = GST_RTP_NTP_UNIX_OFFSET * GST_SECOND;
         } else {
@@ -1860,9 +1858,7 @@ gst_jitter_buffer_sink_parse_caps (GstRtpJitterBuffer * jitterbuffer,
         domain = 0;
 
       if (use_system_clock) {
-        clock =
-            g_object_new (GST_TYPE_SYSTEM_CLOCK, "clock-type",
-            GST_CLOCK_TYPE_REALTIME, NULL);
+        clock = gst_system_clock_new (NULL, GST_CLOCK_TYPE_REALTIME);
         /* difference between UNIX and PTP/TAI (37 leap seconds as of October 2023) */
         clock_correction = 37 * GST_SECOND;
       } else {
@@ -1876,9 +1872,7 @@ gst_jitter_buffer_sink_parse_caps (GstRtpJitterBuffer * jitterbuffer,
       ts_meta_ref = gst_caps_new_empty_simple ("timestamp/x-ntp");
     } else {
       if (use_system_clock) {
-        clock =
-            g_object_new (GST_TYPE_SYSTEM_CLOCK, "clock-type",
-            GST_CLOCK_TYPE_REALTIME, NULL);
+        clock = gst_system_clock_new (NULL, GST_CLOCK_TYPE_REALTIME);
       } else {
         GST_FIXME_OBJECT (jitterbuffer,
             "Unsupported timestamp reference clock");
@@ -2041,7 +2035,8 @@ gst_rtp_jitter_buffer_src_activate_mode (GstPad * pad, GstObject * parent,
         /* start pushing out buffers */
         GST_DEBUG_OBJECT (jitterbuffer, "Starting task on srcpad");
         result = gst_pad_start_task (jitterbuffer->priv->srcpad,
-            (GstTaskFunction) gst_rtp_jitter_buffer_loop, jitterbuffer, NULL);
+            (GstTaskFunction) gst_rtp_jitter_buffer_loop,
+            gst_object_ref (jitterbuffer), gst_object_unref);
       } else {
         /* make sure all data processing stops ASAP */
         gst_rtp_jitter_buffer_flush_start (jitterbuffer);
@@ -4849,7 +4844,7 @@ push_rtx_events (GstRtpJitterBuffer * jitterbuffer, GQueue * events)
  *
  * If there are no timers, we wait on a gcond until something new happens.
  */
-static void
+static gpointer
 timer_thread_func (GstRtpJitterBuffer * jitterbuffer)
 {
   GstRtpJitterBufferPrivate *priv = jitterbuffer->priv;
@@ -4977,7 +4972,7 @@ stopping:
   JBUF_UNLOCK (priv);
 
   GST_DEBUG_OBJECT (jitterbuffer, "we are stopping");
-  return;
+  return NULL;
 }
 
 /*
@@ -5405,8 +5400,13 @@ gst_rtp_jitter_buffer_chain_rtcp (GstPad * pad, GstObject * parent,
             guint8 len;
             const guint8 *data;
 
-            gst_rtcp_packet_sdes_get_entry (&packet, &type, &len,
-                (guint8 **) & data);
+            if (!gst_rtcp_packet_sdes_get_entry (&packet, &type, &len,
+                    (guint8 **) & data)) {
+              GST_WARNING_OBJECT (jitterbuffer, "malformed SDES packet for "
+                  "SSRC %08x, ignoring the rest of it",
+                  gst_rtcp_packet_sdes_get_ssrc (&packet));
+              break;
+            }
 
             if (type == GST_RTCP_SDES_CNAME) {
               cname = g_strndup ((const gchar *) data, len);

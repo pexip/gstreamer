@@ -26,6 +26,9 @@
 #include "gstanalyticssegmentationmtd.h"
 #include <gst/video/video-info.h>
 
+GST_DEBUG_CATEGORY_EXTERN (gst_analytics_relation_meta_debug);
+#define GST_CAT_DEFAULT gst_analytics_relation_meta_debug
+
 /**
  * SECTION: gstanalyticssegmentationmtd
  * @title: GstAnalyticsSegmentationMtd
@@ -69,6 +72,7 @@
  *  region_ids is fill during segmentation post-processing
  *
  *  region_ids:
+ *
  *  |region-index | region-id |
  *  |-------------|-----------|
  *  | 0           | 0         |
@@ -118,7 +122,8 @@
  *  a semantic segmentation is performed, therefore region-id-12 and region-id-7
  *  are now represented by the same region-id-12
  *
- *  region_ids: (here
+ *  region_ids:
+ *
  *  |region-index | region-id |
  *  |-------------|-----------|
  *  | 0           | 0         |
@@ -180,21 +185,28 @@ static const GstAnalyticsMtdImpl segmentation_impl = {
 
 /*
  * GstAnalyticsSegMtdData:
- * @type: #GstSegmentationType indicate if the mask values are object/region-id
+ * @type: #GstSegmentationType indicates if the mask values are object/region-id
  * (in the case of instance segmentation) or object/region-type (in the case
  * of semantic segmentation).
  * @masks: #GstBuffer used to store segmentation masks
  * @region_count: Number of region in the segmentation masks
  * @region_ids: Indexed region ids
  *
- * Store segmentation results where each value represent a group to which
- * belong the corresponding pixel from original image where segmentation was
- * performed. All values equal in @masks form a mask defining all the
- * pixel belonging to the same segmented region from the original image. The
- * GstVideoMeta attached to the @masks, describe masks resolution, padding,
- * format, ... The format in video meta has a special meaning in the context
- * of the mask, GRAY8 mean that @masks value can take 256 values which mean
- * 256 segmented region can be represented.
+ * Store segmentation results, where the pixel values in @masks represent
+ * which group the corresponding pixel from the original image (where
+ * segmentation was performed) belong to. All pixels with the same value in
+ * @masks form a mask marking all the pixels belonging to the same segmented
+ * region from the original image.
+ *
+ * The pixel format, resolution and any padding of the @masks buffer are described
+ * in the #GstVideoMeta attached to the buffer.
+ *
+ * The format in video meta has a special meaning in the context
+ * of the mask: pixels in GRAY8 format can take 256 values, which means
+ * up to 255 segmented regions can be represented, as 0 is the special 'no mask' value.
+ *
+ * When there are more than 255 regions to identify, GRAY16 pixel format can be used
+ * to expand the range up to a maximum of 65535 regions.
  *
  */
 typedef struct _GstAnalyticsSegMtdData
@@ -241,7 +253,28 @@ gst_analytics_segmentation_mtd_get_mtd_type (void)
  *
  * Get segmentation mask data.
  *
- * Returns: Segmentation mask data stored in a #GstBuffer
+ * The mask location (@masks_loc_x, @masks_loc_y, @masks_loc_w, @masks_loc_h) is
+ * the rectangle, in image pixel coordinates, that the mask covers. A mask that
+ * spans the whole image reports @masks_loc_w and @masks_loc_h equal to the image
+ * width and height (see gst_analytics_relation_meta_add_segmentation_mtd());
+ * there is no special "whole frame" zero value, so a zero @masks_loc_w or
+ * @masks_loc_h denotes a degenerate (empty) location.
+ *
+ * The mask's own pixel dimensions, stride and format are not conveyed by this
+ * rectangle: they come from the #GstVideoMeta attached to the returned buffer,
+ * which the producer is required to attach (see
+ * gst_analytics_relation_meta_add_segmentation_mtd()). Read them with
+ * gst_buffer_get_video_meta(); the mask is a single-plane GRAY8 or GRAY16 image
+ * whose pixel values are region ids.
+ *
+ * The format of the mask limits how many region ids can be represented. Pixels
+ * in GRAY8 format can take 256 values, which means up to 255 segmented regions can
+ * be represented, as 0 is the special 'no mask' value.
+ *
+ * When there are more than 255 regions to identify, GRAY16 pixel format can be used
+ * to expand the range up to a maximum of 65535 regions.
+ *
+ * Returns: (transfer full) (nullable): Segmentation mask data stored in a #GstBuffer
  *
  * Since: 1.26
  */
@@ -377,6 +410,11 @@ gst_analytics_segmentation_mtd_get_region_count (const
  * entire image the rectangular area will be (@masks_loc_x = 0, @masks_loc_y = 0,
  * @masks_loc_w = image_width, @masks_loc_h = image_height).
  *
+ * The @buffer must have #GstVideoMeta attached describing the buffer pixel format,
+ * mask dimensions, padding etc. The buffer must be in GRAY8 or GRAY16 (LE or BE) pixel format.
+ *
+ * See gst_analytics_segmentation_mtd_get_mask() for more details
+ *
  * Returns: TRUE if added successfully, otherwise FALSE
  *
  * Since: 1.26
@@ -432,11 +470,37 @@ static gboolean
 gst_analytics_segmentation_mtd_transform (GstBuffer * transbuf,
     GstAnalyticsMtd * transmtd, GstBuffer * buffer, GQuark type, gpointer data)
 {
-  GstAnalyticsSegMtdData *segdata;
-  if (GST_META_TRANSFORM_IS_COPY (type)) {
-    segdata = gst_analytics_relation_meta_get_mtd_data (transmtd->meta,
-        transmtd->id);
+  GstAnalyticsSegMtdData *segdata =
+      gst_analytics_relation_meta_get_mtd_data (transmtd->meta,
+      transmtd->id);
+
+  if (transbuf != buffer)
     gst_buffer_ref (segdata->masks);
+
+  if (GST_VIDEO_META_TRANSFORM_IS_MATRIX (type)) {
+    GstVideoMetaTransformMatrix *trans = data;
+    GstVideoRectangle rect = { segdata->masks_loc_x, segdata->masks_loc_y,
+      segdata->masks_loc_w, segdata->masks_loc_h
+    };
+
+    if (!G_APPROX_VALUE (trans->matrix[0][1], 0.0f, 1e-6f) ||
+        !G_APPROX_VALUE (trans->matrix[1][0], 0.0f, 1e-6f) ||
+        trans->matrix[0][0] < 0 || trans->matrix[1][1] < 0) {
+      GST_WARNING ("Segmentation meta doesn't support rotations or flips,"
+          " not copying from buffer %" GST_PTR_FORMAT " to buffer: %"
+          GST_PTR_FORMAT, buffer, transbuf);
+      return FALSE;
+    }
+
+    if (!gst_video_meta_transform_matrix_rectangle (trans, &rect))
+      return FALSE;
+
+    segdata->masks_loc_x = rect.x;
+    segdata->masks_loc_y = rect.y;
+    segdata->masks_loc_w = rect.w;
+    segdata->masks_loc_h = rect.h;
+
+    return TRUE;
   } else if (GST_VIDEO_META_TRANSFORM_IS_SCALE (type)) {
     GstVideoMetaTransform *trans = data;
     gint ow, oh, nw, nh;
@@ -445,9 +509,6 @@ gst_analytics_segmentation_mtd_transform (GstBuffer * transbuf,
     nw = GST_VIDEO_INFO_WIDTH (trans->out_info);
     oh = GST_VIDEO_INFO_HEIGHT (trans->in_info);
     nh = GST_VIDEO_INFO_HEIGHT (trans->out_info);
-
-    segdata = gst_analytics_relation_meta_get_mtd_data (transmtd->meta,
-        transmtd->id);
 
     segdata->masks_loc_x *= nw;
     segdata->masks_loc_x /= ow;
@@ -461,12 +522,13 @@ gst_analytics_segmentation_mtd_transform (GstBuffer * transbuf,
     segdata->masks_loc_h *= nh;
     segdata->masks_loc_h /= oh;
 
-    if (transbuf != buffer) {
-      gst_buffer_ref (segdata->masks);
-    }
+    return TRUE;
+  } else if (GST_META_TRANSFORM_IS_COPY (type)) {
+    // Data already copied by generic transform function, nothing to do.
+    return TRUE;
   }
 
-  return TRUE;
+  return FALSE;
 }
 
 /**

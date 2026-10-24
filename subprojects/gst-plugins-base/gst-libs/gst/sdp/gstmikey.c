@@ -2480,6 +2480,8 @@ auth_key_length_from_auth_cipher_name (const gchar * auth, const gchar * cipher,
   if (g_strcmp0 (cipher, "aes-128-gcm") == 0
       || g_strcmp0 (cipher, "aes-256-gcm") == 0) {
     *length = 0;
+  } else if (g_strcmp0 (auth, "null") == 0) {
+    *length = 0;
   } else {
     if (g_strcmp0 (auth, "hmac-sha1-32") == 0) {
       *length = HMAC_32_KEY_LEN;
@@ -2515,8 +2517,10 @@ gst_mikey_message_new_from_caps (GstCaps * caps)
   guint8 byte;
   guint8 enc_alg;
   guint8 auth_alg;
-  guint8 enc_key_length;
-  guint8 auth_key_length;
+  guint8 enc_key_length = 0;
+  guint8 auth_key_length = 0;
+  guint8 salt_key_length = 0;
+  gsize key_length = 0;
   GstStructure *s;
   GstMapInfo info;
   GstBuffer *srtpkey;
@@ -2565,6 +2569,15 @@ gst_mikey_message_new_from_caps (GstCaps * caps)
     return NULL;
   }
 
+  /* By default the whole srtp-key buffer is used as the master key. When a
+   * cipher is present and the buffer is larger than the encryption key, the
+   * trailing bytes are the session salt. */
+  key_length = gst_buffer_get_size (srtpkey);
+  if (enc_key_length > 0 && key_length > enc_key_length) {
+    salt_key_length = key_length - enc_key_length;
+    key_length = enc_key_length;
+  }
+
   msg = gst_mikey_message_new ();
   /* unencrypted MIKEY message, we send this over TLS so this is allowed */
   gst_mikey_message_set_info (msg, GST_MIKEY_VERSION, GST_MIKEY_TYPE_PSK_INIT,
@@ -2587,6 +2600,11 @@ gst_mikey_message_new_from_caps (GstCaps * caps)
       /* encryption key length */
       gst_mikey_payload_sp_add_param (payload, GST_MIKEY_SP_SRTP_ENC_KEY_LEN, 1,
           &enc_key_length);
+      if (salt_key_length) {
+        /* session salt key length */
+        gst_mikey_payload_sp_add_param (payload, GST_MIKEY_SP_SRTP_SALT_KEY_LEN,
+            1, &salt_key_length);
+      }
     }
     if (auth) {
       /* HMAC-SHA1 or NULL in case of GCM */
@@ -2615,11 +2633,15 @@ gst_mikey_message_new_from_caps (GstCaps * caps)
   /* make unencrypted KEMAC */
   payload = gst_mikey_payload_new (GST_MIKEY_PT_KEMAC);
   gst_mikey_payload_kemac_set (payload, GST_MIKEY_ENC_NULL, GST_MIKEY_MAC_NULL);
-  /* add the key in KEMAC */
+  /* add the key||salt in KEMAC */
   pkd = gst_mikey_payload_new (GST_MIKEY_PT_KEY_DATA);
   gst_buffer_map (srtpkey, &info, GST_MAP_READ);
-  gst_mikey_payload_key_data_set_key (pkd, GST_MIKEY_KD_TEK, info.size,
+  gst_mikey_payload_key_data_set_key (pkd, GST_MIKEY_KD_TEK, key_length,
       info.data);
+  if (salt_key_length) {
+    gst_mikey_payload_key_data_set_salt (pkd, salt_key_length,
+        info.data + key_length);
+  }
   gst_buffer_unmap (srtpkey, &info);
   /* add optional SPI/MKI
    * See: https://www.rfc-editor.org/rfc/rfc3830.html#section-6.14
@@ -2669,9 +2691,13 @@ gst_mikey_message_to_caps (const GstMIKEYMessage * msg, GstCaps * caps)
   const GstMIKEYPayload *payload;
   const gchar *srtp_cipher;
   const gchar *srtp_auth;
+  const gchar *srtcp_cipher;
+  const gchar *srtcp_auth;
 
   srtp_cipher = "aes-128-icm";
   srtp_auth = "hmac-sha1-80";
+  srtcp_cipher = "aes-128-icm";
+  srtcp_auth = "hmac-sha1-80";
 
   /* Look for first crypto session */
   if (!(srtp = gst_mikey_message_get_cs_srtp (msg, 0))) {
@@ -2686,6 +2712,9 @@ gst_mikey_message_to_caps (const GstMIKEYMessage * msg, GstCaps * caps)
     GstMIKEYPayloadSP *p = (GstMIKEYPayloadSP *) payload;
     guint len, i;
     guint enc_alg = GST_MIKEY_ENC_NULL;
+    gint srtp_auth_on = -1;
+    gint srtp_enc_on = -1;
+    gint srtcp_enc_on = -1;
 
     if (p->proto != GST_MIKEY_SEC_PROTO_SRTP)
       goto done;
@@ -2760,13 +2789,27 @@ gst_mikey_message_to_caps (const GstMIKEYMessage * msg, GstCaps * caps)
           }
           break;
         case GST_MIKEY_SP_SRTP_SRTP_ENC:
+          srtp_enc_on = param->val[0];
           break;
         case GST_MIKEY_SP_SRTP_SRTCP_ENC:
+          srtcp_enc_on = param->val[0];
+          break;
+        case GST_MIKEY_SP_SRTP_SRTP_AUTH:
+          srtp_auth_on = param->val[0];
           break;
         default:
           break;
       }
     }
+
+    srtcp_cipher = srtp_cipher;
+    srtcp_auth = srtp_auth;
+    if (srtp_enc_on == 0)
+      srtp_cipher = "null";
+    if (srtcp_enc_on == 0)
+      srtcp_cipher = "null";
+    if (srtp_auth_on == 0)
+      srtp_auth = "null";
   }
 
   if (!(payload = gst_mikey_message_find_payload (msg, GST_MIKEY_PT_KEMAC, 0)))
@@ -2811,8 +2854,8 @@ gst_mikey_message_to_caps (const GstMIKEYMessage * msg, GstCaps * caps)
   gst_caps_set_simple (caps,
       "srtp-cipher", G_TYPE_STRING, srtp_cipher,
       "srtp-auth", G_TYPE_STRING, srtp_auth,
-      "srtcp-cipher", G_TYPE_STRING, srtp_cipher,
-      "srtcp-auth", G_TYPE_STRING, srtp_auth, NULL);
+      "srtcp-cipher", G_TYPE_STRING, srtcp_cipher,
+      "srtcp-auth", G_TYPE_STRING, srtcp_auth, NULL);
 
   res = TRUE;
 

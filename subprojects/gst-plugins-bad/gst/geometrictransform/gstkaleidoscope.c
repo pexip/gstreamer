@@ -179,9 +179,12 @@ kaleidoscope_map (GstGeometricTransform * gt, gint x, gint y, gdouble * in_x,
   theta = gst_gm_triangle (theta / G_PI * kaleidoscope->sides * 0.5);
 
   if (cgt->precalc_radius != 0) {
-    gdouble radiusc = cgt->precalc_radius / cos (theta);
-
-    distance = radiusc * gst_gm_triangle (distance / radiusc);
+    gdouble cos_theta = cos (theta);
+    /* Avoid division by zero when cos(theta) is too close to zero */
+    if (fabs (cos_theta) > 1e-10) {
+      gdouble radiusc = cgt->precalc_radius / cos_theta;
+      distance = radiusc * gst_gm_triangle (distance / radiusc);
+    }
   }
   theta += kaleidoscope->angle;
 
@@ -210,6 +213,7 @@ gst_kaleidoscope_class_init (GstKaleidoscopeClass * klass)
       "Transform/Effect/Video",
       "Applies 'kaleidoscope' geometric transform to the image",
       "Thiago Santos<thiago.sousa.santos@collabora.co.uk>");
+  gst_element_class_mark_as_untrusted_aware (gstelement_class);
 
   gobject_class->set_property = gst_kaleidoscope_set_property;
   gobject_class->get_property = gst_kaleidoscope_get_property;

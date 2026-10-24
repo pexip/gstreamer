@@ -29,13 +29,20 @@ export OPENSSL_ia32cap=":0"
 # like they would do in the CI.
 export LIBGL_ALWAYS_SOFTWARE="true"
 # This the hardcoded value for llvmpipe
-export MESA_VK_DEVICE_SELECT="10005:0"
+export VK_ICD_FILENAMES="/usr/share/vulkan/icd.d/lvp_icd.json"
 
+if test "x$CI_PROJECT_NAME" = "xgstreamer-security"; then
+  check_bugs=""
+else
+  check_bugs="--check-bugs"
+fi
+
+ret=0
 ./gst-env.py \
     "--builddir=$builddir" \
     gst-validate-launcher "$tests" \
     --jobs "$jobs" \
-    --check-bugs \
+    $check_bugs \
     --dump-on-failure \
     --mute \
     --shuffle \
@@ -46,4 +53,14 @@ export MESA_VK_DEVICE_SELECT="10005:0"
     --fail-on-testlist-change \
     -l "$parent/validate-logs/" \
     --xunit-file "$parent/validate-logs/xunit.xml" \
-    $validate
+    $validate || ret=$?
+
+# On the dedicated media_check runner (last part), generate a diff on failure
+# or when FORCE_MEDIA_INFO_UPDATE is set
+if echo "$tests" | grep -q "validate" && [ "${CI_NODE_INDEX:-}" = "${CI_NODE_TOTAL:-}" ]; then
+    if [ "$ret" -ne 0 ] || [ "${FORCE_MEDIA_INFO_UPDATE:-}" = "1" ]; then
+        python3 "$parent/ci/scripts/media-check-diff.py" "$builddir" || true
+    fi
+fi
+
+exit $ret

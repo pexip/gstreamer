@@ -1,4 +1,3 @@
-aalib-devel
 bat
 bison
 busybox
@@ -57,13 +56,12 @@ llvm-devel
 log4c-devel
 make
 mesa-dri-drivers
-mesa-libd3d-devel
 mesa-libgbm-devel
 mesa-libGL-devel
 mesa-libGLES-devel
 mesa-libGLU-devel
 mesa-libOpenCL-devel
-mesa-libOSMesa-devel
+mesa-compat-libOSMesa-devel
 mesa-va-drivers
 mesa-vulkan-drivers
 nasm
@@ -72,6 +70,7 @@ npm
 nunit
 openjpeg2-devel
 patch
+protobuf-compiler
 procps-ng
 python3-pip
 python3-wheel
@@ -99,6 +98,7 @@ redhat-rpm-config
 soundtouch-devel
 subunit-devel
 systemd-udev
+valgrind
 vulkan-loader
 wildmidi-devel
 xorg-x11-server-Xvfb
@@ -110,7 +110,6 @@ pkgconfig(atk)
 pkgconfig(avtp)
 pkgconfig(bash-completion)
 pkgconfig(bluez)
-pkgconfig(caca)
 pkgconfig(cairo-gobject)
 pkgconfig(cairo-png)
 pkgconfig(cairo)
@@ -176,6 +175,7 @@ pkgconfig(libmfx)
 pkgconfig(libmodplug)
 pkgconfig(libmpeg2)
 pkgconfig(libmpg123)
+pkgconfig(libonnxruntime)
 pkgconfig(libopenjp2)
 pkgconfig(libopenmpt)
 pkgconfig(libpng)
@@ -232,8 +232,6 @@ pkgconfig(sndfile)
 pkgconfig(spandsp)
 pkgconfig(speex)
 pkgconfig(srt)
-pkgconfig(SvtAv1Dec)
-pkgconfig(SvtAv1Enc)
 pkgconfig(SvtHevcEnc)
 pkgconfig(SvtVp9Enc)
 pkgconfig(taglib)

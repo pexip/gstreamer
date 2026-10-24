@@ -128,6 +128,7 @@ gst_ivtc_class_init (GstIvtcClass * klass)
   gst_element_class_set_static_metadata (GST_ELEMENT_CLASS (klass),
       "Inverse Telecine", "Video/Filter", "Inverse Telecine Filter",
       "David Schleef <ds@schleef.org>");
+  gst_element_class_mark_as_untrusted_aware (GST_ELEMENT_CLASS (klass));
 
   base_transform_class->transform_caps =
       GST_DEBUG_FUNCPTR (gst_ivtc_transform_caps);
@@ -682,6 +683,7 @@ get_comb_score (GstVideoFrame * top, GstVideoFrame * bottom)
 static gboolean
 plugin_init (GstPlugin * plugin)
 {
+  gst_plugin_set_static_features_flag (plugin);
   GST_ELEMENT_REGISTER (ivtc, plugin);
   GST_ELEMENT_REGISTER (combdetect, plugin);
 

@@ -22,6 +22,8 @@
 
 #include <gst/vulkan/gstvkqueue.h>
 
+G_BEGIN_DECLS
+
 #define GST_TYPE_VULKAN_OPERATION         (gst_vulkan_operation_get_type())
 #define GST_VULKAN_OPERATION(o)           (G_TYPE_CHECK_INSTANCE_CAST((o), GST_TYPE_VULKAN_OPERATION, GstVulkanOperation))
 #define GST_VULKAN_OPERATION_CLASS(k)     (G_TYPE_CHECK_CLASS_CAST((k), GST_TYPE_VULKAN_OPERATION, GstVulkanOperationClass))
@@ -95,11 +97,13 @@ gboolean                gst_vulkan_operation_end                (GstVulkanOperat
 GST_VULKAN_API
 void                    gst_vulkan_operation_reset              (GstVulkanOperation * self);
 GST_VULKAN_API
-GArray *                gst_vulkan_operation_retrieve_image_barriers
-                                                                (GstVulkanOperation * self) G_GNUC_WARN_UNUSED_RESULT;
+GstVulkanCommandPool *  gst_vulkan_operation_get_command_pool   (GstVulkanOperation * self);
 GST_VULKAN_API
-GArray *                gst_vulkan_operation_new_extra_image_barriers
-                                                                (GstVulkanOperation * self) G_GNUC_WARN_UNUSED_RESULT;
+GstVulkanFence *        gst_vulkan_operation_get_last_fence     (GstVulkanOperation * self);
+GST_VULKAN_API
+GstVulkanTrashList *    gst_vulkan_operation_get_trash_list     (GstVulkanOperation * self);
+GST_VULKAN_API
+GstVulkanBarrierState * gst_vulkan_operation_get_barriers       (GstVulkanOperation * self);
 GST_VULKAN_API
 gboolean                gst_vulkan_operation_add_frame_barrier  (GstVulkanOperation * self,
                                                                  GstBuffer * frame,
@@ -109,9 +113,13 @@ gboolean                gst_vulkan_operation_add_frame_barrier  (GstVulkanOperat
                                                                  VkImageLayout new_layout,
                                                                  GstVulkanQueue * new_queue);
 GST_VULKAN_API
-void                    gst_vulkan_operation_add_extra_image_barriers
-                                                                (GstVulkanOperation * self,
-                                                                 GArray * extra_barriers);
+void                    gst_vulkan_operation_add_wait_semaphore (GstVulkanOperation * self,
+                                                                 GstVulkanHandle * semaphore,
+                                                                 guint64 stage);
+GST_VULKAN_API
+void                    gst_vulkan_operation_add_signal_semaphore (GstVulkanOperation * self,
+                                                                 GstVulkanHandle * semaphore,
+                                                                 guint64 stage);
 GST_VULKAN_API
 void                    gst_vulkan_operation_update_frame       (GstVulkanOperation * self,
                                                                  GstBuffer * frame,
@@ -147,6 +155,5 @@ gboolean                gst_vulkan_operation_end_query          (GstVulkanOperat
                                                                  guint32 id);
 GST_VULKAN_API
 gboolean                gst_vulkan_operation_use_sync2          (GstVulkanOperation * self);
-GST_VULKAN_API
-gboolean                gst_vulkan_operation_pipeline_barrier2  (GstVulkanOperation * self,
-                                                                 gpointer dependency_info);
+
+G_END_DECLS

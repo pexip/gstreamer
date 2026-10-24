@@ -535,6 +535,7 @@ gst_codec_utils_aac_caps_set_level_and_profile (GstCaps * caps,
 
   g_return_val_if_fail (GST_IS_CAPS (caps), FALSE);
   g_return_val_if_fail (GST_CAPS_IS_SIMPLE (caps), FALSE);
+  g_return_val_if_fail (gst_caps_is_fixed (caps), FALSE);
   g_return_val_if_fail (GST_SIMPLE_CAPS_HAS_NAME (caps, "audio/mpeg"), FALSE);
   g_return_val_if_fail (GST_SIMPLE_CAPS_HAS_FIELD (caps, "mpegversion"), FALSE);
   g_return_val_if_fail (audio_config != NULL, FALSE);
@@ -891,6 +892,127 @@ gst_codec_utils_h264_get_profile_flags_level (const guint8 * codec_data,
 
 done:
   return ret;
+}
+
+/* Table A-1 - Level limits */
+/* *INDENT-OFF* */
+static const GstH264LevelLimits _h264_levels[] = {
+  /* level   idc   MaxMBPS   MaxFS   MaxDpbMbs  MaxBR   MaxCPB  MinCR */
+  { "1",     10,   1485,     99,     396,       64,     175,    2 },
+  { "1b",    9,    1485,     99,     396,       128,    350,    2 },
+  { "1.1",   11,   3000,     396,    900,       192,    500,    2 },
+  { "1.2",   12,   6000,     396,    2376,      384,    1000,   2 },
+  { "1.3",   13,   11880,    396,    2376,      768,    2000,   2 },
+  { "2",     20,   11880,    396,    2376,      2000,   2000,   2 },
+  { "2.1",   21,   19800,    792,    4752,      4000,   4000,   2 },
+  { "2.2",   22,   20250,    1620,   8100,      4000,   4000,   2 },
+  { "3",     30,   40500,    1620,   8100,      10000,  10000,  2 },
+  { "3.1",   31,   108000,   3600,   18000,     14000,  14000,  4 },
+  { "3.2",   32,   216000,   5120,   20480,     20000,  20000,  4 },
+  { "4",     40,   245760,   8192,   32768,     20000,  25000,  4 },
+  { "4.1",   41,   245760,   8192,   32768,     50000,  62500,  2 },
+  { "4.2",   42,   522240,   8704,   34816,     50000,  62500,  2 },
+  { "5",     50,   589824,   22080,  110400,    135000, 135000, 2 },
+  { "5.1",   51,   983040,   36864,  184320,    240000, 240000, 2 },
+  { "5.2",   52,   2073600,  36864,  184320,    240000, 240000, 2 },
+  { "6",     60,   4177920,  139264, 696320,    240000, 240000, 2 },
+  { "6.1",   61,   8355840,  139264, 696320,    480000, 480000, 2 },
+  { "6.2",   62,   16711680, 139264, 696320,    800000, 800000, 2 },
+};
+
+/* Table A-2 - CPB BR NAL factor + H.10.2.1 (r)
+ * Profile idc values used since pbutils cannot depend on codecparsers. */
+static const struct {
+  guint8 profile_idc;
+  guint cpb_br_nal_factor;
+} _h264_nal_factors[] = {
+    {  66, 1200 },  /* Baseline */
+    {  77, 1200 },  /* Main */
+    {  88, 1200 },  /* Extended */
+    { 128, 1500 },  /* Stereo High */
+    { 118, 1500 },  /* Multiview High */
+    { 100, 1500 },  /* High */
+    { 110, 3600 },  /* High 10 */
+    { 122, 4800 },  /* High 4:2:2 */
+    { 244, 4800 },  /* High 4:4:4 Predictive */
+};
+/* *INDENT-ON* */
+
+static guint
+_get_h264_cpb_nal_factor (guint8 profile_idc)
+{
+  for (guint i = 0; i < G_N_ELEMENTS (_h264_nal_factors); i++) {
+    if (_h264_nal_factors[i].profile_idc == profile_idc)
+      return _h264_nal_factors[i].cpb_br_nal_factor;
+  }
+
+  /* default to non-high profile */
+  return 1200;
+}
+
+/**
+ * gst_codec_utils_h264_get_level_limits:
+ * @width: the video width in pixels
+ * @height: the video height in pixels
+ * @fps_n: the video frame rate numerator
+ * @fps_d: the video frame rate denominator
+ * @bitrate: the video bitrate in bits per second (0 if unknown)
+ * @max_dec_frame_buffering: the max size of DPB (0 if unknown)
+ * @profile_idc: the H.264 profile idc value (e.g., 66 for Baseline, 77 for Main, 100 for High)
+ *
+ * Finds the minimum H.264 level that can handle the given video parameters
+ * based on the constraints defined in H.264 specification Annex A.
+ *
+ * Returns: (nullable) (transfer none): the #GstH264LevelLimits for the
+ *          minimum level matching the parameters, or %NULL if no suitable
+ *          level is found.
+ *
+ * Since: 1.30
+ */
+const GstH264LevelLimits *
+gst_codec_utils_h264_get_level_limits (gint width, gint height, gint fps_n,
+    gint fps_d, guint bitrate, guint max_dec_frame_buffering,
+    guint8 profile_idc)
+{
+  guint mb_width, mb_height, cpb_factor;
+  guint32 pic_size_mbs, max_mbps;
+
+  g_return_val_if_fail (width > 0 && height > 0, NULL);
+  g_return_val_if_fail (fps_d > 0, NULL);
+
+  cpb_factor = _get_h264_cpb_nal_factor (profile_idc);
+  mb_width = GST_ROUND_UP_16 (width) / 16;
+  mb_height = GST_ROUND_UP_16 (height) / 16;
+
+  pic_size_mbs = mb_width * mb_height;
+  if (fps_n > 0) {
+    max_mbps = gst_util_uint64_scale_int_ceil (pic_size_mbs, fps_n, fps_d);
+  } else {
+    max_mbps = 16;
+  }
+
+  for (guint32 i = 0; i < G_N_ELEMENTS (_h264_levels); i++) {
+    const GstH264LevelLimits *level = &_h264_levels[i];
+
+    if (bitrate > 0 && bitrate > (guint64) level->max_br * cpb_factor)
+      continue;
+    if (pic_size_mbs > level->max_fs)
+      continue;
+    if (pic_size_mbs > 0) {
+      gint max_dpb_frames = MIN (level->max_dpb_mbs / pic_size_mbs, 16);
+      if ((gint) max_dec_frame_buffering > max_dpb_frames)
+        continue;
+
+      if (max_mbps > level->max_mbps)
+        continue;
+    }
+
+    return level;
+  }
+
+  GST_WARNING ("No suitable H.264 level found for %dx%d@%d/%d fps, %u bps, "
+      "profile %u", width, height, fps_n, fps_d, bitrate, profile_idc);
+  return NULL;
 }
 
 /* forked from gsth265parse.c */
@@ -1427,25 +1549,24 @@ gst_codec_utils_h265_get_level (const guint8 * profile_tier_level, guint len)
     switch (profile_tier_level[11]) {
       case 63:
         return "2.1";
-        break;
       case 93:
         return "3.1";
-        break;
       case 123:
         return "4.1";
-        break;
       case 153:
         return "5.1";
-        break;
       case 156:
         return "5.2";
-        break;
       case 183:
         return "6.1";
-        break;
       case 186:
         return "6.2";
-        break;
+      case 189:
+        return "6.3";
+      case 213:
+        return "7.1";
+      case 216:
+        return "7.2";
       default:
         return NULL;
     }
@@ -1493,6 +1614,14 @@ gst_codec_utils_h265_get_level_idc (const gchar * level)
     return 183;
   else if (!strcmp (level, "6.2"))
     return 186;
+  else if (!strcmp (level, "6.3"))
+    return 189;
+  else if (!strcmp (level, "7"))
+    return 210;
+  else if (!strcmp (level, "7.1"))
+    return 213;
+  else if (!strcmp (level, "7.2"))
+    return 216;
 
   GST_WARNING ("Invalid level %s", level);
   return 0;
@@ -1842,6 +1971,169 @@ gst_codec_utils_h266_caps_set_level_tier_and_profile (GstCaps * caps,
   return (level != NULL && tier != NULL && profile != NULL);
 }
 
+/* VP9 */
+typedef struct
+{
+  guint8 level_idc;             /* vpcC / codec integer form: 10,11,20,21, ... */
+  const gchar *level_str;       /* vpcC / codec string form: "1", "1.1", ... */
+  guint64 max_luma_sps;         /* Max Luma Sample Rate (samples/sec) */
+  guint64 max_luma_pic_size;    /* Max Luma Picture Size (samples) */
+} GstVp9Level;
+
+/* Values from Annex A (VP9 bitstream spec v0.7) */
+static const GstVp9Level gst_vp9_levels[] = {
+  {10, "1", 829440ULL, 36864ULL},       /* 1   */
+  {11, "1.1", 2764800ULL, 73728ULL},    /* 1.1 */
+  {20, "2", 4608000ULL, 122880ULL},     /* 2   */
+  {21, "2.1", 9216000ULL, 245760ULL},   /* 2.1 */
+  {30, "3", 20736000ULL, 552960ULL},    /* 3   */
+  {31, "3.1", 36864000ULL, 983040ULL},  /* 3.1 */
+  {40, "4", 83558400ULL, 2228224ULL},   /* 4   */
+  {41, "4.1", 160432128ULL, 2228224ULL},        /* 4.1 */
+  {50, "5", 311951360ULL, 8912896ULL},  /* 5   */
+  {51, "5.1", 588251136ULL, 8912896ULL},        /* 5.1 */
+  {52, "5.2", 1176502272ULL, 8912896ULL},       /* 5.2 */
+  {60, "6", 1176502272ULL, 35651584ULL},        /* 6   */
+  {61, "6.1", 2353004544ULL, 35651584ULL},      /* 6.1 */
+  {62, "6.2", 4706009088ULL, 35651584ULL},      /* 6.2 */
+};
+
+/**
+ * gst_codec_utils_vp9_get_level:
+ * @level_idc: vp9 level value from the vpcC record
+ *
+ * Converts the level indication in the vpcC record into a string.
+ *
+ * Returns: (nullable): The level as a const string and %NULL if the level could not be
+ * determined.
+ *
+ * Since: 1.30
+ */
+const gchar *
+gst_codec_utils_vp9_get_level (guint8 level_idc)
+{
+  guint i;
+  for (i = 0; i < G_N_ELEMENTS (gst_vp9_levels); i++) {
+    const GstVp9Level *vp9_level = &gst_vp9_levels[i];
+    if (level_idc == vp9_level->level_idc) {
+      return vp9_level->level_str;
+    }
+  }
+
+  return NULL;
+}
+
+/**
+ * gst_codec_utils_vp9_get_level_idc:
+ * @level: A vp9 level string from caps
+ *
+ * Transform a level string from the caps into the level_idc
+ *
+ * Returns: The level indication or 0 if the level is unknown.
+ *
+ * Since: 1.30
+ */
+guint8
+gst_codec_utils_vp9_get_level_idc (const gchar * level)
+{
+  guint i;
+
+  g_return_val_if_fail (level != NULL, 0);
+
+  for (i = 0; i < G_N_ELEMENTS (gst_vp9_levels); i++) {
+    const GstVp9Level *vp9_level = &gst_vp9_levels[i];
+    if (!strcmp (level, vp9_level->level_str)) {
+      return vp9_level->level_idc;
+    }
+  }
+
+  return 0;
+}
+
+/**
+ * gst_codec_utils_vp9_estimate_level_idc_from_caps:
+ * @caps: a video/x-vp9 #GstCaps
+ *
+ * Estimates the vp9 level as defined in
+ * https://www.webmproject.org/vp9/mp4/#vp-codec-configuration-box, using
+ * the resolution and, if available, frame rate found in the structure passed
+ * in.
+ *
+ * Returns: The estimated vp9 level indicator, and 0 if it could not be
+ * estimated.
+ *
+ * Since: 1.30
+ */
+guint8
+gst_codec_utils_vp9_estimate_level_idc_from_caps (const GstCaps * caps)
+{
+  GstStructure *caps_st;
+  gint width = 0, height = 0;
+  gint fps_n = 0, fps_d = 1;
+  gboolean have_fps;
+  guint64 ext_w, ext_h, luma_pic_size, sample_rate;
+  guint i;
+
+  g_return_val_if_fail (GST_IS_CAPS (caps), FALSE);
+  g_return_val_if_fail (GST_CAPS_IS_SIMPLE (caps), FALSE);
+  g_return_val_if_fail (gst_caps_is_fixed (caps), FALSE);
+
+  caps_st = gst_caps_get_structure (caps, 0);
+
+  if (!gst_structure_get_int (caps_st, "width", &width) ||
+      !gst_structure_get_int (caps_st, "height", &height) ||
+      width <= 0 || height <= 0) {
+    return 0;                   /* caller decides how to handle "unknown" */
+  }
+
+  have_fps =
+      gst_structure_get_fraction (caps_st, "framerate", &fps_n, &fps_d) &&
+      fps_n > 0 && fps_d > 0;
+
+  /* Annex A: decoder may need to handle extended frame size by up to 32 pixels,
+     as per description for Max Luma Picture Size. */
+  ext_w = (guint64) width + 32;
+  ext_h = (guint64) height + 32;
+  luma_pic_size = ext_w * ext_h;
+
+  /* Approximate luma samples/sec using display framerate when available. */
+  if (have_fps) {
+    sample_rate = gst_util_uint64_scale_int (luma_pic_size, fps_n, fps_d);
+  } else {
+    sample_rate = 0;
+  }
+
+  for (i = 0; i < G_N_ELEMENTS (gst_vp9_levels); i++) {
+    const GstVp9Level *level = &gst_vp9_levels[i];
+
+    if (luma_pic_size > level->max_luma_pic_size)
+      continue;
+
+    if (sample_rate != 0 && sample_rate > level->max_luma_sps)
+      continue;
+
+    return level->level_idc;    /* smallest level satisfying known constraints */
+  }
+
+  /* Exceeds max level constraints: clamp to max defined level code. */
+  return gst_vp9_levels[G_N_ELEMENTS (gst_vp9_levels) - 1].level_idc;
+}
+
+static guint8
+vp9_get_level_idc_from_caps_struct (const GstStructure * caps_st)
+{
+  const gchar *level_str = NULL;
+
+  g_return_val_if_fail (caps_st != NULL, FALSE);
+
+  level_str = gst_structure_get_string (caps_st, "level");
+  if (!level_str) {
+    return FALSE;
+  }
+
+  return gst_codec_utils_vp9_get_level_idc (level_str);
+}
+
 /**
  * gst_codec_utils_av1_get_seq_level_idx:
  * @level: A level string from caps
@@ -2165,6 +2457,7 @@ gst_codec_utils_mpeg4video_caps_set_level_and_profile (GstCaps * caps,
 
   g_return_val_if_fail (GST_IS_CAPS (caps), FALSE);
   g_return_val_if_fail (GST_CAPS_IS_SIMPLE (caps), FALSE);
+  g_return_val_if_fail (gst_caps_is_fixed (caps), FALSE);
   g_return_val_if_fail (vis_obj_seq != NULL, FALSE);
 
   profile = gst_codec_utils_mpeg4video_get_profile (vis_obj_seq, len);
@@ -2210,7 +2503,7 @@ gst_codec_utils_opus_parse_caps (GstCaps * caps,
   gint c, f, sc, cc;
   const GValue *va, *v;
 
-  g_return_val_if_fail (caps != NULL, FALSE);
+  g_return_val_if_fail (GST_IS_CAPS (caps), FALSE);
   g_return_val_if_fail (gst_caps_is_fixed (caps), FALSE);
   g_return_val_if_fail (!gst_caps_is_empty (caps), FALSE);
 
@@ -2715,6 +3008,402 @@ done:
   return ret;
 }
 
+static GstBuffer *
+vpx_create_vpcc_record (guint8 profile,
+    guint8 level,
+    guint8 bit_depth,
+    guint8 chroma_subsampling,
+    gboolean video_full_range,
+    guint8 colour_primaries,
+    guint8 transfer_characteristics, guint8 matrix_coefficients)
+{
+  GstByteWriter bw;
+  gboolean hdl = TRUE;
+  guint8 val = 0;
+  guint8 *buffer = NULL;
+  guint buffer_size = 0;
+
+  /* vpcC size is 8 bytes plus codec initialization data (unused, thus 0). */
+  gst_byte_writer_init_with_size (&bw, 8, FALSE);
+  /* version, always 1 */
+  hdl &= gst_byte_writer_put_uint8 (&bw, 1);
+  /* flags of 24 bits */
+  hdl &= gst_byte_writer_put_uint8 (&bw, 0);
+  hdl &= gst_byte_writer_put_uint8 (&bw, 0);
+  hdl &= gst_byte_writer_put_uint8 (&bw, 0);
+  hdl &= gst_byte_writer_put_uint8 (&bw, profile);
+  hdl &= gst_byte_writer_put_uint8 (&bw, level);
+  val |= (bit_depth & 0xF) << 4;
+  val |= (chroma_subsampling & 0x3) << 1;
+  val |= !(!video_full_range);
+  hdl &= gst_byte_writer_put_uint8 (&bw, val);
+  hdl &= gst_byte_writer_put_uint8 (&bw, colour_primaries);
+  hdl &= gst_byte_writer_put_uint8 (&bw, transfer_characteristics);
+  hdl &= gst_byte_writer_put_uint8 (&bw, matrix_coefficients);
+  /* codec initialization data, currently unused */
+  hdl &= gst_byte_writer_put_uint16_le (&bw, 0);
+
+  if (!hdl) {
+    GST_WARNING ("error creating vpcC record");
+    gst_byte_writer_reset (&bw);
+    return NULL;
+  }
+
+  buffer_size = gst_byte_writer_get_size (&bw);
+  buffer = gst_byte_writer_reset_and_get_data (&bw);
+
+  return gst_buffer_new_wrapped_full (0, buffer, buffer_size, 0, buffer_size,
+      buffer, (GDestroyNotify) g_free);
+}
+
+/**
+ * gst_codec_utils_vpx_caps_set_format_fields:
+ * @caps: the #GstCaps to set VPX fields on (video/x-vp8 or video/x-vp9)
+ * @profile: VPX profile, or -1 if unknown
+ * @level: VP9 level idc, or -1 if unknown
+ * @bit_depth: VPX bit depth, or -1 if unknown
+ * @chroma_subsampling: VPX chroma subsampling (0-3), or -1 if unknown
+ *
+ * Sets VPX format fields in @caps from parsed VPX configuration values.
+ * This setter handles the VPX format-field subset shared between VP9
+ * CodecPrivate and vpcC signaling.
+ * Any field set to -1 is treated as unknown and not written.
+ * For VP8 caps, only profile 0, 8-bit depth, and chroma subsampling 1 are
+ * accepted.
+ *
+ * Returns: %TRUE if provided values were valid, %FALSE otherwise.
+ *
+ * Since: 1.30
+ */
+gboolean
+gst_codec_utils_vpx_caps_set_format_fields (GstCaps * caps, gint profile,
+    gint level, gint bit_depth, gint chroma_subsampling)
+{
+  const GstStructure *caps_st = NULL;
+  gboolean is_vp8 = FALSE;
+  const gchar *profile_str = NULL;
+  const gchar *level_str = NULL;
+  const gchar *chroma_format_str = NULL;
+  const gchar *chroma_site_str = NULL;
+
+  g_return_val_if_fail (GST_IS_CAPS (caps), FALSE);
+  g_return_val_if_fail (GST_CAPS_IS_SIMPLE (caps), FALSE);
+
+  caps_st = gst_caps_get_structure (caps, 0);
+  is_vp8 = gst_structure_has_name (caps_st, "video/x-vp8");
+  if (!is_vp8 && !gst_structure_has_name (caps_st, "video/x-vp9"))
+    return FALSE;
+
+  if (is_vp8) {
+    if (profile != -1 && profile != 0)
+      return FALSE;
+    if (level != -1)
+      return FALSE;
+    if (bit_depth != -1 && bit_depth != 8)
+      return FALSE;
+    if (chroma_subsampling != -1 && chroma_subsampling != 1)
+      return FALSE;
+  }
+
+  if (profile != -1) {
+    switch (profile) {
+      case 0:
+        profile_str = "0";
+        break;
+      case 1:
+        profile_str = "1";
+        break;
+      case 2:
+        profile_str = "2";
+        break;
+      case 3:
+        profile_str = "3";
+        break;
+      default:
+        return FALSE;
+    }
+  }
+
+  if (level != -1) {
+    level_str = gst_codec_utils_vp9_get_level ((guint8) level);
+    if (level_str == NULL)
+      return FALSE;
+  }
+
+  if (bit_depth != -1) {
+    if (bit_depth != 8 && bit_depth != 10 && bit_depth != 12)
+      return FALSE;
+  }
+
+  if (chroma_subsampling != -1) {
+    switch (chroma_subsampling) {
+      case 0:
+        chroma_format_str = "4:2:0";
+        chroma_site_str = "v-cosited";
+        break;
+      case 1:
+        chroma_format_str = "4:2:0";
+        chroma_site_str = "cosited";
+        break;
+      case 2:
+        chroma_format_str = "4:2:2";
+        break;
+      case 3:
+        chroma_format_str = "4:4:4";
+        break;
+      default:
+        return FALSE;
+    }
+  }
+
+  if (profile_str != NULL)
+    gst_caps_set_simple (caps, "profile", G_TYPE_STRING, profile_str, NULL);
+
+  if (level_str != NULL)
+    gst_caps_set_simple (caps, "level", G_TYPE_STRING, level_str, NULL);
+
+  if (bit_depth != -1) {
+    gst_caps_set_simple (caps,
+        "bit-depth-luma", G_TYPE_UINT, bit_depth,
+        "bit-depth-chroma", G_TYPE_UINT, bit_depth, NULL);
+  }
+
+  if (chroma_format_str != NULL) {
+    gst_caps_set_simple (caps,
+        "chroma-format", G_TYPE_STRING, chroma_format_str, NULL);
+
+    if (chroma_site_str != NULL)
+      gst_caps_set_simple (caps,
+          "chroma-site", G_TYPE_STRING, chroma_site_str, NULL);
+  }
+
+  return TRUE;
+}
+
+/**
+ * gst_codec_utils_vpx_caps_get_config:
+ * @caps: a video/x-vp8 or video/x-vp9 #GstCaps
+ * @vpx_version: (nullable) (out): VPX version described by @caps (8 or 9)
+ * @profile: (nullable) (out): profile value
+ * @level: (nullable) (out): level value
+ * @bit_depth: (nullable) (out): bit depth value
+ * @chroma_subsampling: (nullable) (out): chroma subsampling value
+ * @video_full_range: (nullable) (out): whether full-range signaling is set
+ * @colour_primaries: (nullable) (out): ISO color primaries value
+ * @transfer_characteristics: (nullable) (out): ISO transfer characteristics value
+ * @matrix_coefficients: (nullable) (out): ISO matrix coefficients value
+ *
+ * Parses VP8/VP9 caps and extracts normalized VPX configuration fields.
+ * Unlike gst_codec_utils_vpx_caps_set_format_fields(), this getter includes
+ * the colorimetry-derived fields needed to build a full vpcC record.
+ *
+ * Returns: %TRUE if extraction succeeded, %FALSE otherwise.
+ *
+ * Since: 1.30
+ */
+gboolean
+gst_codec_utils_vpx_caps_get_config (GstCaps * caps,
+    gint * vpx_version, guint8 * profile, guint8 * level, guint8 * bit_depth,
+    guint8 * chroma_subsampling, gboolean * video_full_range,
+    guint8 * colour_primaries, guint8 * transfer_characteristics,
+    guint8 * matrix_coefficients)
+{
+  const GstStructure *caps_st = NULL;
+  gboolean local_is_vp9 = FALSE;
+  const char *colorimetry_str;
+  guint bitdepth_luma = 0, bitdepth_chroma = 0;
+  gboolean have_luma = FALSE, have_chroma = FALSE;
+  guint8 local_profile = G_MAXUINT8, local_level = G_MAXUINT8;
+  guint8 local_chroma_format = G_MAXUINT8;
+  GstVideoColorimetry cinfo = { 0, };
+
+  g_return_val_if_fail (GST_IS_CAPS (caps), FALSE);
+  g_return_val_if_fail (GST_CAPS_IS_SIMPLE (caps), FALSE);
+  g_return_val_if_fail (gst_caps_is_fixed (caps), FALSE);
+
+  caps_st = gst_caps_get_structure (caps, 0);
+  local_is_vp9 = gst_structure_has_name (caps_st, "video/x-vp9");
+
+  if (!local_is_vp9 && !gst_structure_has_name (caps_st, "video/x-vp8")) {
+    GST_WARNING ("Caps provided is not video/x-vp8 or video/x-vp9");
+    return FALSE;
+  }
+
+  if (local_is_vp9) {
+    const gchar *profile_str = gst_structure_get_string (caps_st, "profile");
+    if (g_strcmp0 (profile_str, "0") == 0) {
+      local_profile = 0;
+    } else if (g_strcmp0 (profile_str, "1") == 0) {
+      local_profile = 1;
+    } else if (g_strcmp0 (profile_str, "2") == 0) {
+      local_profile = 2;
+    } else if (g_strcmp0 (profile_str, "3") == 0) {
+      local_profile = 3;
+    } else {
+      GST_WARNING ("Caps use unsupported vp9 profile: %s",
+          profile_str ? profile_str : "<missing>");
+      return FALSE;
+    }
+  } else {
+    local_profile = 0;
+  }
+
+  if (local_is_vp9) {
+    local_level = vp9_get_level_idc_from_caps_struct (caps_st);
+    if (local_level == 0) {
+      local_level = gst_codec_utils_vp9_estimate_level_idc_from_caps (caps);
+    }
+  } else {
+    local_level = 0;
+  }
+
+  if (local_is_vp9) {
+    const gchar *chroma_format_str =
+        gst_structure_get_string (caps_st, "chroma-format");
+    if (g_strcmp0 (chroma_format_str, "4:2:0") == 0) {
+      const char *chroma_site_str;
+      GstVideoChromaSite chroma_site;
+
+      chroma_site_str = gst_structure_get_string (caps_st, "chroma-site");
+      if (chroma_site_str) {
+        chroma_site = gst_video_chroma_site_from_string (chroma_site_str);
+      } else {
+        chroma_site = GST_VIDEO_CHROMA_SITE_UNKNOWN;
+      }
+      if (chroma_site == GST_VIDEO_CHROMA_SITE_V_COSITED) {
+        local_chroma_format = 0;
+      } else if (chroma_site == GST_VIDEO_CHROMA_SITE_COSITED) {
+        local_chroma_format = 1;
+      } else {
+        local_chroma_format = 1;
+      }
+    } else if (g_strcmp0 (chroma_format_str, "4:2:2") == 0) {
+      local_chroma_format = 2;
+    } else if (g_strcmp0 (chroma_format_str, "4:4:4") == 0) {
+      local_chroma_format = 3;
+    }
+
+    if (local_chroma_format == G_MAXUINT8) {
+      GST_WARNING ("Unsupported vp9 chroma format: %s",
+          chroma_format_str ? chroma_format_str : "<missing>");
+      return FALSE;
+    }
+  } else {
+    local_chroma_format = 1;
+  }
+
+  have_luma = gst_structure_get (caps_st, "bit-depth-luma", G_TYPE_UINT,
+      &bitdepth_luma, NULL);
+  have_chroma = gst_structure_get (caps_st, "bit-depth-chroma", G_TYPE_UINT,
+      &bitdepth_chroma, NULL);
+
+  if (local_is_vp9) {
+    if (!have_luma || !have_chroma) {
+      if (local_profile == 0 || local_profile == 1) {
+        bitdepth_luma = bitdepth_chroma = 8;
+        have_luma = have_chroma = TRUE;
+        GST_LOG
+            ("Missing VP9 bit-depth in caps; inferring 8-bit from profile %d",
+            local_profile);
+      } else {
+        GST_WARNING ("Missing VP9 bit depth in caps (bit-depth-luma:%s, "
+            "bit-depth-chroma:%s) and cannot infer from profile",
+            have_luma ? "present" : "missing",
+            have_chroma ? "present" : "missing");
+        return FALSE;
+      }
+    }
+  } else {
+    if (!have_luma && !have_chroma) {
+      bitdepth_luma = bitdepth_chroma = 8;
+    } else if (!have_luma || !have_chroma) {
+      GST_WARNING
+          ("Caps missing one of VP8 bit-depth fields (luma:%s chroma:%s)",
+          have_luma ? "present" : "missing",
+          have_chroma ? "present" : "missing");
+      return FALSE;
+    }
+  }
+
+  if (bitdepth_luma != bitdepth_chroma || bitdepth_luma == 0) {
+    GST_WARNING ("Caps using invalid bit depth (luma: %d, chroma: %d)",
+        (int) bitdepth_luma, (int) bitdepth_chroma);
+    return FALSE;
+  }
+
+  if (local_is_vp9) {
+    if (bitdepth_luma != 8 && bitdepth_luma != 10 && bitdepth_luma != 12) {
+      GST_WARNING ("Caps using unsupported vp9 bit depth: %d "
+          "(only 8, 10 and 12 supported)", (int) bitdepth_luma);
+      return FALSE;
+    }
+  } else {
+    if (bitdepth_luma != 8) {
+      GST_WARNING
+          ("Caps using unsupported vp8 bit depth: %d (only 8 supported)",
+          (int) bitdepth_luma);
+      return FALSE;
+    }
+  }
+
+  colorimetry_str = gst_structure_get_string (caps_st, "colorimetry");
+  gst_video_colorimetry_from_string (&cinfo, colorimetry_str);
+
+  if (vpx_version)
+    *vpx_version = local_is_vp9 ? 9 : 8;
+  if (profile)
+    *profile = local_profile;
+  if (level)
+    *level = local_level;
+  if (bit_depth)
+    *bit_depth = (guint8) bitdepth_luma;
+  if (chroma_subsampling)
+    *chroma_subsampling = local_chroma_format;
+  if (video_full_range)
+    *video_full_range = cinfo.range == GST_VIDEO_COLOR_RANGE_0_255;
+  if (colour_primaries)
+    *colour_primaries = gst_video_color_primaries_to_iso (cinfo.primaries);
+  if (transfer_characteristics)
+    *transfer_characteristics =
+        gst_video_transfer_function_to_iso (cinfo.transfer);
+  if (matrix_coefficients)
+    *matrix_coefficients = gst_video_color_matrix_to_iso (cinfo.matrix);
+
+  return TRUE;
+}
+
+/**
+ * gst_codec_utils_vpx_create_vpcc_from_caps:
+ * @caps: a video/x-vp8 or video/x-vp9 #GstCaps
+ *
+ * Creates a vpcC record for VP8/VP9 as per the VP Codec ISO Media File Format
+ * Binding definition found at
+ * https://www.webmproject.org/vp9/mp4/#vp-codec-configuration-box
+ *
+ * Returns: (transfer full) (nullable): Buffer containing the vpcC record, or
+ * %NULL if the record could not be created.
+ *
+ * Since: 1.30
+ */
+GstBuffer *
+gst_codec_utils_vpx_create_vpcc_from_caps (GstCaps * caps)
+{
+  guint8 profile = -1, level = -1, bit_depth = -1, chroma_subsampling = -1;
+  guint8 colour_primaries = -1;
+  guint8 transfer_characteristics = -1;
+  guint8 matrix_coefficients = -1;
+  gboolean video_full_range;
+
+  if (!gst_codec_utils_vpx_caps_get_config (caps, NULL, &profile, &level,
+          &bit_depth, &chroma_subsampling, &video_full_range,
+          &colour_primaries, &transfer_characteristics, &matrix_coefficients))
+    return NULL;
+
+  return vpx_create_vpcc_record (profile, level, bit_depth, chroma_subsampling,
+      video_full_range, colour_primaries, transfer_characteristics,
+      matrix_coefficients);
+}
+
 /**
  * gst_codec_utils_av1_create_caps_from_av1c:
  * @av1c: (transfer none): a #GstBuffer containing a AV1CodecConfigurationRecord
@@ -2859,7 +3548,9 @@ gst_codec_utils_av1_create_av1c_from_caps (GstCaps * caps)
   const gchar *tmp;
   guint tmp2;
 
-  g_return_val_if_fail (caps, NULL);
+  g_return_val_if_fail (GST_IS_CAPS (caps), NULL);
+  g_return_val_if_fail (GST_CAPS_IS_SIMPLE (caps), NULL);
+  g_return_val_if_fail (gst_caps_is_fixed (caps), NULL);
 
   structure = gst_caps_get_structure (caps, 0);
   if (!structure || !gst_structure_has_name (structure, "video/x-av1")) {
@@ -3075,8 +3766,8 @@ hevc_caps_get_mime_codec (GstCaps * caps, gchar ** mime_codec)
   }
 
   profile_tier_level = data + 1;
-  profile_space = (profile_tier_level[0] & 0x11) >> 6;
-  tier_flag = (profile_tier_level[0] & 0x001) >> 5;
+  profile_space = (profile_tier_level[0] >> 6) & 0x03;
+  tier_flag = (profile_tier_level[0] >> 5) & 0x01;
   profile_idc = (profile_tier_level[0] & 0x1f);
 
   compat_flags = GST_READ_UINT32_BE (data + 2);
@@ -3488,7 +4179,7 @@ gst_codec_utils_caps_get_mime_codec (GstCaps * caps)
   GstStructure *caps_st = NULL;
   const gchar *media_type = NULL;
 
-  g_return_val_if_fail (caps != NULL, NULL);
+  g_return_val_if_fail (GST_IS_CAPS (caps), NULL);
   g_return_val_if_fail (gst_caps_is_fixed (caps), NULL);
 
   caps_st = gst_caps_get_structure (caps, 0);
@@ -3541,14 +4232,26 @@ gst_codec_utils_caps_get_mime_codec (GstCaps * caps)
     } else {
       mime_codec = g_strdup ("mp4a.40");
     }
+  } else if (g_strcmp0 (media_type, "audio/x-ac3") == 0) {
+    mime_codec = g_strdup ("ac-3");
+  } else if (g_strcmp0 (media_type, "audio/x-eac3") == 0) {
+    mime_codec = g_strdup ("ec-3");
+  } else if (g_strcmp0 (media_type, "audio/x-ac4") == 0) {
+    mime_codec = g_strdup ("ac-4");
   } else if (g_strcmp0 (media_type, "audio/x-opus") == 0) {
     mime_codec = g_strdup ("opus");
+  } else if (g_strcmp0 (media_type, "audio/x-flac") == 0) {
+    mime_codec = g_strdup ("flac");
   } else if (g_strcmp0 (media_type, "audio/x-mulaw") == 0) {
     mime_codec = g_strdup ("ulaw");
   } else if (g_strcmp0 (media_type, "audio/x-adpcm") == 0) {
     if (g_strcmp0 (gst_structure_get_string (caps_st, "layout"), "g726") == 0) {
       mime_codec = g_strdup ("g726");
     }
+  } else if (g_strcmp0 (media_type, "application/ttml+xml") == 0) {
+    mime_codec = g_strdup ("stpp");
+  } else if (g_strcmp0 (media_type, "application/x-subtitle-vtt") == 0) {
+    mime_codec = g_strdup ("wvtt");
   }
 
 done:
@@ -3713,6 +4416,9 @@ gst_codec_utils_caps_from_mime_codec_single (const gchar * codec)
       /* ETSI TS 102 366 v1.4.1 - Digital Audio Compression (AC-3, Enhanced AC-3) Standard, Annex F */
       caps = gst_caps_new_empty_simple ("audio/x-eac3");
       break;
+    case GST_MAKE_FOURCC ('a', 'c', '-', '4'):
+      caps = gst_caps_new_empty_simple ("audio/x-ac4");
+      break;
     case GST_MAKE_FOURCC ('s', 't', 'p', 'p'):
       /* IMSC1-conformant TTM XML */
       caps = gst_caps_new_empty_simple ("application/ttml+xml");
@@ -3738,6 +4444,9 @@ gst_codec_utils_caps_from_mime_codec_single (const gchar * codec)
     case GST_MAKE_FOURCC ('o', 'p', 'u', 's'):
       /* Opus */
       caps = gst_caps_new_empty_simple ("audio/x-opus");
+      break;
+    case GST_MAKE_FOURCC ('f', 'l', 'a', 'c'):
+      caps = gst_caps_new_empty_simple ("audio/x-flac");
       break;
     case GST_MAKE_FOURCC ('u', 'l', 'a', 'w'):
       /* ulaw */

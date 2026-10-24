@@ -596,7 +596,7 @@ gst_sctp_dec_src_activate_mode (GstPad * pad, GstObject * parent,
     gst_data_queue_set_flushing (sctpdec_pad->packet_queue, FALSE);
     result =
         gst_pad_start_task (pad, (GstTaskFunction) gst_sctp_data_srcpad_loop,
-        pad, NULL);
+        gst_object_ref (pad), gst_object_unref);
   } else {
     gst_data_queue_set_flushing (sctpdec_pad->packet_queue, TRUE);
     gst_data_queue_flush (sctpdec_pad->packet_queue);

@@ -86,6 +86,7 @@ struct _GstH265Parse
   gboolean have_vps_in_frame;
   gboolean have_sps_in_frame;
   gboolean have_pps_in_frame;
+  gboolean have_aud_in_frame;
 
   gboolean first_frame;
 
@@ -111,9 +112,19 @@ struct _GstH265Parse
   gboolean predicted;
   gboolean bidirectional;
   gboolean header;
-  gboolean framerate_from_caps;
   /* AU state */
   gboolean picture_start;
+
+  /* tracing state whether h265parse needs to insert AUD or not.
+   * Used when in_format == byte-stream */
+  gboolean aud_needed;
+
+  /* For insertion of AU Delimiter */
+  gboolean aud_insert;
+
+  /* layer id info of first slice of the current AU */
+  guint layer_id;
+  guint temporal_id_plus1;
 
   GstVideoParseUserData user_data;
   GstVideoParseUserDataUnregistered user_data_unregistered;
@@ -129,6 +140,15 @@ struct _GstH265Parse
 
   GstVideoContentLightLevel content_light_level;
   guint content_light_level_state;
+
+  GstH274DigitallySignedContentInitialization dsc_initialization;
+  guint dsc_initialization_state;
+
+  GstH274DigitallySignedContentSelection dsc_selection;
+  guint dsc_selection_state;
+
+  GstH274DigitallySignedContentVerification dsc_verification;
+  guint dsc_verification_state;
 
   /* For forward predicted trickmode */
   gboolean discard_bidirectional;

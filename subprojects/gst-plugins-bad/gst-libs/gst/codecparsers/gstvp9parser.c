@@ -626,7 +626,7 @@ gst_vp9_parser_update (GstVp9Parser * parser, GstVp9FrameHdr * const frame_hdr)
 /******** API *************/
 
 /**
- * gst_vp9_parser_new:
+ * gst_vp9_parser_new: (skip)
  *
  * Creates a new #GstVp9Parser. It should be freed with
  * gst_vp9_parser_free() after use.
@@ -873,6 +873,9 @@ gst_vp9_parser_parse_superframe_info (GstVp9Parser * parser,
       2 +
       superframe_info->frames_in_superframe *
       superframe_info->bytes_per_framesize;
+
+  if (size < superframe_info->superframe_index_size)
+    goto error;
 
   gst_bit_reader_init (ibr,
       data + size - superframe_info->superframe_index_size,

@@ -104,13 +104,15 @@ GST_DEBUG_CATEGORY_STATIC (devicemonitor_debug);
 struct _GstDeviceMonitorPrivate
 {
   gboolean started;
+  GThread *start_thread;
+  GCond started_cond;
 
   GstBus *bus;
 
   GPtrArray *providers;
   GPtrArray *filters;
 
-  GList *started_providers;
+  GSList *started_providers;
 
   guint last_id;
   GList *hidden;
@@ -324,6 +326,10 @@ gst_device_monitor_init (GstDeviceMonitor * self)
   self->priv->providers = g_ptr_array_new ();
   self->priv->filters = g_ptr_array_new_with_free_func (
       (GDestroyNotify) device_filter_free);
+  self->priv->started_providers = NULL;
+  self->priv->started = FALSE;
+  self->priv->start_thread = NULL;
+  g_cond_init (&self->priv->started_cond);
 
   self->priv->last_id = 1;
 }
@@ -352,7 +358,21 @@ gst_device_monitor_dispose (GObject * object)
 {
   GstDeviceMonitor *self = GST_DEVICE_MONITOR (object);
 
-  g_return_if_fail (!self->priv->started);
+  if (self->priv->started) {
+    g_critical ("gst_device_monitor_dispose: disposed without stopping, "
+        "started providers were leaked");
+  }
+
+  /*
+   * We ensure that dispose is never called while we still hold a reference to
+   * the GThread running monitor_thread_func() by having the func hold
+   * a reference to the monitor. The func will release the monitor's reference
+   * to the GThread before releasing its own reference to the monitor.
+   *
+   * When stopping, _stop() will steal the monitor's reference to the GThread
+   * and join it, achieving the same result.
+   */
+  g_warn_if_fail (!self->priv->start_thread);
 
   if (self->priv->providers) {
     while (self->priv->providers->len)
@@ -373,6 +393,8 @@ gst_device_monitor_dispose (GObject * object)
 
   gst_object_replace ((GstObject **) & self->priv->bus, NULL);
 
+  g_cond_clear (&self->priv->started_cond);
+
   G_OBJECT_CLASS (gst_device_monitor_parent_class)->dispose (object);
 }
 
@@ -382,6 +404,9 @@ gst_device_monitor_dispose (GObject * object)
  *
  * Gets a list of devices from all of the relevant monitors. This may actually
  * probe the hardware if the monitor is not currently started.
+ *
+ * Since 1.28.3, this function will block until the monitor has finished
+ * starting if gst_device_monitor_start() has been called.
  *
  * Returns: (transfer full) (element-type GstDevice) (nullable): a #GList of
  *   #GstDevice
@@ -401,6 +426,10 @@ gst_device_monitor_get_devices (GstDeviceMonitor * monitor)
   g_return_val_if_fail (GST_IS_DEVICE_MONITOR (monitor), NULL);
 
   GST_OBJECT_LOCK (monitor);
+
+  while (monitor->priv->start_thread != NULL) {
+    g_cond_wait (&monitor->priv->started_cond, GST_OBJECT_GET_LOCK (monitor));
+  }
 
   if (monitor->priv->filters->len == 0) {
     GST_OBJECT_UNLOCK (monitor);
@@ -472,13 +501,105 @@ gst_device_monitor_get_devices (GstDeviceMonitor * monitor)
   return devices.head;
 }
 
+static gpointer
+monitor_thread_func (gpointer data)
+{
+  GSList *started = NULL;
+  GQueue pending = G_QUEUE_INIT;
+  GstDeviceMonitor *monitor = data;
+  GstDeviceProvider *provider;
+
+  GST_OBJECT_LOCK (monitor);
+
+  if (!monitor->priv->started) {
+    GST_OBJECT_UNLOCK (monitor);
+    goto done;
+  }
+
+  for (int i = 0; i < monitor->priv->providers->len; i++) {
+    provider = g_ptr_array_index (monitor->priv->providers, i);
+    g_queue_push_tail (&pending, gst_object_ref (provider));
+  }
+
+  while ((provider = g_queue_pop_head (&pending))) {
+    GST_OBJECT_UNLOCK (monitor);
+
+    if (gst_device_provider_start (provider)) {
+      started = g_slist_prepend (started, provider);
+    } else {
+      gst_clear_object (&provider);
+    }
+
+    GST_OBJECT_LOCK (monitor);
+
+    /* We were stopped while unlocked in this iteration. Stop the provider
+     * we just started, dispose all pending providers, and return without
+     * modifying any priv members */
+    if (!monitor->priv->started) {
+      /* Assert that the monitor lost its reference to this GThread when it
+       * was stopped */
+      g_assert (monitor->priv->start_thread == NULL);
+      GST_OBJECT_UNLOCK (monitor);
+
+      if (provider) {
+        gst_device_provider_stop (provider);
+        gst_clear_object (&provider);
+
+        /* Free the node we prepended above by detaching it from the rest of
+         * the list, which is monitor->priv->started_providers. This is safe
+         * because this is a singly-linked list. */
+        started->next = NULL;
+        g_slist_free (started);
+      }
+
+      g_queue_clear_full (&pending, gst_object_unref);
+
+      /* If the provider failed to start, nothing was prepended to started in
+       * this iteration. Either way, the rest of the list has been taken by
+       * gst_device_monitor_stop(), which stops and frees it. */
+      started = NULL;
+
+      goto done;
+    }
+
+    if (started) {
+      monitor->priv->started_providers = started;
+    }
+  }
+
+  if (monitor->priv->started_providers == NULL) {
+    monitor->priv->started = FALSE;
+  }
+
+  g_clear_pointer (&monitor->priv->start_thread, g_thread_unref);
+  g_cond_broadcast (&monitor->priv->started_cond);
+  GST_OBJECT_UNLOCK (monitor);
+
+done:
+  gst_bus_post (monitor->priv->bus,
+      gst_message_new_device_monitor_started (GST_OBJECT (monitor),
+          started != NULL));
+  gst_object_unref (monitor);
+
+  return NULL;
+}
+
 /**
  * gst_device_monitor_start:
  * @monitor: A #GstDeviceMonitor
  *
- * Starts monitoring the devices, one this has succeeded, the
+ * Starts monitoring the devices, once this has succeeded, the
  * %GST_MESSAGE_DEVICE_ADDED and %GST_MESSAGE_DEVICE_REMOVED messages
  * will be emitted on the bus when the list of devices changes.
+ *
+ * Since 1.28, device providers are started asynchronously and
+ * %GST_MESSAGE_DEVICE_MONITOR_STARTED will be emitted once the initial list
+ * of devices has been populated, signalling that monitor startup has
+ * completed.
+ *
+ * The monitor will hold a strong reference to itself while it is populating
+ * devices asynchronously, so you must call gst_device_monitor_stop() before
+ * unreffing if you want monitoring to stop immediately.
  *
  * Returns: %TRUE if the device monitoring could be started, i.e. at least a
  *     single device provider was started successfully.
@@ -489,10 +610,7 @@ gst_device_monitor_get_devices (GstDeviceMonitor * monitor)
 gboolean
 gst_device_monitor_start (GstDeviceMonitor * monitor)
 {
-  guint i;
-  GQueue pending = G_QUEUE_INIT;
-  GList *started = NULL;
-  GstDeviceProvider *provider;
+  gboolean ret;
 
   g_return_val_if_fail (GST_IS_DEVICE_MONITOR (monitor), FALSE);
 
@@ -503,6 +621,10 @@ gst_device_monitor_start (GstDeviceMonitor * monitor)
     GST_DEBUG_OBJECT (monitor, "Monitor started already");
     return TRUE;
   }
+
+  /* This is cleared alongside priv->started being set to FALSE */
+  g_assert (monitor->priv->started_providers == NULL);
+
   if (monitor->priv->filters->len == 0) {
     GST_WARNING_OBJECT (monitor, "No filters have been set, will expose all "
         "devices found");
@@ -515,39 +637,20 @@ gst_device_monitor_start (GstDeviceMonitor * monitor)
     return FALSE;
   }
 
-  monitor->priv->started = TRUE;
+  monitor->priv->start_thread = g_thread_try_new ("gst_device_monitor_start",
+      monitor_thread_func, monitor, NULL);
 
-  gst_bus_set_flushing (monitor->priv->bus, FALSE);
+  if ((ret = monitor->priv->start_thread != NULL)) {
+    // Yield a reference to the GThreadFunc
+    gst_object_ref (monitor);
 
-  for (i = 0; i < monitor->priv->providers->len; i++) {
-    GstDeviceProvider *provider;
-
-    provider = g_ptr_array_index (monitor->priv->providers, i);
-    g_queue_push_tail (&pending, gst_object_ref (provider));
-  }
-
-  while ((provider = g_queue_pop_head (&pending))) {
-    GST_OBJECT_UNLOCK (monitor);
-
-    if (gst_device_provider_start (provider)) {
-      started = g_list_prepend (started, provider);
-    } else {
-      gst_object_unref (provider);
-    }
-
-    GST_OBJECT_LOCK (monitor);
-  }
-
-  if (started) {
-    monitor->priv->started_providers = started;
-  } else {
-    gst_bus_set_flushing (monitor->priv->bus, TRUE);
-    monitor->priv->started = FALSE;
+    monitor->priv->started = TRUE;
+    gst_bus_set_flushing (monitor->priv->bus, FALSE);
   }
 
   GST_OBJECT_UNLOCK (monitor);
 
-  return started != NULL;
+  return ret;
 }
 
 /**
@@ -561,7 +664,8 @@ gst_device_monitor_start (GstDeviceMonitor * monitor)
 void
 gst_device_monitor_stop (GstDeviceMonitor * monitor)
 {
-  GList *started = NULL;
+  GSList *started = NULL;
+  GThread *thread = NULL;
 
   g_return_if_fail (GST_IS_DEVICE_MONITOR (monitor));
 
@@ -576,15 +680,25 @@ gst_device_monitor_stop (GstDeviceMonitor * monitor)
 
   started = monitor->priv->started_providers;
   monitor->priv->started_providers = NULL;
+  /* This will cancel monitor_thread_func() if it is running */
   monitor->priv->started = FALSE;
+  /* Steal GThread reference from the monitor */
+  thread = monitor->priv->start_thread;
+  monitor->priv->start_thread = NULL;
+  g_cond_broadcast (&monitor->priv->started_cond);
   GST_OBJECT_UNLOCK (monitor);
+
+  if (thread != NULL) {
+    /* Thread has been cancelled above, so this join should return quickly */
+    g_thread_join (thread);
+  }
 
   while (started) {
     GstDeviceProvider *provider = started->data;
 
     gst_device_provider_stop (provider);
 
-    started = g_list_delete_link (started, started);
+    started = g_slist_delete_link (started, started);
     gst_object_unref (provider);
   }
 }

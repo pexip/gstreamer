@@ -403,7 +403,7 @@ gst_uri_is_valid (const gchar * uri)
 gchar *
 gst_uri_get_protocol (const gchar * uri)
 {
-  gchar *colon;
+  const gchar *colon;
 
   if (!gst_uri_is_valid (uri))
     return NULL;
@@ -425,7 +425,7 @@ gst_uri_get_protocol (const gchar * uri)
 gboolean
 gst_uri_has_protocol (const gchar * uri, const gchar * protocol)
 {
-  gchar *colon;
+  const gchar *colon;
 
   g_return_val_if_fail (protocol != NULL, FALSE);
 
@@ -1415,8 +1415,17 @@ _gst_uri_string_to_table (const gchar * str, const gchar * part_sep,
             }
           }
         }
-        /* add value to the table */
-        g_hash_table_insert (new_table, key, value);
+        /* Don't insert invalid/bogus values. No key, or a key without a value
+         * should be dropped and ignored. While there are checks before, we
+         * could end up in this situation because of the unescaping functions
+         * returning NULL values */
+        if (key == NULL || (kv_sep_pos != NULL && value == NULL)) {
+          g_free (key);
+          g_free (value);
+        } else {
+          /* add value to the table */
+          g_hash_table_insert (new_table, key, value);
+        }
       }
     }
     /* tidy up */
@@ -1615,7 +1624,7 @@ _gst_uri_from_string_internal (const gchar * uri, gboolean unescape)
     }
     if (uri != NULL && uri[0] == '?') {
       /* get query */
-      gchar *eoq;
+      const gchar *eoq;
       eoq = strchr (++uri, '#');
       if (eoq == NULL) {
         uri_obj->query = _gst_uri_string_to_table (uri, "&", "=", TRUE, TRUE);
@@ -2700,6 +2709,11 @@ gst_uri_get_query_string_ordered (const GstUri * uri, const GList * keys)
   if (!uri->query)
     return NULL;
 
+  /* Reject NULL keys up front so the build loop below cannot leak */
+  for (key = keys; key; key = key->next) {
+    g_return_val_if_fail (key->data != NULL, NULL);
+  }
+
   for (key = keys; key; key = key->next) {
     const gchar *query_key = key->data;
     const gchar *arg;
@@ -2816,6 +2830,7 @@ gst_uri_set_query_value (GstUri * uri, const gchar * query_key,
   if (!uri)
     return FALSE;
   g_return_val_if_fail (GST_IS_URI (uri) && gst_uri_is_writable (uri), FALSE);
+  g_return_val_if_fail (query_key != NULL, FALSE);
 
   if (!uri->query) {
     uri->query = g_hash_table_new_full (g_str_hash, g_str_equal, g_free,
@@ -2846,6 +2861,7 @@ gst_uri_remove_query_key (GstUri * uri, const gchar * query_key)
   if (!uri)
     return FALSE;
   g_return_val_if_fail (GST_IS_URI (uri) && gst_uri_is_writable (uri), FALSE);
+  g_return_val_if_fail (query_key != NULL, FALSE);
   if (!uri->query)
     return FALSE;
 
@@ -2875,6 +2891,7 @@ gst_uri_query_has_key (const GstUri * uri, const gchar * query_key)
   if (!uri)
     return FALSE;
   g_return_val_if_fail (GST_IS_URI (uri), FALSE);
+  g_return_val_if_fail (query_key != NULL, FALSE);
   if (!uri->query)
     return FALSE;
 
@@ -2902,6 +2919,7 @@ gst_uri_get_query_value (const GstUri * uri, const gchar * query_key)
   if (!uri)
     return NULL;
   g_return_val_if_fail (GST_IS_URI (uri), NULL);
+  g_return_val_if_fail (query_key != NULL, NULL);
   if (!uri->query)
     return NULL;
 

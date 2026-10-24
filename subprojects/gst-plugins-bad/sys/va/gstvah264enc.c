@@ -77,10 +77,12 @@
 #include <gst/va/gstvavideoformat.h>
 #include <gst/va/vasurfaceimage.h>
 #include <gst/video/video.h>
+#include <gst/pbutils/pbutils.h>
 #include <va/va_drmcommon.h>
 
 #include "vacompat.h"
 #include "gstvabaseenc.h"
+#include "gstvadisplay_priv.h"
 #include "gstvaencoder.h"
 #include "gstvaprofile.h"
 #include "gstvapluginutils.h"
@@ -97,8 +99,6 @@ GST_DEBUG_CATEGORY_STATIC (gst_va_h264enc_debug);
 typedef struct _GstVaH264Enc GstVaH264Enc;
 typedef struct _GstVaH264EncClass GstVaH264EncClass;
 typedef struct _GstVaH264EncFrame GstVaH264EncFrame;
-typedef struct _GstVaH264LevelLimits GstVaH264LevelLimits;
-
 enum
 {
   PROP_KEY_INT_MAX = 1,
@@ -302,58 +302,6 @@ struct _GstVaH264EncFrame
   gboolean last_frame;
 };
 
-/**
- * GstVaH264LevelLimits:
- * @name: the level name
- * @level_idc: the H.264 level_idc value
- * @MaxMBPS: the maximum macroblock processing rate (MB/sec)
- * @MaxFS: the maximum frame size (MBs)
- * @MaxDpbMbs: the maxium decoded picture buffer size (MBs)
- * @MaxBR: the maximum video bit rate (kbps)
- * @MaxCPB: the maximum CPB size (kbits)
- * @MinCR: the minimum Compression Ratio
- *
- * The data structure that describes the limits of an H.264 level.
- */
-struct _GstVaH264LevelLimits
-{
-  const gchar *name;
-  guint8 level_idc;
-  guint32 MaxMBPS;
-  guint32 MaxFS;
-  guint32 MaxDpbMbs;
-  guint32 MaxBR;
-  guint32 MaxCPB;
-  guint32 MinCR;
-};
-
-/* Table A-1 - Level limits */
-/* *INDENT-OFF* */
-static const GstVaH264LevelLimits _va_h264_level_limits[] = {
-  /* level   idc                  MaxMBPS   MaxFS   MaxDpbMbs  MaxBR   MaxCPB  MinCr */
-  {  "1",    GST_H264_LEVEL_L1,   1485,     99,     396,       64,     175,    2 },
-  {  "1b",   GST_H264_LEVEL_L1B,  1485,     99,     396,       128,    350,    2 },
-  {  "1.1",  GST_H264_LEVEL_L1_1, 3000,     396,    900,       192,    500,    2 },
-  {  "1.2",  GST_H264_LEVEL_L1_2, 6000,     396,    2376,      384,    1000,   2 },
-  {  "1.3",  GST_H264_LEVEL_L1_3, 11880,    396,    2376,      768,    2000,   2 },
-  {  "2",    GST_H264_LEVEL_L2,   11880,    396,    2376,      2000,   2000,   2 },
-  {  "2.1",  GST_H264_LEVEL_L2_1, 19800,    792,    4752,      4000,   4000,   2 },
-  {  "2.2",  GST_H264_LEVEL_L2_2, 20250,    1620,   8100,      4000,   4000,   2 },
-  {  "3",    GST_H264_LEVEL_L3,   40500,    1620,   8100,      10000,  10000,  2 },
-  {  "3.1",  GST_H264_LEVEL_L3_1, 108000,   3600,   18000,     14000,  14000,  4 },
-  {  "3.2",  GST_H264_LEVEL_L3_2, 216000,   5120,   20480,     20000,  20000,  4 },
-  {  "4",    GST_H264_LEVEL_L4,   245760,   8192,   32768,     20000,  25000,  4 },
-  {  "4.1",  GST_H264_LEVEL_L4_1, 245760,   8192,   32768,     50000,  62500,  2 },
-  {  "4.2",  GST_H264_LEVEL_L4_2, 522240,   8704,   34816,     50000,  62500,  2 },
-  {  "5",    GST_H264_LEVEL_L5,   589824,   22080,  110400,    135000, 135000, 2 },
-  {  "5.1",  GST_H264_LEVEL_L5_1, 983040,   36864,  184320,    240000, 240000, 2 },
-  {  "5.2",  GST_H264_LEVEL_L5_2, 2073600,  36864,  184320,    240000, 240000, 2 },
-  {  "6",    GST_H264_LEVEL_L6,   4177920,  139264, 696320,    240000, 240000, 2 },
-  {  "6.1",  GST_H264_LEVEL_L6_1, 8355840,  139264, 696320,    480000, 480000, 2 },
-  {  "6.2",  GST_H264_LEVEL_L6_2, 16711680, 139264, 696320,    800000, 800000, 2 },
-};
-/* *INDENT-ON* */
-
 #ifndef GST_DISABLE_GST_DEBUG
 static const gchar *
 _rate_control_get_name (guint32 rc_mode)
@@ -509,7 +457,7 @@ _ensure_rate_control (GstVaH264Enc * self)
   guint bitrate;
   guint32 rc_ctrl, rc_mode, quality_level;
 
-  quality_level = gst_va_encoder_get_quality_level (base->encoder,
+  quality_level = gst_va_display_get_quality_level (base->display,
       base->profile, GST_VA_BASE_ENC_ENTRYPOINT (base));
   if (self->rc.target_usage > quality_level) {
     GST_INFO_OBJECT (self, "User setting target-usage: %d is not supported, "
@@ -525,7 +473,7 @@ _ensure_rate_control (GstVaH264Enc * self)
   GST_OBJECT_UNLOCK (self);
 
   if (rc_ctrl != VA_RC_NONE) {
-    rc_mode = gst_va_encoder_get_rate_control_mode (base->encoder,
+    rc_mode = gst_va_display_get_rate_control_mode (base->display,
         base->profile, GST_VA_BASE_ENC_ENTRYPOINT (base));
     if (!(rc_mode & rc_ctrl)) {
       guint32 defval =
@@ -688,66 +636,52 @@ _ensure_rate_control (GstVaH264Enc * self)
   return TRUE;
 }
 
-static guint
-_get_h264_cpb_nal_factor (VAProfile profile)
-{
-  guint f;
-
-  /* Table A-2 */
-  switch (profile) {
-    case VAProfileH264High:
-      f = 1500;
-      break;
-    case VAProfileH264ConstrainedBaseline:
-    case VAProfileH264Main:
-      f = 1200;
-      break;
-    case VAProfileH264MultiviewHigh:
-    case VAProfileH264StereoHigh:
-      f = 1500;                 /* H.10.2.1 (r) */
-      break;
-    default:
-      g_assert_not_reached ();
-      f = 1200;
-      break;
-  }
-  return f;
-}
-
 /* Derives the level from the currently set limits */
 static gboolean
 _calculate_level (GstVaH264Enc * self)
 {
   GstVaBaseEnc *base = GST_VA_BASE_ENC (self);
-  const guint cpb_factor = _get_h264_cpb_nal_factor (base->profile);
-  guint i, PicSizeMbs, MaxDpbMbs, MaxMBPS;
+  guint8 profile_idc;
+  const GstH264LevelLimits *level;
 
-  PicSizeMbs = self->mb_width * self->mb_height;
-  MaxDpbMbs = PicSizeMbs * self->gop.max_dec_frame_buffering;
-  MaxMBPS = gst_util_uint64_scale_int_ceil (PicSizeMbs,
-      GST_VIDEO_INFO_FPS_N (&base->in_info),
-      GST_VIDEO_INFO_FPS_D (&base->in_info));
-
-  for (i = 0; i < G_N_ELEMENTS (_va_h264_level_limits); i++) {
-    const GstVaH264LevelLimits *const limits = &_va_h264_level_limits[i];
-    if (PicSizeMbs <= limits->MaxFS && MaxDpbMbs <= limits->MaxDpbMbs
-        && MaxMBPS <= limits->MaxMBPS && (!self->rc.max_bitrate_bits
-            || self->rc.max_bitrate_bits <= (limits->MaxBR * 1000 * cpb_factor))
-        && (!self->rc.cpb_length_bits
-            || self->rc.cpb_length_bits <=
-            (limits->MaxCPB * 1000 * cpb_factor))) {
-
-      self->level_idc = _va_h264_level_limits[i].level_idc;
-      self->level_str = _va_h264_level_limits[i].name;
-      self->min_cr = _va_h264_level_limits[i].MinCR;
-
-      return TRUE;
-    }
+  /* Convert VA profile to profile_idc for level calculation */
+  switch (base->profile) {
+    case VAProfileH264ConstrainedBaseline:
+      profile_idc = 66;
+      break;
+    case VAProfileH264Main:
+      profile_idc = 77;
+      break;
+    case VAProfileH264High:
+      profile_idc = 100;
+      break;
+    case VAProfileH264StereoHigh:
+    case VAProfileH264MultiviewHigh:
+      profile_idc = 100;
+      break;
+    default:
+      profile_idc = 77;
+      break;
   }
 
-  GST_ERROR_OBJECT (self,
-      "failed to find a suitable level matching codec config");
-  return FALSE;
+  level =
+      gst_codec_utils_h264_get_level_limits (GST_VIDEO_INFO_WIDTH
+      (&base->in_info), GST_VIDEO_INFO_HEIGHT (&base->in_info),
+      GST_VIDEO_INFO_FPS_N (&base->in_info),
+      GST_VIDEO_INFO_FPS_D (&base->in_info), self->rc.max_bitrate_bits,
+      self->gop.max_dec_frame_buffering, profile_idc);
+
+  if (level == NULL) {
+    GST_ERROR_OBJECT (self,
+        "failed to find a suitable level matching codec config");
+    return FALSE;
+  }
+
+  self->level_str = level->name;
+  self->level_idc = level->level_idc;
+  self->min_cr = level->min_cr;
+
+  return TRUE;
 }
 
 static void
@@ -760,7 +694,7 @@ _validate_parameters (GstVaH264Enc * self)
    * of the number of slices permitted by the stream and by the
    * hardware. */
   g_assert (self->num_slices >= 1);
-  max_slices = gst_va_encoder_get_max_slice_num (base->encoder,
+  max_slices = gst_va_display_get_max_slice_num (base->display,
       base->profile, GST_VA_BASE_ENC_ENTRYPOINT (base));
   if (self->num_slices > max_slices)
     self->num_slices = max_slices;
@@ -772,7 +706,7 @@ _validate_parameters (GstVaH264Enc * self)
       self->num_slices, PROP_NUM_SLICES);
 
   /* Ensure trellis. */
-  self->support_trellis = gst_va_encoder_has_trellis (base->encoder,
+  self->support_trellis = gst_va_display_has_trellis (base->display,
       base->profile, GST_VA_BASE_ENC_ENTRYPOINT (base));
   if (self->use_trellis && !self->support_trellis) {
     GST_INFO_OBJECT (self, "The trellis is not supported");
@@ -1004,7 +938,7 @@ _generate_gop_structure (GstVaH264Enc * self)
     }
   }
 
-  if (!gst_va_encoder_get_max_num_reference (base->encoder, base->profile,
+  if (!gst_va_display_get_max_num_reference (base->display, base->profile,
           GST_VA_BASE_ENC_ENTRYPOINT (base), &list0, &list1)) {
     GST_INFO_OBJECT (self, "Failed to get the max num reference");
     list0 = 1;
@@ -1288,6 +1222,9 @@ _calculate_coded_size (GstVaH264Enc * self)
   /* Add 5% for safety */
   base->codedbuf_size = (guint) ((gfloat) codedbuf_size * 1.05);
 
+  base->codedbuf_size = gst_va_base_enc_adjust_coded_buffer_size (base,
+      base->codedbuf_size, self->rc.rc_ctrl_mode, self->rc.target_bitrate_bits);
+
   GST_DEBUG_OBJECT (self, "Calculate codedbuf size: %u", base->codedbuf_size);
 }
 
@@ -1320,7 +1257,7 @@ _init_packed_headers (GstVaH264Enc * self)
 
   self->packed_headers = 0;
 
-  if (!gst_va_encoder_get_packed_headers (base->encoder, base->profile,
+  if (!gst_va_display_get_packed_headers (base->display, base->profile,
           GST_VA_BASE_ENC_ENTRYPOINT (base), &packed_headers))
     return FALSE;
 
@@ -1430,7 +1367,7 @@ _decide_profile (GstVaH264Enc * self, VAProfile * _profile, guint * _rt_format)
     if (!gst_va_encoder_has_profile (base->encoder, profile))
       continue;
 
-    if ((rt_format & gst_va_encoder_get_rtformat (base->encoder,
+    if ((rt_format & gst_va_display_get_rtformat (base->display,
                 profile, GST_VA_BASE_ENC_ENTRYPOINT (base))) == 0)
       continue;
 
@@ -1452,7 +1389,7 @@ _decide_profile (GstVaH264Enc * self, VAProfile * _profile, guint * _rt_format)
     if (!gst_va_encoder_has_profile (base->encoder, profile))
       continue;
 
-    if ((rt_format & gst_va_encoder_get_rtformat (base->encoder,
+    if ((rt_format & gst_va_display_get_rtformat (base->display,
                 profile, GST_VA_BASE_ENC_ENTRYPOINT (base))) == 0)
       continue;
 
@@ -1580,46 +1517,22 @@ gst_va_h264_enc_reconfig (GstVaBaseEnc * base)
   GstVaBaseEncClass *klass = GST_VA_BASE_ENC_GET_CLASS (base);
   GstVideoEncoder *venc = GST_VIDEO_ENCODER (base);
   GstVaH264Enc *self = GST_VA_H264_ENC (base);
-  GstCaps *out_caps, *reconf_caps = NULL;
+  GstCaps *out_caps;
   GstVideoCodecState *output_state = NULL;
-  GstVideoFormat format, reconf_format = GST_VIDEO_FORMAT_UNKNOWN;
+  GstVideoFormat format;
   VAProfile profile = VAProfileNone;
-  gboolean do_renegotiation = TRUE, do_reopen, need_negotiation, rc_same;
-  guint max_ref_frames, max_surfaces = 0, rt_format = 0,
-      codedbuf_size, latency_num;
+  gboolean do_renegotiation = TRUE;
+  guint max_ref_frames, rt_format = 0, latency_num;
   gint width, height;
   GstClockTime latency;
 
   width = GST_VIDEO_INFO_WIDTH (&base->in_info);
   height = GST_VIDEO_INFO_HEIGHT (&base->in_info);
   format = GST_VIDEO_INFO_FORMAT (&base->in_info);
-  codedbuf_size = base->codedbuf_size;
   latency_num = base->preferred_output_delay + self->gop.ip_period - 1;
-
-  need_negotiation =
-      !gst_va_encoder_get_reconstruct_pool_config (base->encoder, &reconf_caps,
-      &max_surfaces);
-  if (!need_negotiation && reconf_caps) {
-    GstVideoInfo vi;
-    if (!gst_video_info_from_caps (&vi, reconf_caps))
-      return FALSE;
-    reconf_format = GST_VIDEO_INFO_FORMAT (&vi);
-  }
 
   if (!_decide_profile (self, &profile, &rt_format))
     return FALSE;
-
-  GST_OBJECT_LOCK (self);
-  rc_same = (self->prop.rc_ctrl == self->rc.rc_ctrl_mode);
-  GST_OBJECT_UNLOCK (self);
-
-  /* first check */
-  do_reopen = !(base->profile == profile && base->rt_format == rt_format
-      && format == reconf_format && width == base->width
-      && height == base->height && rc_same);
-
-  if (do_reopen && gst_va_encoder_is_open (base->encoder))
-    gst_va_encoder_close (base->encoder);
 
   gst_va_base_enc_reset_state (base);
 
@@ -1677,7 +1590,6 @@ gst_va_h264_enc_reconfig (GstVaBaseEnc * base)
 
   /* Let the downstream know the new latency. */
   if (latency_num != base->preferred_output_delay + self->gop.ip_period - 1) {
-    need_negotiation = TRUE;
     latency_num = base->preferred_output_delay + self->gop.ip_period - 1;
   }
 
@@ -1693,14 +1605,7 @@ gst_va_h264_enc_reconfig (GstVaBaseEnc * base)
   base->min_buffers = max_ref_frames;
   max_ref_frames += 3 /* scratch frames */ ;
 
-  /* second check after calculations */
-  do_reopen |=
-      !(max_ref_frames == max_surfaces && codedbuf_size == base->codedbuf_size);
-  if (do_reopen && gst_va_encoder_is_open (base->encoder))
-    gst_va_encoder_close (base->encoder);
-
-  if (!gst_va_encoder_is_open (base->encoder)
-      && !gst_va_encoder_open (base->encoder, base->profile,
+  if (!gst_va_encoder_open (base->encoder, base->profile,
           format, base->rt_format, base->width, base->height,
           base->codedbuf_size, max_ref_frames, self->rc.rc_ctrl_mode,
           self->packed_headers)) {
@@ -1723,17 +1628,15 @@ gst_va_h264_enc_reconfig (GstVaBaseEnc * base)
       "height", G_TYPE_INT, base->height, "alignment", G_TYPE_STRING, "au",
       "stream-format", G_TYPE_STRING, "byte-stream", NULL);
 
-  if (!need_negotiation) {
-    output_state = gst_video_encoder_get_output_state (venc);
-    do_renegotiation = TRUE;
-    if (output_state) {
-      do_renegotiation = !gst_caps_is_subset (output_state->caps, out_caps);
-      gst_video_codec_state_unref (output_state);
-    }
-    if (!do_renegotiation) {
-      gst_caps_unref (out_caps);
-      return TRUE;
-    }
+  output_state = gst_video_encoder_get_output_state (venc);
+  do_renegotiation = TRUE;
+  if (output_state) {
+    do_renegotiation = !gst_caps_is_subset (output_state->caps, out_caps);
+    gst_video_codec_state_unref (output_state);
+  }
+  if (!do_renegotiation) {
+    gst_caps_unref (out_caps);
+    return TRUE;
   }
 
   GST_DEBUG_OBJECT (self, "output caps is %" GST_PTR_FORMAT, out_caps);

@@ -129,6 +129,7 @@ gst_vp9_parse_init (GstVp9Parse * self)
 {
   gst_base_parse_set_pts_interpolation (GST_BASE_PARSE (self), FALSE);
   gst_base_parse_set_infer_ts (GST_BASE_PARSE (self), FALSE);
+  gst_base_parse_set_allow_duplicated_pts (GST_BASE_PARSE (self), TRUE);
 
   GST_PAD_SET_ACCEPT_INTERSECT (GST_BASE_PARSE_SINK_PAD (self));
   GST_PAD_SET_ACCEPT_TEMPLATE (GST_BASE_PARSE_SINK_PAD (self));
@@ -441,8 +442,6 @@ gst_vp9_parse_pre_push_frame (GstBaseParse * parse, GstBaseParseFrame * frame)
 {
   GstVp9Parse *self = GST_VP9_PARSE (parse);
 
-  frame->flags |= GST_BASE_PARSE_FRAME_FLAG_CLIP;
-
   if (!frame->buffer)
     return GST_FLOW_OK;
 
@@ -503,7 +502,7 @@ gst_vp9_parse_handle_frame (GstBaseParse * parse, GstBaseParseFrame * frame,
   GstFlowReturn ret = GST_FLOW_OK;
   GstVp9ParserResult parse_res = GST_VP9_PARSER_ERROR;
   GstMapInfo map;
-  gsize offset = 0;
+  gsize offset = 0, size;
   GstVp9SuperframeInfo superframe_info;
   guint i;
   GstVp9FrameHdr frame_hdr;
@@ -512,10 +511,6 @@ gst_vp9_parse_handle_frame (GstBaseParse * parse, GstBaseParseFrame * frame,
     self->discont = TRUE;
   else
     self->discont = FALSE;
-
-  /* need to save buffer from invalidation upon _finish_frame */
-  if (self->align == GST_VP9_PARSE_ALIGN_FRAME)
-    buffer = gst_buffer_copy (frame->buffer);
 
   if (!gst_buffer_map (buffer, &map, GST_MAP_READ)) {
     GST_ELEMENT_ERROR (parse, CORE, NOT_IMPLEMENTED, (NULL),
@@ -579,6 +574,7 @@ gst_vp9_parse_handle_frame (GstBaseParse * parse, GstBaseParseFrame * frame,
         GST_BUFFER_FLAG_SET (subframe.buffer, GST_BUFFER_FLAG_DECODE_ONLY);
 
       ret = gst_base_parse_finish_frame (parse, &subframe, frame_size);
+      gst_base_parse_frame_free (&subframe);
     } else {
       /* FIXME: need to parse all frames belong to this superframe? */
       break;
@@ -590,16 +586,16 @@ gst_vp9_parse_handle_frame (GstBaseParse * parse, GstBaseParseFrame * frame,
   gst_vp9_parse_reset_super_frame (self);
 
 done:
+  size = map.size;
   gst_buffer_unmap (buffer, &map);
 
   if (self->align != GST_VP9_PARSE_ALIGN_FRAME) {
     if (parse_res == GST_VP9_PARSER_OK)
       gst_vp9_parse_parse_frame (self, frame, &frame_hdr);
-    ret = gst_base_parse_finish_frame (parse, frame, map.size);
+    ret = gst_base_parse_finish_frame (parse, frame, size);
   } else {
-    gst_buffer_unref (buffer);
-    if (offset != map.size) {
-      gsize left = map.size - offset;
+    if (offset != size) {
+      gsize left = size - offset;
       if (left != superframe_info.superframe_index_size) {
         GST_WARNING_OBJECT (parse,
             "Skipping leftover frame data %" G_GSIZE_FORMAT, left);
@@ -625,6 +621,7 @@ gst_vp9_parse_update_src_caps (GstVp9Parse * self, GstCaps * caps)
   gchar *colorimetry = NULL;
   const gchar *chroma_format = NULL;
   const gchar *profile = NULL;
+  const gchar *level = NULL;
 
   if (!self->update_caps)
     return;
@@ -644,15 +641,8 @@ gst_vp9_parse_update_src_caps (GstVp9Parse * self, GstCaps * caps)
 
   final_caps = gst_caps_copy (sink_caps);
 
-  /* frame header should give this but upstream overrides */
-  if (s && gst_structure_has_field (s, "width") &&
-      gst_structure_has_field (s, "height")) {
-    gst_structure_get_int (s, "width", &width);
-    gst_structure_get_int (s, "height", &height);
-  } else {
-    width = self->width;
-    height = self->height;
-  }
+  width = self->width;
+  height = self->height;
 
   if (width > 0 && height > 0)
     gst_caps_set_simple (final_caps, "width", G_TYPE_INT, width,
@@ -770,6 +760,15 @@ gst_vp9_parse_update_src_caps (GstVp9Parse * self, GstCaps * caps)
   profile = gst_vp9_parse_profile_to_string (self->profile);
   if (profile)
     gst_caps_set_simple (final_caps, "profile", G_TYPE_STRING, profile, NULL);
+
+  if (!s || !gst_structure_has_field (s, "level")) {
+    guint8 level_idc =
+        gst_codec_utils_vp9_estimate_level_idc_from_caps (final_caps);
+    level = gst_codec_utils_vp9_get_level (level_idc);
+    if (level) {
+      gst_caps_set_simple (final_caps, "level", G_TYPE_STRING, level, NULL);
+    }
+  }
 
   gst_caps_set_simple (final_caps, "codec-alpha", G_TYPE_BOOLEAN,
       self->codec_alpha, NULL);

@@ -1052,6 +1052,7 @@ gst_net_sim_class_init (GstNetSimClass * klass)
 static gboolean
 gst_net_sim_plugin_init (GstPlugin * plugin)
 {
+  gst_plugin_set_static_features_flag (plugin);
   return GST_ELEMENT_REGISTER (netsim, plugin);
 }
 

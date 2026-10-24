@@ -71,6 +71,7 @@ enum ParserState
   GST_JPEG_PARSER_STATE_GOT_SOS = 1 << 2,
   GST_JPEG_PARSER_STATE_GOT_JFIF = 1 << 3,
   GST_JPEG_PARSER_STATE_GOT_ADOBE = 1 << 4,
+  GST_JPEG_PARSER_STATE_GOT_METADATA = 1 << 5,
 
   GST_JPEG_PARSER_STATE_VALID_PICTURE = (GST_JPEG_PARSER_STATE_GOT_SOI |
       GST_JPEG_PARSER_STATE_GOT_SOF | GST_JPEG_PARSER_STATE_GOT_SOS),
@@ -108,6 +109,10 @@ static gboolean gst_jpeg_parse_stop (GstBaseParse * parse);
 G_DEFINE_TYPE (GstJpegParse, gst_jpeg_parse, GST_TYPE_BASE_PARSE);
 GST_ELEMENT_REGISTER_DEFINE (jpegparse, "jpegparse", GST_RANK_PRIMARY,
     GST_TYPE_JPEG_PARSE);
+
+/* CIPA DC-x 007-2009 MPF spec states as TIFF */
+#define MPF_LE  0x4949
+#define MPF_BE  0x4D4D
 
 enum GstJPEGColorspace
 {
@@ -187,6 +192,7 @@ gst_jpeg_parse_class_init (GstJpegParseClass * klass)
 static void
 gst_jpeg_parse_init (GstJpegParse * parse)
 {
+  gst_base_parse_set_allow_duplicated_pts (GST_BASE_PARSE (parse), TRUE);
   parse->sof = -1;
 }
 
@@ -328,6 +334,13 @@ gst_jpeg_parse_sof (GstJpegParse * parse, GstJpegSegment * seg)
     return FALSE;
   }
 
+  if (parse->mpf.mode
+      && parse->mpf.primary_image_index != parse->mpf.cur_image_index) {
+    GST_DEBUG_OBJECT (parse, "Ignoring MPF SOF of picture %d",
+        parse->mpf.cur_image_index);
+    return TRUE;
+  }
+
   colorspace = GST_JPEG_COLORSPACE_NONE;
   sampling = GST_JPEG_SAMPLING_NONE;
 
@@ -444,13 +457,8 @@ gst_jpeg_parse_app0 (GstJpegParse * parse, GstJpegSegment * seg)
   gst_byte_reader_init (&reader, seg->data + seg->offset, seg->size);
   gst_byte_reader_skip_unchecked (&reader, 2);
 
-#if G_BYTE_ORDER == G_LITTLE_ENDIAN
   if (!gst_byte_reader_get_uint32_le (&reader, &id))
     return FALSE;
-#else
-  if (!gst_byte_reader_get_uint32_be (&reader, &id))
-    return FALSE;
-#endif
 
   if (!valid_state (parse->state, GST_JPEG_PARSER_STATE_GOT_JFIF)
       && GST_MAKE_FOURCC ('J', 'F', 'I', 'F') == id) {
@@ -468,19 +476,11 @@ gst_jpeg_parse_app0 (GstJpegParse * parse, GstJpegSegment * seg)
       return FALSE;
 
     /* x density */
-#if G_BYTE_ORDER == G_LITTLE_ENDIAN
-    if (!gst_byte_reader_get_uint16_le (&reader, &xd))
-      return FALSE;
-    /* y density */
-    if (!gst_byte_reader_get_uint16_le (&reader, &yd))
-      return FALSE;
-#else
     if (!gst_byte_reader_get_uint16_be (&reader, &xd))
       return FALSE;
     /* y density */
     if (!gst_byte_reader_get_uint16_be (&reader, &yd))
       return FALSE;
-#endif
 
     /* x thumbnail */
     if (!gst_byte_reader_get_uint8 (&reader, &xt))
@@ -515,7 +515,7 @@ gst_jpeg_parse_app0 (GstJpegParse * parse, GstJpegSegment * seg)
     if (xt > 0 && yt > 0)
       GST_FIXME_OBJECT (parse, "embedded thumbnail ignored");
 
-    return TRUE;
+    goto bail;
   }
 
   /* JFIF  Extension  */
@@ -523,7 +523,7 @@ gst_jpeg_parse_app0 (GstJpegParse * parse, GstJpegSegment * seg)
     if (!valid_state (parse->state, GST_JPEG_PARSER_STATE_GOT_JFIF))
       return FALSE;
 
-    return TRUE;
+    goto bail;
   }
 
   /* https://exiftool.org/TagNames/JPEG.html#AVI1 */
@@ -538,12 +538,14 @@ gst_jpeg_parse_app0 (GstJpegParse * parse, GstJpegSegment * seg)
     GST_DEBUG_OBJECT (parse, "MJPEG interleaved field: %s", unit == 0 ?
         "not interleaved" : unit % 2 ? "Odd" : "Even");
 
-    return TRUE;
+    goto bail;
   }
 
   GST_MEMDUMP_OBJECT (parse, "Unhandled app0", seg->data + seg->offset,
       seg->size);
 
+bail:
+  parse->state |= GST_JPEG_PARSER_STATE_GOT_METADATA;
   return TRUE;
 }
 
@@ -592,8 +594,28 @@ gst_jpeg_parse_app1 (GstJpegParse * parse, GstJpegSegment * seg)
     if (!gst_byte_reader_get_data (&reader, size, &data))
       return FALSE;
 
-    buf = gst_buffer_new_wrapped_full (GST_MEMORY_FLAG_READONLY,
-        (gpointer) data, size, 0, size, NULL, NULL);
+    /* add synthetic xpacket for xpm if it doesn't have it */
+    if (i == 1 && !g_strstr_len ((const char *) data, size, "<?xpacket begin")) {
+      gpointer str;
+      gsize len;
+      GString *xmp = g_string_new ("<?xpacket begin=\"r\"?>");
+
+      g_string_append_len (xmp, (const char *) data, size);
+      g_string_append (xmp, "<?xpacket end=\"r\"?>");
+
+      len = xmp->len;
+#if GLIB_CHECK_VERSION (2, 76, 0)
+      str = g_string_free_and_steal (xmp);
+#else
+      str = g_string_free (xmp, FALSE);
+#endif
+
+      buf = gst_buffer_new_wrapped_full (GST_MEMORY_FLAG_READONLY, str, len, 0,
+          len, str, g_free);
+    } else {
+      buf = gst_buffer_new_wrapped_full (GST_MEMORY_FLAG_READONLY,
+          (gpointer) data, size, 0, size, NULL, NULL);
+    }
 
     if (buf) {
       GstTagList *tags;
@@ -608,15 +630,254 @@ gst_jpeg_parse_app1 (GstJpegParse * parse, GstJpegSegment * seg)
         gst_tag_list_unref (tags);
       } else {
         GST_INFO_OBJECT (parse, "failed to parse %s: %s", id_str, data);
-        return FALSE;
       }
     }
 
-    return TRUE;
+    goto bail;
   }
 
   GST_MEMDUMP_OBJECT (parse, "Unhandled app1", seg->data + seg->offset,
       seg->size);
+
+bail:
+  parse->state |= GST_JPEG_PARSER_STATE_GOT_METADATA;
+  return TRUE;
+}
+
+struct MPF
+{
+  guint32 num_images;
+  guint32 individual_image_no;
+  struct
+  {
+    gboolean parent;
+    gboolean child;
+    gboolean representative;
+    enum
+    {
+      UNDEFINED = 0x0,
+      BASELINE_PRIMARY = 0x30000,
+      LARGE_THUMB_VGA = 0x10001,
+      LARGE_THUMB_HD = 0x10002,
+      MULTI_FRAME_PANO = 0x20001,
+      MULTI_FRAME_DISPARITY = 0x20002,
+      MULTI_FRAME_MULTI_ANGLE = 0x20003,
+    } type;
+    guint32 size;
+    guint32 offset;
+  } entries[32];
+};
+
+static gboolean
+gst_jpeg_parse_mpf (GstJpegParse * parse, GstByteReader * reader,
+    struct MPF *mpf)
+{
+  guint16 endianness;
+  guint16 fortytwo;
+  guint32 offset;
+  guint16 num_entries;
+  gsize offset_ref, offset_cur;
+
+  offset_ref = gst_byte_reader_get_pos (reader);
+
+  /* MP Header */
+  if (!gst_byte_reader_get_uint16_be (reader, &endianness))
+    return FALSE;
+
+  if (endianness == MPF_LE) {
+    if (!gst_byte_reader_get_uint16_le (reader, &fortytwo)
+        || !gst_byte_reader_get_uint32_le (reader, &offset))
+      return FALSE;
+  } else if (endianness == MPF_BE) {
+    if (!gst_byte_reader_get_uint16_be (reader, &fortytwo)
+        || !gst_byte_reader_get_uint32_be (reader, &offset))
+      return FALSE;
+  } else {
+    return FALSE;
+  }
+
+  /* endianness check */
+  if (fortytwo != 42)
+    return FALSE;
+
+  /* Skip to MP Index IFD */
+  offset_cur = gst_byte_reader_get_pos (reader);
+  /* number of bytes to skip = (reference offset + new offset) - current offset */
+  if (!gst_byte_reader_skip (reader, offset_ref + offset - offset_cur))
+    return FALSE;
+
+  while (TRUE) {
+    /* MP Index IFD - number of entries */
+    if (endianness == MPF_LE) {
+      if (!gst_byte_reader_get_uint16_le (reader, &num_entries))
+        return FALSE;
+    } else {
+      if (!gst_byte_reader_get_uint16_be (reader, &num_entries))
+        return FALSE;
+    }
+
+    GST_DEBUG_OBJECT (parse, "MPF: %d IFD entries", num_entries);
+
+    for (int i = 0; i < num_entries; i++) {
+      guint16 tag, type;
+      guint32 count, value;
+
+      if (endianness == MPF_LE) {
+        if (!gst_byte_reader_get_uint16_le (reader, &tag)
+            || !gst_byte_reader_get_uint16_le (reader, &type)
+            || !gst_byte_reader_get_uint32_le (reader, &count)
+            || !gst_byte_reader_get_uint32_le (reader, &value))
+          return FALSE;
+      } else {
+        if (!gst_byte_reader_get_uint16_be (reader, &tag)
+            || !gst_byte_reader_get_uint16_be (reader, &type)
+            || !gst_byte_reader_get_uint32_be (reader, &count)
+            || !gst_byte_reader_get_uint32_be (reader, &value))
+          return FALSE;
+      }
+
+      switch (tag) {
+        case 0XB000:           /* MPF version # */
+          GST_DEBUG_OBJECT (parse, "MPF version %" GST_FOURCC_FORMAT,
+              GST_FOURCC_ARGS (value));
+          break;
+        case 0xB001:           /* number of images */
+          mpf->num_images = value;
+          GST_DEBUG_OBJECT (parse, "MPF number of images %d", mpf->num_images);
+          break;
+        case 0xB002:{          /* MP entries */
+          if (count / 16 != mpf->num_images)
+            return FALSE;
+
+          offset_cur = gst_byte_reader_get_pos (reader);
+          if (!gst_byte_reader_skip (reader, offset_ref + value - offset_cur))
+            return FALSE;
+
+          if (mpf->num_images > 32) {
+            GST_WARNING_OBJECT (parse,
+                "MPF has more than 32 pictures. Forced to 32");
+            mpf->num_images = 32;
+          }
+
+          for (int j = 0; j < mpf->num_images; j++) {
+            guint32 attr, size, offset, dependencies;
+
+            if (endianness == MPF_LE) {
+              if (!gst_byte_reader_get_uint32_le (reader, &attr)
+                  || !gst_byte_reader_get_uint32_le (reader, &size)
+                  || !gst_byte_reader_get_uint32_le (reader, &offset)
+                  || !gst_byte_reader_get_uint32_le (reader, &dependencies))
+                return FALSE;
+            } else {
+              if (!gst_byte_reader_get_uint32_be (reader, &attr)
+                  || !gst_byte_reader_get_uint32_be (reader, &size)
+                  || !gst_byte_reader_get_uint32_be (reader, &offset)
+                  || !gst_byte_reader_get_uint32_be (reader, &dependencies))
+                return FALSE;
+            }
+
+            mpf->entries[j].parent = attr & 0x8000000000u;
+            mpf->entries[j].child = attr & 0x4000000000u;
+            mpf->entries[j].representative = attr & 0x2000000000u;
+            mpf->entries[j].type = attr & 0xffffffu;
+            mpf->entries[j].size = size;
+            mpf->entries[j].offset = offset;
+
+            GST_DEBUG_OBJECT (parse, "MPF entry image type 0x%x",
+                mpf->entries[j].type);
+          }
+
+          break;
+        }
+        case 0xB101:           /* individual image number */
+          mpf->individual_image_no = value;
+          GST_DEBUG_OBJECT (parse, "MPF individual image %d",
+              mpf->individual_image_no);
+          break;
+        case 0xB003:           /* image uid list */
+        case 0xB004:           /* total frames */
+        case 0xB201:           /* panorama scanning orientation */
+        case 0xB202:           /* panorama horiz overlap */
+        case 0xB203:           /* panorama vert overlap */
+        case 0xB204:           /* base viewpoint # */
+        case 0xB205:           /* convergence angle */
+        case 0xB206:           /* baseline length */
+        case 0xB207:           /* divergence angle  */
+        case 0xB208:           /* horiz axis distance */
+        case 0xB209:           /* vert axis distance */
+        case 0xB20A:           /* collimation axis distance */
+        case 0xB20B:           /* yaw angle */
+        case 0xB20C:           /* pitch angle */
+        case 0xB20D:           /* roll angle */
+          GST_DEBUG_OBJECT (parse, "unhandled MPF entry 0x%x", tag);
+          break;
+        default:
+          return FALSE;
+      };
+    }
+
+    if (gst_byte_reader_get_remaining (reader) == 0)
+      break;
+
+    /* Next IFD offset */
+    if (endianness == MPF_LE) {
+      if (!gst_byte_reader_get_uint32_le (reader, &offset))
+        return FALSE;
+    } else {
+      if (!gst_byte_reader_get_uint32_be (reader, &offset))
+        return FALSE;
+    }
+
+    if (offset == 0)
+      break;
+
+    offset_cur = gst_byte_reader_get_pos (reader);
+    if (!gst_byte_reader_skip (reader, offset_ref + offset - offset_cur))
+      return FALSE;
+  }
+
+  return TRUE;
+}
+
+static gboolean
+gst_jpeg_parse_app2 (GstJpegParse * parse, GstJpegSegment * seg)
+{
+  GstByteReader reader;
+  const gchar *id_str;
+  guint i;
+
+  if (seg->size < 4)            /* less than 6 means no id string */
+    return FALSE;
+
+  gst_byte_reader_init (&reader, seg->data + seg->offset, seg->size);
+  gst_byte_reader_skip_unchecked (&reader, 2);
+
+  if (!gst_byte_reader_get_string_utf8 (&reader, &id_str))
+    return FALSE;
+
+  if (g_str_has_suffix (id_str, "MPF")) {
+    struct MPF mpf = { 0, };
+
+    if (!gst_jpeg_parse_mpf (parse, &reader, &mpf))
+      return FALSE;
+
+    parse->mpf.mode = TRUE;
+    parse->mpf.num_images = mpf.num_images;
+    parse->mpf.cur_image_index = 0;
+
+    for (i = 0; i < mpf.num_images; i++) {
+      if (mpf.entries[i].type == BASELINE_PRIMARY) {
+        parse->mpf.primary_image_index = i;
+        break;
+      }
+    }
+
+    if (i == mpf.num_images) {
+      GST_WARNING_OBJECT (parse,
+          "No baseline primary image found. Forcing the first");
+      parse->mpf.primary_image_index = 0;
+    }
+  }
 
   return TRUE;
 }
@@ -644,8 +905,10 @@ gst_jpeg_parse_app14 (GstJpegParse * parse, GstJpegSegment * seg)
     if (!gst_byte_reader_skip (&reader, 5))
       return FALSE;
   } else {
-    GST_DEBUG_OBJECT (parse, "Unhandled app14");
-    return TRUE;
+    GST_MEMDUMP_OBJECT (parse, "Unhandled app14", seg->data + seg->offset,
+        seg->size);
+
+    goto bail;
   }
 
   /* skip version and flags */
@@ -656,9 +919,12 @@ gst_jpeg_parse_app14 (GstJpegParse * parse, GstJpegSegment * seg)
 
   /* transform bit might not exist  */
   if (!gst_byte_reader_get_uint8 (&reader, &transform))
-    return TRUE;
+    goto bail;
 
   parse->adobe_transform = transform;
+
+bail:
+  parse->state |= GST_JPEG_PARSER_STATE_GOT_METADATA;
   return TRUE;
 }
 
@@ -696,9 +962,9 @@ gst_jpeg_parse_com (GstJpegParse * parse, GstJpegSegment * seg)
 
   buf = (const gchar *) data;
   /* buggy avid, it puts EOI only at every 10th frame */
-  if (g_str_has_prefix (buf, "AVID")) {
+  if (size >= 4 && memcmp (buf, "AVID", 4) == 0) {
     parse_avid (parse, data, size);
-  } else if (g_str_has_prefix (buf, "MULTISCOPE II")) {
+  } else if (size >= 13 && memcmp (buf, "MULTISCOPE II", 13) == 0) {
     parse->par_num = 1;
     parse->par_den = 2;
     parse->multiscope = TRUE;
@@ -714,6 +980,8 @@ gst_jpeg_parse_com (GstJpegParse * parse, GstJpegSegment * seg)
         GST_TAG_COMMENT, comment, NULL);
     g_free (comment);
   }
+
+  parse->state |= GST_JPEG_PARSER_STATE_GOT_METADATA;
 
   return TRUE;
 }
@@ -835,6 +1103,25 @@ gst_jpeg_parse_finish_frame (GstJpegParse * parse, GstBaseParseFrame * frame,
   return ret;
 }
 
+static inline gboolean
+gst_jpeg_parse_should_finish_buffer (GstJpegParse * parse, GstJpegMarker marker)
+{
+  guint field_to_check;
+
+  if (parse->mpf.mode)
+    return parse->mpf.cur_image_index + 1 == parse->mpf.num_images;
+
+  if (marker == GST_JPEG_MARKER_SOI)
+    field_to_check = 0;
+  else if (marker == GST_JPEG_MARKER_EOI)
+    field_to_check = 1;
+  else
+    g_assert_not_reached ();
+
+  return parse->interlace_mode == GST_VIDEO_INTERLACE_MODE_PROGRESSIVE
+      || parse->field == field_to_check;
+}
+
 static GstFlowReturn
 gst_jpeg_parse_handle_frame (GstBaseParse * bparse, GstBaseParseFrame * frame,
     gint * skipsize)
@@ -844,6 +1131,7 @@ gst_jpeg_parse_handle_frame (GstBaseParse * bparse, GstBaseParseFrame * frame,
   GstJpegMarker marker;
   GstJpegSegment seg;
   guint offset;
+  gint prev_state;
 
   GST_TRACE_OBJECT (parse, "frame %" GST_PTR_FORMAT, frame->buffer);
 
@@ -890,9 +1178,7 @@ gst_jpeg_parse_handle_frame (GstBaseParse * bparse, GstBaseParseFrame * frame,
     switch (marker) {
       case GST_JPEG_MARKER_SOI:
         /* This means that new SOI comes without an previous EOI. */
-        if (offset > 2
-            && (parse->interlace_mode == GST_VIDEO_INTERLACE_MODE_PROGRESSIVE
-                || parse->field == 0)) {
+        if (offset > 2 && gst_jpeg_parse_should_finish_buffer (parse, marker)) {
           /* If already some data segment parsed, push it as a frame. */
           if (valid_state (parse->state, GST_JPEG_PARSER_STATE_GOT_SOS)) {
             gst_buffer_unmap (frame->buffer, &mapinfo);
@@ -907,15 +1193,19 @@ gst_jpeg_parse_handle_frame (GstBaseParse * bparse, GstBaseParseFrame * frame,
             return gst_jpeg_parse_finish_frame (parse, frame, seg.offset - 2);
           }
 
+          prev_state = parse->state;
           gst_jpeg_parse_reset (parse);
-          parse->state |= GST_JPEG_PARSER_STATE_GOT_SOI;
-          /* unset tags */
-          gst_base_parse_merge_tags (bparse, NULL, GST_TAG_MERGE_UNDEFINED);
+          parse->state |= prev_state | GST_JPEG_PARSER_STATE_GOT_SOI;
 
-          *skipsize = offset - 2;
-          GST_DEBUG_OBJECT (parse, "skipping %d bytes before SOI", *skipsize);
-          parse->last_offset = 2;
-          goto beach;
+          if (!valid_state (parse->state, GST_JPEG_PARSER_STATE_GOT_METADATA)) {
+            /* unset tags */
+            gst_base_parse_merge_tags (bparse, NULL, GST_TAG_MERGE_UNDEFINED);
+
+            *skipsize = offset - 2;
+            GST_DEBUG_OBJECT (parse, "skipping %d bytes before SOI", *skipsize);
+            parse->last_offset = 2;
+            goto beach;
+          }
         }
 
         /* unset tags */
@@ -923,14 +1213,20 @@ gst_jpeg_parse_handle_frame (GstBaseParse * bparse, GstBaseParseFrame * frame,
         parse->state |= GST_JPEG_PARSER_STATE_GOT_SOI;
         break;
       case GST_JPEG_MARKER_EOI:
-        if (parse->interlace_mode == GST_VIDEO_INTERLACE_MODE_PROGRESSIVE
-            || parse->field == 1) {
+        if (gst_jpeg_parse_should_finish_buffer (parse, marker)) {
           gst_buffer_unmap (frame->buffer, &mapinfo);
           return gst_jpeg_parse_finish_frame (parse, frame, seg.offset);
+        } else if (parse->mpf.mode) {
+          parse->mpf.cur_image_index++;
+          GST_DEBUG_OBJECT (parse, "finished image number %d of %d",
+              parse->mpf.cur_image_index, parse->mpf.num_images);
+          /* reset the state to continue parsing */
+          parse->state = GST_JPEG_PARSER_STATE_GOT_METADATA;
         } else if (parse->interlace_mode == GST_VIDEO_INTERLACE_MODE_INTERLEAVED
             && parse->field == 0) {
           parse->field = 1;
-          parse->state = 0;
+          /* reset the state to continue parsing */
+          parse->state = GST_JPEG_PARSER_STATE_GOT_METADATA;
         }
         break;
       case GST_JPEG_MARKER_SOS:
@@ -949,6 +1245,10 @@ gst_jpeg_parse_handle_frame (GstBaseParse * bparse, GstBaseParseFrame * frame,
       case GST_JPEG_MARKER_APP1:
         if (!gst_jpeg_parse_app1 (parse, &seg))
           GST_WARNING_OBJECT (parse, "Failed to parse app1 segment");
+        break;
+      case GST_JPEG_MARKER_APP2:
+        if (!gst_jpeg_parse_app2 (parse, &seg))
+          GST_WARNING_OBJECT (parse, "Failed to parse app2 segment");
         break;
       case GST_JPEG_MARKER_APP14:
         if (!gst_jpeg_parse_app14 (parse, &seg))

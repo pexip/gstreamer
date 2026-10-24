@@ -206,27 +206,54 @@ va_destroy_image (GstVaDisplay * display, VAImageID image_id)
   return TRUE;
 }
 
+#ifndef GST_DISABLE_GST_DEBUG
+static const char *surface_status_str_map[] = {
+  [VASurfaceRendering] = "rendering",
+  [VASurfaceDisplaying] = "displaying",
+  [VASurfaceReady] = "ready",
+  [VASurfaceSkipped] = "skipped"
+};
+#endif
+
+static gboolean
+va_retry_query_surface_status (VADisplay dpy, VASurfaceID surface,
+    gint max_retries)
+{
+  VAStatus status = VA_STATUS_SUCCESS;
+  VASurfaceStatus state = 0;
+  gint i;
+
+  for (i = 0; i < max_retries; i++) {
+    status = vaQuerySurfaceStatus (dpy, surface, &state);
+    if (status != VA_STATUS_SUCCESS) {
+      GST_ERROR ("vaQuerySurfaceStatus: %s", vaErrorStr (status));
+      return FALSE;
+    }
+    if (state == VASurfaceReady || state == VASurfaceSkipped)
+      return TRUE;
+    GST_LOG ("vaQuerySurfaceStatus: Surface 0x%x %s, retrying (%d/%d)", surface,
+        surface_status_str_map[state], i + 1, max_retries);
+    g_usleep (100);
+  }
+
+  GST_WARNING ("vaQuerySurfaceStatus: Surface 0x%x not ready after %d retries",
+      surface, max_retries);
+  return FALSE;
+}
+
 gboolean
 va_get_derive_image (GstVaDisplay * display, VASurfaceID surface,
     VAImage * image)
 {
   VADisplay dpy = gst_va_display_get_va_dpy (display);
   VAStatus status;
-  VASurfaceStatus state;
 
   /* When directly accessing a surface special care must be taken to insure sync
    * proper synchronization with the graphics hardware. Clients should call
    * vaQuerySurfaceStatus to insure that a surface is not the target of
    * concurrent rendering or currently being displayed by an overlay. */
-  status = vaQuerySurfaceStatus (dpy, surface, &state);
-  if (status != VA_STATUS_SUCCESS) {
-    GST_WARNING ("vaQuerySurfaceStatus: %s", vaErrorStr (status));
+  if (!va_retry_query_surface_status (dpy, surface, 10))
     return FALSE;
-  }
-  if (state != VASurfaceReady) {
-    GST_INFO ("Surface not ready");
-    return FALSE;
-  }
 
   status = vaDeriveImage (dpy, surface, image);
   if (status != VA_STATUS_SUCCESS) {
@@ -277,15 +304,34 @@ va_get_image (GstVaDisplay * display, VASurfaceID surface, VAImage * image)
 gboolean
 va_sync_surface (GstVaDisplay * display, VASurfaceID surface)
 {
-  VADisplay dpy = gst_va_display_get_va_dpy (display);
+  VADisplay dpy;
   VAStatus status;
+  const guint max_retries = 10;
 
-  status = vaSyncSurface (dpy, surface);
-  if (status != VA_STATUS_SUCCESS) {
-    GST_WARNING ("vaSyncSurface: %s", vaErrorStr (status));
-    return FALSE;
+  if (va_check_surface_has_status (display, surface, VASurfaceReady))
+    return TRUE;
+
+  dpy = gst_va_display_get_va_dpy (display);
+
+  for (int i = 0; i < max_retries; i++) {
+    status = vaSyncSurface (dpy, surface);
+    if (status == VA_STATUS_SUCCESS)
+      return TRUE;
+    if (status != VA_STATUS_ERROR_HW_BUSY) {
+      GST_WARNING ("vaSyncSurface: %s", vaErrorStr (status));
+      return FALSE;
+    }
+    /* vaSyncSurface might return VA_STATUS_ERROR_HW_BUSY if the hardware is
+       running multiple streams simultaneously and it cannot handle another
+       one. Wait for 1ms to let the other encoding streams to continue. */
+    GST_LOG ("vaSyncSurface: %s, retrying (%d/%d)", vaErrorStr (status), i + 1,
+        max_retries);
+    g_usleep (1000);
   }
-  return TRUE;
+
+  GST_ERROR ("vaSyncSurface: Surface 0x%x not ready after %d retries",
+      surface, max_retries);
+  return FALSE;
 }
 
 gboolean
@@ -371,15 +417,6 @@ va_check_surface (GstVaDisplay * display, VASurfaceID surface)
 {
   return va_check_surface_has_status (display, surface, 0);
 }
-
-#ifndef GST_DISABLE_GST_DEBUG
-static const char *surface_status_str_map[] = {
-  [VASurfaceRendering] = "rendering",
-  [VASurfaceDisplaying] = "displaying",
-  [VASurfaceReady] = "ready",
-  [VASurfaceSkipped] = "skipped"
-};
-#endif
 
 gboolean
 va_check_surface_has_status (GstVaDisplay * display, VASurfaceID surface,

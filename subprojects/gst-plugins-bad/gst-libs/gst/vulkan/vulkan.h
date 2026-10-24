@@ -36,6 +36,7 @@
 #include <gst/vulkan/gstvkfence.h>
 #include <gst/vulkan/gstvkdisplay.h>
 #include <gst/vulkan/gstvkwindow.h>
+#include <gst/vulkan/gstvktimelinesemaphore.h>
 #include <gst/vulkan/gstvkmemory.h>
 #include <gst/vulkan/gstvkbarrier.h>
 #include <gst/vulkan/gstvkbuffermemory.h>
@@ -53,13 +54,14 @@
 #include <gst/vulkan/gstvkvideofilter.h>
 
 /* helper vulkan objects */
+#include <gst/vulkan/gstvkbarrierstate.h>
 #include <gst/vulkan/gstvkdescriptorcache.h>
 #include <gst/vulkan/gstvktrash.h>
 #include <gst/vulkan/gstvkswapper.h>
 #include <gst/vulkan/gstvkhandlepool.h>
 #include <gst/vulkan/gstvkfullscreenquad.h>
-
 #include <gst/vulkan/gstvkoperation.h>
+#include <gst/vulkan/gstvkrequestedextensions.h>
 #include <gst/vulkan/gstvkutils.h>
 
 #endif /* __GST_VULKAN_H__ */

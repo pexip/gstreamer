@@ -38,6 +38,7 @@
 #define OPUS_RTP_CAPS(pt) "application/x-rtp,payload=" G_STRINGIFY(pt) ",encoding-name=OPUS,media=audio,clock-rate=48000,ssrc=(uint)3384078950"
 #define VP8_RTP_CAPS(pt) "application/x-rtp,payload=" G_STRINGIFY(pt) ",encoding-name=VP8,media=video,clock-rate=90000,ssrc=(uint)3484078951"
 #define H264_RTP_CAPS(pt) "application/x-rtp,payload=" G_STRINGIFY(pt) ",encoding-name=H264,media=video,clock-rate=90000,ssrc=(uint)3484078952"
+#define KLV_RTP_CAPS(pt) "application/x-rtp,payload=" G_STRINGIFY(pt) ",encoding-name=SMPTE336M,media=application,clock-rate=90000,ssrc=(uint)3484078953"
 
 #define TEST_IS_OFFER_ELEMENT(t, e) ((((t)->offerror == 1 && (e) == (t)->webrtc1) || ((t)->offerror == 2 && (e) == (t)->webrtc2)) ? TRUE : FALSE)
 #define TEST_GET_OFFEROR(t) (TEST_IS_OFFER_ELEMENT(t, t->webrtc1) ? (t)->webrtc1 : t->webrtc2)
@@ -1046,8 +1047,10 @@ on_sdp_media_direction (struct test_webrtc *t, GstElement * element,
   for (i = 0; i < gst_sdp_message_medias_len (desc->sdp); i++) {
     const GstSDPMedia *media = gst_sdp_message_get_media (desc->sdp, i);
 
-    if (g_strcmp0 (gst_sdp_media_get_media (media), "audio") == 0
-        || g_strcmp0 (gst_sdp_media_get_media (media), "video") == 0) {
+    if (_media_is_datachannel (media))
+      continue;
+
+    if (_get_kind_from_media (media) != GST_WEBRTC_KIND_UNKNOWN) {
       gboolean have_direction = FALSE;
       int j;
 
@@ -1170,6 +1173,18 @@ add_fake_video_src_harness (GstHarness * h, gint pt, guint ssrc)
   gst_harness_add_src_parse (h, "fakesrc is-live=true", TRUE);
 }
 
+static void
+add_fake_klv_src_harness (GstHarness * h, gint pt, guint ssrc)
+{
+  GstCaps *caps = gst_caps_from_string (KLV_RTP_CAPS (pt));
+  GstStructure *s = gst_caps_get_structure (caps, 0);
+  if (ssrc != 0)
+    gst_structure_set (s, "ssrc", G_TYPE_UINT, ssrc, NULL);
+  gst_structure_set (s, "payload", G_TYPE_INT, pt, NULL);
+  gst_harness_set_src_caps (h, caps);
+  gst_harness_add_src_parse (h, "fakesrc is-live=true", TRUE);
+}
+
 static struct test_webrtc *
 create_audio_test (void)
 {
@@ -1183,6 +1198,24 @@ create_audio_test (void)
 
   h = gst_harness_new_with_element (t->webrtc1, "sink_0", NULL);
   add_fake_audio_src_harness (h, 96, 0xDEADBEEF);
+  t->harnesses = g_list_prepend (t->harnesses, h);
+
+  return t;
+}
+
+static struct test_webrtc *
+create_klv_test (void)
+{
+  struct test_webrtc *t = test_webrtc_new ();
+  GstHarness *h;
+
+  t->on_negotiation_needed = NULL;
+  t->on_ice_candidate = NULL;
+  t->on_pad_added = _pad_added_fakesink;
+  t->on_prepare_data_channel = have_prepare_data_channel;
+
+  h = gst_harness_new_with_element (t->webrtc1, "sink_0", NULL);
+  add_fake_klv_src_harness (h, 96, 0xDEADBEEF);
   t->harnesses = g_list_prepend (t->harnesses, h);
 
   return t;
@@ -1223,6 +1256,45 @@ GST_START_TEST (test_audio)
   VAL_SDP_INIT (answer, on_sdp_media_direction, expected_answer_direction,
       &answer_setup);
   GstWebRTCKind expected_kind = GST_WEBRTC_KIND_AUDIO;
+
+  /* check that a single stream connection creates the associated number
+   * of media sections */
+
+  g_signal_connect (t->webrtc1, "on-new-transceiver",
+      G_CALLBACK (on_new_transceiver_expected_kind),
+      GUINT_TO_POINTER (expected_kind));
+  g_signal_connect (t->webrtc2, "on-new-transceiver",
+      G_CALLBACK (on_new_transceiver_expected_kind),
+      GUINT_TO_POINTER (expected_kind));
+
+  test_validate_sdp (t, &offer, &answer);
+  test_webrtc_free (t);
+}
+
+GST_END_TEST;
+
+GST_START_TEST (test_klv)
+{
+  struct test_webrtc *t = create_klv_test ();
+  VAL_SDP_INIT (no_duplicate_payloads, on_sdp_media_no_duplicate_payloads,
+      NULL, NULL);
+  guint media_format_count[] = { 1 };
+  VAL_SDP_INIT (media_formats, on_sdp_media_count_formats,
+      media_format_count, &no_duplicate_payloads);
+  VAL_SDP_INIT (count, _count_num_sdp_media, GUINT_TO_POINTER (1),
+      &media_formats);
+  const gchar *expected_offer_setup[] = { "actpass", };
+  VAL_SDP_INIT (offer_setup, on_sdp_media_setup, expected_offer_setup, &count);
+  const gchar *expected_answer_setup[] = { "active", };
+  VAL_SDP_INIT (answer_setup, on_sdp_media_setup, expected_answer_setup,
+      &count);
+  const gchar *expected_offer_direction[] = { "sendrecv", };
+  VAL_SDP_INIT (offer, on_sdp_media_direction, expected_offer_direction,
+      &offer_setup);
+  const gchar *expected_answer_direction[] = { "recvonly", };
+  VAL_SDP_INIT (answer, on_sdp_media_direction, expected_answer_direction,
+      &answer_setup);
+  GstWebRTCKind expected_kind = GST_WEBRTC_KIND_APPLICATION;
 
   /* check that a single stream connection creates the associated number
    * of media sections */
@@ -1347,6 +1419,52 @@ GST_START_TEST (test_audio_video)
   VAL_SDP_INIT (offer, on_sdp_media_direction, expected_offer_direction,
       &offer_setup);
   const gchar *expected_answer_direction[] = { "recvonly", "recvonly" };
+  VAL_SDP_INIT (answer, on_sdp_media_direction, expected_answer_direction,
+      &answer_setup);
+
+  /* check that a dual stream connection creates the associated number
+   * of media sections */
+
+  test_validate_sdp (t, &offer, &answer);
+  test_webrtc_free (t);
+}
+
+GST_END_TEST;
+
+static struct test_webrtc *
+create_audio_video_klv_test (void)
+{
+  struct test_webrtc *t = create_audio_video_test ();
+  GstHarness *h;
+
+  h = gst_harness_new_with_element (t->webrtc1, "sink_2", NULL);
+  add_fake_klv_src_harness (h, 98, 0xBAADF00D);
+  t->harnesses = g_list_prepend (t->harnesses, h);
+
+  return t;
+}
+
+GST_START_TEST (test_audio_video_klv)
+{
+  struct test_webrtc *t = create_audio_video_klv_test ();
+  VAL_SDP_INIT (no_duplicate_payloads, on_sdp_media_no_duplicate_payloads,
+      NULL, NULL);
+  guint media_format_count[] = { 1, 1, 1 };
+  VAL_SDP_INIT (media_formats, on_sdp_media_count_formats,
+      media_format_count, &no_duplicate_payloads);
+  VAL_SDP_INIT (count, _count_num_sdp_media, GUINT_TO_POINTER (3),
+      &media_formats);
+  const gchar *expected_offer_setup[] = { "actpass", "actpass", "actpass" };
+  VAL_SDP_INIT (offer_setup, on_sdp_media_setup, expected_offer_setup, &count);
+  const gchar *expected_answer_setup[] = { "active", "active", "active" };
+  VAL_SDP_INIT (answer_setup, on_sdp_media_setup, expected_answer_setup,
+      &count);
+  const gchar *expected_offer_direction[] =
+      { "sendrecv", "sendrecv", "sendrecv" };
+  VAL_SDP_INIT (offer, on_sdp_media_direction, expected_offer_direction,
+      &offer_setup);
+  const gchar *expected_answer_direction[] =
+      { "recvonly", "recvonly", "recvonly" };
   VAL_SDP_INIT (answer, on_sdp_media_direction, expected_answer_direction,
       &answer_setup);
 
@@ -1803,11 +1921,35 @@ validate_candidate_stats (const GstStructure * s, const GstStructure * stats)
 }
 
 static void
-validate_transport_stats (const GstStructure * s, const GstStructure * stats)
+validate_certificate_stats (const GstStructure * s, const GstStructure * stats)
+{
+  gchar *pem;
+  gchar *fingerprint;
+  gchar *fingerprint_algo;
+
+  fail_unless (gst_structure_get (s, "fingerprint", G_TYPE_STRING, &fingerprint,
+          NULL));
+  fail_unless (gst_structure_get (s, "fingerprint-algorithm", G_TYPE_STRING,
+          &fingerprint_algo, NULL));
+  fail_unless (gst_structure_get (s, "base64-certificate", G_TYPE_STRING, &pem,
+          NULL));
+
+  fail_unless_equals_string (fingerprint_algo, "sha-256");
+
+  g_free (pem);
+  g_free (fingerprint);
+  g_free (fingerprint_algo);
+}
+
+static void
+validate_transport_stats (const GstStructure * s,
+    const GstStructure * stats, const gchar * expected_tls_version)
 {
   gchar *selected_candidate_pair_id;
   GstWebRTCDTLSTransportState state;
   GstWebRTCDTLSRole dtls_role;
+  gchar *dtls_cipher;
+  gchar *srtp_cipher;
 
   fail_unless (gst_structure_get (s, "selected-candidate-pair-id",
           G_TYPE_STRING, &selected_candidate_pair_id, NULL));
@@ -1815,7 +1957,25 @@ validate_transport_stats (const GstStructure * s, const GstStructure * stats)
           GST_TYPE_WEBRTC_DTLS_TRANSPORT_STATE, &state, NULL));
   fail_unless (gst_structure_get (s, "dtls-role", GST_TYPE_WEBRTC_DTLS_ROLE,
           &dtls_role, NULL));
+  fail_unless (gst_structure_get (s, "dtls-cipher", G_TYPE_STRING,
+          &dtls_cipher, NULL));
+  fail_unless (gst_structure_get (s, "srtp-cipher", G_TYPE_STRING,
+          &srtp_cipher, NULL));
+  fail_unless_equals_string (dtls_cipher,
+      "TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256");
+  fail_unless_equals_string (srtp_cipher, "SRTP_AES128_CM_HMAC_SHA1_80");
 
+  if (expected_tls_version) {
+    gchar *tls_version;
+    fail_unless (gst_structure_get (s, "tls-version", G_TYPE_STRING,
+            &tls_version, NULL));
+
+    fail_unless_equals_string (tls_version, expected_tls_version);
+    g_free (tls_version);
+  }
+
+  g_free (dtls_cipher);
+  g_free (srtp_cipher);
   g_free (selected_candidate_pair_id);
 }
 
@@ -1842,6 +2002,7 @@ struct stats_check_state
   gboolean saw_remote_outbound_rtp;
   gboolean saw_inbound_rtp;
   gboolean saw_remote_inbound_rtp;
+  const gchar *expected_tls_version;
 };
 
 static gboolean
@@ -1882,13 +2043,14 @@ validate_stats_foreach (const GstIdStr * fieldname, const GValue * value,
   } else if (type == GST_WEBRTC_STATS_DATA_CHANNEL) {
   } else if (type == GST_WEBRTC_STATS_STREAM) {
   } else if (type == GST_WEBRTC_STATS_TRANSPORT) {
-    validate_transport_stats (s, stats);
+    validate_transport_stats (s, stats, state->expected_tls_version);
   } else if (type == GST_WEBRTC_STATS_CANDIDATE_PAIR) {
   } else if (type == GST_WEBRTC_STATS_LOCAL_CANDIDATE) {
     validate_candidate_stats (s, stats);
   } else if (type == GST_WEBRTC_STATS_REMOTE_CANDIDATE) {
     validate_candidate_stats (s, stats);
   } else if (type == GST_WEBRTC_STATS_CERTIFICATE) {
+    validate_certificate_stats (s, stats);
   } else {
     g_assert_not_reached ();
   }
@@ -1949,6 +2111,9 @@ GST_START_TEST (test_session_stats)
   p = gst_promise_new_with_change_func (_on_stats, &state, NULL);
   g_signal_emit_by_name (t->webrtc2, "get-stats", NULL, p);
 
+  /* Wait for both get-stats promises: tearing down with one still pending
+   * answers it with an error structure that fails validate_stats(). */
+  test_webrtc_wait_for_state_mask (t, 1 << STATE_CUSTOM);
   test_webrtc_wait_for_state_mask (t, 1 << STATE_CUSTOM);
 
   test_webrtc_free (t);
@@ -1996,6 +2161,9 @@ GST_START_TEST (test_stats_with_stream)
   p = gst_promise_new_with_change_func (_on_stats, &state, NULL);
   g_signal_emit_by_name (t->webrtc2, "get-stats", NULL, p);
 
+  /* Wait for BOTH get-stats promises to be answered before tearing down,
+   * see test_session_stats. */
+  test_webrtc_wait_for_state_mask (t, 1 << STATE_CUSTOM);
   test_webrtc_wait_for_state_mask (t, 1 << STATE_CUSTOM);
 
   test_webrtc_free (t);
@@ -2046,6 +2214,10 @@ GST_START_TEST (test_stats_with_two_streams)
   }
 
   struct stats_check_state state = {.t = t,.n_streams = 2, 0 };
+
+  /* Expecting DTLS version 1.2 in transport stats, because the transport should
+     be connected by now. */
+  state.expected_tls_version = "FEFD";
 
   while (TRUE) {
     g_usleep (100 * 1000);
@@ -2763,10 +2935,19 @@ GST_START_TEST (test_data_channel_close)
     g_clear_object (&tdc.dc1);
     g_clear_object (&tdc.dc2);
 
-    /* XXX: try to do something better here */
-    while (g_weak_ref_get (&dc1_ref) != NULL
-        || g_weak_ref_get (&dc2_ref) != NULL)
+    /* XXX: try to do something better here. Wait for both data channel
+     * objects to be finalized. */
+    while (TRUE) {
+      GObject *dc1_obj = g_weak_ref_get (&dc1_ref);
+      GObject *dc2_obj = g_weak_ref_get (&dc2_ref);
+      gboolean finalized = dc1_obj == NULL && dc2_obj == NULL;
+
+      g_clear_object (&dc1_obj);
+      g_clear_object (&dc2_obj);
+      if (finalized)
+        break;
       g_usleep (100 * 1000);
+    }
 
     g_weak_ref_clear (&dc1_ref);
     g_weak_ref_clear (&dc2_ref);
@@ -3299,41 +3480,45 @@ GST_START_TEST (test_bundle_audio_video_max_bundle_none)
 
 GST_END_TEST;
 
-GST_START_TEST (test_bundle_audio_video_data)
+GST_START_TEST (test_bundle_audio_video_klv_data)
 {
-  struct test_webrtc *t = create_audio_video_test ();
-  const gchar *mids[] = { "audio0", "video1", "application2", NULL };
-  const gchar *offer_bundle_only[] = { "video1", "application2", NULL };
+  struct test_webrtc *t = create_audio_video_klv_test ();
+  const gchar *mids[] =
+      { "audio0", "video1", "application2", "application3", NULL };
+  const gchar *offer_bundle_only[] =
+      { "video1", "application2", "application3", NULL };
   const gchar *answer_bundle_only[] = { NULL };
   GObject *channel = NULL;
 
-  guint media_format_count[] = { 1, 1, 1 };
+  guint media_format_count[] = { 1, 1, 1, 1 };
   VAL_SDP_INIT (media_formats, on_sdp_media_count_formats,
       media_format_count, NULL);
-  VAL_SDP_INIT (count, _count_num_sdp_media, GUINT_TO_POINTER (3),
+  VAL_SDP_INIT (count, _count_num_sdp_media, GUINT_TO_POINTER (4),
       &media_formats);
   VAL_SDP_INIT (payloads, on_sdp_media_no_duplicate_payloads, NULL, &count);
   VAL_SDP_INIT (bundle_tag, _check_bundle_tag, mids, &payloads);
   VAL_SDP_INIT (offer_non_reject, _count_non_rejected_media,
       GUINT_TO_POINTER (1), &bundle_tag);
   VAL_SDP_INIT (answer_non_reject, _count_non_rejected_media,
-      GUINT_TO_POINTER (3), &bundle_tag);
+      GUINT_TO_POINTER (4), &bundle_tag);
   VAL_SDP_INIT (offer_bundle, _check_bundle_only_media, &offer_bundle_only,
       &offer_non_reject);
   VAL_SDP_INIT (answer_bundle, _check_bundle_only_media, &answer_bundle_only,
       &answer_non_reject);
-  const gchar *expected_offer_setup[] = { "actpass", "actpass", "actpass" };
+  const gchar *expected_offer_setup[] =
+      { "actpass", "actpass", "actpass", "actpass" };
   VAL_SDP_INIT (offer_setup, on_sdp_media_setup, expected_offer_setup,
       &offer_bundle);
-  const gchar *expected_answer_setup[] = { "active", "active", "active" };
+  const gchar *expected_answer_setup[] =
+      { "active", "active", "active", "active" };
   VAL_SDP_INIT (answer_setup, on_sdp_media_setup, expected_answer_setup,
       &answer_bundle);
   const gchar *expected_offer_direction[] =
-      { "sendrecv", "sendrecv", "sendrecv" };
+      { "sendrecv", "sendrecv", "sendrecv", "sendrecv" };
   VAL_SDP_INIT (offer, on_sdp_media_direction, expected_offer_direction,
       &offer_setup);
   const gchar *expected_answer_direction[] =
-      { "recvonly", "recvonly", "recvonly" };
+      { "recvonly", "recvonly", "recvonly", "recvonly" };
   VAL_SDP_INIT (answer, on_sdp_media_direction, expected_answer_direction,
       &answer_setup);
 
@@ -5066,8 +5251,11 @@ on_sdp_media_rtp_header_extensions (struct test_webrtc *t, GstElement * element,
 
   for (i = 0; i < gst_sdp_message_medias_len (desc->sdp); i++) {
     const GstSDPMedia *media = gst_sdp_message_get_media (desc->sdp, i);
-    if (g_strcmp0 (gst_sdp_media_get_media (media), "audio") == 0
-        || g_strcmp0 (gst_sdp_media_get_media (media), "video") == 0) {
+
+    if (_media_is_datachannel (media))
+      continue;
+
+    if (_get_kind_from_media (media) != GST_WEBRTC_KIND_UNKNOWN) {
       int extension_idx = 0;
       int j;
       for (j = 0; j < gst_sdp_media_attributes_len (media); j++) {
@@ -6593,6 +6781,7 @@ _pad_added_src_check_msid (struct test_webrtc *t, GstElement * element,
     GstPad * pad, gpointer user_data)
 {
   const char *expected_msid = user_data;
+  GstHarness *h;
   char *msid;
 
   if (GST_PAD_DIRECTION (pad) != GST_PAD_SRC)
@@ -6601,6 +6790,13 @@ _pad_added_src_check_msid (struct test_webrtc *t, GstElement * element,
   g_object_get (pad, "msid", &msid, NULL);
   fail_unless_equals_string (msid, expected_msid);
   g_clear_pointer (&msid, g_free);
+
+  /* Link the exposed pad to a fakesink so it doesn't return
+   * GST_FLOW_NOT_LINKED once RTP flows, which would make nicesrc post a
+   * not-linked stream error. */
+  h = gst_harness_new_with_element (element, NULL, GST_OBJECT_NAME (pad));
+  gst_harness_add_sink_parse (h, "fakesink async=false sync=false");
+  t->harnesses = g_list_prepend (t->harnesses, h);
 
   test_webrtc_signal_state_unlocked (t, STATE_CUSTOM);
 }
@@ -7222,7 +7418,9 @@ webrtcbin_suite (void)
     tcase_add_test (tc, test_audio);
     tcase_add_test (tc, test_audio_sendrecv);
     tcase_add_test (tc, test_ice_port_restriction);
+    tcase_add_test (tc, test_klv);
     tcase_add_test (tc, test_audio_video);
+    tcase_add_test (tc, test_audio_video_klv);
     tcase_add_test (tc, test_media_direction);
     tcase_add_test (tc, test_add_transceiver);
     tcase_add_test (tc, test_get_transceivers);
@@ -7282,7 +7480,7 @@ webrtcbin_suite (void)
       tcase_add_test (tc, test_data_channel_low_threshold);
       tcase_add_test (tc, test_data_channel_max_message_size);
       tcase_add_test (tc, test_data_channel_pre_negotiated);
-      tcase_add_test (tc, test_bundle_audio_video_data);
+      tcase_add_test (tc, test_bundle_audio_video_klv_data);
       tcase_add_test (tc, test_renego_stream_add_data_channel);
       tcase_add_test (tc, test_renego_data_channel_add_stream);
       tcase_add_test (tc, test_renego_stream_data_channel_add_stream);

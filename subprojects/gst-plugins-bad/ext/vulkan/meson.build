@@ -1,9 +1,11 @@
 vulkan_sources = [
   'gstvulkan.c',
   'gstvulkanelement.c',
+  'gstvkutils.c',
   'vkdownload.c',
   'vkdeviceprovider.c',
   'vksink.c',
+  'vkupload-ahb.c',
   'vkupload.c',
 ]
 
@@ -32,6 +34,7 @@ glsc_sources = [
 ]
 
 video_sources = [
+  'base/gsth26xgopmapper.c',
   'base/gsth264encoder.c',
   'gstvkvideocaps.c',
   'vkav1dec.c',
@@ -64,6 +67,13 @@ endif
 
 extra_deps = []
 extra_args = []
+
+if host_system == 'android' and gstallocators_dep.found()
+  extra_deps += [
+    gstallocators_dep,
+    cc.find_library('android', required : true),
+  ]
+endif
 
 vulkan_plugin_enums = []
 
@@ -102,6 +112,7 @@ gstvulkan_plugin = library('gstvulkan',
   objc_args : gst_plugins_bad_args,
   link_args : noseh_link_args,
   include_directories : [configinc],
+  kwargs: vulkan_plugin_kwargs,
   dependencies : [gstvideo_dep, gstbase_dep, gstvulkan_dep, vulkan_dep, gio_dep] + extra_deps,
   install : true,
   install_dir : plugins_install_dir,

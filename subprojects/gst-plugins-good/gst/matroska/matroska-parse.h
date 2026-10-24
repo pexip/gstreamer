@@ -73,7 +73,6 @@ typedef struct _GstMatroskaParse {
   gboolean                 segment_running;
   GstClockTime             last_stop_end;
 
-  GstEvent                *close_segment;
   GstEvent                *new_segment;
 
   /* some state saving */
@@ -91,7 +90,7 @@ typedef struct _GstMatroskaParse {
 
   /* reverse playback */
   GArray                  *seek_index;
-  gint                     seek_entry;
+  guint                    seek_entry_idx;
 } GstMatroskaParse;
 
 typedef struct _GstMatroskaParseClass {

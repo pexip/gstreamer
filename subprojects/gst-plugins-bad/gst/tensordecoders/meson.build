@@ -1,14 +1,26 @@
 tensordecoders_sources = [
   'gsttensordecoders.c',
-  'gstssdobjectdetector.c',
+  'gstssdtensordec.c',
   'gstclassifiertensordecoder.c',
-  'gstfacedetectortensordecoder.c'
+  'gstfacedetectortensordecoder.c',
+  'gstioutracker.c',
+  'gstyolotensordecoder.c',
+  'gstyolo26tensordecoder.c',
+  'gstyolosegtensordecoder.c',
+  'gsttensordecodebin.c',
+  'gstyoloobbtensordecoder.c',
 ]
 
 tensordecoders_headers = [
-  'gstssdobjectdetector.h',
+  'gstssdtensordec.h',
   'gstclassifiertensordecoder.h',
-  'gstfacedetectortensordecoder.h'
+  'gstfacedetectortensordecoder.h',
+  'gstioutracker.h',
+  'gstyolotensordecoder.h',
+  'gstyolo26tensordecoder.h',
+  'gstyolosegtensordecoder.h',
+  'gsttensordecodebin.h',
+  'gstyoloobbtensordecoder.h',
 ]
 
 doc_sources = []

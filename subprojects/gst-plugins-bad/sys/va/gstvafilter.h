@@ -58,10 +58,10 @@ enum {
 };
 
 #define GST_TYPE_VA_SCALE_METHOD gst_va_scale_method_get_type()
-GType gst_va_scale_method_get_type (void) G_GNUC_CONST;
+GType gst_va_scale_method_get_type (void);
 
 #define GST_TYPE_VA_INTERPOLATION_METHOD gst_va_interpolation_method_get_type()
-GType gst_va_interpolation_method_get_type (void) G_GNUC_CONST;
+GType gst_va_interpolation_method_get_type (void);
 
 typedef struct _GstVaSample GstVaSample;
 struct _GstVaSample
@@ -94,6 +94,7 @@ struct _GstVaComposeSample
   VARectangle output_region;
 
   gdouble alpha;
+  gboolean premultiplied_alpha;
 };
 
 typedef struct _GstVaComposeTransaction GstVaComposeTransaction;
@@ -122,6 +123,8 @@ gboolean              gst_va_filter_install_deinterlace_properties
                                                            GObjectClass * klass);
 gboolean              gst_va_filter_set_scale_method      (GstVaFilter * self,
                                                            guint32 method);
+gboolean              gst_va_filter_set_background_color  (GstVaFilter * self,
+                                                           guint32 argb);
 gboolean              gst_va_filter_set_interpolation_method
                                                           (GstVaFilter * self,
                                                            guint32 method);
@@ -160,6 +163,8 @@ gboolean              gst_va_filter_has_video_format      (GstVaFilter * self,
                                                            GstCapsFeatures * feature);
 
 gboolean              gst_va_filter_has_compose           (GstVaFilter * self);
+gboolean              gst_va_filter_supports_premultiplied_alpha
+                                                          (GstVaFilter * self);
 gboolean              gst_va_filter_compose               (GstVaFilter * self,
                                                            GstVaComposeTransaction * tx);
 

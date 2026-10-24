@@ -33,10 +33,12 @@
 #include <gst/hip/gsthip-enums.h>
 #include <gst/hip/gsthip-interop.h>
 #include <gst/hip/gsthipbufferpool.h>
+#include <gst/hip/gsthipbufferpool-host.h>
 #include <gst/hip/gsthipdevice.h>
 #include <gst/hip/gsthipevent.h>
 #include <gst/hip/gsthiploader.h>
 #include <gst/hip/gsthipmemory.h>
+#include <gst/hip/gsthipmemory-host.h>
 #include <gst/hip/gsthiprtc.h>
 #include <gst/hip/gsthipstream.h>
 #include <gst/hip/gsthiputils.h>

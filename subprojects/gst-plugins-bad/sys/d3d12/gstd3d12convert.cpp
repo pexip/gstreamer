@@ -114,6 +114,10 @@ static GstStaticPadTemplate src_template = GST_STATIC_PAD_TEMPLATE ("src",
             GST_CAPS_FEATURE_META_GST_VIDEO_OVERLAY_COMPOSITION,
             GST_D3D12_ALL_FORMATS)));
 
+static GQuark _size_quark;
+static GQuark _scale_quark;
+static GQuark _matrix_quark;
+
 enum
 {
   PROP_SAMPLING_METHOD = 1,
@@ -131,6 +135,7 @@ enum
 #define DEFAULT_BRIGHTNESS 0.0
 #define DEFAULT_CONTRAST 1.0
 #define DEFAULT_MAX_MIP_LEVELS 1
+#define DEFAULT_MOST_DETAILED_MIP 0
 
 /* *INDENT-OFF* */
 struct ConvertContext
@@ -241,6 +246,8 @@ struct GstD3D12BaseConvertPrivate
   gboolean need_color_balance = FALSE;
   gboolean mip_levels_updated = FALSE;
   guint mip_levels = DEFAULT_MAX_MIP_LEVELS;
+  gboolean most_detailed_mip_updated = FALSE;
+  guint most_detailed_mip = DEFAULT_MOST_DETAILED_MIP;
 
   std::atomic<guint> async_depth = { DEFAULT_ASYNC_DEPTH };
 
@@ -265,10 +272,6 @@ static GstCaps *gst_d3d12_base_convert_transform_caps (GstBaseTransform *
     trans, GstPadDirection direction, GstCaps * caps, GstCaps * filter);
 static GstCaps *gst_d3d12_base_convert_fixate_caps (GstBaseTransform *
     base, GstPadDirection direction, GstCaps * caps, GstCaps * othercaps);
-static gboolean gst_d3d12_base_convert_propose_allocation (GstBaseTransform *
-    trans, GstQuery * decide_query, GstQuery * query);
-static gboolean gst_d3d12_base_convert_decide_allocation (GstBaseTransform *
-    trans, GstQuery * query);
 static GstFlowReturn gst_d3d12_base_convert_generate_output (GstBaseTransform *
     trans, GstBuffer ** buffer);
 static gboolean gst_d3d12_base_convert_transform_meta (GstBaseTransform * trans,
@@ -278,8 +281,12 @@ static void gst_d3d12_base_convert_before_transform (GstBaseTransform * trans,
 static GstFlowReturn gst_d3d12_base_convert_transform (GstBaseTransform * trans,
     GstBuffer * inbuf, GstBuffer * outbuf);
 static gboolean gst_d3d12_base_convert_set_info (GstD3D12BaseFilter * filter,
-    GstCaps * incaps, GstVideoInfo * in_info, GstCaps * outcaps,
-    GstVideoInfo * out_info);
+    GstD3D12Device * device, GstCaps * incaps, GstVideoInfo * in_info,
+    GstCaps * outcaps, GstVideoInfo * out_info);
+static gboolean gst_d3d12_base_convert_propose_allocation (GstD3D12BaseFilter *
+    filter, GstD3D12Device * device, GstQuery * decide_query, GstQuery * query);
+static gboolean gst_d3d12_base_convert_decide_allocation (GstD3D12BaseFilter *
+    filter, GstD3D12Device * device, GstQuery * query);
 
 /**
  * GstD3D12BaseConvert:
@@ -333,10 +340,6 @@ gst_d3d12_base_convert_class_init (GstD3D12BaseConvertClass * klass)
       GST_DEBUG_FUNCPTR (gst_d3d12_base_convert_transform_caps);
   trans_class->fixate_caps =
       GST_DEBUG_FUNCPTR (gst_d3d12_base_convert_fixate_caps);
-  trans_class->propose_allocation =
-      GST_DEBUG_FUNCPTR (gst_d3d12_base_convert_propose_allocation);
-  trans_class->decide_allocation =
-      GST_DEBUG_FUNCPTR (gst_d3d12_base_convert_decide_allocation);
   trans_class->generate_output =
       GST_DEBUG_FUNCPTR (gst_d3d12_base_convert_generate_output);
   trans_class->transform_meta =
@@ -346,11 +349,19 @@ gst_d3d12_base_convert_class_init (GstD3D12BaseConvertClass * klass)
   trans_class->transform = GST_DEBUG_FUNCPTR (gst_d3d12_base_convert_transform);
 
   filter_class->set_info = GST_DEBUG_FUNCPTR (gst_d3d12_base_convert_set_info);
+  filter_class->propose_allocation =
+      GST_DEBUG_FUNCPTR (gst_d3d12_base_convert_propose_allocation);
+  filter_class->decide_allocation =
+      GST_DEBUG_FUNCPTR (gst_d3d12_base_convert_decide_allocation);
 
   gst_type_mark_as_plugin_api (GST_TYPE_D3D12_BASE_CONVERT,
       (GstPluginAPIFlags) 0);
   gst_type_mark_as_plugin_api (GST_TYPE_D3D12_SAMPLING_METHOD,
       (GstPluginAPIFlags) 0);
+
+  _size_quark = g_quark_from_static_string (GST_META_TAG_VIDEO_SIZE_STR);
+  _scale_quark = gst_video_meta_transform_scale_get_quark ();
+  _matrix_quark = gst_video_meta_transform_matrix_get_quark ();
 }
 
 static void
@@ -547,8 +558,6 @@ gst_d3d12_base_convert_caps_remove_format_info (GstCaps * caps)
   GstCapsFeatures *f;
   gint i, n;
   GstCaps *res;
-  GstCapsFeatures *feature =
-      gst_caps_features_from_string (GST_CAPS_FEATURE_MEMORY_D3D12_MEMORY);
 
   res = gst_caps_new_empty ();
 
@@ -565,14 +574,13 @@ gst_d3d12_base_convert_caps_remove_format_info (GstCaps * caps)
     st = gst_structure_copy (st);
     /* Only remove format info for the cases when we can actually convert */
     if (!gst_caps_features_is_any (f)
-        && gst_caps_features_is_equal (f, feature)) {
+        && gst_caps_features_contains (f, GST_CAPS_FEATURE_MEMORY_D3D12_MEMORY)) {
       gst_structure_remove_fields (st, "format", "colorimetry", "chroma-site",
           NULL);
     }
 
     gst_caps_append_structure_full (res, st, gst_caps_features_copy (f));
   }
-  gst_caps_features_free (feature);
 
   return res;
 }
@@ -584,8 +592,6 @@ gst_d3d12_base_convert_caps_rangify_size_info (GstCaps * caps)
   GstCapsFeatures *f;
   gint i, n;
   GstCaps *res;
-  GstCapsFeatures *feature =
-      gst_caps_features_from_string (GST_CAPS_FEATURE_MEMORY_D3D12_MEMORY);
 
   res = gst_caps_new_empty ();
 
@@ -602,7 +608,7 @@ gst_d3d12_base_convert_caps_rangify_size_info (GstCaps * caps)
     st = gst_structure_copy (st);
     /* Only remove format info for the cases when we can actually convert */
     if (!gst_caps_features_is_any (f)
-        && gst_caps_features_is_equal (f, feature)) {
+        && gst_caps_features_contains (f, GST_CAPS_FEATURE_MEMORY_D3D12_MEMORY)) {
       gst_structure_set (st, "width", GST_TYPE_INT_RANGE, 1, G_MAXINT,
           "height", GST_TYPE_INT_RANGE, 1, G_MAXINT, NULL);
 
@@ -615,7 +621,6 @@ gst_d3d12_base_convert_caps_rangify_size_info (GstCaps * caps)
 
     gst_caps_append_structure_full (res, st, gst_caps_features_copy (f));
   }
-  gst_caps_features_free (feature);
 
   return res;
 }
@@ -627,9 +632,6 @@ gst_d3d12_base_convert_caps_remove_format_and_rangify_size_info (GstCaps * caps)
   GstCapsFeatures *f;
   gint i, n;
   GstCaps *res;
-  GstCapsFeatures *feature =
-      gst_caps_features_new_single_static_str
-      (GST_CAPS_FEATURE_MEMORY_D3D12_MEMORY);
 
   res = gst_caps_new_empty ();
 
@@ -646,7 +648,7 @@ gst_d3d12_base_convert_caps_remove_format_and_rangify_size_info (GstCaps * caps)
     st = gst_structure_copy (st);
     /* Only remove format info for the cases when we can actually convert */
     if (!gst_caps_features_is_any (f)
-        && gst_caps_features_is_equal (f, feature)) {
+        && gst_caps_features_contains (f, GST_CAPS_FEATURE_MEMORY_D3D12_MEMORY)) {
       gst_structure_set (st, "width", GST_TYPE_INT_RANGE, 1, G_MAXINT,
           "height", GST_TYPE_INT_RANGE, 1, G_MAXINT, nullptr);
       /* if pixel aspect ratio, make a range of it */
@@ -660,7 +662,6 @@ gst_d3d12_base_convert_caps_remove_format_and_rangify_size_info (GstCaps * caps)
 
     gst_caps_append_structure_full (res, st, gst_caps_features_copy (f));
   }
-  gst_caps_features_free (feature);
 
   return res;
 }
@@ -1526,20 +1527,15 @@ gst_d3d12_base_convert_fixate_caps (GstBaseTransform * trans,
 }
 
 static gboolean
-gst_d3d12_base_convert_propose_allocation (GstBaseTransform * trans,
-    GstQuery * decide_query, GstQuery * query)
+gst_d3d12_base_convert_propose_allocation (GstD3D12BaseFilter * filter,
+    GstD3D12Device * device, GstQuery * decide_query, GstQuery * query)
 {
-  auto filter = GST_D3D12_BASE_FILTER (trans);
-  auto self = GST_D3D12_BASE_CONVERT (trans);
+  auto trans = GST_BASE_TRANSFORM (filter);
+  auto self = GST_D3D12_BASE_CONVERT (filter);
   auto priv = self->priv;
-  GstVideoInfo info;
-  GstBufferPool *pool = nullptr;
-  GstCaps *caps;
-  guint n_pools, i;
-  guint size;
 
-  if (!GST_BASE_TRANSFORM_CLASS (parent_class)->propose_allocation (trans,
-          decide_query, query)) {
+  if (!GST_D3D12_BASE_FILTER_CLASS (parent_class)->propose_allocation (filter,
+          device, decide_query, query)) {
     return FALSE;
   }
 
@@ -1550,108 +1546,22 @@ gst_d3d12_base_convert_propose_allocation (GstBaseTransform * trans,
     return TRUE;
   }
 
-  gst_query_parse_allocation (query, &caps, nullptr);
-
-  if (!caps)
-    return FALSE;
-
-  if (!gst_video_info_from_caps (&info, caps)) {
-    GST_ERROR_OBJECT (filter, "Invalid caps %" GST_PTR_FORMAT, caps);
-    return FALSE;
-  }
-
-  n_pools = gst_query_get_n_allocation_pools (query);
-  for (i = 0; i < n_pools; i++) {
-    gst_query_parse_nth_allocation_pool (query, i, &pool, nullptr, nullptr,
-        nullptr);
-    if (pool) {
-      if (!GST_IS_D3D12_BUFFER_POOL (pool)) {
-        gst_clear_object (&pool);
-      } else {
-        auto dpool = GST_D3D12_BUFFER_POOL (pool);
-        if (!gst_d3d12_device_is_equal (dpool->device, filter->device))
-          gst_clear_object (&pool);
-      }
-    }
-  }
-
-  if (!pool)
-    pool = gst_d3d12_buffer_pool_new (filter->device);
-
-  auto config = gst_buffer_pool_get_config (pool);
-  gst_buffer_pool_config_add_option (config, GST_BUFFER_POOL_OPTION_VIDEO_META);
-
-  auto d3d12_params =
-      gst_buffer_pool_config_get_d3d12_allocation_params (config);
-  if (!d3d12_params) {
-    d3d12_params = gst_d3d12_allocation_params_new (filter->device, &info,
-        GST_D3D12_ALLOCATION_FLAG_DEFAULT,
-        D3D12_RESOURCE_FLAG_ALLOW_SIMULTANEOUS_ACCESS, D3D12_HEAP_FLAG_NONE);
-  } else {
-    gst_d3d12_allocation_params_set_resource_flags (d3d12_params,
-        D3D12_RESOURCE_FLAG_ALLOW_SIMULTANEOUS_ACCESS);
-    gst_d3d12_allocation_params_unset_resource_flags (d3d12_params,
-        D3D12_RESOURCE_FLAG_DENY_SHADER_RESOURCE);
-  }
-
-  gst_buffer_pool_config_set_d3d12_allocation_params (config, d3d12_params);
-  gst_d3d12_allocation_params_free (d3d12_params);
-
-  /* size will be updated by d3d12 buffer pool */
-  gst_buffer_pool_config_set_params (config, caps, 0, 0, 0);
-
-  if (!gst_buffer_pool_set_config (pool, config)) {
-    GST_ERROR_OBJECT (filter, "failed to set config");
-    gst_object_unref (pool);
-    return FALSE;
-  }
-
-  gst_query_add_allocation_meta (query, GST_VIDEO_META_API_TYPE, nullptr);
   gst_query_add_allocation_meta (query,
       GST_VIDEO_OVERLAY_COMPOSITION_META_API_TYPE, nullptr);
   gst_query_add_allocation_meta (query, GST_VIDEO_CROP_META_API_TYPE, nullptr);
-
-  /* d3d12 buffer pool will update buffer size based on allocated texture,
-   * get size from config again */
-  config = gst_buffer_pool_get_config (pool);
-  gst_buffer_pool_config_get_params (config, nullptr, &size, nullptr, nullptr);
-  gst_structure_free (config);
-
-  gst_query_add_allocation_pool (query, pool, size, 0, 0);
-
-  gst_object_unref (pool);
 
   return TRUE;
 }
 
 static gboolean
-gst_d3d12_base_convert_decide_allocation (GstBaseTransform * trans,
-    GstQuery * query)
+gst_d3d12_base_convert_decide_allocation (GstD3D12BaseFilter * filter,
+    GstD3D12Device * device, GstQuery * query)
 {
-  auto filter = GST_D3D12_BASE_FILTER (trans);
-  auto self = GST_D3D12_BASE_CONVERT (trans);
+  auto self = GST_D3D12_BASE_CONVERT (filter);
   auto priv = self->priv;
-  GstCaps *outcaps = nullptr;
-  GstBufferPool *pool = nullptr;
-  guint size, min = 0, max = 0;
-  GstStructure *config;
-  gboolean update_pool = FALSE;
-  GstVideoInfo info;
 
-  gst_query_parse_allocation (query, &outcaps, nullptr);
-
-  if (!outcaps)
-    return FALSE;
-
-  if (!gst_video_info_from_caps (&info, outcaps)) {
-    GST_ERROR_OBJECT (filter, "Invalid caps %" GST_PTR_FORMAT, outcaps);
-    return FALSE;
-  }
-
-  GstD3D12Format device_format;
-  if (!gst_d3d12_device_get_format (filter->device,
-          GST_VIDEO_INFO_FORMAT (&info), &device_format)) {
-    GST_ERROR_OBJECT (self, "Couldn't get device foramt");
+  if (!GST_D3D12_BASE_FILTER_CLASS (parent_class)->decide_allocation (filter,
+          device, query)) {
     return FALSE;
   }
 
@@ -1660,72 +1570,7 @@ gst_d3d12_base_convert_decide_allocation (GstBaseTransform * trans,
   GST_DEBUG_OBJECT (self, "Downstream crop meta support: %d",
       priv->downstream_supports_crop_meta);
 
-  size = GST_VIDEO_INFO_SIZE (&info);
-  if (gst_query_get_n_allocation_pools (query) > 0) {
-    gst_query_parse_nth_allocation_pool (query, 0, &pool, &size, &min, &max);
-    if (pool) {
-      if (!GST_IS_D3D12_BUFFER_POOL (pool)) {
-        gst_clear_object (&pool);
-      } else {
-        auto dpool = GST_D3D12_BUFFER_POOL (pool);
-        if (!gst_d3d12_device_is_equal (dpool->device, filter->device))
-          gst_clear_object (&pool);
-      }
-    }
-
-    update_pool = TRUE;
-  }
-
-  if (!pool)
-    pool = gst_d3d12_buffer_pool_new (filter->device);
-
-  config = gst_buffer_pool_get_config (pool);
-  gst_buffer_pool_config_add_option (config, GST_BUFFER_POOL_OPTION_VIDEO_META);
-
-  D3D12_RESOURCE_FLAGS resource_flags =
-      D3D12_RESOURCE_FLAG_ALLOW_SIMULTANEOUS_ACCESS;
-  if ((device_format.format_flags & GST_D3D12_FORMAT_FLAG_OUTPUT_UAV)
-      == GST_D3D12_FORMAT_FLAG_OUTPUT_UAV) {
-    resource_flags |= D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
-  }
-
-  if ((device_format.support1 & D3D12_FORMAT_SUPPORT1_RENDER_TARGET) ==
-      D3D12_FORMAT_SUPPORT1_RENDER_TARGET) {
-    resource_flags |= D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
-  }
-
-  auto d3d12_params =
-      gst_buffer_pool_config_get_d3d12_allocation_params (config);
-  if (!d3d12_params) {
-    d3d12_params = gst_d3d12_allocation_params_new (filter->device, &info,
-        GST_D3D12_ALLOCATION_FLAG_DEFAULT, resource_flags,
-        D3D12_HEAP_FLAG_SHARED);
-  } else {
-    gst_d3d12_allocation_params_set_resource_flags (d3d12_params,
-        resource_flags);
-  }
-
-  gst_buffer_pool_config_set_d3d12_allocation_params (config, d3d12_params);
-  gst_d3d12_allocation_params_free (d3d12_params);
-
-  gst_buffer_pool_config_set_params (config, outcaps, size, min, max);
-  gst_buffer_pool_set_config (pool, config);
-
-  /* d3d12 buffer pool will update buffer size based on allocated texture,
-   * get size from config again */
-  config = gst_buffer_pool_get_config (pool);
-  gst_buffer_pool_config_get_params (config, nullptr, &size, nullptr, nullptr);
-  gst_structure_free (config);
-
-  if (update_pool)
-    gst_query_set_nth_allocation_pool (query, 0, pool, size, min, max);
-  else
-    gst_query_add_allocation_pool (query, pool, size, min, max);
-
-  gst_object_unref (pool);
-
-  return GST_BASE_TRANSFORM_CLASS (parent_class)->decide_allocation (trans,
-      query);
+  return TRUE;
 }
 
 static gboolean
@@ -1759,8 +1604,8 @@ gst_d3d12_base_convert_needs_color_convert (GstD3D12BaseConvert * self,
 
 static gboolean
 gst_d3d12_base_convert_set_info (GstD3D12BaseFilter * filter,
-    GstCaps * incaps, GstVideoInfo * in_info, GstCaps * outcaps,
-    GstVideoInfo * out_info)
+    GstD3D12Device * device, GstCaps * incaps, GstVideoInfo * in_info,
+    GstCaps * outcaps, GstVideoInfo * out_info)
 {
   auto self = GST_D3D12_BASE_CONVERT (filter);
   auto klass = GST_D3D12_BASE_CONVERT_GET_CLASS (self);
@@ -1884,9 +1729,9 @@ gst_d3d12_base_convert_set_info (GstD3D12BaseFilter * filter,
       klass->enable_mip_levels ? GST_D3D12_CONVERTER_MIP_GEN_ENABLED :
       GST_D3D12_CONVERTER_MIP_GEN_DISABLED, nullptr);
 
-  auto ctx = std::make_unique < ConvertContext > (filter->device);
+  auto ctx = std::make_unique < ConvertContext > (device);
 
-  ctx->conv = gst_d3d12_converter_new (filter->device, nullptr, in_info,
+  ctx->conv = gst_d3d12_converter_new (ctx->device, nullptr, in_info,
       out_info, nullptr, nullptr, config);
   if (!ctx->conv) {
     GST_ERROR_OBJECT (self, "Couldn't create converter");
@@ -1945,7 +1790,9 @@ gst_d3d12_base_convert_set_info (GstD3D12BaseFilter * filter,
 
   if (klass->enable_mip_levels) {
     priv->mip_levels_updated = FALSE;
-    g_object_set (ctx->conv, "max-mip-levels", priv->mip_levels, nullptr);
+    priv->most_detailed_mip_updated = FALSE;
+    g_object_set (ctx->conv, "max-mip-levels", priv->mip_levels,
+        "most-detailed-mip", priv->most_detailed_mip, nullptr);
   }
 
   priv->ctx = std::move (ctx);
@@ -2005,11 +1852,51 @@ gst_d3d12_base_convert_transform_meta (GstBaseTransform * trans,
    *   shader or video processor object. Then the conversion object will
    *   consider source cropping area automatically
    */
-  if (meta->info->api == GST_VIDEO_CROP_META_API_TYPE)
+  const auto info = meta->info;
+  if (info->api == GST_VIDEO_CROP_META_API_TYPE)
     return FALSE;
 
-  return GST_BASE_TRANSFORM_CLASS (parent_class)->transform_meta (trans,
-      outbuf, meta, inbuf);
+  const gchar *valid_tags[] = {
+    GST_META_TAG_VIDEO_STR,
+    GST_META_TAG_VIDEO_ORIENTATION_STR,
+    GST_META_TAG_VIDEO_SIZE_STR,
+    nullptr
+  };
+
+  if (!gst_meta_api_type_tags_contain_only (info->api, valid_tags))
+    return FALSE;
+
+  if (gst_meta_api_type_has_tag (info->api, _size_quark)) {
+    if (info->transform_func) {
+      auto base = GST_D3D12_BASE_FILTER (trans);
+      auto self = GST_D3D12_BASE_CONVERT (trans);
+      auto priv = self->priv;
+
+      GstVideoMetaTransformMatrix trans_matrix;
+      GstVideoMetaTransform trans = { &base->in_info, &base->out_info };
+      const GstVideoRectangle in_rectangle = { 0, 0,
+        GST_VIDEO_INFO_WIDTH (&base->in_info),
+        GST_VIDEO_INFO_HEIGHT (&base->in_info)
+      };
+      const GstVideoRectangle out_rectangle = {
+        (gint) priv->out_rect.left,
+        (gint) priv->out_rect.top,
+        (gint) (priv->out_rect.right - priv->out_rect.left),
+        (gint) (priv->out_rect.bottom - priv->out_rect.top),
+      };
+
+      gst_video_meta_transform_matrix_init (&trans_matrix,
+          &base->in_info, &in_rectangle, &base->out_info, &out_rectangle);
+
+      if (!info->transform_func (outbuf, meta, inbuf, _matrix_quark,
+              &trans_matrix))
+        info->transform_func (outbuf, meta, inbuf, _scale_quark, &trans);
+    }
+
+    return FALSE;
+  }
+
+  return TRUE;
 }
 
 static void
@@ -2108,44 +1995,24 @@ gst_d3d12_base_convert_transform (GstBaseTransform * trans, GstBuffer * inbuf,
       g_object_set (priv->ctx->conv,
           "max-mip-levels", priv->mip_levels, nullptr);
     }
-  }
 
-  GstD3D12CmdAlloc *gst_ca;
-  if (!gst_d3d12_cmd_alloc_pool_acquire (priv->ctx->ca_pool, &gst_ca)) {
-    GST_ERROR_OBJECT (self, "Couldn't acquire command allocator");
-    return GST_FLOW_ERROR;
-  }
-
-  auto ca = gst_d3d12_cmd_alloc_get_handle (gst_ca);
-
-  auto hr = ca->Reset ();
-  if (!gst_d3d12_result (hr, priv->ctx->device)) {
-    GST_ERROR_OBJECT (self, "Couldn't reset command allocator");
-    gst_d3d12_cmd_alloc_unref (gst_ca);
-    return GST_FLOW_ERROR;
-  }
-
-  if (!priv->ctx->cl) {
-    auto device = gst_d3d12_device_get_device_handle (priv->ctx->device);
-    hr = device->CreateCommandList (0, D3D12_COMMAND_LIST_TYPE_DIRECT,
-        ca, nullptr, IID_PPV_ARGS (&priv->ctx->cl));
-    if (!gst_d3d12_result (hr, priv->ctx->device)) {
-      GST_ERROR_OBJECT (self, "Couldn't create command list");
-      gst_d3d12_cmd_alloc_unref (gst_ca);
-      return GST_FLOW_ERROR;
-    }
-  } else {
-    hr = priv->ctx->cl->Reset (ca, nullptr);
-    if (!gst_d3d12_result (hr, priv->ctx->device)) {
-      GST_ERROR_OBJECT (self, "Couldn't reset command list");
-      gst_d3d12_cmd_alloc_unref (gst_ca);
-      return GST_FLOW_ERROR;
+    if (priv->most_detailed_mip_updated) {
+      priv->most_detailed_mip_updated = FALSE;
+      g_object_set (priv->ctx->conv,
+          "most-detailed-mip", priv->most_detailed_mip, nullptr);
     }
   }
 
   GstD3D12FenceData *fence_data;
   gst_d3d12_fence_data_pool_acquire (priv->fence_data_pool, &fence_data);
-  gst_d3d12_fence_data_push (fence_data, FENCE_NOTIFY_MINI_OBJECT (gst_ca));
+  if (!gst_d3d12_device_prepare_graphics_cmd_list (priv->ctx->device,
+          priv->ctx->cl.GetAddressOf (), priv->ctx->ca_pool, nullptr,
+          fence_data)) {
+    GST_ERROR_OBJECT (self, "Couldn't prepare command list");
+    gst_d3d12_fence_data_unref (fence_data);
+
+    return GST_FLOW_ERROR;
+  }
 
   auto cq = gst_d3d12_device_get_cmd_queue (priv->ctx->device,
       D3D12_COMMAND_LIST_TYPE_DIRECT);
@@ -2157,7 +2024,7 @@ gst_d3d12_base_convert_transform (GstBaseTransform * trans, GstBuffer * inbuf,
     return GST_FLOW_ERROR;
   }
 
-  hr = priv->ctx->cl->Close ();
+  auto hr = priv->ctx->cl->Close ();
   if (!gst_d3d12_result (hr, priv->ctx->device)) {
     GST_ERROR_OBJECT (self, "Couldn't close command list");
     gst_d3d12_fence_data_unref (fence_data);
@@ -2174,11 +2041,22 @@ gst_d3d12_base_convert_transform (GstBaseTransform * trans, GstBuffer * inbuf,
     return GST_FLOW_ERROR;
   }
 
-  gst_d3d12_buffer_set_fence (outbuf, fence, priv->ctx->fence_val, FALSE);
-  gst_d3d12_cmd_queue_set_notify (cq, priv->ctx->fence_val,
-      FENCE_NOTIFY_MINI_OBJECT (fence_data));
+  if (gst_d3d12_device_is_over_budget (priv->ctx->device)) {
+    GST_LOG_OBJECT (self, "Over budget, evicting output");
+    gst_d3d12_cmd_queue_fence_wait (cq, priv->ctx->fence_val);
+    gst_d3d12_fence_data_unref (fence_data);
 
-  priv->ctx->scheduled.push (priv->ctx->fence_val);
+    if (!gst_d3d12_buffer_evict (outbuf)) {
+      GST_DEBUG_OBJECT (self, "Couldn't evict output");
+      return GST_FLOW_ERROR;
+    }
+  } else {
+    gst_d3d12_buffer_set_fence (outbuf, fence, priv->ctx->fence_val, FALSE);
+    gst_d3d12_cmd_queue_set_notify (cq, priv->ctx->fence_val,
+        FENCE_NOTIFY_MINI_OBJECT (fence_data));
+
+    priv->ctx->scheduled.push (priv->ctx->fence_val);
+  }
 
   auto completed = gst_d3d12_device_get_completed_value (priv->ctx->device,
       D3D12_COMMAND_LIST_TYPE_DIRECT);
@@ -2212,6 +2090,7 @@ enum
   PROP_CONVERT_BRIGHTNESS,
   PROP_CONVERT_CONTRAST,
   PROP_CONVERT_MAX_MIP_LEVELS,
+  PROP_CONVERT_MOST_DETAILED_MIP,
 };
 
 struct _GstD3D12Convert
@@ -2394,6 +2273,18 @@ gst_d3d12_base_convert_set_mip_levels (GstD3D12BaseConvert * self, guint value)
   }
 }
 
+static void
+gst_d3d12_base_convert_set_most_detailed_mip (GstD3D12BaseConvert * self,
+    guint value)
+{
+  auto priv = self->priv;
+  std::lock_guard < std::mutex > lk (priv->lock);
+  if (priv->most_detailed_mip != value) {
+    priv->most_detailed_mip_updated = TRUE;
+    priv->most_detailed_mip = value;
+  }
+}
+
 G_DEFINE_TYPE_WITH_CODE (GstD3D12Convert, gst_d3d12_convert,
     GST_TYPE_D3D12_BASE_CONVERT,
     G_IMPLEMENT_INTERFACE (GST_TYPE_VIDEO_DIRECTION,
@@ -2497,16 +2388,37 @@ gst_d3d12_convert_class_init (GstD3D12ConvertClass * klass)
   g_object_class_install_property (object_class, PROP_CONVERT_MAX_MIP_LEVELS,
       g_param_spec_uint ("max-mip-levels", "Max Mip Levels",
           "Maximum mip levels of shader resource to create "
-          "if viewport size is smaller than shader resource "
-          "(0 = maximum level)", 0, G_MAXUINT16, DEFAULT_MAX_MIP_LEVELS,
+          "if render viewport size is smaller than shader resource "
+          "(0 = generate full mip chain, G_MAXUINT16 = generate only "
+          "the target mip level and one additional level)", 0, G_MAXUINT16,
+          DEFAULT_MAX_MIP_LEVELS,
+          (GParamFlags) (G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS)));
+
+  /**
+   * GstD3D12Convert:most-detailed-mip:
+   *
+   * Index of the most detailed mip level to start generating and sampling
+   * from, skipping the GPU-expensive high-resolution mip levels.
+   *
+   * Ignored when max-mip-levels is %G_MAXUINT16 (fast-path).
+   *
+   * Since: 1.30
+   */
+  g_object_class_install_property (object_class,
+      PROP_CONVERT_MOST_DETAILED_MIP,
+      g_param_spec_uint ("most-detailed-mip", "Most Detailed Mip",
+          "Index of the most detailed mip level to generate and sample "
+          "(ignored when max-mip-levels is G_MAXUINT16)",
+          0, G_MAXUINT16, DEFAULT_MOST_DETAILED_MIP,
           (GParamFlags) (G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS)));
 
   gst_element_class_set_static_metadata (element_class,
       "Direct3D12 Converter",
-      "Filter/Converter/Scaler/Effect/Video/Hardware",
+      "Filter/Converter/Scaler/Colorspace/Effect/Video/Hardware",
       "Performs resizing, colorspace conversion, cropping, flipping/rotating "
       "and adjusts hue/saturation/brightness/contrast using Direct3D12",
       "Seungha Yang <seungha@centricular.com>");
+  gst_element_class_mark_as_untrusted_aware (element_class);
 
   trans_class->sink_event = GST_DEBUG_FUNCPTR (gst_d3d12_convert_sink_event);
 
@@ -2560,6 +2472,10 @@ gst_d3d12_convert_set_property (GObject * object, guint prop_id,
     case PROP_CONVERT_MAX_MIP_LEVELS:
       gst_d3d12_base_convert_set_mip_levels (self, g_value_get_uint (value));
       break;
+    case PROP_CONVERT_MOST_DETAILED_MIP:
+      gst_d3d12_base_convert_set_most_detailed_mip (self,
+          g_value_get_uint (value));
+      break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
       break;
@@ -2604,6 +2520,9 @@ gst_d3d12_convert_get_property (GObject * object, guint prop_id,
       break;
     case PROP_CONVERT_MAX_MIP_LEVELS:
       g_value_set_uint (value, priv->mip_levels);
+      break;
+    case PROP_CONVERT_MOST_DETAILED_MIP:
+      g_value_set_uint (value, priv->most_detailed_mip);
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
@@ -2733,9 +2652,10 @@ gst_d3d12_color_convert_class_init (GstD3D12ColorConvertClass * klass)
 
   gst_element_class_set_static_metadata (element_class,
       "Direct3D12 Colorspace Converter",
-      "Filter/Converter/Video/Hardware",
+      "Filter/Converter/Video/Colorspace/Hardware",
       "Converts colorspace and adjusts hue/saturation/brightness/contrast "
       "using Direct3D12", "Seungha Yang <seungha@centricular.com>");
+  gst_element_class_mark_as_untrusted_aware (element_class);
 
   trans_class->transform_caps =
       GST_DEBUG_FUNCPTR (gst_d3d12_color_convert_transform_caps);
@@ -2860,6 +2780,7 @@ enum
   PROP_SCALE_ADD_BORDERS = 1,
   PROP_SCALE_BORDER_COLOR,
   PROP_SCALE_MAX_MIP_LEVELS,
+  PROP_SCALE_MOST_DETAILED_MIP,
 };
 
 struct _GstD3D12Scale
@@ -2909,8 +2830,27 @@ gst_d3d12_scale_class_init (GstD3D12ScaleClass * klass)
   g_object_class_install_property (object_class, PROP_SCALE_MAX_MIP_LEVELS,
       g_param_spec_uint ("max-mip-levels", "Max Mip Levels",
           "Maximum mip levels of shader resource to create "
-          "if viewport size is smaller than shader resource "
-          "(0 = maximum level)", 0, G_MAXUINT16, DEFAULT_MAX_MIP_LEVELS,
+          "if render viewport size is smaller than shader resource "
+          "(0 = generate full mip chain, G_MAXUINT16 = generate only "
+          "the target mip level and one additional level)", 0, G_MAXUINT16,
+          DEFAULT_MAX_MIP_LEVELS,
+          (GParamFlags) (G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS)));
+
+  /**
+   * GstD3D12Scale:most-detailed-mip:
+   *
+   * Index of the most detailed mip level to start generating and sampling
+   * from, skipping the GPU-expensive high-resolution mip levels.
+   *
+   * Ignored when max-mip-levels is %G_MAXUINT16 (fast-path).
+   *
+   * Since: 1.30
+   */
+  g_object_class_install_property (object_class, PROP_SCALE_MOST_DETAILED_MIP,
+      g_param_spec_uint ("most-detailed-mip", "Most Detailed Mip",
+          "Index of the most detailed mip level to generate and sample "
+          "(ignored when max-mip-levels is G_MAXUINT16)",
+          0, G_MAXUINT16, DEFAULT_MOST_DETAILED_MIP,
           (GParamFlags) (G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS)));
 
   gst_element_class_set_static_metadata (element_class,
@@ -2918,6 +2858,7 @@ gst_d3d12_scale_class_init (GstD3D12ScaleClass * klass)
       "Filter/Converter/Video/Scaler/Hardware",
       "Resizes video using Direct3D12",
       "Seungha Yang <seungha@centricular.com>");
+  gst_element_class_mark_as_untrusted_aware (element_class);
 
   trans_class->transform_caps =
       GST_DEBUG_FUNCPTR (gst_d3d12_scale_transform_caps);
@@ -2948,6 +2889,10 @@ gst_d3d12_scale_set_property (GObject * object, guint prop_id,
     case PROP_SCALE_MAX_MIP_LEVELS:
       gst_d3d12_base_convert_set_mip_levels (base, g_value_get_uint (value));
       break;
+    case PROP_SCALE_MOST_DETAILED_MIP:
+      gst_d3d12_base_convert_set_most_detailed_mip (base,
+          g_value_get_uint (value));
+      break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
       break;
@@ -2971,6 +2916,9 @@ gst_d3d12_scale_get_property (GObject * object, guint prop_id,
       break;
     case PROP_SCALE_MAX_MIP_LEVELS:
       g_value_set_uint (value, priv->mip_levels);
+      break;
+    case PROP_SCALE_MOST_DETAILED_MIP:
+      g_value_set_uint (value, priv->most_detailed_mip);
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);

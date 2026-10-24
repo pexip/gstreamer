@@ -1253,6 +1253,8 @@ gst_rtcp_packet_sdes_get_item_count (GstRTCPPacket * packet)
 gboolean
 gst_rtcp_packet_sdes_first_item (GstRTCPPacket * packet)
 {
+  guint len;
+
   g_return_val_if_fail (packet != NULL, FALSE);
   g_return_val_if_fail (packet->type == GST_RTCP_TYPE_SDES, FALSE);
 
@@ -1263,7 +1265,54 @@ gst_rtcp_packet_sdes_first_item (GstRTCPPacket * packet)
   if (packet->count == 0)
     return FALSE;
 
+  /* don't overrun - use total packet size */
+  len = (packet->length + 1) << 2;
+
+  /* need at least space for the SSRC and one entry */
+  if (packet->item_offset + packet->entry_offset + 4 > len)
+    return FALSE;
+
   return TRUE;
+}
+
+static guint
+find_sdes_next_item_offset (GstRTCPPacket * packet)
+{
+  guint8 *data;
+  guint offset;
+  guint len;
+
+  g_return_val_if_fail (packet != NULL, 0);
+  g_return_val_if_fail (packet->type == GST_RTCP_TYPE_SDES, 0);
+  g_return_val_if_fail (packet->rtcp != NULL, 0);
+
+  /* if we are at the last item, we are done */
+  if (packet->item_count == packet->count)
+    return 0;
+
+  /* move to SDES */
+  data = packet->rtcp->map.data;
+  data += packet->offset;
+  /* move to item */
+  offset = packet->item_offset;
+  /* skip SSRC */
+  offset += 4;
+
+  /* use total packet size */
+  len = (packet->length + 1) << 2;
+
+  while (offset < len) {
+    if (data[offset] == 0) {
+      /* end of list, round to next 32-bit word */
+      offset = (offset + 4) & ~3;
+      break;
+    }
+    if (offset + 1 >= len)
+      return 0;
+    offset += data[offset + 1] + 2;
+  }
+
+  return offset;
 }
 
 /**
@@ -1277,7 +1326,6 @@ gst_rtcp_packet_sdes_first_item (GstRTCPPacket * packet)
 gboolean
 gst_rtcp_packet_sdes_next_item (GstRTCPPacket * packet)
 {
-  guint8 *data;
   guint offset;
   guint len;
 
@@ -1286,30 +1334,15 @@ gst_rtcp_packet_sdes_next_item (GstRTCPPacket * packet)
   g_return_val_if_fail (packet->rtcp != NULL, FALSE);
   g_return_val_if_fail (packet->rtcp->map.flags & GST_MAP_READ, FALSE);
 
-  /* if we are at the last item, we are done */
-  if (packet->item_count == packet->count)
+  offset = find_sdes_next_item_offset (packet);
+  if (offset == 0)
     return FALSE;
 
-  /* move to SDES */
-  data = packet->rtcp->map.data;
-  data += packet->offset;
-  /* move to item */
-  offset = packet->item_offset;
-  /* skip SSRC */
-  offset += 4;
+  /* use total packet size */
+  len = (packet->length + 1) << 2;
 
-  /* don't overrun */
-  len = (packet->length << 2);
-
-  while (offset < len) {
-    if (data[offset] == 0) {
-      /* end of list, round to next 32-bit word */
-      offset = (offset + 4) & ~3;
-      break;
-    }
-    offset += data[offset + 1] + 2;
-  }
-  if (offset >= len)
+  /* needs at least SSRC and one item plus padding */
+  if (offset + 4 + 4 > len)
     return FALSE;
 
   packet->item_offset = offset;
@@ -1331,7 +1364,7 @@ guint32
 gst_rtcp_packet_sdes_get_ssrc (GstRTCPPacket * packet)
 {
   guint32 ssrc;
-  guint8 *data;
+  const guint8 *data;
 
   g_return_val_if_fail (packet != NULL, 0);
   g_return_val_if_fail (packet->type == GST_RTCP_TYPE_SDES, 0);
@@ -1341,10 +1374,15 @@ gst_rtcp_packet_sdes_get_ssrc (GstRTCPPacket * packet)
   /* move to SDES */
   data = packet->rtcp->map.data;
   data += packet->offset;
-  /* move to item */
-  data += packet->item_offset;
 
-  ssrc = GST_READ_UINT32_BE (data);
+  /* don't overrun - use total packet size */
+  guint len = (packet->length + 1) << 2;
+
+  /* needs at least SSRC and one item plus padding */
+  if (packet->item_offset + 4 + 4 > len)
+    return 0;
+
+  ssrc = GST_READ_UINT32_BE (data + packet->item_offset);
 
   return ssrc;
 }
@@ -1378,12 +1416,16 @@ gst_rtcp_packet_sdes_first_entry (GstRTCPPacket * packet)
 
   packet->entry_offset = 4;
 
-  /* don't overrun */
-  len = (packet->length << 2);
+  /* don't overrun - use total packet size */
+  len = (packet->length + 1) << 2;
   if (offset >= len)
     return FALSE;
 
   if (data[offset] == 0)
+    return FALSE;
+
+  /* need at least id, length and padding */
+  if (offset + 4 > len)
     return FALSE;
 
   return TRUE;
@@ -1416,12 +1458,16 @@ gst_rtcp_packet_sdes_next_entry (GstRTCPPacket * packet)
   /* move to entry */
   offset += packet->entry_offset;
 
+  /* don't overrun - use total packet size */
+  len = (packet->length + 1) << 2;
+  if (offset + 1 >= len)
+    return FALSE;
+
   item_len = data[offset + 1] + 2;
   /* skip item */
   offset += item_len;
 
-  /* don't overrun */
-  len = (packet->length << 2);
+  /* check again after adding item_len */
   if (offset >= len)
     return FALSE;
 
@@ -1429,6 +1475,15 @@ gst_rtcp_packet_sdes_next_entry (GstRTCPPacket * packet)
 
   /* check for end of list */
   if (data[offset] == 0)
+    return FALSE;
+
+  /* need at least id and length */
+  if (offset + 1 >= len)
+    return FALSE;
+
+  /* validate the full entry fits */
+  item_len = data[offset + 1] + 2;
+  if (offset + item_len > len)
     return FALSE;
 
   return TRUE;
@@ -1471,13 +1526,23 @@ gst_rtcp_packet_sdes_get_entry (GstRTCPPacket * packet,
   /* move to entry */
   offset += packet->entry_offset;
 
-  if (bdata[offset] == 0)
+  /* use total packet size */
+  guint pkt_len = (packet->length + 1) << 2;
+  if (offset + 2 >= pkt_len)
+    return FALSE;
+
+  guint item_type = bdata[offset];
+  if (item_type == 0)
+    return FALSE;
+
+  guint item_length = bdata[offset + 1];
+  if (offset + 2 + item_length > pkt_len)
     return FALSE;
 
   if (type)
-    *type = bdata[offset];
+    *type = item_type;
   if (len)
-    *len = bdata[offset + 1];
+    *len = item_length;
   if (data)
     *data = &bdata[offset + 2];
 
@@ -1541,15 +1606,28 @@ gst_rtcp_packet_sdes_add_item (GstRTCPPacket * packet, guint32 ssrc)
   g_return_val_if_fail (packet->rtcp != NULL, FALSE);
   g_return_val_if_fail (packet->rtcp->map.flags & GST_MAP_WRITE, FALSE);
 
+  maxsize = packet->rtcp->map.maxsize;
+
   /* increment item count when possible */
   if (packet->count >= GST_RTCP_MAX_SDES_ITEM_COUNT)
     goto no_space;
 
-  /* pretend there is a next packet for the next call */
-  packet->count++;
+  /* Find the next free slot. The first item always goes at
+   * item_offset=4 (set by read_packet_header). For subsequent items
+   * we must skip past the current item and bail out if the SDES is
+   * too small to hold another one. Otherwise the next add_item()
+   * would silently overwrite the previous one at the previous
+   * item_offset. */
+  if (packet->count > 0) {
+    offset = find_sdes_next_item_offset (packet);
+    if (offset == 0 || packet->offset + offset + 8 > maxsize)
+      goto no_space;
+    packet->item_offset = offset;
+    packet->item_count++;
+    packet->entry_offset = 4;
+  }
 
-  /* jump over current item */
-  gst_rtcp_packet_sdes_next_item (packet);
+  packet->count++;
 
   /* move to SDES */
   data = packet->rtcp->map.data;
@@ -1558,8 +1636,11 @@ gst_rtcp_packet_sdes_add_item (GstRTCPPacket * packet, guint32 ssrc)
   /* move to current item */
   offset = packet->item_offset;
 
-  /* we need 2 free words now */
-  if (offset + 8 >= maxsize)
+  /* we need 2 free words. packet->offset may be non-zero for a SDES
+   * that follows another packet in a compound buffer, so compare
+   * against the absolute write position. Using the relative offset
+   * would allow appending past the buffer's maxsize. */
+  if (packet->offset + offset + 8 >= maxsize)
     goto no_next;
 
   /* write SSRC */

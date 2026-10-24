@@ -73,7 +73,9 @@ GST_DEBUG_CATEGORY_STATIC (glcolorbalance_debug);
 
 #define GST_GL_COLOR_BALANCE_VIDEO_CAPS_FULL \
     GST_GL_COLOR_BALANCE_VIDEO_CAPS " ; "                               \
-    GST_VIDEO_DMA_DRM_CAPS_MAKE
+    GST_VIDEO_DMA_DRM_CAPS_MAKE " ; "                                   \
+    GST_VIDEO_CAPS_MAKE_WITH_FEATURES ("memory:DMABuf,"                 \
+        GST_CAPS_FEATURE_META_GST_VIDEO_OVERLAY_COMPOSITION, "DMA_DRM")
 
 static GstStaticPadTemplate gst_gl_color_balance_element_src_pad_template =
 GST_STATIC_PAD_TEMPLATE ("src",
@@ -143,18 +145,21 @@ static GstCaps *
 gcb_transform_internal_caps (GstGLFilter * filter,
     GstPadDirection direction, GstCaps * caps, GstCaps * filter_caps)
 {
+  GstBaseTransform *base = GST_BASE_TRANSFORM (filter);
   static GstStaticCaps static_caps =
       GST_STATIC_CAPS (GST_GL_COLOR_BALANCE_VIDEO_CAPS);
-  GstCaps *non_passthrough_caps = gst_static_caps_get (&static_caps);
+  GstCaps *non_passthrough_caps;
   GstCaps *tmp;
   gint i;
 
-  /* If we're not in passthrough mode, we can only output 2D textures,
-   * but can always receive any compatible texture.
-   * This function is not called in passthrough mode, so we can do the
-   * transform unconditionally */
+  if (gst_base_transform_is_passthrough (base))
+    return gst_caps_ref (caps);
 
-  non_passthrough_caps = gst_caps_make_writable (non_passthrough_caps);
+  /* If we're not in passthrough mode, we can only output 2D textures,
+   * but can always receive any compatible texture. */
+
+  non_passthrough_caps =
+      gst_caps_make_writable (gst_static_caps_get (&static_caps));
   for (i = 0; i < gst_caps_get_size (non_passthrough_caps); i++) {
     GstStructure *outs = gst_caps_get_structure (non_passthrough_caps, i);
     gst_structure_remove_field (outs, "texture-target");
@@ -503,6 +508,7 @@ gst_gl_color_balance_class_init (GstGLColorBalanceClass * klass)
       "Filter/Effect/Video",
       "Adjusts brightness, contrast, hue, saturation on a video stream",
       "Matthew Waters <matthew@centricular.com>");
+  gst_element_class_mark_as_untrusted_aware (gstelement_class);
 
   trans_class->before_transform =
       GST_DEBUG_FUNCPTR (gst_gl_color_balance_before_transform);

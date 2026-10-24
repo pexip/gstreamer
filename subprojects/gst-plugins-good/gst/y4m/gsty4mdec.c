@@ -120,6 +120,7 @@ gst_y4m_dec_class_init (GstY4mDecClass * klass)
 static void
 gst_y4m_dec_init (GstY4mDec * y4mdec)
 {
+  gst_base_parse_set_allow_duplicated_pts (GST_BASE_PARSE (y4mdec), TRUE);
 }
 
 static gboolean
@@ -398,7 +399,11 @@ gst_y4m_dec_parse_magic (GstY4mDec * y4mdec, gpointer data, gsize size,
 
   /* what ever until '\n' */
   for (i = 0; i < MAX_STREAM_HEADER_LENGTH; i++) {
-    header[i] = gst_byte_reader_get_uint8_unchecked (&br);
+    if (!gst_byte_reader_get_uint8 (&br, (guint8 *) & header[i])) {
+      GST_ERROR_OBJECT (y4mdec, "Not enough data for Y4M header");
+      return FALSE;
+    }
+
     if (header[i] == '\n') {
       header[i] = 0;
       break;
@@ -426,7 +431,8 @@ gst_y4m_dec_process_header (GstY4mDec * y4mdec, GstBuffer * buffer,
     return FALSE;
   }
 
-  g_assert (mapinfo.size >= MAX_STREAM_HEADER_LENGTH);
+  if (mapinfo.size < MAX_STREAM_HEADER_LENGTH)
+    goto bail;
 
   if (!gst_y4m_dec_parse_magic (y4mdec, mapinfo.data, mapinfo.size, stream_hdr))
     goto bail;

@@ -244,6 +244,14 @@ void video_orc_dither_ordered_u8 (guint8 * ORC_RESTRICT d1, const guint8 * ORC_R
 void video_orc_dither_ordered_4u8_mask (guint8 * ORC_RESTRICT d1, const guint16 * ORC_RESTRICT s1, orc_int64 p1, int n);
 void video_orc_dither_ordered_4u16_mask (guint16 * ORC_RESTRICT d1, const guint16 * ORC_RESTRICT s1, orc_int64 p1, int n);
 void video_orc_convert_UYVY_GRAY8 (guint8 * ORC_RESTRICT d1, int d1_stride, const orc_uint16 * ORC_RESTRICT s1, int s1_stride, int n, int m);
+void video_orc_convert_u8_f32 (gfloat * ORC_RESTRICT d1, const guint8 * ORC_RESTRICT s1, int p1, int p2, int p3, int p4, int n);
+void video_orc_convert_u8_f32_swap (gfloat * ORC_RESTRICT d1, const guint8 * ORC_RESTRICT s1, int p1, int p2, int p3, int p4, int n);
+void video_orc_convert_u8_f32_range (gfloat * ORC_RESTRICT d1, const guint8 * ORC_RESTRICT s1, int p1, int p2, int p3, int p4, int n);
+void video_orc_convert_u8_f32_range_swap (gfloat * ORC_RESTRICT d1, const guint8 * ORC_RESTRICT s1, int p1, int p2, int p3, int p4, int n);
+void video_orc_convert_f32_u8 (guint8 * ORC_RESTRICT d1, const gfloat * ORC_RESTRICT s1, int p1, int p2, int p3, int p4, int n);
+void video_orc_convert_f32_u8_swap (guint8 * ORC_RESTRICT d1, const gfloat * ORC_RESTRICT s1, int p1, int p2, int p3, int p4, int n);
+void video_orc_convert_f32_u8_range (guint8 * ORC_RESTRICT d1, const gfloat * ORC_RESTRICT s1, int p1, int p2, int p3, int p4, int n);
+void video_orc_convert_f32_u8_range_swap (guint8 * ORC_RESTRICT d1, const gfloat * ORC_RESTRICT s1, int p1, int p2, int p3, int p4, int n);
 
 #ifdef __cplusplus
 }

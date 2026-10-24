@@ -26,10 +26,20 @@ G_BEGIN_DECLS
 
 // kCVPixelFormatType_64RGBALE is only available for 11.3 +.
 // See https://developer.apple.com/documentation/corevideo/1563591-pixel_format_identifiers/kcvpixelformattype_64rgbale
-#if defined(MAC_OS_X_VERSION_MAX_ALLOWED) && MAC_OS_X_VERSION_MAX_ALLOWED < 110300
+#if MAC_OS_X_VERSION_MAX_ALLOWED < 110300
 #define kCVPixelFormatType_64RGBALE 'l64r'
 #endif
 #define GST_APPLEMEDIA_HAVE_64RGBALE __builtin_available(macOS 11.3, *)
+
+// Added in Xcode 14
+#if MAC_OS_X_VERSION_MAX_ALLOWED < 130100
+#define kCMVideoCodecType_AV1 'av01'
+#endif
+
+// Added in Xcode 12
+#if MAC_OS_X_VERSION_MAX_ALLOWED < 110000
+#define kCMVideoCodecType_VP9 'vp09'
+#endif
 
 #define GST_CVPIXELFORMAT_FOURCC_ARGS(fourcc) \
   __GST_PRINT_CHAR(((fourcc) >> 24) & 0xff),  \
@@ -39,6 +49,11 @@ G_BEGIN_DECLS
 
 GstVideoFormat          gst_video_format_from_cvpixelformat         (int fmt);
 int                     gst_video_format_to_cvpixelformat           (GstVideoFormat fmt);
+
+GstCaps *               gst_applemedia_copy_caps_with_feature       (GstCaps * caps,
+                                                                     const gchar * feature);
+
+void                    gst_applemedia_init_once                    (void);
 
 G_END_DECLS
 #endif /* _APPLEMEDIA_HELPERS_H_ */

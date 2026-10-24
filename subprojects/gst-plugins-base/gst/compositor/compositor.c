@@ -723,11 +723,6 @@ gst_compositor_pad_class_init (GstCompositorPadClass * klass)
       GST_DEBUG_FUNCPTR (gst_compositor_pad_create_conversion_info);
 
   gst_type_mark_as_plugin_api (GST_TYPE_COMPOSITOR_SIZING_POLICY, 0);
-
-  GST_DEBUG_CATEGORY_INIT (gst_compositor_debug, "compositor", 0, "compositor");
-
-  gst_compositor_init_blend ();
-
 }
 
 static void
@@ -819,8 +814,8 @@ GST_ELEMENT_REGISTER_DEFINE (compositor, "compositor", GST_RANK_PRIMARY + 1,
 static gboolean
 set_functions (GstCompositor * self, const GstVideoInfo * info)
 {
-  gint offset[GST_VIDEO_MAX_COMPONENTS] = { 0, };
-  gint scale[GST_VIDEO_MAX_COMPONENTS] = { 0, };
+  gdouble offset[GST_VIDEO_MAX_COMPONENTS] = { 0, };
+  gdouble scale[GST_VIDEO_MAX_COMPONENTS] = { 0, };
   gint i;
 
   gst_clear_buffer (&self->intermediate_frame);
@@ -1135,8 +1130,8 @@ set_functions (GstCompositor * self, const GstVideoInfo * info)
   }
 
   /* calculate black and white colors */
-  gst_video_color_range_offsets (self->intermediate_info.colorimetry.range,
-      self->intermediate_info.finfo, offset, scale);
+  gst_video_color_range_offsets_full (self->intermediate_info.colorimetry.range,
+      self->intermediate_info.finfo, offset, scale, NULL);
   if (GST_VIDEO_INFO_IS_YUV (info)) {
     /* black color [0.0, 0.0, 0.0] */
     self->black_color[0] = offset[0];
@@ -1168,20 +1163,43 @@ _fixate_caps (GstAggregator * agg, GstCaps * caps)
   GList *l;
   gint best_width = -1, best_height = -1;
   gint best_fps_n = -1, best_fps_d = -1;
-  gint par_n, par_d;
+  gint par_n = 1, par_d = 1;
+  gint first_par_n = -1, first_par_d = -1;
   gdouble best_fps = 0.;
-  GstCaps *ret = NULL;
-  GstStructure *s;
+  GstCaps *ret;
+  gint i, caps_size;
+  GstCaps *preferred_caps;
+  GstCompositor *compositor = GST_COMPOSITOR (agg);
 
-  ret = gst_caps_make_writable (caps);
+  caps_size = gst_caps_get_size (caps);
+  /* pixel-aspect-ratio is taken from the output caps */
+  /* first try seeing if we can use square pixels */
+  for (i = 0; i < caps_size; i++) {
+    GstStructure *s = gst_caps_get_structure (caps, i);
+    if (!gst_structure_has_field (s, "pixel-aspect-ratio")) {
+      par_n = par_d = 1;
+      break;
+    }
 
-  /* we need this to calculate how large to make the output frame */
-  s = gst_caps_get_structure (ret, 0);
-  if (gst_structure_has_field (s, "pixel-aspect-ratio")) {
+    s = gst_structure_copy (s);
     gst_structure_fixate_field_nearest_fraction (s, "pixel-aspect-ratio", 1, 1);
     gst_structure_get_fraction (s, "pixel-aspect-ratio", &par_n, &par_d);
-  } else {
-    par_n = par_d = 1;
+    gst_structure_free (s);
+
+    if (first_par_n == -1 || first_par_d == -1) {
+      first_par_n = par_n;
+      first_par_d = par_d;
+    }
+
+    if (par_n == 1 && par_d == 1)
+      break;
+  }
+  /* if not, we don't have a preferred PAR, so let's pick the first one we
+   * found, default caps negotiation shouldn't have fed us something
+   * impossible */
+  if (par_n != 1 || par_d != 1) {
+    par_n = first_par_n;
+    par_d = first_par_d;
   }
 
   GST_OBJECT_LOCK (vagg);
@@ -1200,7 +1218,7 @@ _fixate_caps (GstAggregator * agg, GstCaps * caps)
 
     fps_n = GST_VIDEO_INFO_FPS_N (&vaggpad->info);
     fps_d = GST_VIDEO_INFO_FPS_D (&vaggpad->info);
-    _mixer_pad_get_output_size (GST_COMPOSITOR (vagg), compositor_pad, par_n,
+    _mixer_pad_get_output_size (compositor, compositor_pad, par_n,
         par_d, &width, &height, &x_offset, &y_offset);
 
     if (width == 0 || height == 0)
@@ -1231,16 +1249,56 @@ _fixate_caps (GstAggregator * agg, GstCaps * caps)
   GST_OBJECT_UNLOCK (vagg);
 
   if (best_fps_n <= 0 || best_fps_d <= 0 || best_fps == 0.0) {
-    best_fps_n = 25;
-    best_fps_d = 1;
-    best_fps = 25.0;
+    gint caps_size = gst_caps_get_size (caps);
+    /* First try to negotiate something useful from downstream */
+    for (i = 0; i < caps_size; i++) {
+      gint fps_n, fps_d;
+      gdouble cur_fps;
+      GstStructure *s2 = gst_caps_get_structure (caps, i);
+      if (!gst_structure_get_fraction (s2, "framerate", &fps_n, &fps_d)) {
+        fps_n = 0;
+        fps_d = 0;
+      }
+      if (fps_d == 0)
+        cur_fps = 0.0;
+      else
+        gst_util_fraction_to_double (fps_n, fps_d, &cur_fps);
+      if (best_fps < cur_fps) {
+        best_fps = cur_fps;
+        best_fps_n = fps_n;
+        best_fps_d = fps_d;
+      }
+    }
+    /* Otherwise, just go for 25 FPS */
+    if (best_fps_n <= 0 || best_fps_d <= 0 || best_fps == 0.0) {
+      best_fps_n = 25;
+      best_fps_d = 1;
+      best_fps = 25.0;
+    }
   }
 
-  gst_structure_fixate_field_nearest_int (s, "width", best_width);
-  gst_structure_fixate_field_nearest_int (s, "height", best_height);
-  gst_structure_fixate_field_nearest_fraction (s, "framerate", best_fps_n,
-      best_fps_d);
+  GST_DEBUG_OBJECT (compositor, "found best dimensions %dx%d best_fps %d/%d",
+      best_width, best_height, best_fps_n, best_fps_d);
+
+  preferred_caps =
+      gst_caps_new_simple ("video/x-raw", "width", G_TYPE_INT, best_width,
+      "height", G_TYPE_INT, best_height, "pixel-aspect-ratio",
+      GST_TYPE_FRACTION, par_n, par_d, "framerate", GST_TYPE_FRACTION,
+      best_fps_n, best_fps_d, NULL);
+  /* if we can't negotiate our preferred dimensions and framerate, prefer
+   * dimensions first */
+  gst_caps_append (preferred_caps, gst_caps_new_simple ("video/x-raw", "width",
+          G_TYPE_INT, best_width, "height", G_TYPE_INT, best_height,
+          "pixel-aspect-ratio", GST_TYPE_FRACTION, par_n, par_d, NULL));
+  gst_caps_append (preferred_caps, gst_caps_new_simple ("video/x-raw",
+          "framerate", GST_TYPE_FRACTION, best_fps_n, best_fps_d, NULL));
+  /* otherwise, just let downstream negotiate something for us */
+  gst_caps_append (preferred_caps, gst_caps_new_empty_simple ("video/x-raw"));
+  ret =
+      gst_caps_intersect_full (preferred_caps, caps, GST_CAPS_INTERSECT_FIRST);
   ret = gst_caps_fixate (ret);
+  gst_caps_unref (caps);
+  gst_caps_unref (preferred_caps);
 
   return ret;
 }
@@ -1638,6 +1696,45 @@ blend_pads (struct CompositeTask *comp)
   }
 }
 
+static void
+copy_metas (GstCompositor * compositor, GstCompositorPad * cpad,
+    GstVideoFrame * in_frame, GstBuffer * out_buffer)
+{
+  GstVideoAggregator *vagg = GST_VIDEO_AGGREGATOR_CAST (compositor);
+  GstMeta *meta;
+  gpointer state = NULL;
+  const gchar *valid_tags[] = {
+    GST_META_TAG_VIDEO_STR,
+    GST_META_TAG_VIDEO_ORIENTATION_STR,
+    GST_META_TAG_VIDEO_SIZE_STR,
+    GST_META_TAG_VIDEO_COLORSPACE_STR,
+    NULL
+  };
+  GstVideoMetaTransformMatrix trans_matrix;
+  const GstVideoRectangle in_rectangle = { 0, 0,
+    GST_VIDEO_INFO_WIDTH (&in_frame->info),
+    GST_VIDEO_INFO_HEIGHT (&in_frame->info)
+  };
+  const GstVideoRectangle out_rectangle = { cpad->xpos + cpad->x_offset,
+    cpad->ypos + cpad->y_offset, GST_VIDEO_INFO_WIDTH (&in_frame->info),
+    GST_VIDEO_INFO_HEIGHT (&in_frame->info)
+  };
+
+  gst_video_meta_transform_matrix_init (&trans_matrix, &in_frame->info,
+      &in_rectangle, &vagg->info, &out_rectangle);
+
+  while ((meta = gst_buffer_iterate_meta (in_frame->buffer, &state))) {
+    if (meta->info->transform_func == NULL)
+      continue;
+
+    if (!gst_meta_api_type_tags_contain_only (meta->info->api, valid_tags))
+      continue;
+
+    meta->info->transform_func (out_buffer, meta, in_frame->buffer,
+        gst_video_meta_transform_matrix_get_quark (), &trans_matrix);
+  }
+}
+
 static GstFlowReturn
 gst_compositor_aggregate_frames (GstVideoAggregator * vagg, GstBuffer * outbuf)
 {
@@ -1649,7 +1746,8 @@ gst_compositor_aggregate_frames (GstVideoAggregator * vagg, GstBuffer * outbuf)
   struct CompositePadInfo *pads_info;
   guint i, n_pads = 0;
 
-  if (!gst_video_frame_map (&out_frame, &vagg->info, outbuf, GST_MAP_WRITE)) {
+  if (!gst_video_frame_map (&out_frame, &vagg->info, outbuf,
+          GST_MAP_WRITE | GST_VIDEO_FRAME_MAP_FLAG_NO_REF)) {
     GST_WARNING_OBJECT (vagg, "Could not map output buffer");
     return GST_FLOW_ERROR;
   }
@@ -1659,7 +1757,7 @@ gst_compositor_aggregate_frames (GstVideoAggregator * vagg, GstBuffer * outbuf)
   if (compositor->intermediate_frame) {
     if (!gst_video_frame_map (&intermediate_frame,
             &compositor->intermediate_info, compositor->intermediate_frame,
-            GST_MAP_READWRITE)) {
+            GST_MAP_READWRITE | GST_VIDEO_FRAME_MAP_FLAG_NO_REF)) {
       GST_WARNING_OBJECT (vagg, "Could not map intermediate buffer");
       gst_video_frame_unmap (&out_frame);
       return GST_FLOW_ERROR;
@@ -1722,6 +1820,7 @@ gst_compositor_aggregate_frames (GstVideoAggregator * vagg, GstBuffer * outbuf)
       if (!drawn_a_pad && !draw_background &&
           frames_can_copy (prepared_frame, outframe)) {
         gst_video_frame_copy (outframe, prepared_frame);
+        copy_metas (compositor, compo_pad, prepared_frame, outbuf);
       } else {
         pads_info[n_pads].pad = compo_pad;
         pads_info[n_pads].prepared_frame = prepared_frame;
@@ -1776,6 +1875,13 @@ gst_compositor_aggregate_frames (GstVideoAggregator * vagg, GstBuffer * outbuf)
   }
 
   gst_video_frame_unmap (&out_frame);
+
+  GST_OBJECT_LOCK (vagg);
+  for (i = 0; i < n_pads; i++) {
+    copy_metas (compositor, pads_info[i].pad, pads_info[i].prepared_frame,
+        outbuf);
+  }
+  GST_OBJECT_UNLOCK (vagg);
 
   return GST_FLOW_OK;
 }
@@ -1991,6 +2097,8 @@ gst_compositor_class_init (GstCompositorClass * klass)
   agg_class->stop = GST_DEBUG_FUNCPTR (gst_composior_stop);
   videoaggregator_class->aggregate_frames = gst_compositor_aggregate_frames;
 
+  gst_compositor_init_blend ();
+
   g_object_class_install_property (gobject_class, PROP_BACKGROUND,
       g_param_spec_enum ("background", "Background", "Background type",
           GST_TYPE_COMPOSITOR_BACKGROUND,
@@ -2036,6 +2144,8 @@ gst_compositor_class_init (GstCompositorClass * klass)
       "Composite multiple video streams", "Wim Taymans <wim@fluendo.com>, "
       "Sebastian Dröge <sebastian.droege@collabora.co.uk>");
 
+  gst_element_class_mark_as_untrusted_aware (gstelement_class);
+
   /**
    * compositor:ignore-inactive-pads:
    *
@@ -2059,6 +2169,8 @@ gst_compositor_class_init (GstCompositorClass * klass)
   gst_type_mark_as_plugin_api (GST_TYPE_COMPOSITOR_PAD, 0);
   gst_type_mark_as_plugin_api (GST_TYPE_COMPOSITOR_OPERATOR, 0);
   gst_type_mark_as_plugin_api (GST_TYPE_COMPOSITOR_BACKGROUND, 0);
+
+  GST_DEBUG_CATEGORY_INIT (gst_compositor_debug, "compositor", 0, "compositor");
 }
 
 static void
@@ -2114,6 +2226,8 @@ gst_compositor_child_proxy_init (gpointer g_iface, gpointer iface_data)
 static gboolean
 plugin_init (GstPlugin * plugin)
 {
+  gst_plugin_set_static_features_flag (plugin);
+
   return GST_ELEMENT_REGISTER (compositor, plugin);
 }
 

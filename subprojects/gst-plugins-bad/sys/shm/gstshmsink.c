@@ -310,13 +310,6 @@ gst_shm_sink_allocator_alloc (GstAllocator * allocator, gsize size,
   memory = gst_shm_sink_allocator_alloc_locked (self, size, params);
   GST_OBJECT_UNLOCK (self->sink);
 
-  if (!memory) {
-    memory = gst_allocator_alloc (NULL, size, params);
-    GST_LOG_OBJECT (self,
-        "Not enough shared memory for GstMemory of %" G_GSIZE_FORMAT
-        "bytes, allocating using standard allocator", size);
-  }
-
   return memory;
 }
 
@@ -839,6 +832,8 @@ pollthread_func (gpointer data)
     } while (rv < 0 && errno == EINTR);
 
     if (rv < 0) {
+      if (self->stop)
+        return NULL;
       GST_ELEMENT_ERROR (self, RESOURCE, READ,
           ("Failed waiting on fd activity"),
           ("gst_poll_wait returned %d, errno: %d", rv, errno));

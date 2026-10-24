@@ -25,7 +25,10 @@
  *
  * This tracing module tracks the lifetimes of #GstObject and #GstMiniObject
  * objects and prints a list of leaks to the debug log under `GST_TRACER:7` when
- * gst_deinit() is called, and also prints a g_warning().
+ * gst_deinit() is called, and also prints a g_warning(). Since 1.30 the
+ * reports are emitted as tracer events rendered to the debug log by the
+ * `log` tracer, which is automatically enabled when the `GST_TRACER` debug
+ * category is at least at TRACE level.
  *
  * Starting with GStreamer 1.18, you can also use GObject action signals on the tracer
  * object to fetch leak information. Use gst_tracing_get_active_tracers() to
@@ -67,7 +70,6 @@
 #include <glib-unix.h>
 #include <pthread.h>
 #endif /* G_OS_UNIX */
-
 GST_DEBUG_CATEGORY_STATIC (gst_leaks_debug);
 #define GST_CAT_DEFAULT gst_leaks_debug
 
@@ -138,10 +140,10 @@ static void gst_leaks_tracer_setup_signals (GstLeaksTracer * leaks);
 static void gst_leaks_tracer_cleanup_signals (GstLeaksTracer * leaks);
 #endif
 
-static GstTracerRecord *tr_alive;
-static GstTracerRecord *tr_refings;
-static GstTracerRecord *tr_added = NULL;
-static GstTracerRecord *tr_removed = NULL;
+static GstTraceFormat *tr_alive;
+static GstTraceFormat *tr_refings;
+static GstTraceFormat *tr_added = NULL;
+static GstTraceFormat *tr_removed = NULL;
 static GQueue instances = G_QUEUE_INIT;
 static guint gst_leaks_tracer_signals[LAST_SIGNAL] = { 0 };
 
@@ -633,9 +635,13 @@ process_leak (Leak * leak, GValue * ret_leaks)
 
   if (!ret_leaks) {
     /* log to the debug log */
-    gst_tracer_record_log (tr_alive, g_type_name (leak->type), leak->obj,
-        leak->desc, leak->ref_count,
-        leak->infos->creation_trace ? leak->infos->creation_trace : "");
+    gst_trace_event (tr_alive,
+        GST_TRACE_VALUES (STRING (g_type_name (leak->type)),
+            OBJECT (leak->obj),
+            STRING (leak->desc),
+            UINT (leak->ref_count),
+            STRING (leak->infos->creation_trace ? leak->
+                infos->creation_trace : "")));
   } else {
     GValue s_value = G_VALUE_INIT;
     GValue obj_value = G_VALUE_INIT;
@@ -673,9 +679,13 @@ process_leak (Leak * leak, GValue * ret_leaks)
 
     if (!ret_leaks) {
       /* log to the debug log */
-      gst_tracer_record_log (tr_refings, refinfo->ts, g_type_name (leak->type),
-          leak->obj, refinfo->reffed ? "reffed" : "unreffed",
-          refinfo->new_refcount, refinfo->trace ? refinfo->trace : "");
+      gst_trace_event (tr_refings,
+          GST_TRACE_VALUES (UINT64 (refinfo->ts),
+              STRING (g_type_name (leak->type)),
+              OBJECT (leak->obj),
+              STRING (refinfo->reffed ? "reffed" : "unreffed"),
+              UINT (refinfo->new_refcount),
+              STRING (refinfo->trace ? refinfo->trace : "")));
     } else {
       GValue r_value = G_VALUE_INIT;
       r = gst_structure_new_empty ("object-refings");
@@ -783,30 +793,12 @@ gst_leaks_tracer_finalize (GObject * object)
   ((GObjectClass *) gst_leaks_tracer_parent_class)->finalize (object);
 }
 
-#define RECORD_FIELD_TYPE_TS \
-    "ts", GST_TYPE_STRUCTURE, gst_structure_new ("value", \
-        "type", G_TYPE_GTYPE, GST_TYPE_CLOCK_TIME, \
-        NULL)
-#define RECORD_FIELD_TYPE_NAME \
-    "type-name", GST_TYPE_STRUCTURE, gst_structure_new ("value", \
-        "type", G_TYPE_GTYPE, G_TYPE_STRING, \
-        NULL)
-#define RECORD_FIELD_ADDRESS \
-    "address", GST_TYPE_STRUCTURE, gst_structure_new ("value", \
-        "type", G_TYPE_GTYPE, G_TYPE_POINTER, \
-        NULL)
-#define RECORD_FIELD_DESC \
-    "description", GST_TYPE_STRUCTURE, gst_structure_new ("value", \
-        "type", G_TYPE_GTYPE, G_TYPE_STRING, \
-        NULL)
-#define RECORD_FIELD_REF_COUNT \
-    "ref-count", GST_TYPE_STRUCTURE, gst_structure_new ("value", \
-        "type", G_TYPE_GTYPE, G_TYPE_UINT, \
-        NULL)
-#define RECORD_FIELD_TRACE \
-    "trace", GST_TYPE_STRUCTURE, gst_structure_new ("value", \
-        "type", G_TYPE_GTYPE, G_TYPE_STRING, \
-        NULL)
+#define RECORD_FIELD_TYPE_TS "ts", GST_TRACER_FIELD_TYPE_CLOCK_TIME
+#define RECORD_FIELD_TYPE_NAME "type-name", GST_TRACER_FIELD_TYPE_STRING
+#define RECORD_FIELD_ADDRESS "address", GST_TRACER_FIELD_TYPE_OBJECT
+#define RECORD_FIELD_DESC "description", GST_TRACER_FIELD_TYPE_STRING
+#define RECORD_FIELD_REF_COUNT "ref-count", GST_TRACER_FIELD_TYPE_UINT
+#define RECORD_FIELD_TRACE "trace", GST_TRACER_FIELD_TYPE_STRING
 
 #ifdef G_OS_UNIX
 static gboolean
@@ -969,10 +961,6 @@ gst_leaks_tracer_cleanup_signals (GstLeaksTracer * leaks)
     g_main_loop_quit (signal_loop);
     g_thread_join (signal_thread);
     signal_thread = NULL;
-    gst_object_unref (tr_added);
-    tr_added = NULL;
-    gst_object_unref (tr_removed);
-    tr_removed = NULL;
   }
   G_UNLOCK (signal_thread);
 }
@@ -1027,7 +1015,7 @@ gst_leaks_tracer_activity_start_tracking (GstLeaksTracer * self)
 
 /* When @ret is %NULL, this simply logs the activities */
 static void
-process_checkpoint (GstTracerRecord * record, const gchar * record_type,
+process_checkpoint (GstTraceFormat * record, const gchar * record_type,
     GHashTable * hash, GValue * ret)
 {
   GHashTableIter iter;
@@ -1041,7 +1029,8 @@ process_checkpoint (GstTracerRecord * record, const gchar * record_type,
 
     if (!ret) {
       /* log to the debug log */
-      gst_tracer_record_log (record, type_name, obj->object);
+      gst_trace_event (record,
+          GST_TRACE_VALUES (STRING (type_name), OBJECT (obj->object)));
     } else {
       GValue s_value = G_VALUE_INIT;
       GValue addr_value = G_VALUE_INIT;
@@ -1277,23 +1266,21 @@ gst_leaks_tracer_class_init (GstLeaksTracerClass * klass)
 
   g_object_class_install_properties (gobject_class, N_PROPERTIES, properties);
 
-  tr_alive = gst_tracer_record_new ("object-alive.class",
+  gst_type_mark_as_plugin_api (GST_TYPE_LEAKS_STACK_TRACE_FLAGS, 0);
+
+  tr_alive = gst_trace_format_register ("object-alive",
       RECORD_FIELD_TYPE_NAME, RECORD_FIELD_ADDRESS, RECORD_FIELD_DESC,
       RECORD_FIELD_REF_COUNT, RECORD_FIELD_TRACE, NULL);
-  GST_OBJECT_FLAG_SET (tr_alive, GST_OBJECT_FLAG_MAY_BE_LEAKED);
 
-  tr_refings = gst_tracer_record_new ("object-refings.class",
+  tr_refings = gst_trace_format_register ("object-refings",
       RECORD_FIELD_TYPE_TS, RECORD_FIELD_TYPE_NAME, RECORD_FIELD_ADDRESS,
       RECORD_FIELD_DESC, RECORD_FIELD_REF_COUNT, RECORD_FIELD_TRACE, NULL);
-  GST_OBJECT_FLAG_SET (tr_refings, GST_OBJECT_FLAG_MAY_BE_LEAKED);
 
-  tr_added = gst_tracer_record_new ("object-added.class",
+  tr_added = gst_trace_format_register ("object-added",
       RECORD_FIELD_TYPE_NAME, RECORD_FIELD_ADDRESS, NULL);
-  GST_OBJECT_FLAG_SET (tr_added, GST_OBJECT_FLAG_MAY_BE_LEAKED);
 
-  tr_removed = gst_tracer_record_new ("object-removed.class",
+  tr_removed = gst_trace_format_register ("object-removed",
       RECORD_FIELD_TYPE_NAME, RECORD_FIELD_ADDRESS, NULL);
-  GST_OBJECT_FLAG_SET (tr_removed, GST_OBJECT_FLAG_MAY_BE_LEAKED);
 
   /**
    * GstLeaksTracer::get-live-objects:

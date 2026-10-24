@@ -25,10 +25,6 @@
 #include <stdio.h>
 #include <math.h>
 
-#ifdef HAVE_ORC
-#include <orc/orc.h>
-#endif
-
 #include "audio-resampler.h"
 #include "audio-resampler-private.h"
 #include "audio-resampler-macros.h"
@@ -822,57 +818,58 @@ static ResampleFunc resample_funcs[] = {
 #define resample_gfloat_cubic_1 resample_funcs[14]
 #define resample_gdouble_cubic_1 resample_funcs[15]
 
-#if defined HAVE_ORC && !defined DISABLE_ORC
-# if defined (HAVE_ARM_NEON)
+#if defined (HAVE_ARM_NEON)
 #  define CHECK_NEON
 #  include "audio-resampler-neon.h"
-# endif
-# if defined (__i386__) || defined (__x86_64__)
+#endif
+#if defined (HAVE_SSE) || defined(HAVE_SSE2) || defined(HAVE_SSE41)
 #  define CHECK_X86
 #  include "audio-resampler-x86.h"
-# endif
+#endif
+#if defined (HAVE_RISCV_RVV)
+#  define CHECK_RVV
+#  include "audio-resampler-rvv.h"
 #endif
 
 static void
 audio_resampler_init (void)
 {
   static gsize init_gonce = 0;
-
   if (g_once_init_enter (&init_gonce)) {
 
     GST_DEBUG_CATEGORY_INIT (audio_resampler_debug, "audio-resampler", 0,
         "audio-resampler object");
 
-#if defined HAVE_ORC && !defined DISABLE_ORC
-    orc_init ();
-    {
-      OrcTarget *target = orc_target_get_default ();
-      gint i;
-
-      if (target) {
-        const gchar *name;
-        unsigned int flags = orc_target_get_default_flags (target);
-
-        for (i = -1; i < 32; ++i) {
-          if (i == -1) {
-            name = orc_target_get_name (target);
-            GST_DEBUG ("target %s, default flags %08x", name, flags);
-          } else if (flags & (1U << i)) {
-            name = orc_target_get_flag_name (target, i);
-            GST_DEBUG ("target flag %s", name);
-          } else
-            name = NULL;
-
-          if (name) {
 #ifdef CHECK_X86
-            audio_resampler_check_x86 (name);
+    audio_resampler_check_x86 ();
 #endif
 #ifdef CHECK_NEON
-            audio_resampler_check_neon (name);
+    audio_resampler_check_neon ();
 #endif
-          }
-        }
-      }
+#ifdef CHECK_RVV
+    if (gst_cpuid_supports_riscv_v ()) {
+      GST_DEBUG ("enable RVV optimisations");
+
+      resample_gint16_full_1 = resample_gint16_full_1_rvv;
+      resample_gint16_linear_1 = resample_gint16_linear_1_rvv;
+      resample_gint16_cubic_1 = resample_gint16_cubic_1_rvv;
+
+      interpolate_gint16_linear = interpolate_gint16_linear_rvv;
+      interpolate_gint16_cubic = interpolate_gint16_cubic_rvv;
+
+      resample_gint32_full_1 = resample_gint32_full_1_rvv;
+      resample_gint32_linear_1 = resample_gint32_linear_1_rvv;
+      resample_gint32_cubic_1 = resample_gint32_cubic_1_rvv;
+
+      interpolate_gint32_linear = interpolate_gint32_linear_rvv;
+      interpolate_gint32_cubic = interpolate_gint32_cubic_rvv;
+
+      resample_gfloat_full_1 = resample_gfloat_full_1_rvv;
+      resample_gfloat_linear_1 = resample_gfloat_linear_1_rvv;
+      resample_gfloat_cubic_1 = resample_gfloat_cubic_1_rvv;
+
+      interpolate_gfloat_linear = interpolate_gfloat_linear_rvv;
+      interpolate_gfloat_cubic = interpolate_gfloat_cubic_rvv;
     }
 #endif
     g_once_init_leave (&init_gonce, 1);

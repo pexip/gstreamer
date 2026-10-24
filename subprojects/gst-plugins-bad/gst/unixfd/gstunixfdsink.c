@@ -49,6 +49,7 @@
 #include <gst/base/base.h>
 #include <gst/allocators/allocators.h>
 
+#include <stdint.h>
 #include <glib/gstdio.h>
 #include <gio/gio.h>
 #include <gio/gunixsocketaddress.h>
@@ -113,8 +114,11 @@ enum
   PROP_SOCKET_TYPE,
   PROP_WAIT_FOR_CONNECTION,
   PROP_MIN_MEMORY_SIZE,
+  PROP_NUM_CLIENTS,
+  NUM_PROPERTIES
 };
 
+static GParamSpec *properties[NUM_PROPERTIES];
 
 static void
 client_free (Client * client)
@@ -275,6 +279,9 @@ gst_unix_fd_sink_get_property (GObject * object, guint prop_id,
     case PROP_MIN_MEMORY_SIZE:
       g_value_set_int64 (value, self->min_memory_size);
       break;
+    case PROP_NUM_CLIENTS:
+      g_value_set_uint (value, g_hash_table_size (self->clients));
+      break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
       break;
@@ -326,7 +333,9 @@ incoming_command_cb (GSocket * socket, GIOCondition cond, gpointer user_data)
       }
       /* id is actually the GstBuffer pointer casted to guint64.
        * We can now drop its reference kept for this client. */
-      if (!g_hash_table_remove (client->buffers, (gpointer) release_buffer->id)) {
+      if (release_buffer->id > UINTPTR_MAX
+          || !g_hash_table_remove (client->buffers,
+              (gpointer) (guintptr) release_buffer->id)) {
         GST_ERROR_OBJECT (self,
             "Received wrong id %" G_GUINT64_FORMAT
             " in release-buffer command from client %p", release_buffer->id,
@@ -351,6 +360,7 @@ on_error:
   g_clear_error (&error);
   g_free (payload);
   GST_OBJECT_UNLOCK (self);
+  g_object_notify_by_pspec (G_OBJECT (self), properties[PROP_NUM_CLIENTS]);
   return G_SOURCE_REMOVE;
 }
 
@@ -406,6 +416,8 @@ new_client_cb (GSocket * socket, GIOCondition cond, gpointer user_data)
   g_cond_signal (&self->wait_for_connection_cond);
 
   GST_OBJECT_UNLOCK (self);
+
+  g_object_notify_by_pspec (G_OBJECT (self), properties[PROP_NUM_CLIENTS]);
 
   return G_SOURCE_CONTINUE;
 }
@@ -492,7 +504,7 @@ gst_unix_fd_sink_stop (GstBaseSink * bsink)
   return TRUE;
 }
 
-static void
+static gboolean
 send_command_to_all (GstUnixFdSink * self, CommandType type, GUnixFDList * fds,
     const guint8 * payload, gsize payload_size, GstBuffer * buffer)
 {
@@ -500,6 +512,7 @@ send_command_to_all (GstUnixFdSink * self, CommandType type, GUnixFDList * fds,
   GSocket *socket;
   Client *client;
   GError *error = NULL;
+  gboolean client_removed = FALSE;
 
   g_hash_table_iter_init (&iter, self->clients);
   while (g_hash_table_iter_next (&iter, (gpointer) & socket,
@@ -510,12 +523,15 @@ send_command_to_all (GstUnixFdSink * self, CommandType type, GUnixFDList * fds,
           type, client, error->message);
       g_clear_error (&error);
       g_hash_table_iter_remove (&iter);
+      client_removed = TRUE;
       continue;
     }
     /* Keep a ref on this buffer until all clients released it. */
     if (buffer != NULL)
       g_hash_table_add (client->buffers, gst_buffer_ref (buffer));
   }
+
+  return client_removed;
 }
 
 static GstClockTime
@@ -584,7 +600,7 @@ gst_unix_fd_sink_render (GstBaseSink * bsink, GstBuffer * buffer)
   NewBufferPayload *new_buffer = (NewBufferPayload *) self->payload->data;
   /* Cast buffer pointer to guint64 identifier. Client will send us back that
    * id so we know which buffer to unref. */
-  new_buffer->id = (guint64) buffer;
+  new_buffer->id = (guint64) (guintptr) buffer;
   new_buffer->pts =
       to_monotonic (GST_BUFFER_PTS (buffer),
       &GST_BASE_SINK_CAST (self)->segment, base_time, latency, clock_diff);
@@ -657,7 +673,7 @@ gst_unix_fd_sink_render (GstBaseSink * bsink, GstBuffer * buffer)
     new_buffer->type = MEMORY_TYPE_DMABUF;
 
   if (dst_buffer != NULL) {
-    new_buffer->id = (guint64) dst_buffer;
+    new_buffer->id = (guint64) (guintptr) dst_buffer;
     if (ref_original_buffer)
       gst_buffer_add_parent_buffer_meta (dst_buffer, buffer);
     buffer = dst_buffer;
@@ -676,10 +692,15 @@ gst_unix_fd_sink_render (GstBaseSink * bsink, GstBuffer * buffer)
     }
   }
 
-  send_command_to_all (self, COMMAND_TYPE_NEW_BUFFER, fds,
+  gboolean client_removed =
+      send_command_to_all (self, COMMAND_TYPE_NEW_BUFFER, fds,
       self->payload->data, self->payload->len, buffer);
 
   GST_OBJECT_UNLOCK (self);
+
+  if (client_removed) {
+    g_object_notify_by_pspec (G_OBJECT (self), properties[PROP_NUM_CLIENTS]);
+  }
 
 out:
   gst_clear_buffer (&dst_buffer);
@@ -728,19 +749,30 @@ gst_unix_fd_sink_event (GstBaseSink * bsink, GstEvent * event)
           self->caps);
       gsize payload_size;
       guint8 *payload = caps_to_payload (self->caps, &payload_size);
-      send_command_to_all (self, COMMAND_TYPE_CAPS, NULL, payload, payload_size,
+      gboolean client_removed =
+          send_command_to_all (self, COMMAND_TYPE_CAPS, NULL, payload,
+          payload_size,
           NULL);
       g_free (payload);
       /* New caps could mean new buffer size, or even no copies needed anymore.
        * We'll create a new pool if still needed. */
       g_clear_pointer (&self->allocator, allocator_unref);
       GST_OBJECT_UNLOCK (self);
+      if (client_removed) {
+        g_object_notify_by_pspec (G_OBJECT (self),
+            properties[PROP_NUM_CLIENTS]);
+      }
       break;
     }
     case GST_EVENT_EOS:{
       GST_OBJECT_LOCK (self);
-      send_command_to_all (self, COMMAND_TYPE_EOS, NULL, NULL, 0, NULL);
+      gboolean client_removed =
+          send_command_to_all (self, COMMAND_TYPE_EOS, NULL, NULL, 0, NULL);
       GST_OBJECT_UNLOCK (self);
+      if (client_removed) {
+        g_object_notify_by_pspec (G_OBJECT (self),
+            properties[PROP_NUM_CLIENTS]);
+      }
       break;
     }
     default:
@@ -766,12 +798,8 @@ gst_unix_fd_sink_set_clock (GstElement * element, GstClock * clock)
 {
   GstUnixFdSink *self = (GstUnixFdSink *) element;
 
-  self->uses_monotonic_clock = FALSE;
-  if (clock != NULL && G_OBJECT_TYPE (clock) == GST_TYPE_SYSTEM_CLOCK) {
-    GstClockType clock_type;
-    g_object_get (clock, "clock-type", &clock_type, NULL);
-    self->uses_monotonic_clock = clock_type == GST_CLOCK_TYPE_MONOTONIC;
-  }
+  self->uses_monotonic_clock = clock != NULL
+      && gst_clock_is_system_monotonic (clock);
 
   return GST_ELEMENT_CLASS (gst_unix_fd_sink_parent_class)->set_clock (element,
       clock);
@@ -831,21 +859,20 @@ gst_unix_fd_sink_class_init (GstUnixFdSinkClass * klass)
   gstbasesink_class->unlock_stop =
       GST_DEBUG_FUNCPTR (gst_unix_fd_sink_unlock_stop);
 
-  g_object_class_install_property (gobject_class, PROP_SOCKET_PATH,
+  properties[PROP_SOCKET_PATH] =
       g_param_spec_string ("socket-path",
-          "Path to the control socket",
-          "The path to the control socket used to control the shared memory "
-          "transport. This may be modified during the NULL->READY transition",
-          NULL,
-          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
-          GST_PARAM_MUTABLE_READY));
+      "Path to the control socket",
+      "The path to the control socket used to control the shared memory "
+      "transport. This may be modified during the NULL->READY transition",
+      NULL,
+      G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS | GST_PARAM_MUTABLE_READY);
 
-  g_object_class_install_property (gobject_class, PROP_SOCKET_TYPE,
+  properties[PROP_SOCKET_TYPE] =
       g_param_spec_enum ("socket-type", "Socket type",
-          "The type of underlying socket",
-          G_TYPE_UNIX_SOCKET_ADDRESS_TYPE, DEFAULT_SOCKET_TYPE,
-          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS | G_PARAM_CONSTRUCT |
-          GST_PARAM_MUTABLE_READY));
+      "The type of underlying socket",
+      G_TYPE_UNIX_SOCKET_ADDRESS_TYPE, DEFAULT_SOCKET_TYPE,
+      G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS | G_PARAM_CONSTRUCT |
+      GST_PARAM_MUTABLE_READY);
 
   /**
    * GstUnixFdSink:wait-for-connection:
@@ -854,12 +881,12 @@ gst_unix_fd_sink_class_init (GstUnixFdSinkClass * klass)
    *
    * Since: 1.26
    */
-  g_object_class_install_property (gobject_class, PROP_WAIT_FOR_CONNECTION,
+  properties[PROP_WAIT_FOR_CONNECTION] =
       g_param_spec_boolean ("wait-for-connection",
-          "Wait for a connection until rendering",
-          "Block the stream until a least one client is connected",
-          DEFAULT_WAIT_FOR_CONNECTION,
-          G_PARAM_READWRITE | G_PARAM_CONSTRUCT | G_PARAM_STATIC_STRINGS));
+      "Wait for a connection until rendering",
+      "Block the stream until a least one client is connected",
+      DEFAULT_WAIT_FOR_CONNECTION,
+      G_PARAM_READWRITE | G_PARAM_CONSTRUCT | G_PARAM_STATIC_STRINGS);
 
   /**
    * GstUnixFdSink:min-memory-size:
@@ -876,9 +903,24 @@ gst_unix_fd_sink_class_init (GstUnixFdSinkClass * klass)
    *
    * Since: 1.28
    */
-  g_object_class_install_property (gobject_class, PROP_MIN_MEMORY_SIZE,
+  properties[PROP_MIN_MEMORY_SIZE] =
       g_param_spec_int64 ("min-memory-size", "Minimum memory size",
-          "Minimum size to allocate in the case a copy into shared memory is needed.",
-          -1, G_MAXINT64, DEFAULT_MIN_MEMORY_SIZE,
-          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS | G_PARAM_CONSTRUCT));
+      "Minimum size to allocate in the case a copy into shared memory is needed.",
+      -1, G_MAXINT64, DEFAULT_MIN_MEMORY_SIZE,
+      G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS | G_PARAM_CONSTRUCT);
+
+  /**
+   * GstUnixFdSink:num-clients:
+   *
+   * The number of clients that are currently connected to the sink.
+   * This property is read-only and reflects the current connection count.
+   *
+   * Since: 1.28
+   */
+  properties[PROP_NUM_CLIENTS] =
+      g_param_spec_uint ("num-clients", "Number of clients",
+      "The number of clients that are connected currently",
+      0, G_MAXUINT, 0, G_PARAM_READABLE | G_PARAM_STATIC_STRINGS);
+
+  g_object_class_install_properties (gobject_class, NUM_PROPERTIES, properties);
 }

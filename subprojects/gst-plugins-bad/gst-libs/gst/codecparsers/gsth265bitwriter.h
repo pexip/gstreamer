@@ -35,7 +35,7 @@ G_BEGIN_DECLS
  *
  * The result of writing H265 data into bit stream.
  *
- * Since: 1.22
+ * Since: 1.30
  */
 typedef enum
 {
@@ -76,6 +76,12 @@ GstH265BitWriterResult    gst_h265_bit_writer_sei       (GArray * sei_messages,
 GST_CODEC_PARSERS_API
 GstH265BitWriterResult    gst_h265_bit_writer_aud       (guint8 pic_type,
                                                          gboolean start_code,
+                                                         guint8 * data,
+                                                         guint * size);
+
+GST_CODEC_PARSERS_API
+GstH265BitWriterResult    gst_h265_bit_writer_filler    (gboolean start_code,
+                                                         guint num,
                                                          guint8 * data,
                                                          guint * size);
 

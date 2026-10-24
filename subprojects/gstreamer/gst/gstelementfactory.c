@@ -215,7 +215,7 @@ gst_element_register (GstPlugin * plugin, const gchar * name, guint rank,
   g_return_val_if_fail (name != NULL, FALSE);
   g_return_val_if_fail (g_type_is_a (type, GST_TYPE_ELEMENT), FALSE);
 
-  registry = gst_registry_get ();
+  registry = gst_plugin_get_registry (plugin);
 
   /* check if feature already exists, if it exists there is no need to update it
    * when the registry is getting updated, outdated plugins and all their
@@ -499,6 +499,8 @@ gst_element_factory_create_with_properties (GstElementFactory * factory,
     g_return_val_if_fail (element != NULL, NULL);
   }
 
+  GST_DEBUG ("created element \"%s\"", GST_OBJECT_NAME (factory));
+
   /* fill in the pointer to the factory in the element class. The
    * class will not be unreffed currently.
    * Be thread safe as there might be 2 threads creating the first instance of
@@ -519,9 +521,6 @@ gst_element_factory_create_with_properties (GstElementFactory * factory,
     g_critical ("The created element should be floating, "
         "this is probably caused by faulty bindings");
   }
-
-
-  GST_DEBUG ("created element \"%s\"", GST_OBJECT_NAME (factory));
 
   return element;
 
@@ -875,6 +874,33 @@ gst_element_factory_get_metadata (GstElementFactory * factory,
   g_return_val_if_fail (GST_IS_ELEMENT_FACTORY (factory), NULL);
 
   return gst_structure_get_string ((GstStructure *) factory->metadata, key);
+}
+
+/**
+ * gst_element_factory_is_untrusted_aware:
+ * @factory: a #GstElementFactory
+ *
+ * Checks whether the element @factory produces was reviewed for use with
+ * untrusted input, see gst_element_class_mark_as_untrusted_aware(). The check
+ * reads the factory metadata, so it does not load the plugin nor create an
+ * element.
+ *
+ * Returns: %TRUE if elements from @factory may be created from an untrusted
+ * description.
+ *
+ * Since: 1.30
+ */
+gboolean
+gst_element_factory_is_untrusted_aware (GstElementFactory * factory)
+{
+  const gchar *aware;
+
+  g_return_val_if_fail (GST_IS_ELEMENT_FACTORY (factory), FALSE);
+
+  aware = gst_element_factory_get_metadata (factory,
+      GST_ELEMENT_METADATA_UNTRUSTED_AWARE);
+
+  return aware != NULL && !g_strcmp0 (aware, "true");
 }
 
 /**

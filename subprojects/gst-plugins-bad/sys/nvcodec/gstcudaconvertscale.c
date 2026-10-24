@@ -24,12 +24,11 @@
 
 #include <gst/cuda/gstcudautils.h>
 #include "gstcudaconvertscale.h"
-#include "gstcudaconverter.h"
 
 GST_DEBUG_CATEGORY_STATIC (gst_cuda_base_convert_debug);
 #define GST_CAT_DEFAULT gst_cuda_base_convert_debug
 
-#define GST_CUDA_CONVET_FORMATS \
+#define GST_CUDA_CONVERT_FORMATS \
     "{ I420, YV12, NV12, NV21, P010_10LE, P012_LE, P016_LE, I420_10LE, I420_12LE, Y444, " \
     "Y444_10LE, Y444_12LE, Y444_16LE, BGRA, RGBA, RGBx, BGRx, ARGB, ABGR, RGB, " \
     "BGR, BGR10A2_LE, RGB10A2_LE, Y42B, I422_10LE, I422_12LE, RGBP, BGRP, GBR, " \
@@ -39,14 +38,14 @@ static GstStaticPadTemplate sink_template = GST_STATIC_PAD_TEMPLATE ("sink",
     GST_PAD_SINK,
     GST_PAD_ALWAYS,
     GST_STATIC_CAPS (GST_VIDEO_CAPS_MAKE_WITH_FEATURES
-        (GST_CAPS_FEATURE_MEMORY_CUDA_MEMORY, GST_CUDA_CONVET_FORMATS))
+        (GST_CAPS_FEATURE_MEMORY_CUDA_MEMORY, GST_CUDA_CONVERT_FORMATS))
     );
 
 static GstStaticPadTemplate src_template = GST_STATIC_PAD_TEMPLATE ("src",
     GST_PAD_SRC,
     GST_PAD_ALWAYS,
     GST_STATIC_CAPS (GST_VIDEO_CAPS_MAKE_WITH_FEATURES
-        (GST_CAPS_FEATURE_MEMORY_CUDA_MEMORY, GST_CUDA_CONVET_FORMATS))
+        (GST_CAPS_FEATURE_MEMORY_CUDA_MEMORY, GST_CUDA_CONVERT_FORMATS))
     );
 
 #define DEFAULT_ADD_BORDERS TRUE
@@ -1437,8 +1436,8 @@ gst_cuda_base_convert_set_info (GstCudaBaseTransform * btrans,
     self->same_caps = TRUE;
   }
 
-  self->converter = gst_cuda_converter_new (in_info,
-      out_info, btrans->context, NULL);
+  self->converter =
+      gst_cuda_converter_new (btrans->context, in_info, out_info, NULL);
   if (!self->converter) {
     GST_ERROR_OBJECT (self, "Couldn't create converter");
     return FALSE;
@@ -1492,7 +1491,6 @@ gst_cuda_base_convert_transform (GstBaseTransform * trans,
   GstCudaMemory *in_cmem, *out_cmem;
   GstCudaStream *in_stream, *out_stream;
   GstCudaStream *selected_stream = NULL;
-  gboolean sync_done = FALSE;
   GstVideoRectangle in_rect;
 
   GstVideoCropMeta *crop_meta = gst_buffer_get_video_crop_meta (inbuf);
@@ -1568,16 +1566,13 @@ gst_cuda_base_convert_transform (GstBaseTransform * trans,
     }
   }
 
-  if (!gst_cuda_converter_convert_frame (self->converter, &in_frame, &out_frame,
-          gst_cuda_stream_get_handle (selected_stream), &sync_done)) {
+  if (!gst_cuda_converter_convert_frame (self->converter, selected_stream,
+          &in_frame, &out_frame)) {
     GST_ERROR_OBJECT (self, "Failed to convert frame");
     ret = GST_FLOW_ERROR;
   }
 
-  if (sync_done) {
-    GST_TRACE_OBJECT (self, "Sync done by converter");
-    GST_MEMORY_FLAG_UNSET (out_cmem, GST_CUDA_MEMORY_TRANSFER_NEED_SYNC);
-  } else if (selected_stream != out_stream) {
+  if (selected_stream != out_stream) {
     GST_MEMORY_FLAG_UNSET (out_cmem, GST_CUDA_MEMORY_TRANSFER_NEED_SYNC);
     GST_TRACE_OBJECT (self, "Waiting for convert sync");
     gst_cuda_context_push (btrans->context);
@@ -1747,6 +1742,7 @@ gst_cuda_convert_scale_class_init (GstCudaConvertScaleClass * klass)
       "Filter/Converter/Video/Scaler/Colorspace/Effect/Hardware",
       "Resizes video and allow color conversion using CUDA",
       "Seungha Yang <seungha@centricular.com>");
+  gst_element_class_mark_as_untrusted_aware (element_class);
 
   transform_class->passthrough_on_same_caps = FALSE;
   transform_class->before_transform =
@@ -1903,9 +1899,10 @@ gst_cuda_convert_class_init (GstCudaConvertClass * klass)
 
   gst_element_class_set_static_metadata (element_class,
       "CUDA colorspace converter",
-      "Filter/Converter/Video/Hardware",
+      "Filter/Converter/Video/Colorspace/Hardware",
       "Converts video from one colorspace to another using CUDA",
       "Seungha Yang <seungha.yang@navercorp.com>");
+  gst_element_class_mark_as_untrusted_aware (element_class);
 
   trans_class->transform_caps =
       GST_DEBUG_FUNCPTR (gst_cuda_convert_transform_caps);
@@ -2030,6 +2027,7 @@ gst_cuda_scale_class_init (GstCudaScaleClass * klass)
       "CUDA video scaler",
       "Filter/Converter/Video/Scaler/Hardware",
       "Resize video using CUDA", "Seungha Yang <seungha.yang@navercorp.com>");
+  gst_element_class_mark_as_untrusted_aware (element_class);
 
   trans_class->transform_caps =
       GST_DEBUG_FUNCPTR (gst_cuda_scale_transform_caps);

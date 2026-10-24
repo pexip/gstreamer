@@ -94,6 +94,7 @@ gst_jp2k_decimator_class_init (GstJP2kDecimatorClass * klass)
       "Filter/Image",
       "Removes information from JPEG2000 streams without recompression",
       "Sebastian Dröge <sebastian.droege@collabora.co.uk>");
+  gst_element_class_mark_as_untrusted_aware (gstelement_class);
 
   gst_element_class_add_static_pad_template (gstelement_class,
       &sink_pad_template);
@@ -261,6 +262,7 @@ gst_jp2k_decimator_sink_chain (GstPad * pad, GstObject * parent,
 static gboolean
 plugin_init (GstPlugin * plugin)
 {
+  gst_plugin_set_static_features_flag (plugin);
   return GST_ELEMENT_REGISTER (jp2kdecimator, plugin);
 }
 

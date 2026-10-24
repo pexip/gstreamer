@@ -206,6 +206,132 @@ GST_HIP_API
 hipError_t HipGraphicsUnregisterResource (GstHipVendor vendor,
                                           hipGraphicsResource_t resource);
 
+GST_HIP_API
+hipError_t HipDeviceGetLuid (GstHipVendor vendor,
+                             char *luid,
+                             unsigned int *deviceNodeMask,
+                             hipDevice_t dev);
+
+GST_HIP_API
+hipError_t HipMemcpyDtoD (GstHipVendor vendor,
+                          hipDeviceptr_t dstDevice,
+                          hipDeviceptr_t srcDevice,
+                          size_t ByteCount);
+
+GST_HIP_API
+hipError_t HipMemcpyDtoDAsync (GstHipVendor vendor,
+                               hipDeviceptr_t dstDevice,
+                               hipDeviceptr_t srcDevice,
+                               size_t ByteCount,
+                               hipStream_t hStream);
+
+GST_HIP_API
+hipError_t HipMemcpyDtoH (GstHipVendor vendor,
+                          void *dstHost,
+                          hipDeviceptr_t srcDevice,
+                          size_t ByteCount);
+
+GST_HIP_API
+hipError_t HipMemcpyDtoHAsync (GstHipVendor vendor,
+                                void *dstHost,
+                                hipDeviceptr_t srcDevice,
+                                size_t ByteCount,
+                                hipStream_t hStream);
+
+GST_HIP_API
+hipError_t HipMemcpyHtoD (GstHipVendor vendor,
+                          hipDeviceptr_t dstDevice,
+                          const void *srcHost,
+                          size_t ByteCount);
+
+GST_HIP_API
+hipError_t HipMemcpyHtoDAsync (GstHipVendor vendor,
+                               hipDeviceptr_t dstDevice,
+                               const void *srcHost,
+                               size_t ByteCount,
+                               hipStream_t hStream);
+
+GST_HIP_API
+hipError_t HipImportExternalMemory (GstHipVendor vendor,
+                                    hipExternalMemory_t* extMem_out,
+                                    const hipExternalMemoryHandleDesc* memHandleDesc);
+
+GST_HIP_API
+hipError_t HipDestroyExternalMemory (GstHipVendor vendor,
+                                     hipExternalMemory_t extMem);
+
+GST_HIP_API
+hipError_t HipExternalMemoryGetMappedBuffer (GstHipVendor vendor,
+                                             void** devPtr,
+                                             hipExternalMemory_t extMem,
+                                             const hipExternalMemoryBufferDesc* bufferDesc);
+
+GST_HIP_API
+hipError_t HipMemGetAllocationGranularity (GstHipVendor vendor,
+                                           size_t* granularity,
+                                           const hipMemAllocationProp* prop,
+                                           hipMemAllocationGranularity_flags option);
+
+GST_HIP_API
+hipError_t HipMemCreate (GstHipVendor vendor,
+                         hipMemGenericAllocationHandle_t* handle,
+                         size_t size,
+                         const hipMemAllocationProp* prop,
+                         unsigned long long flags);
+
+GST_HIP_API
+hipError_t HipMemRelease (GstHipVendor vendor,
+                          hipMemGenericAllocationHandle_t handle);
+
+GST_HIP_API
+hipError_t HipMemAddressReserve (GstHipVendor vendor,
+                                 void** ptr,
+                                 size_t size,
+                                 size_t alignment,
+                                 void* addr,
+                                 unsigned long long flags);
+
+GST_HIP_API
+hipError_t HipMemAddressFree (GstHipVendor vendor,
+                              void* devPtr,
+                              size_t size);
+
+GST_HIP_API
+hipError_t HipMemMap (GstHipVendor vendor,
+                      void* ptr,
+                      size_t size,
+                      size_t offset,
+                      hipMemGenericAllocationHandle_t handle,
+                      unsigned long long flags);
+
+GST_HIP_API
+hipError_t HipMemUnmap (GstHipVendor vendor,
+                        void* ptr,
+                        size_t size);
+
+GST_HIP_API
+hipError_t HipMemSetAccess (GstHipVendor vendor,
+                            void* ptr,
+                            size_t size,
+                            const hipMemAccessDesc* desc,
+                            size_t count);
+
+GST_HIP_API
+hipError_t HipDeviceGetPCIBusId (GstHipVendor vendor,
+                                 char * pciBusId,
+                                 int len,
+                                 int device);
+
+GST_HIP_API
+hipError_t HipDeviceGetByPCIBusId (GstHipVendor vendor,
+                                   int * device,
+                                   const char * pciBusId);
+GST_HIP_API
+hipError_t HipHostGetDevicePointer (GstHipVendor vendor,
+                                    void** devPtr,
+                                    void* hstPtr,
+                                    unsigned int flags);
+
 G_END_DECLS
 
 

@@ -392,10 +392,48 @@ struct _GstValidateActionPrivate
   gboolean pending_set_done;
 
   GMainContext *context;
+  GstTraceSpanId trace_span_id;
 
   GValue it_value;
   GWeakRef sub_pipeline;
 };
+
+GST_DEFINE_TRACE_FORMAT (gst_validate_action,
+    "type", STRING,
+    "name", STRING,
+    "filename", STRING,
+    "lineno", INT,
+    "repeat", INT,
+    "action-number", UINT, "playback-time", INT64, "structure", STRING);
+
+static void
+gst_validate_action_trace_span_begin (GstValidateAction * action)
+{
+  GstTraceFormat *format = gst_validate_action ();
+  gchar *action_structure;
+
+  if (G_LIKELY (!gst_trace_format_is_enabled (format)))
+    return;
+
+  gst_trace_span_end_and_clear (&action->priv->trace_span_id);
+
+  action_structure = action->structure ?
+      gst_structure_to_string (action->structure) : NULL;
+
+  action->priv->trace_span_id =
+      gst_trace_span_begin (format,
+      GST_TRACE_VALUES (STRING (action->type),
+          STRING (action->name),
+          STRING (GST_VALIDATE_ACTION_FILENAME (action)),
+          INT (GST_VALIDATE_ACTION_LINENO (action)),
+          INT (action->repeat),
+          UINT (action->action_number),
+          INT64 (GST_CLOCK_TIME_IS_VALID (action->playback_time)
+              ? (gint64) action->playback_time : -1),
+          STRING (action_structure)));
+
+  g_free (action_structure);
+}
 
 static JsonNode *
 gst_validate_action_serialize (GstValidateAction * action)
@@ -505,6 +543,8 @@ gst_validate_action_return_get_name (GstValidateActionReturn r)
 static void
 _action_free (GstValidateAction * action)
 {
+  gst_trace_span_end_and_clear (&action->priv->trace_span_id);
+
   if (action->structure)
     gst_structure_free (action->structure);
 
@@ -2664,7 +2704,7 @@ _should_execute_action (GstValidateScenario * scenario, GstValidateAction * act,
   pipeline = gst_validate_scenario_get_pipeline (scenario);
   if (pipeline == NULL) {
 
-    if (!(GST_VALIDATE_ACTION_GET_TYPE (act)->flags &
+    if (!(_find_action_type (act->type)->flags &
             GST_VALIDATE_ACTION_TYPE_DOESNT_NEED_PIPELINE)) {
       GST_VALIDATE_REPORT_ACTION (scenario, act,
           SCENARIO_ACTION_EXECUTION_ERROR,
@@ -2991,7 +3031,12 @@ gst_validate_execute_action (GstValidateActionType * action_type,
   action->priv->execution_time = gst_util_get_timestamp ();
   action->priv->state = GST_VALIDATE_EXECUTE_ACTION_IN_PROGRESS;
   action_type->priv->n_calls++;
+  gst_validate_action_trace_span_begin (action);
   res = action_type->execute (scenario, action);
+  if (res != GST_VALIDATE_EXECUTE_ACTION_ASYNC &&
+      res != GST_VALIDATE_EXECUTE_ACTION_NON_BLOCKING &&
+      res != GST_VALIDATE_EXECUTE_ACTION_IN_PROGRESS)
+    gst_trace_span_end_and_clear (&action->priv->trace_span_id);
   gst_object_unref (scenario);
 
   return res;
@@ -3709,6 +3754,8 @@ _execute_dot_pipeline (GstValidateScenario * scenario,
   gchar *dotname;
   gint details = GST_DEBUG_GRAPH_SHOW_ALL;
   const gchar *name = gst_structure_get_string (action->structure, "name");
+  const gchar *dot_dir =
+      gst_structure_get_string (action->structure, "dot-dir");
   DECLARE_AND_GET_PIPELINE (scenario, action);
 
   gst_structure_get_int (action->structure, "details", &details);
@@ -3717,7 +3764,50 @@ _execute_dot_pipeline (GstValidateScenario * scenario,
   else
     dotname = g_strdup ("validate.action.unnamed");
 
-  GST_DEBUG_BIN_TO_DOT_FILE_WITH_TS (GST_BIN (pipeline), details, dotname);
+  if (dot_dir) {
+    const gchar *base_dir = g_getenv ("GST_DEBUG_DUMP_DOT_DIR");
+
+    if (!base_dir) {
+      GST_VALIDATE_REPORT_ACTION (scenario, action,
+          SCENARIO_ACTION_EXECUTION_ERROR,
+          "`dot-dir` requires the GST_DEBUG_DUMP_DOT_DIR environment variable"
+          " to be set");
+      g_free (dotname);
+      gst_object_unref (pipeline);
+      return FALSE;
+    }
+
+    gchar *full_dir = g_build_filename (base_dir, dot_dir, NULL);
+    if (g_mkdir_with_parents (full_dir, 0755) < 0) {
+      GST_VALIDATE_REPORT_ACTION (scenario, action,
+          SCENARIO_ACTION_EXECUTION_ERROR,
+          "Could not create dot directory '%s': %s", full_dir,
+          g_strerror (errno));
+      g_free (full_dir);
+      g_free (dotname);
+      gst_object_unref (pipeline);
+      return FALSE;
+    }
+
+    GstClockTime now = gst_util_get_timestamp ();
+    gchar *ts_name = g_strdup_printf ("%u.%02u.%02u.%09u-%s.dot",
+        GST_TIME_ARGS (now), dotname);
+    gchar *full_path = g_build_filename (full_dir, ts_name, NULL);
+
+    GError *err = NULL;
+    gchar *buf = gst_debug_bin_to_dot_data (GST_BIN (pipeline), details);
+    if (!g_file_set_contents (full_path, buf, -1, &err)) {
+      GST_WARNING_OBJECT (scenario, "Failed to write dot file '%s': %s",
+          full_path, err->message);
+      g_clear_error (&err);
+    }
+    g_free (buf);
+    g_free (full_path);
+    g_free (ts_name);
+    g_free (full_dir);
+  } else {
+    GST_DEBUG_BIN_TO_DOT_FILE_WITH_TS (GST_BIN (pipeline), details, dotname);
+  }
 
   g_free (dotname);
   gst_object_unref (pipeline);
@@ -5205,8 +5295,16 @@ handle_bus_message (MessageData * d)
       if (old_state == GST_STATE_PAUSED && state == GST_STATE_READY)
         gst_validate_scenario_reset (scenario);
 
-      if (reached_state && gst_validate_scenario_is_flush_seeking (scenario))
-        gst_validate_action_set_done (priv->current_seek->action);
+      if (reached_state && gst_validate_scenario_is_flush_seeking (scenario)) {
+        if (priv->actions) {
+          GstClockTime position = GST_CLOCK_TIME_NONE;
+          gdouble rate;
+
+          _check_position (scenario, priv->current_seek->action, &position,
+              &rate);
+          gst_validate_action_set_done (priv->current_seek->action);
+        }
+      }
 
       if (priv->changing_state && priv->target_state == state) {
         priv->changing_state = FALSE;
@@ -6584,6 +6682,202 @@ done:
   return res;
 }
 
+static gboolean
+_parse_expected_color (GstValidateScenario * scenario,
+    GstValidateAction * action, gdouble expected[4])
+{
+  const GValue *value =
+      gst_structure_get_value (action->structure, "expected-color");
+  guint64 argb = 0;
+  gboolean is_argb = FALSE;
+
+  if (G_VALUE_HOLDS (value, G_TYPE_INT)) {
+    argb = (guint32) g_value_get_int (value);
+    is_argb = TRUE;
+  } else if (G_VALUE_HOLDS (value, G_TYPE_UINT)) {
+    argb = g_value_get_uint (value);
+    is_argb = TRUE;
+  } else if (G_VALUE_HOLDS (value, G_TYPE_INT64)) {
+    argb = (guint64) g_value_get_int64 (value);
+    is_argb = TRUE;
+  } else if (G_VALUE_HOLDS (value, G_TYPE_UINT64)) {
+    argb = g_value_get_uint64 (value);
+    is_argb = TRUE;
+  } else if (G_VALUE_HOLDS (value, G_TYPE_STRING)) {
+    const gchar *s = g_value_get_string (value);
+
+    if (!g_str_has_prefix (s, "0x")) {
+      GST_VALIDATE_REPORT_ACTION (scenario, action,
+          SCENARIO_ACTION_EXECUTION_ERROR,
+          "Invalid 'expected-color' string '%s', expected an '0xAARRGGBB'"
+          " value", s);
+      return FALSE;
+    }
+    argb = g_ascii_strtoull (s + 2, NULL, 16);
+    is_argb = TRUE;
+  } else if (GST_VALUE_HOLDS_LIST (value) || GST_VALUE_HOLDS_ARRAY (value)) {
+    guint i, size = GST_VALUE_HOLDS_LIST (value) ?
+        gst_value_list_get_size (value) : gst_value_array_get_size (value);
+
+    if (size != 3 && size != 4) {
+      GST_VALIDATE_REPORT_ACTION (scenario, action,
+          SCENARIO_ACTION_EXECUTION_ERROR,
+          "'expected-color' arrays must have 3 (RGB) or 4 (RGBA) components,"
+          " got %u", size);
+      return FALSE;
+    }
+
+    expected[3] = 1.0;
+    for (i = 0; i < size; i++) {
+      const GValue *c = GST_VALUE_HOLDS_LIST (value) ?
+          gst_value_list_get_value (value, i) :
+          gst_value_array_get_value (value, i);
+      GValue tmp = G_VALUE_INIT;
+
+      g_value_init (&tmp, G_TYPE_DOUBLE);
+      if (!g_value_transform (c, &tmp)) {
+        GST_VALIDATE_REPORT_ACTION (scenario, action,
+            SCENARIO_ACTION_EXECUTION_ERROR,
+            "'expected-color' component %u is not a number", i);
+        g_value_unset (&tmp);
+        return FALSE;
+      }
+      expected[i] = g_value_get_double (&tmp);
+      g_value_unset (&tmp);
+    }
+
+    return TRUE;
+  } else {
+    GST_VALIDATE_REPORT_ACTION (scenario, action,
+        SCENARIO_ACTION_EXECUTION_ERROR,
+        "Invalid 'expected-color' type %s, expected an 0xAARRGGBB value or"
+        " an array of 3 or 4 doubles", G_VALUE_TYPE_NAME (value));
+    return FALSE;
+  }
+
+  if (is_argb) {
+    expected[0] = ((argb >> 16) & 0xff) / 255.0;
+    expected[1] = ((argb >> 8) & 0xff) / 255.0;
+    expected[2] = (argb & 0xff) / 255.0;
+    expected[3] = ((argb >> 24) & 0xff) / 255.0;
+  }
+
+  return TRUE;
+}
+
+static GstValidateExecuteActionReturn
+check_last_sample_frame_color (GstValidateScenario * scenario,
+    GstValidateAction * action, GstSample * sample)
+{
+  GstVideoInfo in_info, out_info;
+  GstVideoFrame in_frame, out_frame;
+  GstVideoConverter *converter;
+  GstBuffer *out_buffer;
+  GstCaps *caps;
+  GstValidateExecuteActionReturn res = GST_VALIDATE_EXECUTE_ACTION_OK;
+  gdouble expected[4], got[4] = { 0, }, tolerance = 0.01, max_dev = -1.0;
+  const guint8 *data;
+  gint x = 0, y = 0, width = -1, height = -1, max_x = 0, max_y = 0;
+  gint i, j, k, stride;
+
+  if (!_parse_expected_color (scenario, action, expected))
+    return GST_VALIDATE_EXECUTE_ACTION_ERROR_REPORTED;
+
+  gst_structure_get_int (action->structure, "x", &x);
+  gst_structure_get_int (action->structure, "y", &y);
+  gst_structure_get_int (action->structure, "width", &width);
+  gst_structure_get_int (action->structure, "height", &height);
+  gst_structure_get_double (action->structure, "tolerance", &tolerance);
+
+  caps = gst_sample_get_caps (sample);
+  if (!caps || !gst_video_info_from_caps (&in_info, caps)) {
+    GST_VALIDATE_REPORT_ACTION (scenario, action,
+        SCENARIO_ACTION_EXECUTION_ERROR,
+        "Could not get video info from the last sample caps %" GST_PTR_FORMAT,
+        caps);
+    return GST_VALIDATE_EXECUTE_ACTION_ERROR_REPORTED;
+  }
+
+  if (width <= 0)
+    width = in_info.width - x;
+  if (height <= 0)
+    height = in_info.height - y;
+
+  if (x < 0 || y < 0 || width <= 0 || height <= 0
+      || x + width > in_info.width || y + height > in_info.height) {
+    GST_VALIDATE_REPORT_ACTION (scenario, action,
+        SCENARIO_ACTION_EXECUTION_ERROR,
+        "Region (%d, %d) %dx%d is outside of the %dx%d frame",
+        x, y, width, height, in_info.width, in_info.height);
+    return GST_VALIDATE_EXECUTE_ACTION_ERROR_REPORTED;
+  }
+
+  if (!gst_video_frame_map (&in_frame, &in_info,
+          gst_sample_get_buffer (sample), GST_MAP_READ)) {
+    GST_VALIDATE_REPORT_ACTION (scenario, action,
+        SCENARIO_ACTION_EXECUTION_ERROR,
+        "Could not map the last sample buffer");
+    return GST_VALIDATE_EXECUTE_ACTION_ERROR_REPORTED;
+  }
+
+  gst_video_info_set_format (&out_info, GST_VIDEO_FORMAT_ARGB64,
+      in_info.width, in_info.height);
+  out_info.fps_n = in_info.fps_n;
+  out_info.fps_d = in_info.fps_d;
+  out_info.par_n = in_info.par_n;
+  out_info.par_d = in_info.par_d;
+  out_info.interlace_mode = in_info.interlace_mode;
+  out_buffer = gst_buffer_new_and_alloc (GST_VIDEO_INFO_SIZE (&out_info));
+  gst_video_frame_map (&out_frame, &out_info, out_buffer, GST_MAP_WRITE);
+
+  converter = gst_video_converter_new (&in_info, &out_info, NULL);
+  gst_video_converter_frame (converter, &in_frame, &out_frame);
+  gst_video_converter_free (converter);
+  gst_video_frame_unmap (&in_frame);
+
+  data = GST_VIDEO_FRAME_PLANE_DATA (&out_frame, 0);
+  stride = GST_VIDEO_FRAME_PLANE_STRIDE (&out_frame, 0);
+  for (j = y; j < y + height; j++) {
+    const guint16 *l = (const guint16 *) (data + j * stride);
+
+    for (i = x; i < x + width; i++) {
+      /* ARGB64 stores A, R, G, B, compare as R, G, B, A */
+      gdouble px[4] = { l[i * 4 + 1] / 65535.0, l[i * 4 + 2] / 65535.0,
+        l[i * 4 + 3] / 65535.0, l[i * 4 + 0] / 65535.0
+      };
+      gdouble dev = 0.0;
+
+      for (k = 0; k < 4; k++)
+        dev = MAX (dev, ABS (px[k] - expected[k]));
+
+      if (dev > max_dev) {
+        max_dev = dev;
+        max_x = i;
+        max_y = j;
+        for (k = 0; k < 4; k++)
+          got[k] = px[k];
+      }
+    }
+  }
+
+  if (max_dev > tolerance) {
+    GST_VALIDATE_REPORT_ACTION (scenario, action,
+        SCENARIO_ACTION_EXECUTION_ERROR,
+        "Color mismatch in region (%d, %d) %dx%d: pixel (%d, %d) is"
+        " rgba(%.4f, %.4f, %.4f, %.4f) but expected"
+        " rgba(%.4f, %.4f, %.4f, %.4f), deviation %.4f > tolerance %.4f",
+        x, y, width, height, max_x, max_y,
+        got[0], got[1], got[2], got[3],
+        expected[0], expected[1], expected[2], expected[3], max_dev, tolerance);
+    res = GST_VALIDATE_EXECUTE_ACTION_ERROR_REPORTED;
+  }
+
+  gst_video_frame_unmap (&out_frame);
+  gst_buffer_unref (out_buffer);
+
+  return res;
+}
+
 static GstValidateActionReturn
 check_last_sample_internal (GstValidateScenario * scenario,
     GstValidateAction * action, GstElement * sink)
@@ -6591,7 +6885,6 @@ check_last_sample_internal (GstValidateScenario * scenario,
   GstSample *sample;
   gchar *sum;
   GstBuffer *buffer;
-  const gchar *target_sum;
   guint64 frame_number;
   GstValidateExecuteActionReturn res = GST_VALIDATE_EXECUTE_ACTION_OK;
   GstVideoTimeCodeMeta *tc_meta;
@@ -6609,9 +6902,13 @@ check_last_sample_internal (GstValidateScenario * scenario,
   }
 
   buffer = gst_sample_get_buffer (sample);
-  target_sum = gst_structure_get_string (action->structure, "checksum");
-  if (target_sum) {
+
+  /* Check for checksum field (can be string or GstValueList) */
+  gchar **checksums_values =
+      gst_validate_utils_get_strv (action->structure, "checksum");
+  if (checksums_values) {
     GstMapInfo map;
+    gboolean checksum_match = FALSE;
 
     if (!gst_buffer_map (buffer, &map, GST_MAP_READ)) {
       GST_VALIDATE_REPORT_ACTION (scenario, action,
@@ -6623,16 +6920,33 @@ check_last_sample_internal (GstValidateScenario * scenario,
     sum = g_compute_checksum_for_data (G_CHECKSUM_SHA1, map.data, map.size);
     gst_buffer_unmap (buffer, &map);
 
-    if (g_strcmp0 (sum, target_sum)) {
+    /* Handle both single string and GstValueList */
+    for (gint i = 0; checksums_values[i]; i++) {
+      if (g_strcmp0 (sum, checksums_values[i]) == 0) {
+        checksum_match = TRUE;
+        break;
+      }
+    }
+
+    if (!checksum_match) {
+      gchar *checksums_str =
+          gst_value_serialize (gst_structure_get_value (action->structure,
+              "checksum"));
       GST_VALIDATE_REPORT_ACTION (scenario, action,
           SCENARIO_ACTION_EXECUTION_ERROR,
-          "Last buffer checksum '%s' is different than the expected one: '%s'",
-          sum, target_sum);
+          "Last buffer checksum '%s' does not match expected checksum(s): %s",
+          sum, checksums_str);
+      g_free (checksums_str);
 
       res = GST_VALIDATE_EXECUTE_ACTION_ERROR_REPORTED;
     }
     g_free (sum);
 
+    goto done;
+  }
+
+  if (gst_structure_has_field (action->structure, "expected-color")) {
+    res = check_last_sample_frame_color (scenario, action, sample);
     goto done;
   }
 
@@ -6644,8 +6958,9 @@ check_last_sample_internal (GstValidateScenario * scenario,
             &iframe_number)) {
       GST_VALIDATE_REPORT_ACTION (scenario, action,
           SCENARIO_ACTION_EXECUTION_ERROR,
-          "The 'checksum' or 'time-code-frame-number' parameters of the "
-          "`check-last-sample` action type needs to be specified, none found");
+          "The 'checksum', 'timecode-frame-number' or 'expected-color'"
+          " parameters of the `check-last-sample` action type needs to be"
+          " specified, none found");
 
       res = GST_VALIDATE_EXECUTE_ACTION_ERROR_REPORTED;
       goto done;
@@ -7254,6 +7569,8 @@ _action_set_done (GstValidateAction * action)
   if (scenario == NULL || !action->priv->pending_set_done)
     return G_SOURCE_REMOVE;
 
+  gst_trace_span_end_and_clear (&action->priv->trace_span_id);
+
   action->priv->execution_duration =
       gst_util_get_timestamp () - action->priv->execution_time;
 
@@ -7302,20 +7619,46 @@ _action_set_done (GstValidateAction * action)
       break;
   }
 
+  const gchar *endcolor =
+      gst_validate_has_colored_output ()? GST_VALIDATE_END_COLOR : "";
+  gchar *name_color =
+      gst_validate_get_term_color (GST_DEBUG_FG_GREEN | GST_DEBUG_BOLD);
+  gchar *loc_color = gst_validate_get_term_color (GST_DEBUG_FG_MAGENTA);
+  gchar *state_color = gst_validate_get_term_color (action->priv->state ==
+      GST_VALIDATE_EXECUTE_ACTION_ERROR ? GST_DEBUG_FG_RED | GST_DEBUG_BOLD :
+      GST_DEBUG_FG_CYAN);
+
   if (GST_VALIDATE_ACTION_N_REPEATS (action))
     repeat_message =
         g_strdup_printf ("[%d/%d]", action->repeat,
         GST_VALIDATE_ACTION_N_REPEATS (action));
 
   gst_validate_printf (NULL,
-      "%*c⇨ Action `%s` at %s:%d done '%s' %s (duration: %" GST_TIME_FORMAT
-      ")\n\n", (action->priv->subaction_level * 2) - 1, ' ',
-      gst_structure_get_name (action->priv->main_structure),
-      GST_VALIDATE_ACTION_FILENAME (action),
-      GST_VALIDATE_ACTION_LINENO (action),
-      gst_validate_action_return_get_name (action->priv->state),
-      repeat_message ? repeat_message : "",
+      "%*c⇨ Action %s`%s`%s at %s%s:%d%s done '%s%s%s' %s (duration: %"
+      GST_TIME_FORMAT ")\n\n", (action->priv->subaction_level * 2) - 1, ' ',
+      name_color, gst_structure_get_name (action->priv->main_structure),
+      endcolor, loc_color, GST_VALIDATE_ACTION_FILENAME (action),
+      GST_VALIDATE_ACTION_LINENO (action), endcolor,
+      state_color, gst_validate_action_return_get_name (action->priv->state),
+      endcolor, repeat_message ? repeat_message : "",
       GST_TIME_ARGS (action->priv->execution_duration));
+
+  g_free (name_color);
+  g_free (loc_color);
+  g_free (state_color);
+
+  GstClockTime max_execution_duration;
+  if (gst_validate_action_get_clocktime (scenario, action,
+          "max-execution-duration", &max_execution_duration)) {
+    if (action->priv->execution_duration > max_execution_duration) {
+      GST_VALIDATE_REPORT_ACTION (scenario, action,
+          SCENARIO_ACTION_EXECUTION_ERROR,
+          "Action execution duration (%" GST_TIME_FORMAT
+          ") is longer than the expected max execution duration (%"
+          GST_TIME_FORMAT ")", GST_TIME_ARGS (action->priv->execution_duration),
+          GST_TIME_ARGS (max_execution_duration));
+    }
+  }
   g_free (repeat_message);
 
   g_signal_emit (scenario, scenario_signals[ACTION_DONE], 0, action);
@@ -8220,15 +8563,15 @@ register_action_types (void)
         .name="features-rank",
         .description=g_bytes_get_data (meta_features_rank_doc, NULL),
         .mandatory = FALSE,
-        .types = "bool",
+        .types = "{GstStructure as string}",
         .possible_variables = NULL,
-        .def = "false"
+        .def = "{}"
       },
       {
         .name="monitor-all-pipelines",
         .description="This should only be used in `.validatetest` files, and allows forcing to monitor "
                      "all pipelines instead of only the one the tools wanted to monitor, for example to "
-                     "use `validateflow` on auxilary pipelines",
+                     "use `validateflow` on auxiliary pipelines",
         .mandatory = FALSE,
         .types = "bool",
         .possible_variables = NULL,
@@ -8504,10 +8847,39 @@ register_action_types (void)
       "Waits for signal 'signal-name', message 'message-type', or during 'duration' seconds",
       GST_VALIDATE_ACTION_TYPE_DOESNT_NEED_PIPELINE);
 
-  REGISTER_ACTION_TYPE ("dot-pipeline", _execute_dot_pipeline, NULL,
+  REGISTER_ACTION_TYPE ("dot-pipeline", _execute_dot_pipeline,
+      ((GstValidateActionParameter []) {
+        {
+          .name = "name",
+          .description = "Used as the suffix of the generated dot filename "
+                         "(prefixed with `validate.action.`).",
+          .mandatory = FALSE,
+          .types = "string",
+          NULL
+        },
+        {
+          .name = "details",
+          .description = "A #GstDebugGraphDetails bitmask describing what to dump.",
+          .mandatory = FALSE,
+          .types = "int",
+          NULL
+        },
+        {
+          .name = "dot-dir",
+          .description = "Subdirectory of `GST_DEBUG_DUMP_DOT_DIR` in which "
+                         "to write the dot file. Created if it does not "
+                         "exist. `GST_DEBUG_DUMP_DOT_DIR` must still be set.",
+          .mandatory = FALSE,
+          .types = "string",
+          NULL
+        },
+        {NULL}
+      }),
       "Dots the pipeline (the 'name' property will be used in the dot filename).\n"
       "For more information have a look at the GST_DEBUG_BIN_TO_DOT_FILE documentation.\n"
-      "Note that the GST_DEBUG_DUMP_DOT_DIR env variable needs to be set",
+      "Note that the GST_DEBUG_DUMP_DOT_DIR env variable needs to be set.\n"
+      "When `dot-dir` is set, the file is written into that subdirectory of\n"
+      "`GST_DEBUG_DUMP_DOT_DIR` (created if missing).",
       GST_VALIDATE_ACTION_TYPE_NONE);
 
   REGISTER_ACTION_TYPE ("set-rank", _execute_set_rank_or_disable_feature,
@@ -8998,10 +9370,70 @@ register_action_types (void)
           .types = "string",
           NULL
         },
+        {
+          .name = "expected-color",
+          .description = "The expected color of the video frame (or of the"
+                         " region specified with 'x', 'y', 'width', 'height'),"
+                         " either as a 0xAARRGGBB value (matching the"
+                         " `videotestsrc` 'foreground-color' property format)"
+                         " or as an array of 3 (RGB) or 4 (RGBA) doubles in"
+                         " the 0.0 - 1.0 range. The frame is converted to RGB"
+                         " before comparing, every pixel of the region must"
+                         " match the expected color within 'tolerance'.",
+          .mandatory = FALSE,
+          .types = "string, guint or (double){3,4}",
+          NULL
+        },
+        {
+          .name = "tolerance",
+          .description = "The maximum per component deviation accepted when"
+                         " checking 'expected-color'",
+          .mandatory = FALSE,
+          .types = "double",
+          .def = "0.01",
+          NULL
+        },
+        {
+          .name = "x",
+          .description = "The horizontal offset of the region to check with"
+                         " 'expected-color'",
+          .mandatory = FALSE,
+          .types = "int",
+          .def = "0",
+          NULL
+        },
+        {
+          .name = "y",
+          .description = "The vertical offset of the region to check with"
+                         " 'expected-color'",
+          .mandatory = FALSE,
+          .types = "int",
+          .def = "0",
+          NULL
+        },
+        {
+          .name = "width",
+          .description = "The width of the region to check with"
+                         " 'expected-color', the full frame width if not"
+                         " specified",
+          .mandatory = FALSE,
+          .types = "int",
+          NULL
+        },
+        {
+          .name = "height",
+          .description = "The height of the region to check with"
+                         " 'expected-color', the full frame height if not"
+                         " specified",
+          .mandatory = FALSE,
+          .types = "int",
+          NULL
+        },
         {NULL}
       }),
-      "Checks the last-sample checksum or frame number (set on its "
-      " GstVideoTimeCodeMeta) on declared Sink element."
+      "Checks the last-sample checksum, frame number (set on its "
+      " GstVideoTimeCodeMeta) or the color of a video frame region on the"
+      " declared Sink element."
       " This allows checking the checksum of a buffer after a 'seek' or after a"
       " GESTimeline 'commit'"
       " for example",
@@ -9303,7 +9735,7 @@ register_action_types (void)
       }),
       "Send an HTTP request to a server.\n"
       "\n"
-      "NOTE: This is not expected to be usebale on any server but the\n"
+      "NOTE: This is not expected to be useable on any server but the\n"
       "one started with the `start-http-server` action.\n"
       "\n"
       "Example:\n"

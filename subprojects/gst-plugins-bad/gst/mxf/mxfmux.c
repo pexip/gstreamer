@@ -1286,7 +1286,7 @@ gst_mxf_mux_handle_buffer (GstMXFMux * mux, GstMXFMuxPad * pad)
       if (mux->index_table->len <= mux->current_index_pos) {
         MXFIndexTableSegment s;
 
-        memset (&segment, 0, sizeof (segment));
+        memset (&s, 0, sizeof (s));
 
         mxf_uuid_init (&s.instance_id, mux->metadata);
         memcpy (&s.index_edit_rate, &pad->source_track->edit_rate,
@@ -1341,7 +1341,7 @@ gst_mxf_mux_handle_buffer (GstMXFMux * mux, GstMXFMuxPad * pad)
           if (pts_index_pos >= mux->index_table->len) {
             MXFIndexTableSegment s;
 
-            memset (&segment, 0, sizeof (segment));
+            memset (&s, 0, sizeof (s));
 
             mxf_uuid_init (&s.instance_id, mux->metadata);
             memcpy (&s.index_edit_rate, &pad->source_track->edit_rate,
@@ -1389,6 +1389,10 @@ gst_mxf_mux_handle_buffer (GstMXFMux * mux, GstMXFMuxPad * pad)
             index_pos_diff].temporal_offset = -index_pos_diff;
       }
     }
+
+    segment =
+        &g_array_index (mux->index_table, MXFIndexTableSegment,
+        mux->current_index_pos);
 
     /* Leave temporal offset initialized at 0, above code will set it as necessary */
     ;

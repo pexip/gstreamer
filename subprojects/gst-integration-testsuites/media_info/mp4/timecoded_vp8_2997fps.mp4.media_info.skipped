@@ -1,0 +1,14 @@
+<file duration="4004004004" frame-detection="0" skip-parsers="0" uri="file:///../../media/defaults/mp4/timecoded_vp8_2997fps.mp4" seekable="true">
+  <streams caps="video/quicktime">
+    <stream type="video" caps="video/x-vp8, width=(int)640, height=(int)380, framerate=(fraction)30000/1001, pixel-aspect-ratio=(fraction)1/1, interlace-mode=(string)progressive, colorimetry=(string)2:4:5:4" id="/001">
+      <segments>
+      </segments>
+      <tags>
+        <tag content="taglist, bitrate=(uint)213696, container-specific-track-id=(string)1, video-codec=(string)&quot;VP8\ video&quot;;"/>
+      </tags>
+    </stream>
+  </streams>
+  <tags>
+    <tag content="taglist, bitrate=(uint)213696, container-format=(string)Quicktime, container-specific-track-id=(string)1, datetime=(datetime)2020-01-30T20:42:39Z, video-codec=(string)&quot;VP8\ video&quot;;"/>
+  </tags>
+</file>

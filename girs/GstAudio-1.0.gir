@@ -1,7 +1,7 @@
 <!-- This file was automatically generated from C sources - DO NOT EDIT!
 To affect the contents of this file, edit the original C definitions,
 and/or use gtk-doc annotations.  -->
-<repository xmlns="http://www.gtk.org/introspection/core/1.0" xmlns:c="http://www.gtk.org/introspection/c/1.0" xmlns:glib="http://www.gtk.org/introspection/glib/1.0" version="1.2">
+<repository xmlns="http://www.gtk.org/introspection/core/1.0" xmlns:c="http://www.gtk.org/introspection/c/1.0" xmlns:doc="http://www.gtk.org/introspection/doc/1.0" xmlns:glib="http://www.gtk.org/introspection/glib/1.0" version="1.2">
   <include name="GLib" version="2.0"/>
   <include name="GModule" version="2.0"/>
   <include name="GObject" version="2.0"/>
@@ -9,6 +9,7 @@ and/or use gtk-doc annotations.  -->
   <include name="GstBase" version="1.0"/>
   <package name="gstreamer-audio-1.0"/>
   <c:include name="gst/audio/audio.h"/>
+  <doc:format name="unknown"/>
   <namespace name="GstAudio" version="1.0" shared-library="libgstaudio-1.0.so.0" c:identifier-prefixes="Gst" c:symbol-prefixes="gst">
     <function-macro name="AUDIO_AGGREGATOR" c:identifier="GST_AUDIO_AGGREGATOR" introspectable="0">
       <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/audio/gstaudioaggregator.h"/>
@@ -697,7 +698,7 @@ return to upstream/caller (indicating either GST_FLOW_ERROR or GST_FLOW_OK).</do
         </parameter>
       </parameters>
     </function-macro>
-    <constant name="AUDIO_FORMATS_ALL" value="{ F64BE, F64LE, F32BE, F32LE, S32BE, S32LE, U32BE, U32LE, S24_32BE, S24_32LE, U24_32BE, U24_32LE, S24BE, S24LE, U24BE, U24LE, S20BE, S20LE, U20BE, U20LE, S18BE, S18LE, U18BE, U18LE, S16BE, S16LE, U16BE, U16LE, S8, U8 }" c:type="GST_AUDIO_FORMATS_ALL">
+    <constant name="AUDIO_FORMATS_ALL" value="{ F64BE, F64LE, F32BE, F32LE, S32BE, S32LE, U32BE, U32LE, S24_32BE, S24_32LE, U24_32BE, U24_32LE, S24BE, S24LE, U24BE, U24LE, S20_32BE, S20_32LE, U20_32BE, U20_32LE, S20BE, S20LE, U20BE, U20LE, S18BE, S18LE, U18BE, U18LE, S16BE, S16LE, U16BE, U16LE, S8, U8 }" c:type="GST_AUDIO_FORMATS_ALL">
       <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/audio/audio-format.h">List of all audio formats, for use in template caps strings.
 
 Formats are sorted by decreasing "quality", using these criteria by priority:
@@ -794,7 +795,7 @@ format.</doc>
         </parameter>
       </parameters>
     </function-macro>
-    <constant name="AUDIO_FORMAT_LAST" value="32" c:type="GST_AUDIO_FORMAT_LAST" version="1.26">
+    <constant name="AUDIO_FORMAT_LAST" value="36" c:type="GST_AUDIO_FORMAT_LAST" version="1.26">
       <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/audio/audio-format.h">Number of audio formats in #GstAudioFormat.</doc>
       <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/audio/audio-format.h"/>
       <type name="gint" c:type="gint"/>
@@ -1294,6 +1295,21 @@ additional information in the info #GstStructure of the returned sample:
           </parameter>
         </parameters>
       </virtual-method>
+      <method name="has_current_output_buffer" c:identifier="gst_audio_aggregator_has_current_output_buffer" version="1.30">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/audio/gstaudioaggregator.c">This can be used by subclasses to delay renegotiation until the current
+output buffer is finished to avoid dropping/converting it.</doc>
+        <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/audio/gstaudioaggregator.h"/>
+        <return-value transfer-ownership="none">
+          <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/audio/gstaudioaggregator.c">%TRUE if there's currently a pending output buffer.</doc>
+          <type name="gboolean" c:type="gboolean"/>
+        </return-value>
+        <parameters>
+          <instance-parameter name="self" transfer-ownership="none">
+            <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/audio/gstaudioaggregator.c">A #GstAudioAggregator</doc>
+            <type name="AudioAggregator" c:type="GstAudioAggregator*"/>
+          </instance-parameter>
+        </parameters>
+      </method>
       <method name="set_sink_caps" c:identifier="gst_audio_aggregator_set_sink_caps">
         <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/audio/gstaudioaggregator.h"/>
         <return-value transfer-ownership="none">
@@ -5265,6 +5281,26 @@ negotiate fails.</doc>
           </parameter>
         </parameters>
       </virtual-method>
+      <virtual-method name="prepare_allocator" version="1.30">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/audio/gstaudioencoder.h">Orchestrates #GstAllocator configuration for the negotiated @caps.
+Default implementation relies on an Allocation #GstQuery &amp;
+calls `decide_allocation()`.</doc>
+        <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/audio/gstaudioencoder.h"/>
+        <return-value transfer-ownership="none">
+          <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/audio/gstaudioencoder.h">whether the #GstAllocator could be configured.</doc>
+          <type name="gboolean" c:type="gboolean"/>
+        </return-value>
+        <parameters>
+          <instance-parameter name="encoder" transfer-ownership="none">
+            <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/audio/gstaudioencoder.h">the #GstAudioEncoder</doc>
+            <type name="AudioEncoder" c:type="GstAudioEncoder*"/>
+          </instance-parameter>
+          <parameter name="caps" transfer-ownership="none">
+            <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/audio/gstaudioencoder.h">the negotiated #GstCaps</doc>
+            <type name="Gst.Caps" c:type="GstCaps*"/>
+          </parameter>
+        </parameters>
+      </virtual-method>
       <virtual-method name="propose_allocation">
         <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/audio/gstaudioencoder.h">Optional.
                      Propose buffer allocation parameters for upstream elements.
@@ -5764,6 +5800,28 @@ query will use the caps from the pad.</doc>
           <parameter name="allocation_caps" transfer-ownership="none" nullable="1" allow-none="1">
             <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/audio/gstaudioencoder.c">a #GstCaps or %NULL</doc>
             <type name="Gst.Caps" c:type="GstCaps*"/>
+          </parameter>
+        </parameters>
+      </method>
+      <method name="set_allocator" c:identifier="gst_audio_encoder_set_allocator" version="1.30">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/audio/gstaudioencoder.c">Allows #GstAudioEncoder sub-classes to set the memory @allocator and
+its @params.</doc>
+        <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/audio/gstaudioencoder.h"/>
+        <return-value transfer-ownership="none">
+          <type name="none" c:type="void"/>
+        </return-value>
+        <parameters>
+          <instance-parameter name="enc" transfer-ownership="none">
+            <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/audio/gstaudioencoder.c">a #GstAudioEncoder</doc>
+            <type name="AudioEncoder" c:type="GstAudioEncoder*"/>
+          </instance-parameter>
+          <parameter name="allocator" transfer-ownership="full" nullable="1" allow-none="1">
+            <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/audio/gstaudioencoder.c">the #GstAllocator</doc>
+            <type name="Gst.Allocator" c:type="GstAllocator*"/>
+          </parameter>
+          <parameter name="params" transfer-ownership="none" nullable="1" allow-none="1">
+            <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/audio/gstaudioencoder.c">the #GstAllocationParams of @allocator</doc>
+            <type name="Gst.AllocationParams" c:type="const GstAllocationParams*"/>
           </parameter>
         </parameters>
       </method>
@@ -6408,8 +6466,27 @@ needed. At minimum @set_format and @handle_frame needs to be overridden.</doc>
           </parameters>
         </callback>
       </field>
+      <field name="prepare_allocator">
+        <callback name="prepare_allocator">
+          <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/audio/gstaudioencoder.h"/>
+          <return-value transfer-ownership="none">
+            <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/audio/gstaudioencoder.h">whether the #GstAllocator could be configured.</doc>
+            <type name="gboolean" c:type="gboolean"/>
+          </return-value>
+          <parameters>
+            <parameter name="encoder" transfer-ownership="none">
+              <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/audio/gstaudioencoder.h">the #GstAudioEncoder</doc>
+              <type name="AudioEncoder" c:type="GstAudioEncoder*"/>
+            </parameter>
+            <parameter name="caps" transfer-ownership="none">
+              <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/audio/gstaudioencoder.h">the negotiated #GstCaps</doc>
+              <type name="Gst.Caps" c:type="GstCaps*"/>
+            </parameter>
+          </parameters>
+        </callback>
+      </field>
       <field name="_gst_reserved" readable="0" private="1">
-        <array zero-terminated="0" fixed-size="17">
+        <array zero-terminated="0" fixed-size="16">
           <type name="gpointer" c:type="gpointer"/>
         </array>
       </field>
@@ -6619,6 +6696,18 @@ This function is usually used from within a GObject class_init function.</doc>
       <member name="f64be" value="31" c:identifier="GST_AUDIO_FORMAT_F64BE" glib:nick="f64be" glib:name="GST_AUDIO_FORMAT_F64BE">
         <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/audio/audio-format.h">64-bit floating point samples, big endian</doc>
       </member>
+      <member name="s20_32le" value="32" c:identifier="GST_AUDIO_FORMAT_S20_32LE" version="1.28" glib:nick="s20-32le" glib:name="GST_AUDIO_FORMAT_S20_32LE">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/audio/audio-format.h">20 bits in 32 bits, signed, little endian.</doc>
+      </member>
+      <member name="s20_32be" value="33" c:identifier="GST_AUDIO_FORMAT_S20_32BE" version="1.28" glib:nick="s20-32be" glib:name="GST_AUDIO_FORMAT_S20_32BE">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/audio/audio-format.h">20 bits in 32 bits, signed, big endian.</doc>
+      </member>
+      <member name="u20_32le" value="34" c:identifier="GST_AUDIO_FORMAT_U20_32LE" version="1.28" glib:nick="u20-32le" glib:name="GST_AUDIO_FORMAT_U20_32LE">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/audio/audio-format.h">20 bits in 32 bits, unsigned, little endian.</doc>
+      </member>
+      <member name="u20_32be" value="35" c:identifier="GST_AUDIO_FORMAT_U20_32BE" version="1.28" glib:nick="u20-32be" glib:name="GST_AUDIO_FORMAT_U20_32BE">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/audio/audio-format.h">20 bits in 32 bits, unsigned, big endian.</doc>
+      </member>
       <member name="s16" value="4" c:identifier="GST_AUDIO_FORMAT_S16" glib:nick="s16" glib:name="GST_AUDIO_FORMAT_S16">
         <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/audio/audio-format.h">16 bits in 16 bits, signed, native endianness</doc>
       </member>
@@ -6648,6 +6737,12 @@ This function is usually used from within a GObject class_init function.</doc>
       </member>
       <member name="u20" value="22" c:identifier="GST_AUDIO_FORMAT_U20" glib:nick="u20" glib:name="GST_AUDIO_FORMAT_U20">
         <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/audio/audio-format.h">20 bits in 24 bits, unsigned, native endianness</doc>
+      </member>
+      <member name="s20_32" value="32" c:identifier="GST_AUDIO_FORMAT_S20_32" version="1.28" glib:nick="s20-32" glib:name="GST_AUDIO_FORMAT_S20_32">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/audio/audio-format.h">20 bits in 32 bits, signed, native endian.</doc>
+      </member>
+      <member name="u20_32" value="34" c:identifier="GST_AUDIO_FORMAT_U20_32" version="1.28" glib:nick="u20-32" glib:name="GST_AUDIO_FORMAT_U20_32">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/audio/audio-format.h">20 bits in 32 bits, unsigned, native endian.</doc>
       </member>
       <member name="s18" value="24" c:identifier="GST_AUDIO_FORMAT_S18" glib:nick="s18" glib:name="GST_AUDIO_FORMAT_S18">
         <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/audio/audio-format.h">18 bits in 24 bits, signed, native endianness</doc>
@@ -6779,7 +6874,7 @@ versions were printing a critical warning and returned %NULL.</doc>
 #GstAudioFormatUnpack and #GstAudioFormatPack functions</doc>
       </member>
     </bitfield>
-    <record name="AudioFormatInfo" c:type="GstAudioFormatInfo">
+    <record name="AudioFormatInfo" c:type="GstAudioFormatInfo" glib:type-name="GstAudioFormatInfo" glib:get-type="gst_audio_format_info_get_type" c:symbol-prefix="audio_format_info">
       <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/audio/audio-format.h">Information for an audio format.</doc>
       <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/audio/audio-format.h"/>
       <field name="format" writable="1">
@@ -11387,12 +11482,6 @@ string is not a known format.</doc>
         </parameter>
       </parameters>
     </function>
-    <function name="audio_format_info_get_type" c:identifier="gst_audio_format_info_get_type">
-      <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/audio/audio-format.h"/>
-      <return-value transfer-ownership="none">
-        <type name="GType" c:type="GType"/>
-      </return-value>
-    </function>
     <function name="audio_format_to_string" c:identifier="gst_audio_format_to_string" moved-to="AudioFormat.to_string">
       <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/audio/audio-format.c">Returns a string containing a descriptive name for the #GstAudioFormat.
 
@@ -11833,7 +11922,7 @@ for @quality in @options.</doc>
         </parameter>
       </parameters>
     </function>
-    <function name="buffer_add_audio_downmix_meta" c:identifier="gst_buffer_add_audio_downmix_meta">
+    <function name="buffer_add_audio_downmix_meta" c:identifier="gst_buffer_add_audio_downmix_meta" introspectable="0">
       <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/audio/gstaudiometa.c">Attaches #GstAudioDownmixMeta metadata to @buffer with the given parameters.
 
 @matrix is an two-dimensional array of @to_channels times @from_channels
@@ -11875,7 +11964,7 @@ of the results.</doc>
         <parameter name="matrix" transfer-ownership="none">
           <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/audio/gstaudiometa.c">The matrix coefficients.</doc>
           <array zero-terminated="0" c:type="const gfloat**">
-            <type name="gfloat"/>
+            <type name="gpointer"/>
           </array>
         </parameter>
       </parameters>

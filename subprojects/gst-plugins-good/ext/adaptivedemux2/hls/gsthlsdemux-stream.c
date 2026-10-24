@@ -527,12 +527,21 @@ gst_hlsdemux_stream_handle_internal_time (GstHLSDemuxStream * hls_stream,
           "Got data from a new discont sequence on a rendition stream, can't validate stream time");
       return GST_HLS_PARSER_RESULT_DONE;
     }
-    GST_DEBUG_OBJECT (hls_stream,
+
+    /* The stream time for a mapping should always be positive ! */
+    gboolean stream_time_valid = current_stream_time >= 0;
+
+    GST_CAT_LEVEL_LOG (GST_CAT_DEFAULT,
+        stream_time_valid ? GST_LEVEL_DEBUG : GST_LEVEL_ERROR, hls_stream,
         "Updating time map dsn:%" G_GINT64_FORMAT " stream_time:%"
         GST_STIME_FORMAT " internal_time:%" GST_TIME_FORMAT, map->dsn,
         GST_STIME_ARGS (current_stream_time), GST_TIME_ARGS (internal_time));
-    /* The stream time for a mapping should always be positive ! */
-    g_assert (current_stream_time >= 0);
+
+    if (!stream_time_valid) {
+      GST_ELEMENT_ERROR (demux, STREAM, DEMUX,
+          (NULL), ("Negative stream time, please file a bug"));
+      return GST_HLS_PARSER_RESULT_ERROR;
+    }
 
     if (hls_stream->parser_type == GST_HLS_PARSER_ISOBMFF)
       hls_stream->presentation_offset = internal_time - current_stream_time;
@@ -1457,7 +1466,10 @@ lost_sync:
     stream->playlist_fetched = TRUE;
     stream->pending_discont = TRUE;
 
-    gst_hls_demux_reset_for_lost_sync (demux);
+    if (!gst_hls_demux_reset_for_lost_sync (demux)) {
+      GST_ELEMENT_ERROR (demux, STREAM, DEMUX,
+          ("Failed to resynchronise streams after a discontinuity"), (NULL));
+    }
   }
 }
 
@@ -1564,7 +1576,8 @@ gst_hls_demux_stream_update_fragment_info (GstAdaptiveDemux2Stream * stream)
   gboolean discont;
 
   /* Return BUSY if no playlist is loaded yet. Even if
-   * we switched an another playlist is loading, we'll keep*/
+   * we switched and another playlist is loading,
+   * we'll keep trying to load one */
   if (!hlsdemux_stream->playlist_fetched) {
     gst_hls_demux_stream_start_playlist_loading (hlsdemux_stream);
     return GST_ADAPTIVE_DEMUX_FLOW_BUSY;

@@ -98,6 +98,9 @@ gst_h263_parse_class_init (GstH263ParseClass * klass)
 static void
 gst_h263_parse_init (GstH263Parse * h263parse)
 {
+  gst_base_parse_set_pts_interpolation (GST_BASE_PARSE (h263parse), FALSE);
+  gst_base_parse_set_infer_ts (GST_BASE_PARSE (h263parse), FALSE);
+  gst_base_parse_set_allow_duplicated_pts (GST_BASE_PARSE (h263parse), TRUE);
   GST_PAD_SET_ACCEPT_INTERSECT (GST_BASE_PARSE_SINK_PAD (h263parse));
   GST_PAD_SET_ACCEPT_TEMPLATE (GST_BASE_PARSE_SINK_PAD (h263parse));
 }
@@ -236,8 +239,9 @@ gst_h263_parse_set_src_caps (GstH263Parse * h263parse,
     /* Caps didn't have the framerate - get it from params */
     gst_h263_parse_get_par (params, &par_num, &par_denom);
   }
-  gst_caps_set_simple (caps, "pixel-aspect-ratio", GST_TYPE_FRACTION,
-      par_num, par_denom, NULL);
+  if (par_denom != 0)
+    gst_caps_set_simple (caps, "pixel-aspect-ratio", GST_TYPE_FRACTION,
+        par_num, par_denom, NULL);
 
   if (h263parse->state == GOT_HEADER) {
     gst_caps_set_simple (caps,

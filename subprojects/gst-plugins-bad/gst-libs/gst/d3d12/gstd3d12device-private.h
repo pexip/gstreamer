@@ -43,6 +43,20 @@ struct GstD3D12CopyTextureRegionArgs
   const D3D12_BOX * src_box;
 };
 
+struct GstD3D12CopyBuffer2DArgs
+{
+  ID3D12Resource *dst;
+  guint64 dst_offset;
+  guint dst_stride;
+
+  ID3D12Resource *src;
+  guint64 src_offset;
+  guint src_stride;
+
+  guint width_in_bytes;
+  guint height;
+};
+
 GST_D3D12_API
 gboolean  gst_d3d12_device_copy_texture_region (GstD3D12Device * device,
                                                 guint num_args,
@@ -53,6 +67,31 @@ gboolean  gst_d3d12_device_copy_texture_region (GstD3D12Device * device,
                                                 const guint64 * fence_values_to_wait,
                                                 D3D12_COMMAND_LIST_TYPE command_type,
                                                 guint64 * fence_value);
+
+GST_D3D12_API
+gboolean  gst_d3d12_device_copy_buffer_region (GstD3D12Device * device,
+                                               ID3D12Resource * dst,
+                                               guint64 dst_offset,
+                                               ID3D12Resource * src,
+                                               guint64 src_offset,
+                                               guint64 size,
+                                               GstD3D12FenceData * fence_data,
+                                               guint num_fences_to_wait,
+                                               ID3D12Fence ** fences_to_wait,
+                                               const guint64 * fence_values_to_wait,
+                                               D3D12_COMMAND_LIST_TYPE command_type,
+                                               guint64 * fence_value);
+
+GST_D3D12_API
+gboolean  gst_d3d12_device_copy_buffer_2d (GstD3D12Device * device,
+                                           guint num_args,
+                                           const GstD3D12CopyBuffer2DArgs * args,
+                                           GstD3D12FenceData * fence_data,
+                                           guint num_fences_to_wait,
+                                           ID3D12Fence ** fences_to_wait,
+                                           const guint64 * fence_values_to_wait,
+                                           D3D12_COMMAND_LIST_TYPE command_type,
+                                           guint64 * fence_value);
 
 GST_D3D12_API
 gboolean  gst_d3d12_device_acquire_fence_data (GstD3D12Device * device,
@@ -93,28 +132,20 @@ GST_D3D12_API
 GstD3D12WAFlags gst_d3d12_device_get_workaround_flags (GstD3D12Device * device);
 
 GST_D3D12_API
-HRESULT     gst_d3d12_device_get_sampler_state (GstD3D12Device * device,
-                                                D3D12_FILTER filter,
-                                                ID3D12DescriptorHeap ** heap);
-
-GST_D3D12_API
 gboolean    gst_d3d12_device_non_zeroed_supported (GstD3D12Device * device);
 
 GST_D3D12_API
 gboolean    gst_d3d12_device_is_uma (GstD3D12Device * device);
 
 GST_D3D12_API
-HRESULT     gst_d3d12_device_get_converter_resources (GstD3D12Device * device,
-                                                      ID3D12Resource * index_buf,
-                                                      ID3D12Resource * index_upload,
-                                                      const D3D12_VERTEX_BUFFER_VIEW * vbv,
-                                                      const D3D12_INDEX_BUFFER_VIEW * ibv,
-                                                      GstVideoTransferFunction gamma_dec_func,
-                                                      ID3D12Resource ** gamma_dec,
-                                                      GstVideoTransferFunction gamma_enc_func,
-                                                      ID3D12Resource ** gamma_enc,
-                                                      ID3D12Fence ** fence,
-                                                      guint64 * fence_val);
+void        gst_d3d12_device_update_resident_size (GstD3D12Device * device,
+                                                   gint64 size);
+
+GST_D3D12_API
+gboolean    gst_d3d12_device_is_over_budget (GstD3D12Device * device);
+
+GST_D3D12_API
+void        gst_d3d12_register_flush_callback (GDestroyNotify callback,
+                                               gpointer user_data);
 
 G_END_DECLS
-

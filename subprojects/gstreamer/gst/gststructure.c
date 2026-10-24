@@ -363,7 +363,7 @@ gst_structure_validate_name (const gchar * name)
 
   /* FIXME: test name string more */
   s = &name[1];
-  while (*s && (g_ascii_isalnum (*s) || strchr ("/-_.:+", *s) != NULL))
+  while (*s && (g_ascii_isalnum (*s) || strchr ("/-_.:+*", *s) != NULL))
     s++;
   if (G_UNLIKELY (*s != '\0')) {
     GST_WARNING ("Invalid character '%c' at offset %" G_GUINTPTR_FORMAT " in"
@@ -3064,9 +3064,14 @@ priv_gst_structure_append_to_gstring (const GstStructure * structure,
     g_string_append_len (s, ", ", 2);
     /* FIXME: do we need to escape fieldnames? */
     g_string_append (s, gst_id_str_as_str (&field->name));
-    g_string_append_len (s, "=(", 2);
-    g_string_append (s, _priv_gst_value_gtype_to_abbr (type));
-    g_string_append_c (s, ')');
+
+    if (t != NULL && t[0] == '(') {
+      g_string_append_len (s, "=", 1);
+    } else {
+      g_string_append_len (s, "=(", 2);
+      g_string_append (s, _priv_gst_value_gtype_to_abbr (type));
+      g_string_append_c (s, ')');
+    }
     if (nested_structs_brackets
         && G_VALUE_TYPE (&field->value) == GST_TYPE_STRUCTURE) {
       const GstStructure *substruct = gst_value_get_structure (&field->value);
@@ -3099,8 +3104,14 @@ priv_gst_structure_append_to_gstring (const GstStructure * structure,
         g_string_append_printf (s, "%p", ptr);
     } else if (G_TYPE_CHECK_VALUE_TYPE (&field->value, G_TYPE_ARRAY)) {
       GArray *arr = g_value_get_boxed (&field->value);
-      g_string_append_printf (s, "[%d %s]", arr->len,
-          arr->len == 1 ? "entry" : "entries");
+
+      if (strict)
+        return FALSE;
+      if (arr == NULL)
+        g_string_append (s, "NULL");
+      else
+        g_string_append_printf (s, "[%d %s]", arr->len,
+            arr->len == 1 ? "entry" : "entries");
     } else {
       if (!G_TYPE_CHECK_VALUE_TYPE (&field->value, G_TYPE_STRING))
         GST_WARNING ("No value transform to serialize field '%s' of type '%s'",
@@ -3283,7 +3294,7 @@ gst_structure_parse_field (gchar * str,
   while (g_ascii_isspace (*s) || (s[0] == '\\' && g_ascii_isspace (s[1])))
     s++;
   name = s;
-  if (G_UNLIKELY (!_priv_gst_value_parse_simple_string (s, &name_end))) {
+  if (G_UNLIKELY (!_priv_gst_value_parse_simple_string (s, &name_end, '\0'))) {
     GST_WARNING ("failed to parse simple string, str=%s", str);
     return FALSE;
   }

@@ -1,13 +1,14 @@
 <!-- This file was automatically generated from C sources - DO NOT EDIT!
 To affect the contents of this file, edit the original C definitions,
 and/or use gtk-doc annotations.  -->
-<repository xmlns="http://www.gtk.org/introspection/core/1.0" xmlns:c="http://www.gtk.org/introspection/c/1.0" xmlns:glib="http://www.gtk.org/introspection/glib/1.0" version="1.2">
+<repository xmlns="http://www.gtk.org/introspection/core/1.0" xmlns:c="http://www.gtk.org/introspection/c/1.0" xmlns:doc="http://www.gtk.org/introspection/doc/1.0" xmlns:glib="http://www.gtk.org/introspection/glib/1.0" version="1.2">
   <include name="Gst" version="1.0"/>
   <include name="GstAudio" version="1.0"/>
   <include name="GstBase" version="1.0"/>
   <include name="GstVideo" version="1.0"/>
   <package name="gstreamer-pbutils-1.0"/>
   <c:include name="gst/pbutils/pbutils.h"/>
+  <doc:format name="unknown"/>
   <namespace name="GstPbutils" version="1.0" shared-library="libgstpbutils-1.0.so.0" c:identifier-prefixes="Gst" c:symbol-prefixes="gst">
     <alias name="DiscovererAudioInfoClass" c:type="GstDiscovererAudioInfoClass">
       <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer.h"/>
@@ -256,10 +257,61 @@ new frame.</doc>
         </parameter>
       </parameters>
     </function-macro>
+    <function-macro name="DISCOVERER_AUDIO_BITRATE" c:identifier="GST_DISCOVERER_AUDIO_BITRATE" version="1.30" introspectable="0">
+      <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer.h">Sets the bitrate. Use within GST_DISCOVERER_AUDIO_STREAM_BUILD().</doc>
+      <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer.h"/>
+      <parameters>
+        <parameter name="br">
+          <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer.h">the bitrate in bits/second</doc>
+        </parameter>
+      </parameters>
+    </function-macro>
     <function-macro name="DISCOVERER_AUDIO_INFO" c:identifier="GST_DISCOVERER_AUDIO_INFO" introspectable="0">
       <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer.h"/>
       <parameters>
         <parameter name="obj">
+        </parameter>
+      </parameters>
+    </function-macro>
+    <function-macro name="DISCOVERER_AUDIO_LANGUAGE" c:identifier="GST_DISCOVERER_AUDIO_LANGUAGE" version="1.30" introspectable="0">
+      <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer.h">Sets the language. Use within GST_DISCOVERER_AUDIO_STREAM_BUILD().</doc>
+      <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer.h"/>
+      <parameters>
+        <parameter name="l">
+          <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer.h">the language code</doc>
+        </parameter>
+      </parameters>
+    </function-macro>
+    <function-macro name="DISCOVERER_AUDIO_MAX_BITRATE" c:identifier="GST_DISCOVERER_AUDIO_MAX_BITRATE" version="1.30" introspectable="0">
+      <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer.h">Sets the maximum bitrate. Use within GST_DISCOVERER_AUDIO_STREAM_BUILD().</doc>
+      <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer.h"/>
+      <parameters>
+        <parameter name="br">
+          <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer.h">the maximum bitrate in bits/second</doc>
+        </parameter>
+      </parameters>
+    </function-macro>
+    <function-macro name="DISCOVERER_AUDIO_STREAM_BUILD" c:identifier="GST_DISCOVERER_AUDIO_STREAM_BUILD" version="1.30" introspectable="0">
+      <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer.h">Macro to build a #GstDiscovererAudioInfo.</doc>
+      <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer.h"/>
+      <parameters>
+        <parameter name="stream_id">
+          <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer.h">the stream ID</doc>
+        </parameter>
+        <parameter name="caps">
+          <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer.h">the #GstCaps for the audio stream</doc>
+        </parameter>
+        <parameter name="...">
+          <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer.h">statements using GST_DISCOVERER_AUDIO_* macros</doc>
+        </parameter>
+      </parameters>
+    </function-macro>
+    <function-macro name="DISCOVERER_AUDIO_TAGS" c:identifier="GST_DISCOVERER_AUDIO_TAGS" version="1.30" introspectable="0">
+      <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer.h">Sets the stream tags. Use within GST_DISCOVERER_AUDIO_STREAM_BUILD().</doc>
+      <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer.h"/>
+      <parameters>
+        <parameter name="t">
+          <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer.h">a #GstTagList</doc>
         </parameter>
       </parameters>
     </function-macro>
@@ -270,6 +322,39 @@ new frame.</doc>
         </parameter>
       </parameters>
     </function-macro>
+    <function-macro name="DISCOVERER_CONTAINER_ADD_STREAM" c:identifier="GST_DISCOVERER_CONTAINER_ADD_STREAM" version="1.30" introspectable="0">
+      <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer.h">Adds a stream to the container. Use within GST_DISCOVERER_CONTAINER_BUILD().</doc>
+      <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer.h"/>
+      <parameters>
+        <parameter name="stream_info">
+          <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer.h">a #GstDiscovererStreamInfo</doc>
+        </parameter>
+      </parameters>
+    </function-macro>
+    <function-macro name="DISCOVERER_CONTAINER_BUILD" c:identifier="GST_DISCOVERER_CONTAINER_BUILD" version="1.30" introspectable="0">
+      <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer.h">Macro to build a #GstDiscovererContainerInfo with multiple streams.
+
+Example:
+|[&lt;!-- language="C" --&gt;
+GstCaps *container_caps = gst_caps_from_string ("video/quicktime");
+GstDiscovererContainerInfo *container = GST_DISCOVERER_CONTAINER_BUILD (
+    container_caps,
+    GST_DISCOVERER_CONTAINER_ADD_STREAM (
+        GST_DISCOVERER_VIDEO_STREAM_BUILD ("video_0", video_caps, ));
+    GST_DISCOVERER_CONTAINER_ADD_STREAM (
+        GST_DISCOVERER_AUDIO_STREAM_BUILD ("audio_0", audio_caps, ));
+);
+]|</doc>
+      <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer.h"/>
+      <parameters>
+        <parameter name="caps">
+          <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer.h">the container #GstCaps</doc>
+        </parameter>
+        <parameter name="...">
+          <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer.h">statements using GST_DISCOVERER_CONTAINER_* macros</doc>
+        </parameter>
+      </parameters>
+    </function-macro>
     <function-macro name="DISCOVERER_CONTAINER_INFO" c:identifier="GST_DISCOVERER_CONTAINER_INFO" introspectable="0">
       <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer.h"/>
       <parameters>
@@ -277,10 +362,112 @@ new frame.</doc>
         </parameter>
       </parameters>
     </function-macro>
+    <function-macro name="DISCOVERER_CONTAINER_TAGS" c:identifier="GST_DISCOVERER_CONTAINER_TAGS" version="1.30" introspectable="0">
+      <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer.h">Sets the container tags. Use within GST_DISCOVERER_CONTAINER_BUILD().</doc>
+      <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer.h"/>
+      <parameters>
+        <parameter name="t">
+          <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer.h">a #GstTagList</doc>
+        </parameter>
+      </parameters>
+    </function-macro>
     <function-macro name="DISCOVERER_INFO" c:identifier="GST_DISCOVERER_INFO" introspectable="0">
       <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer.h"/>
       <parameters>
         <parameter name="obj">
+        </parameter>
+      </parameters>
+    </function-macro>
+    <function-macro name="DISCOVERER_INFO_BUILD" c:identifier="GST_DISCOVERER_INFO_BUILD" version="1.30" introspectable="0">
+      <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer.h">Macro to build a #GstDiscovererInfo using a declarative DSL.
+
+The @stream parameter is REQUIRED and determines the structure:
+- For single-stream files: pass a stream directly (audio/video/subtitle)
+- For container files: pass a container built with GST_DISCOVERER_CONTAINER_BUILD()
+
+Example for single stream:
+|[&lt;!-- language="C" --&gt;
+GstCaps *audio_caps = gst_caps_from_string ("audio/x-raw, rate=48000");
+GstDiscovererInfo *info = GST_DISCOVERER_INFO_BUILD ("file:///test.flac",
+    GST_DISCOVERER_AUDIO_STREAM_BUILD ("audio_0", audio_caps,
+        GST_DISCOVERER_AUDIO_LANGUAGE ("en");
+    ),
+    GST_DISCOVERER_INFO_DURATION (10 * GST_SECOND);
+    GST_DISCOVERER_INFO_SEEKABLE (TRUE);
+);
+gst_caps_unref (audio_caps);
+]|
+
+Example for container with multiple streams:
+|[&lt;!-- language="C" --&gt;
+GstCaps *container_caps = gst_caps_from_string ("video/quicktime");
+GstDiscovererInfo *info = GST_DISCOVERER_INFO_BUILD ("file:///test.mp4",
+    GST_DISCOVERER_CONTAINER_BUILD (container_caps,
+        GST_DISCOVERER_CONTAINER_ADD_STREAM (
+            GST_DISCOVERER_VIDEO_STREAM_BUILD ("video_0", video_caps, ));
+        GST_DISCOVERER_CONTAINER_ADD_STREAM (
+            GST_DISCOVERER_AUDIO_STREAM_BUILD ("audio_0", audio_caps, ));
+    ),
+    GST_DISCOVERER_INFO_DURATION (10 * GST_SECOND);
+    GST_DISCOVERER_INFO_SEEKABLE (TRUE);
+);
+gst_caps_unref (container_caps);
+]|</doc>
+      <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer.h"/>
+      <parameters>
+        <parameter name="uri">
+          <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer.h">the URI for the discoverer info</doc>
+        </parameter>
+        <parameter name="stream">
+          <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer.h">the stream info (single stream or container built with GST_DISCOVERER_CONTAINER_BUILD)</doc>
+        </parameter>
+        <parameter name="...">
+          <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer.h">statements using GST_DISCOVERER_INFO_* macros</doc>
+        </parameter>
+      </parameters>
+    </function-macro>
+    <function-macro name="DISCOVERER_INFO_DURATION" c:identifier="GST_DISCOVERER_INFO_DURATION" version="1.30" introspectable="0">
+      <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer.h">Sets the duration on the info builder. Use within GST_DISCOVERER_INFO_BUILD().</doc>
+      <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer.h"/>
+      <parameters>
+        <parameter name="d">
+          <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer.h">the duration in #GstClockTime</doc>
+        </parameter>
+      </parameters>
+    </function-macro>
+    <function-macro name="DISCOVERER_INFO_LIVE" c:identifier="GST_DISCOVERER_INFO_LIVE" version="1.30" introspectable="0">
+      <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer.h">Sets whether the stream is live. Use within GST_DISCOVERER_INFO_BUILD().</doc>
+      <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer.h"/>
+      <parameters>
+        <parameter name="l">
+          <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer.h">%TRUE if live</doc>
+        </parameter>
+      </parameters>
+    </function-macro>
+    <function-macro name="DISCOVERER_INFO_RESULT" c:identifier="GST_DISCOVERER_INFO_RESULT" version="1.30" introspectable="0">
+      <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer.h">Sets the result on the info builder. Use within GST_DISCOVERER_INFO_BUILD().</doc>
+      <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer.h"/>
+      <parameters>
+        <parameter name="r">
+          <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer.h">a #GstDiscovererResult</doc>
+        </parameter>
+      </parameters>
+    </function-macro>
+    <function-macro name="DISCOVERER_INFO_SEEKABLE" c:identifier="GST_DISCOVERER_INFO_SEEKABLE" version="1.30" introspectable="0">
+      <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer.h">Sets whether the stream is seekable. Use within GST_DISCOVERER_INFO_BUILD().</doc>
+      <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer.h"/>
+      <parameters>
+        <parameter name="s">
+          <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer.h">%TRUE if seekable</doc>
+        </parameter>
+      </parameters>
+    </function-macro>
+    <function-macro name="DISCOVERER_INFO_TAGS" c:identifier="GST_DISCOVERER_INFO_TAGS" version="1.30" introspectable="0">
+      <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer.h">Sets the tags on the info builder. Use within GST_DISCOVERER_INFO_BUILD().</doc>
+      <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer.h"/>
+      <parameters>
+        <parameter name="t">
+          <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer.h">a #GstTagList</doc>
         </parameter>
       </parameters>
     </function-macro>
@@ -298,10 +485,103 @@ new frame.</doc>
         </parameter>
       </parameters>
     </function-macro>
+    <function-macro name="DISCOVERER_SUBTITLE_LANGUAGE" c:identifier="GST_DISCOVERER_SUBTITLE_LANGUAGE" version="1.30" introspectable="0">
+      <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer.h">Sets the language. Use within GST_DISCOVERER_SUBTITLE_STREAM_BUILD().</doc>
+      <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer.h"/>
+      <parameters>
+        <parameter name="l">
+          <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer.h">the language code</doc>
+        </parameter>
+      </parameters>
+    </function-macro>
+    <function-macro name="DISCOVERER_SUBTITLE_STREAM_BUILD" c:identifier="GST_DISCOVERER_SUBTITLE_STREAM_BUILD" version="1.30" introspectable="0">
+      <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer.h">Macro to build a #GstDiscovererSubtitleInfo.</doc>
+      <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer.h"/>
+      <parameters>
+        <parameter name="stream_id">
+          <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer.h">the stream ID</doc>
+        </parameter>
+        <parameter name="caps">
+          <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer.h">the #GstCaps for the subtitle stream</doc>
+        </parameter>
+        <parameter name="...">
+          <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer.h">statements using GST_DISCOVERER_SUBTITLE_* macros</doc>
+        </parameter>
+      </parameters>
+    </function-macro>
+    <function-macro name="DISCOVERER_SUBTITLE_TAGS" c:identifier="GST_DISCOVERER_SUBTITLE_TAGS" version="1.30" introspectable="0">
+      <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer.h">Sets the stream tags. Use within GST_DISCOVERER_SUBTITLE_STREAM_BUILD().</doc>
+      <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer.h"/>
+      <parameters>
+        <parameter name="t">
+          <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer.h">a #GstTagList</doc>
+        </parameter>
+      </parameters>
+    </function-macro>
+    <function-macro name="DISCOVERER_VIDEO_BITRATE" c:identifier="GST_DISCOVERER_VIDEO_BITRATE" version="1.30" introspectable="0">
+      <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer.h">Sets the bitrate. Use within GST_DISCOVERER_VIDEO_STREAM_BUILD().</doc>
+      <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer.h"/>
+      <parameters>
+        <parameter name="br">
+          <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer.h">the bitrate in bits/second</doc>
+        </parameter>
+      </parameters>
+    </function-macro>
     <function-macro name="DISCOVERER_VIDEO_INFO" c:identifier="GST_DISCOVERER_VIDEO_INFO" introspectable="0">
       <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer.h"/>
       <parameters>
         <parameter name="obj">
+        </parameter>
+      </parameters>
+    </function-macro>
+    <function-macro name="DISCOVERER_VIDEO_INTERLACED" c:identifier="GST_DISCOVERER_VIDEO_INTERLACED" version="1.30" introspectable="0">
+      <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer.h">Sets whether the video is interlaced. Use within GST_DISCOVERER_VIDEO_STREAM_BUILD().</doc>
+      <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer.h"/>
+      <parameters>
+        <parameter name="i">
+          <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer.h">%TRUE if interlaced</doc>
+        </parameter>
+      </parameters>
+    </function-macro>
+    <function-macro name="DISCOVERER_VIDEO_IS_IMAGE" c:identifier="GST_DISCOVERER_VIDEO_IS_IMAGE" version="1.30" introspectable="0">
+      <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer.h">Sets whether this is an image. Use within GST_DISCOVERER_VIDEO_STREAM_BUILD().</doc>
+      <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer.h"/>
+      <parameters>
+        <parameter name="i">
+          <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer.h">%TRUE if this is an image</doc>
+        </parameter>
+      </parameters>
+    </function-macro>
+    <function-macro name="DISCOVERER_VIDEO_MAX_BITRATE" c:identifier="GST_DISCOVERER_VIDEO_MAX_BITRATE" version="1.30" introspectable="0">
+      <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer.h">Sets the maximum bitrate. Use within GST_DISCOVERER_VIDEO_STREAM_BUILD().</doc>
+      <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer.h"/>
+      <parameters>
+        <parameter name="br">
+          <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer.h">the maximum bitrate in bits/second</doc>
+        </parameter>
+      </parameters>
+    </function-macro>
+    <function-macro name="DISCOVERER_VIDEO_STREAM_BUILD" c:identifier="GST_DISCOVERER_VIDEO_STREAM_BUILD" version="1.30" introspectable="0">
+      <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer.h">Macro to build a #GstDiscovererVideoInfo.</doc>
+      <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer.h"/>
+      <parameters>
+        <parameter name="stream_id">
+          <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer.h">the stream ID</doc>
+        </parameter>
+        <parameter name="caps">
+          <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer.h">the #GstCaps for the video stream</doc>
+        </parameter>
+        <parameter name="...">
+          <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer.h">statements using GST_DISCOVERER_VIDEO_* macros</doc>
+        </parameter>
+      </parameters>
+    </function-macro>
+    <function-macro name="DISCOVERER_VIDEO_TAGS" c:identifier="GST_DISCOVERER_VIDEO_TAGS" version="1.30" introspectable="0">
+      <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer.h">Sets the stream tags. Use within GST_DISCOVERER_VIDEO_STREAM_BUILD().</doc>
+      <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer.h"/>
+      <parameters>
+        <parameter name="t">
+          <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer.h">a #GstTagList</doc>
         </parameter>
       </parameters>
     </function-macro>
@@ -676,6 +956,128 @@ information.</doc>
         </parameters>
       </method>
     </class>
+    <record name="DiscovererAudioInfoBuilder" c:type="GstDiscovererAudioInfoBuilder" disguised="1" opaque="1" version="1.30">
+      <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer.h">Opaque structure for building #GstDiscovererAudioInfo objects programmatically.</doc>
+      <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer.h"/>
+      <method name="build" c:identifier="gst_discoverer_audio_info_builder_build" version="1.30">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer-types.c">Builds and returns a new #GstDiscovererAudioInfo. This frees the builder.</doc>
+        <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer.h"/>
+        <return-value transfer-ownership="full">
+          <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer-types.c">a new #GstDiscovererAudioInfo</doc>
+          <type name="DiscovererAudioInfo" c:type="GstDiscovererAudioInfo*"/>
+        </return-value>
+        <parameters>
+          <instance-parameter name="builder" transfer-ownership="full">
+            <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer-types.c">a #GstDiscovererAudioInfoBuilder</doc>
+            <type name="DiscovererAudioInfoBuilder" c:type="GstDiscovererAudioInfoBuilder*"/>
+          </instance-parameter>
+        </parameters>
+      </method>
+      <method name="free" c:identifier="gst_discoverer_audio_info_builder_free" version="1.30">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer-types.c">Frees a #GstDiscovererAudioInfoBuilder without building.</doc>
+        <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer.h"/>
+        <return-value transfer-ownership="none">
+          <type name="none" c:type="void"/>
+        </return-value>
+        <parameters>
+          <instance-parameter name="builder" transfer-ownership="full">
+            <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer-types.c">a #GstDiscovererAudioInfoBuilder</doc>
+            <type name="DiscovererAudioInfoBuilder" c:type="GstDiscovererAudioInfoBuilder*"/>
+          </instance-parameter>
+        </parameters>
+      </method>
+      <method name="set_bitrate" c:identifier="gst_discoverer_audio_info_builder_set_bitrate" version="1.30">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer-types.c">Sets the bitrate.</doc>
+        <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer.h"/>
+        <return-value transfer-ownership="none">
+          <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer-types.c">the same builder for chaining</doc>
+          <type name="DiscovererAudioInfoBuilder" c:type="GstDiscovererAudioInfoBuilder*"/>
+        </return-value>
+        <parameters>
+          <instance-parameter name="builder" transfer-ownership="none">
+            <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer-types.c">a #GstDiscovererAudioInfoBuilder</doc>
+            <type name="DiscovererAudioInfoBuilder" c:type="GstDiscovererAudioInfoBuilder*"/>
+          </instance-parameter>
+          <parameter name="bitrate" transfer-ownership="none">
+            <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer-types.c">the bitrate in bits/second</doc>
+            <type name="guint" c:type="guint"/>
+          </parameter>
+        </parameters>
+      </method>
+      <method name="set_language" c:identifier="gst_discoverer_audio_info_builder_set_language" version="1.30">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer-types.c">Sets the language.</doc>
+        <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer.h"/>
+        <return-value transfer-ownership="none">
+          <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer-types.c">the same builder for chaining</doc>
+          <type name="DiscovererAudioInfoBuilder" c:type="GstDiscovererAudioInfoBuilder*"/>
+        </return-value>
+        <parameters>
+          <instance-parameter name="builder" transfer-ownership="none">
+            <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer-types.c">a #GstDiscovererAudioInfoBuilder</doc>
+            <type name="DiscovererAudioInfoBuilder" c:type="GstDiscovererAudioInfoBuilder*"/>
+          </instance-parameter>
+          <parameter name="language" transfer-ownership="none" nullable="1" allow-none="1">
+            <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer-types.c">the language code</doc>
+            <type name="utf8" c:type="const gchar*"/>
+          </parameter>
+        </parameters>
+      </method>
+      <method name="set_max_bitrate" c:identifier="gst_discoverer_audio_info_builder_set_max_bitrate" version="1.30">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer-types.c">Sets the maximum bitrate.</doc>
+        <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer.h"/>
+        <return-value transfer-ownership="none">
+          <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer-types.c">the same builder for chaining</doc>
+          <type name="DiscovererAudioInfoBuilder" c:type="GstDiscovererAudioInfoBuilder*"/>
+        </return-value>
+        <parameters>
+          <instance-parameter name="builder" transfer-ownership="none">
+            <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer-types.c">a #GstDiscovererAudioInfoBuilder</doc>
+            <type name="DiscovererAudioInfoBuilder" c:type="GstDiscovererAudioInfoBuilder*"/>
+          </instance-parameter>
+          <parameter name="max_bitrate" transfer-ownership="none">
+            <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer-types.c">the maximum bitrate in bits/second</doc>
+            <type name="guint" c:type="guint"/>
+          </parameter>
+        </parameters>
+      </method>
+      <method name="set_tags" c:identifier="gst_discoverer_audio_info_builder_set_tags" version="1.30">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer-types.c">Sets the stream tags.</doc>
+        <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer.h"/>
+        <return-value transfer-ownership="none">
+          <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer-types.c">the same builder for chaining</doc>
+          <type name="DiscovererAudioInfoBuilder" c:type="GstDiscovererAudioInfoBuilder*"/>
+        </return-value>
+        <parameters>
+          <instance-parameter name="builder" transfer-ownership="none">
+            <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer-types.c">a #GstDiscovererAudioInfoBuilder</doc>
+            <type name="DiscovererAudioInfoBuilder" c:type="GstDiscovererAudioInfoBuilder*"/>
+          </instance-parameter>
+          <parameter name="tags" transfer-ownership="none" nullable="1" allow-none="1">
+            <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer-types.c">the stream tags</doc>
+            <type name="Gst.TagList" c:type="GstTagList*"/>
+          </parameter>
+        </parameters>
+      </method>
+      <function name="new" c:identifier="gst_discoverer_audio_info_builder_new" version="1.30" introspectable="0">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer-types.c">Creates a new #GstDiscovererAudioInfoBuilder.
+Audio properties (channels, sample_rate, depth) will be extracted from caps.</doc>
+        <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer.h"/>
+        <return-value transfer-ownership="full">
+          <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer-types.c">a new #GstDiscovererAudioInfoBuilder</doc>
+          <type name="DiscovererAudioInfoBuilder" c:type="GstDiscovererAudioInfoBuilder*"/>
+        </return-value>
+        <parameters>
+          <parameter name="stream_id" transfer-ownership="none">
+            <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer-types.c">the stream ID</doc>
+            <type name="utf8" c:type="const gchar*"/>
+          </parameter>
+          <parameter name="caps" transfer-ownership="none">
+            <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer-types.c">the audio caps</doc>
+            <type name="Gst.Caps" c:type="GstCaps*"/>
+          </parameter>
+        </parameters>
+      </function>
+    </record>
     <record name="DiscovererClass" c:type="GstDiscovererClass" glib:is-gtype-struct-for="Discoverer">
       <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer.h"/>
       <field name="parentclass">
@@ -801,6 +1203,89 @@ the tags after the life-time of @info, you will need to copy them.</doc>
         </parameters>
       </method>
     </class>
+    <record name="DiscovererContainerInfoBuilder" c:type="GstDiscovererContainerInfoBuilder" disguised="1" opaque="1" version="1.30">
+      <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer.h">Opaque structure for building #GstDiscovererContainerInfo objects programmatically.</doc>
+      <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer.h"/>
+      <method name="add_stream" c:identifier="gst_discoverer_container_info_builder_add_stream" version="1.30">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer-types.c">Adds a stream to the container. Takes ownership of @stream_info.</doc>
+        <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer.h"/>
+        <return-value transfer-ownership="none">
+          <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer-types.c">the same builder for chaining</doc>
+          <type name="DiscovererContainerInfoBuilder" c:type="GstDiscovererContainerInfoBuilder*"/>
+        </return-value>
+        <parameters>
+          <instance-parameter name="builder" transfer-ownership="none">
+            <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer-types.c">a #GstDiscovererContainerInfoBuilder</doc>
+            <type name="DiscovererContainerInfoBuilder" c:type="GstDiscovererContainerInfoBuilder*"/>
+          </instance-parameter>
+          <parameter name="stream_info" transfer-ownership="full">
+            <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer-types.c">the stream info to add</doc>
+            <type name="DiscovererStreamInfo" c:type="GstDiscovererStreamInfo*"/>
+          </parameter>
+        </parameters>
+      </method>
+      <method name="build" c:identifier="gst_discoverer_container_info_builder_build" version="1.30">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer-types.c">Builds and returns a new #GstDiscovererContainerInfo. This frees the builder.</doc>
+        <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer.h"/>
+        <return-value transfer-ownership="full">
+          <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer-types.c">a new #GstDiscovererContainerInfo</doc>
+          <type name="DiscovererContainerInfo" c:type="GstDiscovererContainerInfo*"/>
+        </return-value>
+        <parameters>
+          <instance-parameter name="builder" transfer-ownership="full">
+            <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer-types.c">a #GstDiscovererContainerInfoBuilder</doc>
+            <type name="DiscovererContainerInfoBuilder" c:type="GstDiscovererContainerInfoBuilder*"/>
+          </instance-parameter>
+        </parameters>
+      </method>
+      <method name="free" c:identifier="gst_discoverer_container_info_builder_free" version="1.30">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer-types.c">Frees a #GstDiscovererContainerInfoBuilder without building.</doc>
+        <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer.h"/>
+        <return-value transfer-ownership="none">
+          <type name="none" c:type="void"/>
+        </return-value>
+        <parameters>
+          <instance-parameter name="builder" transfer-ownership="full">
+            <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer-types.c">a #GstDiscovererContainerInfoBuilder</doc>
+            <type name="DiscovererContainerInfoBuilder" c:type="GstDiscovererContainerInfoBuilder*"/>
+          </instance-parameter>
+        </parameters>
+      </method>
+      <method name="set_tags" c:identifier="gst_discoverer_container_info_builder_set_tags" version="1.30">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer-types.c">Sets the container-level tags.</doc>
+        <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer.h"/>
+        <return-value transfer-ownership="none">
+          <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer-types.c">the same builder for chaining</doc>
+          <type name="DiscovererContainerInfoBuilder" c:type="GstDiscovererContainerInfoBuilder*"/>
+        </return-value>
+        <parameters>
+          <instance-parameter name="builder" transfer-ownership="none">
+            <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer-types.c">a #GstDiscovererContainerInfoBuilder</doc>
+            <type name="DiscovererContainerInfoBuilder" c:type="GstDiscovererContainerInfoBuilder*"/>
+          </instance-parameter>
+          <parameter name="tags" transfer-ownership="none" nullable="1" allow-none="1">
+            <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer-types.c">the container tags</doc>
+            <type name="Gst.TagList" c:type="GstTagList*"/>
+          </parameter>
+        </parameters>
+      </method>
+      <function name="new" c:identifier="gst_discoverer_container_info_builder_new" version="1.30" introspectable="0">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer-types.c">Creates a new #GstDiscovererContainerInfoBuilder for building a
+#GstDiscovererContainerInfo with multiple streams.</doc>
+        <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer.h"/>
+        <return-value transfer-ownership="full" nullable="1">
+          <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer-types.c">a new #GstDiscovererContainerInfoBuilder,
+  or %NULL if @caps is %NULL</doc>
+          <type name="DiscovererContainerInfoBuilder" c:type="GstDiscovererContainerInfoBuilder*"/>
+        </return-value>
+        <parameters>
+          <parameter name="caps" transfer-ownership="none">
+            <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer-types.c">the container caps</doc>
+            <type name="Gst.Caps" c:type="GstCaps*"/>
+          </parameter>
+        </parameters>
+      </function>
+    </record>
     <class name="DiscovererInfo" c:symbol-prefix="discoverer_info" c:type="GstDiscovererInfo" parent="GObject.Object" glib:type-name="GstDiscovererInfo" glib:get-type="gst_discoverer_info_get_type">
       <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer.h">Structure containing the information of a URI analyzed by #GstDiscoverer.</doc>
       <function name="from_variant" c:identifier="gst_discoverer_info_from_variant" version="1.6">
@@ -1115,6 +1600,149 @@ what needs to be serialized.</doc>
         </parameters>
       </method>
     </class>
+    <record name="DiscovererInfoBuilder" c:type="GstDiscovererInfoBuilder" disguised="1" opaque="1" version="1.30">
+      <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer.h">Opaque structure for building #GstDiscovererInfo objects programmatically.</doc>
+      <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer.h"/>
+      <method name="build" c:identifier="gst_discoverer_info_builder_build" version="1.30">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer-types.c">Builds and returns a new #GstDiscovererInfo. This frees the builder.</doc>
+        <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer.h"/>
+        <return-value transfer-ownership="full">
+          <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer-types.c">a new #GstDiscovererInfo</doc>
+          <type name="DiscovererInfo" c:type="GstDiscovererInfo*"/>
+        </return-value>
+        <parameters>
+          <instance-parameter name="builder" transfer-ownership="full">
+            <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer-types.c">a #GstDiscovererInfoBuilder</doc>
+            <type name="DiscovererInfoBuilder" c:type="GstDiscovererInfoBuilder*"/>
+          </instance-parameter>
+        </parameters>
+      </method>
+      <method name="free" c:identifier="gst_discoverer_info_builder_free" version="1.30">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer-types.c">Frees a #GstDiscovererInfoBuilder without building.</doc>
+        <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer.h"/>
+        <return-value transfer-ownership="none">
+          <type name="none" c:type="void"/>
+        </return-value>
+        <parameters>
+          <instance-parameter name="builder" transfer-ownership="full">
+            <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer-types.c">a #GstDiscovererInfoBuilder</doc>
+            <type name="DiscovererInfoBuilder" c:type="GstDiscovererInfoBuilder*"/>
+          </instance-parameter>
+        </parameters>
+      </method>
+      <method name="set_duration" c:identifier="gst_discoverer_info_builder_set_duration" version="1.30">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer-types.c">Sets the duration of the URI.</doc>
+        <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer.h"/>
+        <return-value transfer-ownership="none">
+          <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer-types.c">the same builder for chaining</doc>
+          <type name="DiscovererInfoBuilder" c:type="GstDiscovererInfoBuilder*"/>
+        </return-value>
+        <parameters>
+          <instance-parameter name="builder" transfer-ownership="none">
+            <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer-types.c">a #GstDiscovererInfoBuilder</doc>
+            <type name="DiscovererInfoBuilder" c:type="GstDiscovererInfoBuilder*"/>
+          </instance-parameter>
+          <parameter name="duration" transfer-ownership="none">
+            <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer-types.c">the duration in #GstClockTime</doc>
+            <type name="Gst.ClockTime" c:type="GstClockTime"/>
+          </parameter>
+        </parameters>
+      </method>
+      <method name="set_live" c:identifier="gst_discoverer_info_builder_set_live" version="1.30">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer-types.c">Sets whether the URI is live.</doc>
+        <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer.h"/>
+        <return-value transfer-ownership="none">
+          <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer-types.c">the same builder for chaining</doc>
+          <type name="DiscovererInfoBuilder" c:type="GstDiscovererInfoBuilder*"/>
+        </return-value>
+        <parameters>
+          <instance-parameter name="builder" transfer-ownership="none">
+            <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer-types.c">a #GstDiscovererInfoBuilder</doc>
+            <type name="DiscovererInfoBuilder" c:type="GstDiscovererInfoBuilder*"/>
+          </instance-parameter>
+          <parameter name="live" transfer-ownership="none">
+            <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer-types.c">whether the URI is live</doc>
+            <type name="gboolean" c:type="gboolean"/>
+          </parameter>
+        </parameters>
+      </method>
+      <method name="set_result" c:identifier="gst_discoverer_info_builder_set_result" version="1.30">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer-types.c">Sets the result of the discovery.</doc>
+        <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer.h"/>
+        <return-value transfer-ownership="none">
+          <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer-types.c">the same builder for chaining</doc>
+          <type name="DiscovererInfoBuilder" c:type="GstDiscovererInfoBuilder*"/>
+        </return-value>
+        <parameters>
+          <instance-parameter name="builder" transfer-ownership="none">
+            <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer-types.c">a #GstDiscovererInfoBuilder</doc>
+            <type name="DiscovererInfoBuilder" c:type="GstDiscovererInfoBuilder*"/>
+          </instance-parameter>
+          <parameter name="result" transfer-ownership="none">
+            <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer-types.c">the #GstDiscovererResult</doc>
+            <type name="DiscovererResult" c:type="GstDiscovererResult"/>
+          </parameter>
+        </parameters>
+      </method>
+      <method name="set_seekable" c:identifier="gst_discoverer_info_builder_set_seekable" version="1.30">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer-types.c">Sets whether the URI is seekable.</doc>
+        <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer.h"/>
+        <return-value transfer-ownership="none">
+          <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer-types.c">the same builder for chaining</doc>
+          <type name="DiscovererInfoBuilder" c:type="GstDiscovererInfoBuilder*"/>
+        </return-value>
+        <parameters>
+          <instance-parameter name="builder" transfer-ownership="none">
+            <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer-types.c">a #GstDiscovererInfoBuilder</doc>
+            <type name="DiscovererInfoBuilder" c:type="GstDiscovererInfoBuilder*"/>
+          </instance-parameter>
+          <parameter name="seekable" transfer-ownership="none">
+            <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer-types.c">whether the URI is seekable</doc>
+            <type name="gboolean" c:type="gboolean"/>
+          </parameter>
+        </parameters>
+      </method>
+      <method name="set_tags" c:identifier="gst_discoverer_info_builder_set_tags" version="1.30">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer-types.c">Sets the global tags for the URI.</doc>
+        <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer.h"/>
+        <return-value transfer-ownership="none">
+          <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer-types.c">the same builder for chaining</doc>
+          <type name="DiscovererInfoBuilder" c:type="GstDiscovererInfoBuilder*"/>
+        </return-value>
+        <parameters>
+          <instance-parameter name="builder" transfer-ownership="none">
+            <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer-types.c">a #GstDiscovererInfoBuilder</doc>
+            <type name="DiscovererInfoBuilder" c:type="GstDiscovererInfoBuilder*"/>
+          </instance-parameter>
+          <parameter name="tags" transfer-ownership="none" nullable="1" allow-none="1">
+            <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer-types.c">the global tags</doc>
+            <type name="Gst.TagList" c:type="GstTagList*"/>
+          </parameter>
+        </parameters>
+      </method>
+      <function name="new" c:identifier="gst_discoverer_info_builder_new" version="1.30" introspectable="0">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer-types.c">Creates a new #GstDiscovererInfoBuilder for building a #GstDiscovererInfo.
+
+The stream info can be either:
+- A single stream (audio, video, or subtitle) for files without a container
+- A #GstDiscovererContainerInfo for files with a container and multiple streams</doc>
+        <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer.h"/>
+        <return-value transfer-ownership="full">
+          <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer-types.c">a new #GstDiscovererInfoBuilder</doc>
+          <type name="DiscovererInfoBuilder" c:type="GstDiscovererInfoBuilder*"/>
+        </return-value>
+        <parameters>
+          <parameter name="uri" transfer-ownership="none">
+            <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer-types.c">the URI for this discoverer info</doc>
+            <type name="utf8" c:type="const gchar*"/>
+          </parameter>
+          <parameter name="stream_info" transfer-ownership="full">
+            <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer-types.c">the stream info (single stream or container)</doc>
+            <type name="DiscovererStreamInfo" c:type="GstDiscovererStreamInfo*"/>
+          </parameter>
+        </parameters>
+      </function>
+    </record>
     <record name="DiscovererPrivate" c:type="GstDiscovererPrivate" disguised="1" opaque="1">
       <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer.h"/>
     </record>
@@ -1268,10 +1896,23 @@ use the stream ID after the life-time of @info you will need to copy it.</doc>
         </parameters>
       </method>
       <method name="get_stream_number" c:identifier="gst_discoverer_stream_info_get_stream_number" version="1.20">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer-types.c">Get the stream number of @info, a stable identifier of the stream within its
+#GstDiscovererInfo.
+
+The contract of the stream number is:
+
+* Elementary streams are numbered from 0, in the order the demuxer exposes
+  them (their declaration order in the container) - the same order in which a
+  #GstStreamCollection enumerates them. This usually matches the stream index
+  other tools such as `ffprobe` report, but the order is the demuxer's, so it
+  may differ between tools for containers without a canonical stream order.
+* Each actual (elementary) stream is given exactly one number. Extra caps
+  nodes that a parser may expose for a *single* stream do not get their own
+  number.
+* A container is not an elementary stream and has a stream number of -1.</doc>
         <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer.h"/>
         <return-value transfer-ownership="none">
-          <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer-types.c">the stream number, -1 if no index could be determined. This property
-acts as a unique identifier as a 'int' for the stream.</doc>
+          <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer-types.c">the stream number, or -1 if it could not be determined.</doc>
           <type name="gint" c:type="gint"/>
         </return-value>
         <parameters>
@@ -1341,6 +1982,91 @@ image based ones).</doc>
         </parameters>
       </method>
     </class>
+    <record name="DiscovererSubtitleInfoBuilder" c:type="GstDiscovererSubtitleInfoBuilder" disguised="1" opaque="1" version="1.30">
+      <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer.h">Opaque structure for building #GstDiscovererSubtitleInfo objects programmatically.</doc>
+      <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer.h"/>
+      <method name="build" c:identifier="gst_discoverer_subtitle_info_builder_build" version="1.30">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer-types.c">Builds and returns a new #GstDiscovererSubtitleInfo. This frees the builder.</doc>
+        <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer.h"/>
+        <return-value transfer-ownership="full">
+          <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer-types.c">a new #GstDiscovererSubtitleInfo</doc>
+          <type name="DiscovererSubtitleInfo" c:type="GstDiscovererSubtitleInfo*"/>
+        </return-value>
+        <parameters>
+          <instance-parameter name="builder" transfer-ownership="full">
+            <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer-types.c">a #GstDiscovererSubtitleInfoBuilder</doc>
+            <type name="DiscovererSubtitleInfoBuilder" c:type="GstDiscovererSubtitleInfoBuilder*"/>
+          </instance-parameter>
+        </parameters>
+      </method>
+      <method name="free" c:identifier="gst_discoverer_subtitle_info_builder_free" version="1.30">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer-types.c">Frees a #GstDiscovererSubtitleInfoBuilder without building.</doc>
+        <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer.h"/>
+        <return-value transfer-ownership="none">
+          <type name="none" c:type="void"/>
+        </return-value>
+        <parameters>
+          <instance-parameter name="builder" transfer-ownership="full">
+            <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer-types.c">a #GstDiscovererSubtitleInfoBuilder</doc>
+            <type name="DiscovererSubtitleInfoBuilder" c:type="GstDiscovererSubtitleInfoBuilder*"/>
+          </instance-parameter>
+        </parameters>
+      </method>
+      <method name="set_language" c:identifier="gst_discoverer_subtitle_info_builder_set_language" version="1.30">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer-types.c">Sets the language.</doc>
+        <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer.h"/>
+        <return-value transfer-ownership="none">
+          <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer-types.c">the same builder for chaining</doc>
+          <type name="DiscovererSubtitleInfoBuilder" c:type="GstDiscovererSubtitleInfoBuilder*"/>
+        </return-value>
+        <parameters>
+          <instance-parameter name="builder" transfer-ownership="none">
+            <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer-types.c">a #GstDiscovererSubtitleInfoBuilder</doc>
+            <type name="DiscovererSubtitleInfoBuilder" c:type="GstDiscovererSubtitleInfoBuilder*"/>
+          </instance-parameter>
+          <parameter name="language" transfer-ownership="none" nullable="1" allow-none="1">
+            <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer-types.c">the language code</doc>
+            <type name="utf8" c:type="const gchar*"/>
+          </parameter>
+        </parameters>
+      </method>
+      <method name="set_tags" c:identifier="gst_discoverer_subtitle_info_builder_set_tags" version="1.30">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer-types.c">Sets the stream tags.</doc>
+        <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer.h"/>
+        <return-value transfer-ownership="none">
+          <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer-types.c">the same builder for chaining</doc>
+          <type name="DiscovererSubtitleInfoBuilder" c:type="GstDiscovererSubtitleInfoBuilder*"/>
+        </return-value>
+        <parameters>
+          <instance-parameter name="builder" transfer-ownership="none">
+            <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer-types.c">a #GstDiscovererSubtitleInfoBuilder</doc>
+            <type name="DiscovererSubtitleInfoBuilder" c:type="GstDiscovererSubtitleInfoBuilder*"/>
+          </instance-parameter>
+          <parameter name="tags" transfer-ownership="none" nullable="1" allow-none="1">
+            <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer-types.c">the stream tags</doc>
+            <type name="Gst.TagList" c:type="GstTagList*"/>
+          </parameter>
+        </parameters>
+      </method>
+      <function name="new" c:identifier="gst_discoverer_subtitle_info_builder_new" version="1.30" introspectable="0">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer-types.c">Creates a new #GstDiscovererSubtitleInfoBuilder.</doc>
+        <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer.h"/>
+        <return-value transfer-ownership="full">
+          <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer-types.c">a new #GstDiscovererSubtitleInfoBuilder</doc>
+          <type name="DiscovererSubtitleInfoBuilder" c:type="GstDiscovererSubtitleInfoBuilder*"/>
+        </return-value>
+        <parameters>
+          <parameter name="stream_id" transfer-ownership="none">
+            <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer-types.c">the stream ID</doc>
+            <type name="utf8" c:type="const gchar*"/>
+          </parameter>
+          <parameter name="caps" transfer-ownership="none">
+            <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer-types.c">the subtitle caps</doc>
+            <type name="Gst.Caps" c:type="GstCaps*"/>
+          </parameter>
+        </parameters>
+      </function>
+    </record>
     <class name="DiscovererVideoInfo" c:symbol-prefix="discoverer_video_info" c:type="GstDiscovererVideoInfo" parent="DiscovererStreamInfo" glib:type-name="GstDiscovererVideoInfo" glib:get-type="gst_discoverer_video_info_get_type">
       <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer.h">#GstDiscovererStreamInfo specific to video streams (this includes images).</doc>
       <method name="get_bitrate" c:identifier="gst_discoverer_video_info_get_bitrate">
@@ -1488,6 +2214,146 @@ one frame).</doc>
         </parameters>
       </method>
     </class>
+    <record name="DiscovererVideoInfoBuilder" c:type="GstDiscovererVideoInfoBuilder" disguised="1" opaque="1" version="1.30">
+      <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer.h">Opaque structure for building #GstDiscovererVideoInfo objects programmatically.</doc>
+      <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer.h"/>
+      <method name="build" c:identifier="gst_discoverer_video_info_builder_build" version="1.30">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer-types.c">Builds and returns a new #GstDiscovererVideoInfo. This frees the builder.</doc>
+        <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer.h"/>
+        <return-value transfer-ownership="full">
+          <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer-types.c">a new #GstDiscovererVideoInfo</doc>
+          <type name="DiscovererVideoInfo" c:type="GstDiscovererVideoInfo*"/>
+        </return-value>
+        <parameters>
+          <instance-parameter name="builder" transfer-ownership="full">
+            <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer-types.c">a #GstDiscovererVideoInfoBuilder</doc>
+            <type name="DiscovererVideoInfoBuilder" c:type="GstDiscovererVideoInfoBuilder*"/>
+          </instance-parameter>
+        </parameters>
+      </method>
+      <method name="free" c:identifier="gst_discoverer_video_info_builder_free" version="1.30">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer-types.c">Frees a #GstDiscovererVideoInfoBuilder without building.</doc>
+        <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer.h"/>
+        <return-value transfer-ownership="none">
+          <type name="none" c:type="void"/>
+        </return-value>
+        <parameters>
+          <instance-parameter name="builder" transfer-ownership="full">
+            <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer-types.c">a #GstDiscovererVideoInfoBuilder</doc>
+            <type name="DiscovererVideoInfoBuilder" c:type="GstDiscovererVideoInfoBuilder*"/>
+          </instance-parameter>
+        </parameters>
+      </method>
+      <method name="set_bitrate" c:identifier="gst_discoverer_video_info_builder_set_bitrate" version="1.30">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer-types.c">Sets the bitrate.</doc>
+        <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer.h"/>
+        <return-value transfer-ownership="none">
+          <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer-types.c">the same builder for chaining</doc>
+          <type name="DiscovererVideoInfoBuilder" c:type="GstDiscovererVideoInfoBuilder*"/>
+        </return-value>
+        <parameters>
+          <instance-parameter name="builder" transfer-ownership="none">
+            <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer-types.c">a #GstDiscovererVideoInfoBuilder</doc>
+            <type name="DiscovererVideoInfoBuilder" c:type="GstDiscovererVideoInfoBuilder*"/>
+          </instance-parameter>
+          <parameter name="bitrate" transfer-ownership="none">
+            <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer-types.c">the bitrate in bits/second</doc>
+            <type name="guint" c:type="guint"/>
+          </parameter>
+        </parameters>
+      </method>
+      <method name="set_interlaced" c:identifier="gst_discoverer_video_info_builder_set_interlaced" version="1.30">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer-types.c">Sets whether the video is interlaced.</doc>
+        <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer.h"/>
+        <return-value transfer-ownership="none">
+          <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer-types.c">the same builder for chaining</doc>
+          <type name="DiscovererVideoInfoBuilder" c:type="GstDiscovererVideoInfoBuilder*"/>
+        </return-value>
+        <parameters>
+          <instance-parameter name="builder" transfer-ownership="none">
+            <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer-types.c">a #GstDiscovererVideoInfoBuilder</doc>
+            <type name="DiscovererVideoInfoBuilder" c:type="GstDiscovererVideoInfoBuilder*"/>
+          </instance-parameter>
+          <parameter name="interlaced" transfer-ownership="none">
+            <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer-types.c">whether the video is interlaced</doc>
+            <type name="gboolean" c:type="gboolean"/>
+          </parameter>
+        </parameters>
+      </method>
+      <method name="set_is_image" c:identifier="gst_discoverer_video_info_builder_set_is_image" version="1.30">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer-types.c">Sets whether this is an image (single frame).</doc>
+        <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer.h"/>
+        <return-value transfer-ownership="none">
+          <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer-types.c">the same builder for chaining</doc>
+          <type name="DiscovererVideoInfoBuilder" c:type="GstDiscovererVideoInfoBuilder*"/>
+        </return-value>
+        <parameters>
+          <instance-parameter name="builder" transfer-ownership="none">
+            <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer-types.c">a #GstDiscovererVideoInfoBuilder</doc>
+            <type name="DiscovererVideoInfoBuilder" c:type="GstDiscovererVideoInfoBuilder*"/>
+          </instance-parameter>
+          <parameter name="is_image" transfer-ownership="none">
+            <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer-types.c">whether this is an image</doc>
+            <type name="gboolean" c:type="gboolean"/>
+          </parameter>
+        </parameters>
+      </method>
+      <method name="set_max_bitrate" c:identifier="gst_discoverer_video_info_builder_set_max_bitrate" version="1.30">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer-types.c">Sets the maximum bitrate.</doc>
+        <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer.h"/>
+        <return-value transfer-ownership="none">
+          <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer-types.c">the same builder for chaining</doc>
+          <type name="DiscovererVideoInfoBuilder" c:type="GstDiscovererVideoInfoBuilder*"/>
+        </return-value>
+        <parameters>
+          <instance-parameter name="builder" transfer-ownership="none">
+            <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer-types.c">a #GstDiscovererVideoInfoBuilder</doc>
+            <type name="DiscovererVideoInfoBuilder" c:type="GstDiscovererVideoInfoBuilder*"/>
+          </instance-parameter>
+          <parameter name="max_bitrate" transfer-ownership="none">
+            <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer-types.c">the maximum bitrate in bits/second</doc>
+            <type name="guint" c:type="guint"/>
+          </parameter>
+        </parameters>
+      </method>
+      <method name="set_tags" c:identifier="gst_discoverer_video_info_builder_set_tags" version="1.30">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer-types.c">Sets the stream tags.</doc>
+        <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer.h"/>
+        <return-value transfer-ownership="none">
+          <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer-types.c">the same builder for chaining</doc>
+          <type name="DiscovererVideoInfoBuilder" c:type="GstDiscovererVideoInfoBuilder*"/>
+        </return-value>
+        <parameters>
+          <instance-parameter name="builder" transfer-ownership="none">
+            <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer-types.c">a #GstDiscovererVideoInfoBuilder</doc>
+            <type name="DiscovererVideoInfoBuilder" c:type="GstDiscovererVideoInfoBuilder*"/>
+          </instance-parameter>
+          <parameter name="tags" transfer-ownership="none" nullable="1" allow-none="1">
+            <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer-types.c">the stream tags</doc>
+            <type name="Gst.TagList" c:type="GstTagList*"/>
+          </parameter>
+        </parameters>
+      </method>
+      <function name="new" c:identifier="gst_discoverer_video_info_builder_new" version="1.30" introspectable="0">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer-types.c">Creates a new #GstDiscovererVideoInfoBuilder.
+Video properties (width, height, framerate, PAR) will be extracted from caps.</doc>
+        <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer.h"/>
+        <return-value transfer-ownership="full">
+          <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer-types.c">a new #GstDiscovererVideoInfoBuilder</doc>
+          <type name="DiscovererVideoInfoBuilder" c:type="GstDiscovererVideoInfoBuilder*"/>
+        </return-value>
+        <parameters>
+          <parameter name="stream_id" transfer-ownership="none">
+            <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer-types.c">the stream ID</doc>
+            <type name="utf8" c:type="const gchar*"/>
+          </parameter>
+          <parameter name="caps" transfer-ownership="none">
+            <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer-types.c">the video caps</doc>
+            <type name="Gst.Caps" c:type="GstCaps*"/>
+          </parameter>
+        </parameters>
+      </function>
+    </record>
     <function-macro name="ENCODING_AUDIO_PROFILE" c:identifier="GST_ENCODING_AUDIO_PROFILE" introspectable="0">
       <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/encoding-profile.h"/>
       <parameters>
@@ -2585,6 +3451,42 @@ constance framerate.</doc>
     <record name="EncodingVideoProfileClass" c:type="GstEncodingVideoProfileClass" disguised="1" opaque="1" glib:is-gtype-struct-for="EncodingVideoProfile">
       <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/encoding-profile.h"/>
     </record>
+    <record name="H264LevelLimits" c:type="GstH264LevelLimits" version="1.30">
+      <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/codec-utils.h">H.264 level limits from Table A-1 of the specification.</doc>
+      <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/codec-utils.h"/>
+      <field name="name" writable="1">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/codec-utils.h">the level name (e.g. "3.1", "4", "4.2")</doc>
+        <type name="utf8" c:type="const gchar*"/>
+      </field>
+      <field name="level_idc" writable="1">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/codec-utils.h">the level_idc value</doc>
+        <type name="guint8" c:type="guint8"/>
+      </field>
+      <field name="max_mbps" writable="1">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/codec-utils.h">maximum macroblock processing rate (MB/s)</doc>
+        <type name="guint32" c:type="guint32"/>
+      </field>
+      <field name="max_fs" writable="1">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/codec-utils.h">maximum frame size (MB)</doc>
+        <type name="guint32" c:type="guint32"/>
+      </field>
+      <field name="max_dpb_mbs" writable="1">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/codec-utils.h">maximum decoded picture buffer size (MB)</doc>
+        <type name="guint32" c:type="guint32"/>
+      </field>
+      <field name="max_br" writable="1">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/codec-utils.h">maximum video bit rate (kbps)</doc>
+        <type name="guint32" c:type="guint32"/>
+      </field>
+      <field name="max_cpb" writable="1">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/codec-utils.h">maximum CPB size (kbits)</doc>
+        <type name="guint32" c:type="guint32"/>
+      </field>
+      <field name="min_cr" writable="1">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/codec-utils.h">minimum compression ratio</doc>
+        <type name="guint32" c:type="guint32"/>
+      </field>
+    </record>
     <function-macro name="IS_DISCOVERER" c:identifier="GST_IS_DISCOVERER" introspectable="0">
       <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstdiscoverer.h"/>
       <parameters>
@@ -2955,7 +3857,7 @@ in debugging.</doc>
       <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstpluginsbaseversion.h"/>
       <type name="gint" c:type="gint"/>
     </constant>
-    <constant name="PLUGINS_BASE_VERSION_MINOR" value="27" c:type="GST_PLUGINS_BASE_VERSION_MINOR">
+    <constant name="PLUGINS_BASE_VERSION_MINOR" value="29" c:type="GST_PLUGINS_BASE_VERSION_MINOR">
       <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstpluginsbaseversion.h">The minor version of GStreamer's gst-plugins-base libraries at compile time.</doc>
       <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/gstpluginsbaseversion.h"/>
       <type name="gint" c:type="gint"/>
@@ -3319,6 +4221,47 @@ same format as for gst_codec_utils_h264_get_profile().</doc>
         <parameter name="level" transfer-ownership="none">
           <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/codec-utils.c">A level string from caps</doc>
           <type name="utf8" c:type="const gchar*"/>
+        </parameter>
+      </parameters>
+    </function>
+    <function name="codec_utils_h264_get_level_limits" c:identifier="gst_codec_utils_h264_get_level_limits" version="1.30">
+      <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/codec-utils.c">Finds the minimum H.264 level that can handle the given video parameters
+based on the constraints defined in H.264 specification Annex A.</doc>
+      <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/codec-utils.h"/>
+      <return-value transfer-ownership="none" nullable="1">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/codec-utils.c">the #GstH264LevelLimits for the
+         minimum level matching the parameters, or %NULL if no suitable
+         level is found.</doc>
+        <type name="H264LevelLimits" c:type="const GstH264LevelLimits*"/>
+      </return-value>
+      <parameters>
+        <parameter name="width" transfer-ownership="none">
+          <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/codec-utils.c">the video width in pixels</doc>
+          <type name="gint" c:type="gint"/>
+        </parameter>
+        <parameter name="height" transfer-ownership="none">
+          <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/codec-utils.c">the video height in pixels</doc>
+          <type name="gint" c:type="gint"/>
+        </parameter>
+        <parameter name="fps_n" transfer-ownership="none">
+          <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/codec-utils.c">the video frame rate numerator</doc>
+          <type name="gint" c:type="gint"/>
+        </parameter>
+        <parameter name="fps_d" transfer-ownership="none">
+          <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/codec-utils.c">the video frame rate denominator</doc>
+          <type name="gint" c:type="gint"/>
+        </parameter>
+        <parameter name="bitrate" transfer-ownership="none">
+          <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/codec-utils.c">the video bitrate in bits per second (0 if unknown)</doc>
+          <type name="guint" c:type="guint"/>
+        </parameter>
+        <parameter name="max_dec_frame_buffering" transfer-ownership="none">
+          <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/codec-utils.c">the max size of DPB (0 if unknown)</doc>
+          <type name="guint" c:type="guint"/>
+        </parameter>
+        <parameter name="profile_idc" transfer-ownership="none">
+          <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/codec-utils.c">the H.264 profile idc value (e.g., 66 for Baseline, 77 for Main, 100 for High)</doc>
+          <type name="guint8" c:type="guint8"/>
         </parameter>
       </parameters>
     </function>
@@ -3882,6 +4825,157 @@ invalid Opus caps.</doc>
         <parameter name="output_gain" direction="out" caller-allocates="0" transfer-ownership="full" optional="1" allow-none="1">
           <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/codec-utils.c">Output gain or 0</doc>
           <type name="gint16" c:type="gint16*"/>
+        </parameter>
+      </parameters>
+    </function>
+    <function name="codec_utils_vp9_estimate_level_idc_from_caps" c:identifier="gst_codec_utils_vp9_estimate_level_idc_from_caps" version="1.30">
+      <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/codec-utils.c">Estimates the vp9 level as defined in
+https://www.webmproject.org/vp9/mp4/#vp-codec-configuration-box, using
+the resolution and, if available, frame rate found in the structure passed
+in.</doc>
+      <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/codec-utils.h"/>
+      <return-value transfer-ownership="none">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/codec-utils.c">The estimated vp9 level indicator, and 0 if it could not be
+estimated.</doc>
+        <type name="guint8" c:type="guint8"/>
+      </return-value>
+      <parameters>
+        <parameter name="caps" transfer-ownership="none">
+          <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/codec-utils.c">a video/x-vp9 #GstCaps</doc>
+          <type name="Gst.Caps" c:type="const GstCaps*"/>
+        </parameter>
+      </parameters>
+    </function>
+    <function name="codec_utils_vp9_get_level" c:identifier="gst_codec_utils_vp9_get_level" version="1.30">
+      <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/codec-utils.c">Converts the level indication in the vpcC record into a string.</doc>
+      <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/codec-utils.h"/>
+      <return-value transfer-ownership="none" nullable="1">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/codec-utils.c">The level as a const string and %NULL if the level could not be
+determined.</doc>
+        <type name="utf8" c:type="const gchar*"/>
+      </return-value>
+      <parameters>
+        <parameter name="level_idc" transfer-ownership="none">
+          <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/codec-utils.c">vp9 level value from the vpcC record</doc>
+          <type name="guint8" c:type="guint8"/>
+        </parameter>
+      </parameters>
+    </function>
+    <function name="codec_utils_vp9_get_level_idc" c:identifier="gst_codec_utils_vp9_get_level_idc" version="1.30">
+      <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/codec-utils.c">Transform a level string from the caps into the level_idc</doc>
+      <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/codec-utils.h"/>
+      <return-value transfer-ownership="none">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/codec-utils.c">The level indication or 0 if the level is unknown.</doc>
+        <type name="guint8" c:type="guint8"/>
+      </return-value>
+      <parameters>
+        <parameter name="level" transfer-ownership="none">
+          <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/codec-utils.c">A vp9 level string from caps</doc>
+          <type name="utf8" c:type="const gchar*"/>
+        </parameter>
+      </parameters>
+    </function>
+    <function name="codec_utils_vpx_caps_get_config" c:identifier="gst_codec_utils_vpx_caps_get_config" version="1.30">
+      <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/codec-utils.c">Parses VP8/VP9 caps and extracts normalized VPX configuration fields.
+Unlike gst_codec_utils_vpx_caps_set_format_fields(), this getter includes
+the colorimetry-derived fields needed to build a full vpcC record.</doc>
+      <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/codec-utils.h"/>
+      <return-value transfer-ownership="none">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/codec-utils.c">%TRUE if extraction succeeded, %FALSE otherwise.</doc>
+        <type name="gboolean" c:type="gboolean"/>
+      </return-value>
+      <parameters>
+        <parameter name="caps" transfer-ownership="none">
+          <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/codec-utils.c">a video/x-vp8 or video/x-vp9 #GstCaps</doc>
+          <type name="Gst.Caps" c:type="GstCaps*"/>
+        </parameter>
+        <parameter name="vpx_version" direction="out" caller-allocates="0" transfer-ownership="full" nullable="1">
+          <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/codec-utils.c">VPX version described by @caps (8 or 9)</doc>
+          <type name="gint" c:type="gint*"/>
+        </parameter>
+        <parameter name="profile" direction="out" caller-allocates="0" transfer-ownership="full" nullable="1">
+          <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/codec-utils.c">profile value</doc>
+          <type name="guint8" c:type="guint8*"/>
+        </parameter>
+        <parameter name="level" direction="out" caller-allocates="0" transfer-ownership="full" nullable="1">
+          <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/codec-utils.c">level value</doc>
+          <type name="guint8" c:type="guint8*"/>
+        </parameter>
+        <parameter name="bit_depth" direction="out" caller-allocates="0" transfer-ownership="full" nullable="1">
+          <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/codec-utils.c">bit depth value</doc>
+          <type name="guint8" c:type="guint8*"/>
+        </parameter>
+        <parameter name="chroma_subsampling" direction="out" caller-allocates="0" transfer-ownership="full" nullable="1">
+          <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/codec-utils.c">chroma subsampling value</doc>
+          <type name="guint8" c:type="guint8*"/>
+        </parameter>
+        <parameter name="video_full_range" direction="out" caller-allocates="0" transfer-ownership="full" nullable="1">
+          <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/codec-utils.c">whether full-range signaling is set</doc>
+          <type name="gboolean" c:type="gboolean*"/>
+        </parameter>
+        <parameter name="colour_primaries" direction="out" caller-allocates="0" transfer-ownership="full" nullable="1">
+          <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/codec-utils.c">ISO color primaries value</doc>
+          <type name="guint8" c:type="guint8*"/>
+        </parameter>
+        <parameter name="transfer_characteristics" direction="out" caller-allocates="0" transfer-ownership="full" nullable="1">
+          <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/codec-utils.c">ISO transfer characteristics value</doc>
+          <type name="guint8" c:type="guint8*"/>
+        </parameter>
+        <parameter name="matrix_coefficients" direction="out" caller-allocates="0" transfer-ownership="full" nullable="1">
+          <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/codec-utils.c">ISO matrix coefficients value</doc>
+          <type name="guint8" c:type="guint8*"/>
+        </parameter>
+      </parameters>
+    </function>
+    <function name="codec_utils_vpx_caps_set_format_fields" c:identifier="gst_codec_utils_vpx_caps_set_format_fields" version="1.30">
+      <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/codec-utils.c">Sets VPX format fields in @caps from parsed VPX configuration values.
+This setter handles the VPX format-field subset shared between VP9
+CodecPrivate and vpcC signaling.
+Any field set to -1 is treated as unknown and not written.
+For VP8 caps, only profile 0, 8-bit depth, and chroma subsampling 1 are
+accepted.</doc>
+      <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/codec-utils.h"/>
+      <return-value transfer-ownership="none">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/codec-utils.c">%TRUE if provided values were valid, %FALSE otherwise.</doc>
+        <type name="gboolean" c:type="gboolean"/>
+      </return-value>
+      <parameters>
+        <parameter name="caps" transfer-ownership="none">
+          <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/codec-utils.c">the #GstCaps to set VPX fields on (video/x-vp8 or video/x-vp9)</doc>
+          <type name="Gst.Caps" c:type="GstCaps*"/>
+        </parameter>
+        <parameter name="profile" transfer-ownership="none">
+          <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/codec-utils.c">VPX profile, or -1 if unknown</doc>
+          <type name="gint" c:type="gint"/>
+        </parameter>
+        <parameter name="level" transfer-ownership="none">
+          <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/codec-utils.c">VP9 level idc, or -1 if unknown</doc>
+          <type name="gint" c:type="gint"/>
+        </parameter>
+        <parameter name="bit_depth" transfer-ownership="none">
+          <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/codec-utils.c">VPX bit depth, or -1 if unknown</doc>
+          <type name="gint" c:type="gint"/>
+        </parameter>
+        <parameter name="chroma_subsampling" transfer-ownership="none">
+          <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/codec-utils.c">VPX chroma subsampling (0-3), or -1 if unknown</doc>
+          <type name="gint" c:type="gint"/>
+        </parameter>
+      </parameters>
+    </function>
+    <function name="codec_utils_vpx_create_vpcc_from_caps" c:identifier="gst_codec_utils_vpx_create_vpcc_from_caps" version="1.30">
+      <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/codec-utils.c">Creates a vpcC record for VP8/VP9 as per the VP Codec ISO Media File Format
+Binding definition found at
+https://www.webmproject.org/vp9/mp4/#vp-codec-configuration-box</doc>
+      <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/codec-utils.h"/>
+      <return-value transfer-ownership="full" nullable="1">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/codec-utils.c">Buffer containing the vpcC record, or
+%NULL if the record could not be created.</doc>
+        <type name="Gst.Buffer" c:type="GstBuffer*"/>
+      </return-value>
+      <parameters>
+        <parameter name="caps" transfer-ownership="none">
+          <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/pbutils/codec-utils.c">a video/x-vp8 or video/x-vp9 #GstCaps</doc>
+          <type name="Gst.Caps" c:type="GstCaps*"/>
         </parameter>
       </parameters>
     </function>

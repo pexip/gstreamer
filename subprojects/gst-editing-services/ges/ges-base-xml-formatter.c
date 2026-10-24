@@ -90,11 +90,22 @@ struct _GESBaseXmlFormatterPrivate
 
   GError *asset_error;
 
+  /* Set by _set_child_property() when the application refuses a child
+   * property marked GST_PARAM_UNTRUSTED_SENSITIVE. Owned here; consumed
+   * (moved) by the caller that has a GError ** so the load fails closed. */
+  GError *untrusted_error;
+  /* Bin descriptions the application refused during this load, so it is not
+   * asked again about the same one. */
+  GHashTable *untrusted_refused;
+
   /* current track element */
   GESTrackElement *current_track_element;
 
   GESClip *current_clip;
   GstClockTime current_clip_duration;
+  /* accumulated source-to-track routing of the clip being loaded, from the
+   * <source stream-number='...'> attributes; applied at </clip> */
+  GESSourceTrackMapBuilder *current_source_map_builder;
 
   gboolean timeline_auto_transition;
 
@@ -192,7 +203,8 @@ _parse (GESBaseXmlFormatter * self, GError ** error, LoadingState state)
     for (tmp = priv->pending_assets; tmp; tmp = tmp->next) {
       PendingAsset *passet = tmp->data;
 
-      ges_asset_request_async (passet->extractable_type, passet->id, NULL,
+      ges_asset_request_async_full (passet->extractable_type, passet->id,
+          GES_ASSET_REQUEST_FLAG_NO_UNTRUSTED_BIN_DESCRIPTION, NULL,
           (GAsyncReadyCallback) new_asset_cb, passet);
       ges_project_add_loading_asset (GES_FORMATTER (self)->project,
           passet->extractable_type, passet->id);
@@ -378,6 +390,8 @@ _dispose (GObject * object)
   g_clear_pointer (&priv->containers, g_hash_table_unref);
   g_clear_pointer (&priv->tracks, g_hash_table_unref);
   g_clear_pointer (&priv->layers, g_hash_table_unref);
+  g_clear_error (&priv->untrusted_error);
+  g_clear_pointer (&priv->untrusted_refused, g_hash_table_unref);
 
   G_OBJECT_CLASS (parent_class)->dispose (object);
 }
@@ -419,6 +433,8 @@ ges_base_xml_formatter_init (GESBaseXmlFormatter * self)
   priv->current_track_element = NULL;
   priv->current_clip = NULL;
   priv->current_clip_duration = GST_CLOCK_TIME_NONE;
+  g_clear_pointer (&priv->current_source_map_builder,
+      ges_source_track_map_builder_free);
   priv->timeline_auto_transition = FALSE;
 }
 
@@ -546,12 +562,102 @@ _loading_done_cb (GESFormatter * self)
   return FALSE;
 }
 
+typedef struct
+{
+  GESBaseXmlFormatter *formatter;
+  GESTimelineElement *tlelement;
+} SetChildPropertyData;
+
+/* Ask the application, through GESProject::untrusted-content, whether the
+ * effect asset @id that the untrusted-input rules refused with @err may be
+ * created after all. Acceptance is remembered process-wide, refusal for the
+ * rest of this load. */
+static gboolean
+_ask_untrusted_effect (GESBaseXmlFormatter * self, const gchar * id,
+    GType extractable_type, GError * err)
+{
+  GESBaseXmlFormatterPrivate *priv = _GET_PRIV (self);
+  GESProject *project = GES_FORMATTER (self)->project;
+  GstStructure *report = NULL;
+  gchar **descriptions = g_strsplit (id, "||", -1);
+  gchar *refused = NULL, *fallback = NULL;
+  gboolean accepted = FALSE;
+  gint i;
+
+  /* The id may carry more than one description (an effect clip's audio and
+   * video bins). check_id_full refuses at the first description that is not
+   * allowed, so the one to ask about is the first not-yet-approved
+   * description that has a recorded refusal report; the first unapproved one
+   * is only a fallback should the report be missing. */
+  for (i = 0; descriptions[i]; i++) {
+    GESTrackType ttype;
+    gchar *bin_desc;
+
+    if (!*g_strstrip (descriptions[i]))
+      continue;
+
+    bin_desc = ges_effect_asset_id_get_bindesc (descriptions[i], &ttype);
+    if (ges_untrusted_content_is_approved (bin_desc)) {
+      g_free (bin_desc);
+      continue;
+    }
+
+    if (!fallback)
+      fallback = g_strdup (bin_desc);
+
+    report = ges_untrusted_content_get_report (bin_desc);
+    if (report) {
+      refused = bin_desc;
+      break;
+    }
+    g_free (bin_desc);
+  }
+  g_strfreev (descriptions);
+
+  if (!refused) {
+    refused = fallback;
+    fallback = NULL;
+  }
+  g_free (fallback);
+
+  if (!refused) {
+    /* No description left to refuse: every one was already approved (the same
+     * effect requested twice, accepted on the first request). Retry. */
+    accepted = TRUE;
+    goto done;
+  }
+
+  if (!project || (priv->untrusted_refused
+          && g_hash_table_contains (priv->untrusted_refused, refused)))
+    goto done;
+
+  accepted = ges_project_ask_untrusted_content (project, id, extractable_type,
+      report, err);
+
+  if (accepted) {
+    ges_untrusted_content_approve (refused);
+  } else {
+    if (!priv->untrusted_refused) {
+      priv->untrusted_refused = g_hash_table_new_full (g_str_hash, g_str_equal,
+          g_free, NULL);
+    }
+    g_hash_table_add (priv->untrusted_refused, g_strdup (refused));
+  }
+
+done:
+  gst_clear_structure (&report);
+  g_free (refused);
+  return accepted;
+}
+
 static gboolean
 _set_child_property (const GstIdStr * fieldname, const GValue * value,
-    GESTimelineElement * tlelement)
+    SetChildPropertyData * data)
 {
   GParamSpec *pspec;
   GObject *object;
+  GESTimelineElement *tlelement = data->tlelement;
+  GESBaseXmlFormatterPrivate *priv = _GET_PRIV (data->formatter);
 
   /* FIXME: error handling? */
   if (!ges_timeline_element_lookup_child (tlelement,
@@ -565,9 +671,94 @@ _set_child_property (const GstIdStr * fieldname, const GValue * value,
     return TRUE;
   }
 
+  /* Children properties are applied verbatim from the (potentially untrusted)
+   * serialized timeline. This is the second property channel: an attacker can
+   * put the payload here even with an inert bin-description. Security
+   * sensitive ones need the application to accept them, one signal emission
+   * per element type, property and value; a refusal fails the load closed.
+   *
+   * Only effect elements carry untrusted content: their bin description comes
+   * from the file. A source's elements are the application's own (its asset),
+   * so their properties are not vetted. tlelement is the effect (track
+   * element) or the effect clip whose core children are effects; a source or
+   * a plain clip resolves this channel to source elements. */
+  if ((GES_IS_BASE_EFFECT (tlelement) || GES_IS_BASE_EFFECT_CLIP (tlelement))
+      && (pspec->flags & GST_PARAM_UNTRUSTED_SENSITIVE)
+      && !ges_untrusted_property_is_approved (G_OBJECT_TYPE_NAME (object),
+          pspec->name, value)) {
+    GESProject *project = GES_FORMATTER (data->formatter)->project;
+    GESAsset *asset = ges_extractable_get_asset (GES_EXTRACTABLE (tlelement));
+    GstStructure *props, *report;
+    GError *err = NULL;
+    gchar *field;
+    gboolean accepted;
+
+    if (!asset) {
+      GST_ERROR_OBJECT (tlelement, "Effect has no asset, cannot vet its "
+          "untrusted property \"%s\"", pspec->name);
+      if (!priv->untrusted_error)
+        g_set_error (&priv->untrusted_error, GES_ERROR,
+            GES_ERROR_SENSITIVE_PROPERTY,
+            "property \"%s\" in element \"%s\" is not allowed when loading "
+            "untrusted content", pspec->name,
+            GES_TIMELINE_ELEMENT_NAME (tlelement));
+      g_param_spec_unref (pspec);
+      gst_object_unref (object);
+      return FALSE;
+    }
+
+    field = g_strdup_printf ("%s:%s",
+        GES_TIMELINE_ELEMENT_NAME (tlelement), pspec->name);
+    props = gst_structure_new_empty ("untrusted-sensitive-properties");
+    gst_structure_set_value (props, field, value);
+    report = gst_structure_new ("untrusted-content",
+        "properties", GST_TYPE_STRUCTURE, props, NULL);
+    g_set_error (&err, GES_ERROR, GES_ERROR_SENSITIVE_PROPERTY,
+        "property \"%s\" in element \"%s\" is not allowed when loading "
+        "untrusted content", pspec->name,
+        GES_TIMELINE_ELEMENT_NAME (tlelement));
+
+    accepted = project && ges_project_ask_untrusted_content (project,
+        ges_asset_get_id (asset), G_OBJECT_TYPE (tlelement), report, err);
+
+    gst_structure_free (report);
+    gst_structure_free (props);
+    g_free (field);
+
+    if (accepted) {
+      ges_untrusted_property_approve (G_OBJECT_TYPE_NAME (object),
+          pspec->name, value);
+      g_error_free (err);
+    } else {
+      if (!priv->untrusted_error)
+        priv->untrusted_error = err;
+      else
+        g_error_free (err);
+      g_param_spec_unref (pspec);
+      gst_object_unref (object);
+      return FALSE;
+    }
+  }
+
   g_object_set_property (G_OBJECT (object), pspec->name, value);
   g_param_spec_unref (pspec);
   gst_object_unref (object);
+  return TRUE;
+}
+
+/* Move a pending untrusted-input refusal (if any) into @error, returning
+ * TRUE if the load must fail closed. */
+static gboolean
+_take_untrusted_error (GESBaseXmlFormatter * self, GError ** error)
+{
+  GESBaseXmlFormatterPrivate *priv = _GET_PRIV (self);
+
+  if (!priv->untrusted_error)
+    return FALSE;
+
+  g_propagate_error (error, priv->untrusted_error);
+  priv->untrusted_error = NULL;
+
   return TRUE;
 }
 
@@ -580,13 +771,14 @@ set_property_foreach (const GstIdStr * fieldname, const GValue * value,
 }
 
 static inline GESClip *
-_add_object_to_layer (GESBaseXmlFormatterPrivate * priv, const gchar * id,
+_add_object_to_layer (GESBaseXmlFormatter * self, const gchar * id,
     GESLayer * layer, GESAsset * asset, GstClockTime start,
     GstClockTime inpoint, GstClockTime duration,
     GESTrackType track_types, const gchar * metadatas,
     GstStructure * properties, GstStructure * children_properties,
     GError ** error)
 {
+  GESBaseXmlFormatterPrivate *priv = _GET_PRIV (self);
   GESClip *clip = ges_layer_add_asset (layer,
       asset, start, inpoint, duration, track_types);
 
@@ -607,9 +799,13 @@ _add_object_to_layer (GESBaseXmlFormatterPrivate * priv, const gchar * id,
     gst_structure_foreach_id_str (properties,
         (GstStructureForeachIdStrFunc) set_property_foreach, clip);
 
-  if (children_properties)
+  if (children_properties) {
+    SetChildPropertyData data = { self, GES_TIMELINE_ELEMENT (clip) };
     gst_structure_foreach_id_str (children_properties,
-        (GstStructureForeachIdStrFunc) _set_child_property, clip);
+        (GstStructureForeachIdStrFunc) _set_child_property, &data);
+    if (_take_untrusted_error (self, error))
+      return NULL;
+  }
 
   g_hash_table_insert (priv->containers, g_strdup (id), gst_object_ref (clip));
   return clip;
@@ -637,8 +833,13 @@ _add_track_element (GESFormatter * self, GESClip * clip,
           GES_TIMELINE_ELEMENT (trackelement)))
     GST_ERROR ("%" GES_FORMAT " could not add child %p while"
         " reloading, this should never happen", GES_ARGS (clip), trackelement);
-  gst_structure_foreach_id_str (children_properties,
-      (GstStructureForeachIdStrFunc) _set_child_property, trackelement);
+  {
+    SetChildPropertyData data = { GES_BASE_XML_FORMATTER (self),
+      GES_TIMELINE_ELEMENT (trackelement)
+    };
+    gst_structure_foreach_id_str (children_properties,
+        (GstStructureForeachIdStrFunc) _set_child_property, &data);
+  }
 
   if (properties) {
     gboolean has_internal_source;
@@ -682,6 +883,31 @@ new_asset_cb (GESAsset * source, GAsyncResult * res, PendingAsset * passet)
   if (error) {
     GST_INFO_OBJECT (self, "Error %s creating asset id: %s", error->message,
         id);
+
+    /* The untrusted-input rules refused the asset: ask the application right
+     * away and retry the request if it accepts, otherwise fail the load with
+     * that error. */
+    if (error->domain == GES_ERROR
+        && (error->code == GES_ERROR_UNTRUSTED_ELEMENT
+            || error->code == GES_ERROR_SENSITIVE_PROPERTY)) {
+      if (_ask_untrusted_effect (GES_BASE_XML_FORMATTER (self), id,
+              ges_asset_get_extractable_type (source), error)) {
+        /* The flag marks the id as coming from the file; approval is consulted
+         * per description during the parse, so the accepted description passes
+         * while any other in the same id (an effect clip's other bin) is still
+         * vetted. */
+        ges_asset_request_async_full (ges_asset_get_extractable_type (source),
+            id, GES_ASSET_REQUEST_FLAG_NO_UNTRUSTED_BIN_DESCRIPTION, NULL,
+            (GAsyncReadyCallback) new_asset_cb, passet);
+        goto done;
+      }
+
+      gst_object_unref (self);
+      _free_pending_asset (priv, passet);
+      if (!priv->asset_error)
+        priv->asset_error = g_error_copy (error);
+      goto done;
+    }
 
     /* We set the metas on the Asset to give hints to the user */
     if (passet->metadatas)
@@ -889,7 +1115,35 @@ ges_base_xml_formatter_add_clip (GESBaseXmlFormatter * self,
     gst_structure_remove_fields (properties, "supported-formats",
         "inpoint", "start", "duration", NULL);
 
-  asset = ges_asset_request (type, asset_id, NULL);
+  {
+    GError *err = NULL;
+
+    asset = ges_asset_request_full (type, asset_id,
+        GES_ASSET_REQUEST_FLAG_NO_UNTRUSTED_BIN_DESCRIPTION, &err);
+    /* An effect clip the untrusted-input rules refuse: ask the application
+     * right away and retry if it accepts. An effect clip carries several
+     * descriptions (audio and video), so keep asking until they are all
+     * accepted or one is refused. */
+    while (asset == NULL && err && err->domain == GES_ERROR
+        && (err->code == GES_ERROR_UNTRUSTED_ELEMENT
+            || err->code == GES_ERROR_SENSITIVE_PROPERTY)) {
+      if (!_ask_untrusted_effect (self, asset_id, type, err)) {
+        g_propagate_error (error, err);
+        return;
+      }
+      g_clear_error (&err);
+      asset = ges_asset_request_full (type, asset_id,
+          GES_ASSET_REQUEST_FLAG_NO_UNTRUSTED_BIN_DESCRIPTION, &err);
+    }
+    if (asset == NULL && err) {
+      /* A non-untrusted failure (e.g. a missing plugin) is the description's
+       * own problem, not a refusal: keep the lenient behavior and let the
+       * clip load without that effect, as an unflagged request would. */
+      g_clear_error (&err);
+      asset = ges_asset_request (type, asset_id, NULL);
+    }
+  }
+
   if (!asset) {
     g_set_error (error, GES_ERROR, GES_ERROR_FORMATTER_MALFORMED_INPUT_FILE,
         "Clip references asset %s of type %s which was not present in the list of ressource,"
@@ -897,7 +1151,7 @@ ges_base_xml_formatter_add_clip (GESBaseXmlFormatter * self,
     return;
   }
 
-  nclip = _add_object_to_layer (priv, id, entry->layer,
+  nclip = _add_object_to_layer (self, id, entry->layer,
       asset, start, inpoint, duration, track_types, metadatas, properties,
       children_properties, error);
 
@@ -1109,13 +1363,42 @@ done:
   g_slist_free_full (timed_values, g_free);
 }
 
+/* A core source of @clip backing the URI stream @stream_number, or NULL. */
+static GESTrackElement *
+_get_source_by_stream_number (GESClip * clip, gint stream_number)
+{
+  GList *tmp;
+
+  for (tmp = GES_CONTAINER_CHILDREN (clip); tmp; tmp = tmp->next) {
+    GESTrackElement *el = tmp->data;
+    GESAsset *asset;
+    GstDiscovererStreamInfo *info;
+
+    if (!GES_IS_SOURCE (el))
+      continue;
+
+    asset = ges_extractable_get_asset (GES_EXTRACTABLE (el));
+    if (!GES_IS_URI_SOURCE_ASSET (asset))
+      continue;
+
+    info = ges_uri_source_asset_get_stream_info (GES_URI_SOURCE_ASSET (asset));
+    if (info
+        && gst_discoverer_stream_info_get_stream_number (info) == stream_number)
+      return el;
+  }
+
+  return NULL;
+}
+
 void
 ges_base_xml_formatter_add_source (GESBaseXmlFormatter * self,
     const gchar * track_id, GstStructure * children_properties,
-    GstStructure * properties, const gchar * metadatas)
+    GstStructure * properties, const gchar * metadatas, gint stream_number,
+    GError ** error)
 {
   GESBaseXmlFormatterPrivate *priv = _GET_PRIV (self);
   GESTrackElement *element = NULL;
+  GESTrack *track = NULL;
 
   if (priv->state != STATE_LOADING_CLIPS) {
     GST_DEBUG_OBJECT (self, "Not loading source elements in %s state.",
@@ -1124,6 +1407,39 @@ ges_base_xml_formatter_add_source (GESBaseXmlFormatter * self,
   }
 
   if (track_id[0] != '-' && priv->current_clip)
+    track = g_hash_table_lookup (priv->tracks, track_id);
+
+  if (stream_number >= 0 && track && priv->current_clip) {
+    /* The file routes a specific stream to this track; make sure that stream's
+     * source is the one placed there, undoing the default placement. */
+    element = _get_source_by_stream_number (priv->current_clip, stream_number);
+    if (element && ges_track_element_get_track (element) != track) {
+      GESTrackElement *wrong =
+          ges_clip_find_track_element (priv->current_clip, track,
+          GES_TYPE_SOURCE);
+      GESTrack *cur = ges_track_element_get_track (element);
+
+      if (wrong && wrong != element)
+        ges_track_remove_element (track, wrong);
+      gst_clear_object (&wrong);
+      if (cur)
+        ges_track_remove_element (cur, element);
+      ges_clip_add_child_to_track (priv->current_clip, element, track, NULL);
+    }
+
+    /* Rebuild the clip's GESSourceTrackMap so it round-trips on re-save and
+     * matches the authored clip. Applied (and extras pruned) at </clip>. */
+    if (element) {
+      GESUriSourceAsset *sasset =
+          GES_URI_SOURCE_ASSET (ges_extractable_get_asset (GES_EXTRACTABLE
+              (element)));
+
+      if (!priv->current_source_map_builder)
+        priv->current_source_map_builder = ges_source_track_map_builder_new ();
+      ges_source_track_map_builder_add (priv->current_source_map_builder,
+          sasset, track);
+    }
+  } else if (track_id[0] != '-' && priv->current_clip)
     element = _get_element_by_track_id (priv, track_id, priv->current_clip);
   else
     element = priv->current_track_element;
@@ -1138,9 +1454,13 @@ ges_base_xml_formatter_add_source (GESBaseXmlFormatter * self,
     gst_structure_foreach_id_str (properties,
         (GstStructureForeachIdStrFunc) set_property_foreach, element);
 
-  if (children_properties)
+  if (children_properties) {
+    SetChildPropertyData data = { self, GES_TIMELINE_ELEMENT (element) };
     gst_structure_foreach_id_str (children_properties,
-        (GstStructureForeachIdStrFunc) _set_child_property, element);
+        (GstStructureForeachIdStrFunc) _set_child_property, &data);
+    if (_take_untrusted_error (self, error))
+      return;
+  }
 
   if (metadatas)
     ges_meta_container_add_metas_from_string (GES_META_CONTAINER
@@ -1177,7 +1497,26 @@ ges_base_xml_formatter_add_track_element (GESBaseXmlFormatter * self,
     goto out;
   }
 
-  asset = ges_asset_request (track_element_type, asset_id, &err);
+  asset = ges_asset_request_full (track_element_type, asset_id,
+      GES_ASSET_REQUEST_FLAG_NO_UNTRUSTED_BIN_DESCRIPTION, &err);
+  if (asset == NULL && err && err->domain == GES_ERROR
+      && (err->code == GES_ERROR_UNTRUSTED_ELEMENT
+          || err->code == GES_ERROR_SENSITIVE_PROPERTY)) {
+    /* An effect the untrusted-input rules refuse must fail the load, not be
+     * silently dropped: ask the application right away and retry the request
+     * if it accepts. */
+    if (_ask_untrusted_effect (GES_BASE_XML_FORMATTER (self), asset_id,
+            track_element_type, err)) {
+      g_clear_error (&err);
+      asset = ges_asset_request_full (track_element_type, asset_id,
+          GES_ASSET_REQUEST_FLAG_NO_UNTRUSTED_BIN_DESCRIPTION, &err);
+    } else {
+      g_propagate_error (error, err);
+      err = NULL;
+      goto out;
+    }
+  }
+
   if (asset == NULL) {
     GST_DEBUG_OBJECT (self, "Can not create trackelement %s", asset_id);
     GST_FIXME_OBJECT (self, "Check if missing plugins etc %s",
@@ -1196,6 +1535,10 @@ ges_base_xml_formatter_add_track_element (GESBaseXmlFormatter * self,
     clip = g_hash_table_lookup (priv->containers, timeline_obj_id);
     _add_track_element (GES_FORMATTER (self), clip, trackelement, track_id,
         children_properties, properties);
+    if (_take_untrusted_error (self, error)) {
+      gst_object_unref (asset);
+      return;
+    }
     priv->current_track_element = trackelement;
   }
 
@@ -1350,6 +1693,32 @@ ges_base_xml_formatter_end_current_clip (GESBaseXmlFormatter * self)
   if (_DURATION (priv->current_clip) != priv->current_clip_duration)
     _set_duration0 (GES_TIMELINE_ELEMENT (priv->current_clip),
         priv->current_clip_duration);
+
+  if (priv->current_source_map_builder) {
+    GList *children, *tmp;
+
+    /* Prune the sources the default placement created but did not route: for a
+     * routed clip, any source left without a track is either an unselected
+     * stream or a stray fan-out copy, so the loaded clip matches the authored
+     * one. */
+    children = ges_container_get_children (GES_CONTAINER (priv->current_clip),
+        FALSE);
+    for (tmp = children; tmp; tmp = tmp->next) {
+      GESTrackElement *el = tmp->data;
+
+      if (GES_IS_SOURCE (el) && !ges_track_element_get_track (el))
+        ges_container_remove (GES_CONTAINER (priv->current_clip),
+            GES_TIMELINE_ELEMENT (el));
+    }
+    g_list_free_full (children, gst_object_unref);
+
+    if (!ges_uri_clip_set_source_track_map (GES_URI_CLIP (priv->current_clip),
+            ges_source_track_map_builder_build
+            (priv->current_source_map_builder), NULL, NULL))
+      GST_ERROR_OBJECT (priv->current_clip,
+          "Failed to apply the loaded " "source-track-map");
+    priv->current_source_map_builder = NULL;
+  }
 
   priv->current_clip = NULL;
   priv->current_clip_duration = GST_CLOCK_TIME_NONE;

@@ -108,7 +108,7 @@ adpcmdec_set_format (GstAudioDecoder * bdec, GstCaps * in_caps)
     return FALSE;
 
   if (!gst_structure_get_int (structure, "block_align", &dec->blocksize))
-    dec->blocksize = -1;        /* Not provided */
+    return FALSE;
 
   if (!gst_structure_get_int (structure, "rate", &dec->rate))
     return FALSE;
@@ -280,7 +280,7 @@ adpcmdec_decode_ima_block (ADPCMDec * dec, int n_samples, const guint8 * data,
   int i, j;
   int sample;
 
-  if ((n_samples - dec->channels) % 8 != 0) {
+  if ((n_samples - dec->channels) % (8 * dec->channels) != 0) {
     GST_WARNING_OBJECT (dec, "Input not correct size");
     return FALSE;
   }
@@ -490,6 +490,7 @@ adpcmdec_class_init (ADPCMDecClass * klass)
 static gboolean
 plugin_init (GstPlugin * plugin)
 {
+  gst_plugin_set_static_features_flag (plugin);
   return GST_ELEMENT_REGISTER (adpcmdec, plugin);
 }
 

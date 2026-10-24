@@ -3000,7 +3000,7 @@ gst_parse_group_hide (GstParseGroup * group)
  *
  * Not MT-safe, call with parent's chain lock!
  */
-static void
+static gpointer
 gst_parse_chain_free_hidden_groups (GList * old_groups)
 {
   GList *l;
@@ -3011,6 +3011,8 @@ gst_parse_chain_free_hidden_groups (GList * old_groups)
     gst_parse_group_free (group);
   }
   g_list_free (old_groups);
+
+  return NULL;
 }
 
 static void
@@ -3501,8 +3503,8 @@ sort_end_pads (GstParsePad * da, GstParsePad * db)
   } else {
     GstStructure *sa, *sb;
 
-    sa = gst_caps_get_structure ((const GstCaps *) capsa, 0);
-    sb = gst_caps_get_structure ((const GstCaps *) capsb, 0);
+    sa = gst_caps_get_structure (capsa, 0);
+    sb = gst_caps_get_structure (capsb, 0);
 
     namea = gst_structure_get_name (sa);
     nameb = gst_structure_get_name (sb);
@@ -4052,6 +4054,8 @@ guess_stream_type_from_caps (GstCaps * caps)
       g_str_has_prefix (name, "subtitle/") ||
       g_str_has_prefix (name, "closedcaption/"))
     return GST_STREAM_TYPE_TEXT;
+  if (g_str_has_prefix (name, "meta/"))
+    return GST_STREAM_TYPE_METADATA;
 
   /* Use information from pbutils. Note that we only care about elementary
    * streams which is why we check flag equality */
@@ -4063,6 +4067,8 @@ guess_stream_type_from_caps (GstCaps * caps)
       return GST_STREAM_TYPE_VIDEO;
     case GST_PBUTILS_CAPS_DESCRIPTION_FLAG_SUBTITLE:
       return GST_STREAM_TYPE_TEXT;
+    case GST_PBUTILS_CAPS_DESCRIPTION_FLAG_METADATA:
+      return GST_STREAM_TYPE_METADATA;
     default:
       return GST_STREAM_TYPE_UNKNOWN;
   }
@@ -4072,11 +4078,12 @@ static void
 gst_parse_pad_update_caps (GstParsePad * parsepad, GstCaps * caps)
 {
   if (caps && parsepad->active_stream) {
-    GST_DEBUG_OBJECT (parsepad, "Storing caps %" GST_PTR_FORMAT
-        " on stream %" GST_PTR_FORMAT, caps, parsepad->active_stream);
-
-    if (gst_caps_is_fixed (caps))
+    if (gst_caps_is_fixed (caps)) {
+      GST_DEBUG_OBJECT (parsepad, "Storing caps %" GST_PTR_FORMAT
+          " on stream %" GST_PTR_FORMAT, caps, parsepad->active_stream);
       gst_stream_set_caps (parsepad->active_stream, caps);
+    }
+
     /* intuit a type */
     if (gst_stream_get_stream_type (parsepad->active_stream) ==
         GST_STREAM_TYPE_UNKNOWN) {

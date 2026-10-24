@@ -32,11 +32,11 @@
 
 typedef struct _Qt6GLWindowPrivate Qt6GLWindowPrivate;
 
-class Qt6GLWindow : public QQuickWindow, protected QOpenGLFunctions
+class Qt6GLWindow : public QObject, protected QOpenGLFunctions
 {
     Q_OBJECT
 public:
-    Qt6GLWindow (QWindow * parent = NULL, QQuickWindow *source = NULL);
+    Qt6GLWindow (QQuickWindow *source = NULL, QObject * parent = NULL);
     ~Qt6GLWindow ();
     bool getGeometry (int * width, int * height);
 
@@ -45,7 +45,7 @@ public:
 
 private Q_SLOTS:
     void beforeRendering ();
-    void afterFrameEnd ();
+    void afterRendering ();
     void onSceneGraphInitialized ();
     void onSceneGraphInvalidated ();
 

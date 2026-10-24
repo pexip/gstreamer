@@ -597,8 +597,9 @@ gst_radioactv_class_init (GstRadioacTVClass * klass)
   gst_element_class_set_static_metadata (gstelement_class, "RadioacTV effect",
       "Filter/Effect/Video",
       "motion-enlightment effect",
-      "FUKUCHI, Kentarou <fukuchi@users.sourceforge.net>, "
+      "Kentaro Fukuchi <fukuchi@users.sourceforge.net>, "
       "Sebastian Dröge <sebastian.droege@collabora.co.uk>");
+  gst_element_class_mark_as_untrusted_aware (gstelement_class);
 
   gst_element_class_add_static_pad_template (gstelement_class,
       &gst_radioactv_sink_template);

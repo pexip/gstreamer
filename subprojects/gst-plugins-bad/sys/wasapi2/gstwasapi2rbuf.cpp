@@ -151,7 +151,9 @@ struct RbufCtx
     HRESULT hr = S_OK;
     if (client) {
       hr = client->Stop ();
-      if (gst_wasapi2_result (hr))
+      /* Process loopback client does not resume capture after Reset() */
+      if (gst_wasapi2_result (hr) &&
+          !gst_wasapi2_is_process_loopback_class (endpoint_class))
         client->Reset ();
     }
 
@@ -1000,8 +1002,10 @@ gst_wasapi2_rbuf_ctx_init (RbufCtxPtr & ctx, WAVEFORMATEX * selected_format)
     }
   }
 
-  /* Warm up device, first Start() call may take long if device is in idle state */
-  if (ctx->capture_client && !ctx->dummy_client) {
+  /* Warm up device, first Start() call may take long if device is in idle state.
+   * Skip process loopback: virtual device, and its client does not survive Reset() */
+  if (ctx->capture_client && !ctx->dummy_client &&
+      !gst_wasapi2_is_process_loopback_class (ctx->endpoint_class)) {
     ctx->client->Start ();
     ctx->client->Stop ();
     ctx->client->Reset ();
@@ -2796,6 +2800,13 @@ gst_wasapi2_rbuf_loop_thread (GstWasapi2Rbuf * self)
               hr = gst_wasapi2_rbuf_process_write (self);
           }
 
+          if ((hr == AUDCLNT_E_ENDPOINT_CREATE_FAILED ||
+                  hr == AUDCLNT_E_DEVICE_INVALIDATED) && priv->ctx->is_default
+              && !gst_wasapi2_is_loopback_class (priv->ctx->endpoint_class)) {
+            GST_WARNING_OBJECT (self, "Ignore write error from default device");
+            hr = S_OK;
+          }
+
           if (FAILED (hr)) {
             gst_wasapi2_rbuf_post_io_error (self, hr, TRUE);
             gst_wasapi2_rbuf_start_fallback_timer (self);
@@ -3159,6 +3170,10 @@ gst_wasapi2_rbuf_set_device (GstWasapi2Rbuf * rbuf, const gchar * device_id,
   cmd->pid = pid;
   cmd->low_latency = low_latency;
   cmd->exclusive = exclusive;
+
+  GST_DEBUG_OBJECT (rbuf, "device-id: %s, endpoint-class: %d, pid: %u, "
+      "low-latency: %d, exclusive: %d", GST_STR_NULL (device_id),
+      endpoint_class, pid, low_latency, exclusive);
 
   gst_wasapi2_rbuf_push_command (rbuf, cmd);
 

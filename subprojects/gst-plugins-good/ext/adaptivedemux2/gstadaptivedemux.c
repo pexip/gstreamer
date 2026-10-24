@@ -750,19 +750,6 @@ gst_adaptive_demux_change_state (GstElement * element,
     case GST_STATE_CHANGE_PAUSED_TO_READY:
       if (g_atomic_int_compare_and_exchange (&demux->running, TRUE, FALSE))
         GST_DEBUG_OBJECT (demux, "demuxer has stopped running");
-
-      gst_adaptive_demux_loop_stop (demux->priv->scheduler_task, TRUE);
-      downloadhelper_stop (demux->download_helper);
-
-      TRACKS_LOCK (demux);
-      demux->priv->flushing = TRUE;
-      g_cond_signal (&demux->priv->tracks_add);
-      gst_task_stop (demux->priv->output_task);
-      TRACKS_UNLOCK (demux);
-
-      gst_task_join (demux->priv->output_task);
-
-      gst_adaptive_demux_reset (demux);
       break;
     case GST_STATE_CHANGE_READY_TO_PAUSED:
       gst_adaptive_demux_reset (demux);
@@ -785,6 +772,20 @@ gst_adaptive_demux_change_state (GstElement * element,
     case GST_STATE_CHANGE_READY_TO_PAUSED:
       /* Start download task */
       downloadhelper_start (demux->download_helper);
+      break;
+    case GST_STATE_CHANGE_PAUSED_TO_READY:
+      gst_adaptive_demux_loop_stop (demux->priv->scheduler_task, TRUE);
+      downloadhelper_stop (demux->download_helper);
+
+      TRACKS_LOCK (demux);
+      demux->priv->flushing = TRUE;
+      g_cond_signal (&demux->priv->tracks_add);
+      gst_task_stop (demux->priv->output_task);
+      TRACKS_UNLOCK (demux);
+
+      gst_task_join (demux->priv->output_task);
+
+      gst_adaptive_demux_reset (demux);
       break;
     default:
       break;
@@ -1180,7 +1181,7 @@ invalid_manifest:
 struct http_headers_collector
 {
   GstAdaptiveDemux *demux;
-  gchar **cookies;
+  const gchar *uri;
 };
 
 static gboolean
@@ -1203,47 +1204,58 @@ gst_adaptive_demux_handle_upstream_http_header (const GstIdStr * fieldname,
 
   if ((g_ascii_strcasecmp (field_name, "Cookie") == 0) ||
       g_ascii_strcasecmp (field_name, "Set-Cookie") == 0) {
-    guint i = 0, prev_len = 0, total_len = 0;
-    gchar **cookies = NULL;
+    const gboolean is_set_cookie =
+        g_ascii_strcasecmp (field_name, "Set-Cookie") == 0;
+    guint i, n = 0;
+    gchar **values = NULL;
 
-    if (hdr_data->cookies != NULL)
-      prev_len = g_strv_length (hdr_data->cookies);
+    if (hdr_data->uri == NULL) {
+      GST_WARNING_OBJECT (demux,
+          "Got %s header without an origin URI, ignoring",
+          gst_id_str_as_str (fieldname));
+    } else if (GST_VALUE_HOLDS_ARRAY (value)) {
+      n = gst_value_array_get_size (value);
+      values = g_new0 (gchar *, n + 1);
 
-    if (GST_VALUE_HOLDS_ARRAY (value)) {
-      total_len = gst_value_array_get_size (value) + prev_len;
-      cookies = (gchar **) g_malloc0 ((total_len + 1) * sizeof (gchar *));
-
-      for (i = 0; i < gst_value_array_get_size (value); i++) {
+      for (i = 0; i < n; i++) {
         GST_INFO_OBJECT (demux, "%s : %s", gst_id_str_as_str (fieldname),
             g_value_get_string (gst_value_array_get_value (value, i)));
-        cookies[i] = g_value_dup_string (gst_value_array_get_value (value, i));
+        values[i] = g_value_dup_string (gst_value_array_get_value (value, i));
       }
     } else if (G_VALUE_HOLDS_STRING (value)) {
-      total_len = 1 + prev_len;
-      cookies = (gchar **) g_malloc0 ((total_len + 1) * sizeof (gchar *));
+      n = 1;
+      values = g_new0 (gchar *, 2);
 
       GST_INFO_OBJECT (demux, "%s : %s", gst_id_str_as_str (fieldname),
           g_value_get_string (value));
-      cookies[0] = g_value_dup_string (value);
+      values[0] = g_value_dup_string (value);
     } else {
       GST_WARNING_OBJECT (demux, "%s field is not string or array",
           gst_id_str_as_str (fieldname));
     }
 
-    if (cookies) {
-      if (prev_len) {
+    for (i = 0; i < n; i++) {
+      if (is_set_cookie) {
+        downloadhelper_add_cookie (demux->download_helper, hdr_data->uri,
+            values[i]);
+      } else {
+        /* Request cookies only carry name=value pairs, so cookie attributes
+         * are lost until the server re-sends Set-Cookie */
+        gchar **pairs;
         guint j;
-        for (j = 0; j < prev_len; j++) {
-          GST_DEBUG_OBJECT (demux,
-              "Append existing cookie %s", hdr_data->cookies[j]);
-          cookies[i + j] = g_strdup (hdr_data->cookies[j]);
-        }
-      }
-      cookies[total_len] = NULL;
 
-      g_strfreev (hdr_data->cookies);
-      hdr_data->cookies = cookies;
+        pairs = g_strsplit (values[i], ";", -1);
+        for (j = 0; pairs[j]; j++) {
+          pairs[j] = g_strstrip (pairs[j]);
+          if (*pairs[j] != '\0')
+            downloadhelper_add_cookie (demux->download_helper, hdr_data->uri,
+                pairs[j]);
+        }
+        g_strfreev (pairs);
+      }
     }
+
+    g_strfreev (values);
   }
 
   if (g_ascii_strcasecmp (field_name, "Referer") == 0) {
@@ -1332,6 +1344,16 @@ gst_adaptive_demux_sink_event (GstPad * pad, GstObject * parent,
       struct http_headers_collector c = { demux, NULL };
 
       if (gst_structure_has_name (structure, "http-headers")) {
+        const gchar *uri = NULL;
+
+        /* Origin for cookies from these headers. Prefer the redirect target
+         * since a redirected request's headers belong to it. */
+        gst_structure_get (structure, "redirection-uri", G_TYPE_STRING, &uri,
+            NULL);
+        if (uri == NULL)
+          gst_structure_get (structure, "uri", G_TYPE_STRING, &uri, NULL);
+        c.uri = uri;
+
         if (gst_structure_has_field (structure, "request-headers")) {
           GstStructure *req_headers = NULL;
           gst_structure_get (structure, "request-headers", GST_TYPE_STRUCTURE,
@@ -1352,9 +1374,6 @@ gst_adaptive_demux_sink_event (GstPad * pad, GstObject * parent,
             gst_structure_free (res_headers);
           }
         }
-
-        if (c.cookies)
-          downloadhelper_set_cookies (demux->download_helper, c.cookies);
       }
       break;
     }
@@ -1687,7 +1706,7 @@ gst_adaptive_demux_get_period_start_time (GstAdaptiveDemux * demux)
   return klass->get_period_start_time (demux);
 }
 
-/* must be called with manifest_lock taken */
+/* must be called with manifest_lock and scheduler lock taken */
 static gboolean
 gst_adaptive_demux_prepare_streams (GstAdaptiveDemux * demux,
     gboolean first_and_live)
@@ -2088,6 +2107,52 @@ gst_adaptive_demux_setup_streams_for_restart (GstAdaptiveDemux * demux,
                               GST_SEEK_FLAG_SNAP_AFTER | \
                               GST_SEEK_FLAG_SNAP_NEAREST))
 
+/* Sends @flush_event (flush-start or flush-stop, consumed by this call) to
+ * all the stream parsebins of all periods and then to all exposed src pads.
+ *
+ * Flushing the parsebins unblocks any element inside them that may be
+ * blocking the download thread (e.g. a decryptor waiting for its ring buffer
+ * to drain). The track sinkpads drop the flush events coming out of parsebin,
+ * so the src pads have to be flushed explicitly for downstream (decoders,
+ * sinks) to be flushed and return the buffers they are holding.
+ *
+ * The parsebin flushes must stay balanced: a parsebin left in flushing state
+ * would silently drop all data after the streams restart. This is why no
+ * stream "running" state check is made here.
+ *
+ * The events are sent without holding TRACKS_LOCK: a download thread blocked
+ * on TRACKS_LOCK in _track_sink_chain_function() holds the parsebin pads
+ * stream locks, which a serialized flush-stop needs to take. */
+static void
+gst_adaptive_demux_send_flush_event (GstAdaptiveDemux * demux,
+    GstEvent * flush_event)
+{
+  GList *pads = NULL, *iter, *p, *s;
+
+  TRACKS_LOCK (demux);
+  for (p = demux->priv->periods->head; p; p = p->next) {
+    GstAdaptiveDemuxPeriod *period = p->data;
+
+    for (s = period->streams; s; s = s->next) {
+      GstAdaptiveDemux2Stream *stream = s->data;
+
+      if (stream->parsebin_sink)
+        pads = g_list_prepend (pads, gst_object_ref (stream->parsebin_sink));
+    }
+  }
+  TRACKS_UNLOCK (demux);
+
+  for (iter = pads; iter; iter = iter->next) {
+    GstPad *pad = iter->data;
+
+    GST_DEBUG_OBJECT (pad, "Sending %" GST_PTR_FORMAT, flush_event);
+    gst_pad_send_event (pad, gst_event_ref (flush_event));
+  }
+  g_list_free_full (pads, (GDestroyNotify) gst_object_unref);
+
+  gst_adaptive_demux_push_src_event (demux, flush_event);
+}
+
 /**
  * gst_adaptive_demux_handle_seek_event:
  * @demux:
@@ -2108,10 +2173,9 @@ gst_adaptive_demux_handle_seek_event (GstAdaptiveDemux * demux,
   guint32 seqnum;
   gboolean update;
   gboolean ret = FALSE;
+  gboolean need_flush_stop = FALSE;
   GstSegment oldsegment;
   GstEvent *flush_event;
-
-  GST_INFO_OBJECT (demux, "Received seek event");
 
   gst_event_parse_seek (event, &rate, &format, &flags, &start_type, &start,
       &stop_type, &stop);
@@ -2130,10 +2194,23 @@ gst_adaptive_demux_handle_seek_event (GstAdaptiveDemux * demux,
   }
 
   seqnum = gst_event_get_seqnum (event);
+  GST_INFO_OBJECT (demux, "Received seek event (seq %u)", seqnum);
+
+  if (flags & GST_SEEK_FLAG_FLUSH && !lost_sync) {
+    GST_DEBUG_OBJECT (demux, "sending flush start");
+    flush_event = gst_event_new_flush_start ();
+    gst_event_set_seqnum (flush_event, seqnum);
+
+    /* This must happen before trying to grab the scheduler lock: the
+     * scheduler thread may be blocked inside a parsebin element, and only a
+     * flush will unblock it. */
+    gst_adaptive_demux_send_flush_event (demux, flush_event);
+    need_flush_stop = TRUE;
+  }
 
   if (!GST_ADAPTIVE_SCHEDULER_LOCK (demux)) {
     GST_LOG_OBJECT (demux, "Failed to acquire scheduler context");
-    return FALSE;
+    goto flush_stop_return;
   }
 
   if (flags & GST_SEEK_FLAG_INSTANT_RATE_CHANGE) {
@@ -2270,14 +2347,6 @@ gst_adaptive_demux_handle_seek_event (GstAdaptiveDemux * demux,
   /* have a backup in case seek fails */
   gst_segment_copy_into (&demux->segment, &oldsegment);
 
-  if (!lost_sync) {
-    GST_DEBUG_OBJECT (demux, "sending flush start");
-    flush_event = gst_event_new_flush_start ();
-    gst_event_set_seqnum (flush_event, seqnum);
-
-    gst_adaptive_demux_push_src_event (demux, flush_event);
-  }
-
   gst_adaptive_demux_stop_tasks (demux, FALSE);
   gst_adaptive_demux_reset_tracks (demux);
 
@@ -2292,37 +2361,54 @@ gst_adaptive_demux_handle_seek_event (GstAdaptiveDemux * demux,
   if (IS_SNAP_SEEK (flags)) {
     GstAdaptiveDemux2Stream *default_stream = NULL;
     GstAdaptiveDemux2Stream *stream = NULL;
+    GstAdaptiveDemux2Stream *video_stream = NULL;
     GList *iter;
     /*
      * Handle snap seeks as follows:
-     * 1) do the snap seeking a (random) active stream
-     * 1.1) If none are active yet (early-seek), pick a random default one
+     * 1) do the snap seeking on a video stream (if available)
+     * 1.1) If no video stream is active, use any active stream
+     * 1.2) If none are active yet (early-seek), pick a random default one
      * 2) use the final position on this stream to seek
      *    on the other streams to the same position
      *
      * We can't snap at all streams at the same time as they might end in
-     * different positions, so just pick one and align all others to that
-     * position.
+     * different positions, so we prefer to snap on the video stream (to find
+     * keyframes) and align all others to that position. This prevents
+     * subtitle/audio tracks with long segments from forcing seeks to their
+     * segment boundaries.
      */
 
-    /* Pick a random active stream on which to do the stream seek */
+    /* Pick a video stream (preferred) or any active stream for snap seeking */
     for (iter = demux->output_period->streams; iter; iter = iter->next) {
       GstAdaptiveDemux2Stream *cand = iter->data;
       if (gst_adaptive_demux2_stream_is_selected_locked (cand)) {
-        stream = cand;
-        break;
+        /* Prefer video streams for snapping to keyframes */
+        if (cand->stream_type & GST_STREAM_TYPE_VIDEO) {
+          video_stream = cand;
+          break;
+        }
+        /* Keep first selected stream as fallback */
+        if (stream == NULL)
+          stream = cand;
       }
       if (default_stream == NULL
           && gst_adaptive_demux2_stream_is_default_locked (cand))
         default_stream = cand;
     }
 
-    if (stream == NULL)
+    /* Use video stream if found, otherwise fallback to any stream */
+    if (video_stream != NULL)
+      stream = video_stream;
+    else if (stream == NULL)
       stream = default_stream;
 
     if (stream) {
       GstClockTimeDiff ts;
       GstSeekFlags stream_seek_flags = flags;
+
+      GST_DEBUG_OBJECT (demux,
+          "Snap seeking on stream %" GST_PTR_FORMAT " (type: %s)", stream,
+          gst_stream_type_get_name (stream->stream_type));
 
       /* snap-seek on the chosen stream and then
        * use the resulting position to seek on all streams */
@@ -2396,11 +2482,12 @@ gst_adaptive_demux_handle_seek_event (GstAdaptiveDemux * demux,
   /* Resetting flow combiner */
   gst_flow_combiner_reset (demux->priv->flowcombiner);
 
-  if (!lost_sync) {
+  if (need_flush_stop) {
     GST_DEBUG_OBJECT (demux, "Sending flush stop on all pad");
     flush_event = gst_event_new_flush_stop (TRUE);
     gst_event_set_seqnum (flush_event, seqnum);
-    gst_adaptive_demux_push_src_event (demux, flush_event);
+    gst_adaptive_demux_send_flush_event (demux, flush_event);
+    need_flush_stop = FALSE;
   }
 
   /* If the seek generated a new period, prepare it */
@@ -2441,6 +2528,16 @@ gst_adaptive_demux_handle_seek_event (GstAdaptiveDemux * demux,
 
 unlock_return:
   GST_ADAPTIVE_SCHEDULER_UNLOCK (demux);
+
+flush_stop_return:
+  /* If the seek bailed out after flush-start was sent, rebalance with a
+   * flush-stop so that the parsebins and downstream resume dataflow. */
+  if (need_flush_stop) {
+    flush_event = gst_event_new_flush_stop (TRUE);
+    gst_event_set_seqnum (flush_event, seqnum);
+    gst_adaptive_demux_send_flush_event (demux, flush_event);
+  }
+
   gst_event_unref (event);
 
   return ret;
@@ -3866,6 +3963,7 @@ static gboolean
 gst_adaptive_demux2_manual_manifest_update_cb (GstAdaptiveDemux * demux)
 {
   GST_MANIFEST_LOCK (demux);
+  demux->priv->manifest_updates_cb = 0;
   gst_adaptive_demux_update_manifest (demux);
   GST_MANIFEST_UNLOCK (demux);
 

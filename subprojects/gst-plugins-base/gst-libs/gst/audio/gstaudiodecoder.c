@@ -1418,6 +1418,7 @@ gst_audio_decoder_finish_frame_or_subframe (GstAudioDecoder * dec,
       goto exit;
     }
 
+    /* FIXME: This is wrong if multiple full frames are pending */
     if (priv->pending_events)
       send_pending_events (dec);
   }
@@ -2484,8 +2485,21 @@ gst_audio_decoder_handle_gap (GstAudioDecoder * dec, GstEvent * event)
      * so just try sending GAP downstream */
     flowret = check_pending_reconfigure (dec);
     if (flowret == GST_FLOW_OK) {
-      send_pending_events (dec);
-      ret = gst_audio_decoder_push_event (dec, event);
+      /* Only forward the gap event immediately if no frames are currently
+       * pending, otherwise it needs to be queued up instead. This mirrors
+       * the code in gst_audio_decoder_finish_frame_or_subframe().
+       *
+       * FIXME: This is wrong if multiple full frames are pending.
+       */
+      if (dec->priv->subframe_samples == 0) {
+        send_pending_events (dec);
+        ret = gst_audio_decoder_push_event (dec, event);
+      } else {
+        dec->priv->pending_events =
+            g_list_append (dec->priv->pending_events, event);
+        gst_event_unref (event);
+        ret = TRUE;
+      }
     } else {
       ret = FALSE;
       gst_event_unref (event);
@@ -2543,9 +2557,11 @@ gst_audio_decoder_sink_eventfunc (GstAudioDecoder * dec, GstEvent * event)
     {
       GstSegment seg;
       GstFormat format;
+      guint32 seqnum;
 
       GST_AUDIO_DECODER_STREAM_LOCK (dec);
       gst_event_copy_segment (event, &seg);
+      seqnum = gst_event_get_seqnum (event);
 
       format = seg.format;
       if (format == GST_FORMAT_TIME) {
@@ -2572,6 +2588,7 @@ gst_audio_decoder_sink_eventfunc (GstAudioDecoder * dec, GstEvent * event)
           /* replace event */
           gst_event_unref (event);
           event = gst_event_new_segment (&seg);
+          gst_event_set_seqnum (event, seqnum);
         } else {
           GST_DEBUG_OBJECT (dec, "unsupported format; ignoring");
           GST_AUDIO_DECODER_STREAM_UNLOCK (dec);

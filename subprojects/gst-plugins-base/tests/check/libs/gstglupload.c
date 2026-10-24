@@ -78,8 +78,17 @@ static GstVideoFormat test_passthrough_formats[] = {
   GST_VIDEO_FORMAT_DMA_DRM,
 };
 
-static const gchar *test_passthrough_features[] = {
-  GST_CAPS_FEATURE_MEMORY_DMABUF,
+typedef struct
+{
+  const gchar *features[3];     /* NULL-terminated array of feature strings */
+} PassthroughFeatureSet;
+
+static PassthroughFeatureSet test_passthrough_feature_sets[] = {
+  /* Single feature: DMABuf only */
+  {{GST_CAPS_FEATURE_MEMORY_DMABUF, NULL}},
+  /* Multiple features: DMABuf + overlay composition */
+  {{GST_CAPS_FEATURE_MEMORY_DMABUF,
+          GST_CAPS_FEATURE_META_GST_VIDEO_OVERLAY_COMPOSITION, NULL}},
 };
 
 static void
@@ -333,7 +342,6 @@ GST_START_TEST (test_upload_gl_memory)
   GstStructure *out_s;
   GstVideoInfo in_info;
   GstMapInfo map_info;
-  gint i = 0;
   gint res;
 
   base_mem_alloc =
@@ -364,9 +372,14 @@ GST_START_TEST (test_upload_gl_memory)
   /* at this point glupload hasn't received any buffers so can output anything */
   out_caps = gst_gl_upload_transform_caps (upload, context,
       GST_PAD_SINK, in_caps, NULL);
-  out_s = gst_caps_get_structure (out_caps, 0);
-  fail_unless (gst_structure_has_field_typed (out_s, "texture-target",
-          GST_TYPE_LIST));
+  for (gint i = 0; i < gst_caps_get_size (out_caps); i++) {
+    out_s = gst_caps_get_structure (out_caps, i);
+    res =
+        gst_structure_has_field_typed (out_s, "texture-target", GST_TYPE_LIST);
+    if (res)
+      break;
+  }
+  fail_unless (res);
   gst_caps_unref (out_caps);
 
   /* set some output caps without setting texture-target: this should trigger RECONFIGURE */
@@ -414,11 +427,9 @@ GST_START_TEST (test_upload_gl_memory)
   gst_gl_window_draw (window);
   gst_gl_window_send_message (window, GST_GL_WINDOW_CB (init), context);
 
-  while (i < 2) {
+  for (gint i = 0; i < 2; i++)
     gst_gl_window_send_message (window, GST_GL_WINDOW_CB (draw_render),
         context);
-    i++;
-  }
   gst_gl_window_send_message (window, GST_GL_WINDOW_CB (deinit), context);
 
   gst_caps_unref (in_caps);
@@ -432,8 +443,8 @@ GST_END_TEST;
 GST_START_TEST (test_passthrough)
 {
   guint formats_size = G_N_ELEMENTS (test_passthrough_formats);
-  guint features_size = G_N_ELEMENTS (test_passthrough_features);
-  gint i, j, k, l;
+  guint features_size = G_N_ELEMENTS (test_passthrough_feature_sets);
+  gint i, j, k, l, m;
 
   for (i = 0; i < formats_size; i++) {
     GstVideoFormat in_format = test_passthrough_formats[i];
@@ -442,23 +453,34 @@ GST_START_TEST (test_passthrough)
       GstVideoFormat out_format = test_passthrough_formats[j];
 
       for (k = 0; k < features_size; k++) {
-        const gchar *in_feature = test_passthrough_features[k];
+        PassthroughFeatureSet *in_feature_set =
+            &test_passthrough_feature_sets[k];
         GstCaps *in_caps;
+        GstCapsFeatures *in_features;
 
         in_caps = gst_caps_new_simple ("video/x-raw", "format", G_TYPE_STRING,
             gst_video_format_to_string (in_format), NULL);
-        gst_caps_set_features_simple (in_caps,
-            gst_caps_features_new_single_static_str (in_feature));
 
+        in_features = gst_caps_features_new_empty ();
+        for (m = 0; in_feature_set->features[m] != NULL; m++) {
+          gst_caps_features_add (in_features, in_feature_set->features[m]);
+        }
+        gst_caps_set_features_simple (in_caps, in_features);
 
         for (l = 0; l < features_size; l++) {
-          const gchar *out_feature = test_passthrough_features[l];
+          PassthroughFeatureSet *out_feature_set =
+              &test_passthrough_feature_sets[l];
           GstCaps *out_caps;
+          GstCapsFeatures *out_features;
 
           out_caps = gst_caps_new_simple ("video/x-raw", "format",
               G_TYPE_STRING, gst_video_format_to_string (out_format), NULL);
-          gst_caps_set_features_simple (out_caps,
-              gst_caps_features_new_single_static_str (out_feature));
+
+          out_features = gst_caps_features_new_empty ();
+          for (m = 0; out_feature_set->features[m] != NULL; m++) {
+            gst_caps_features_add (out_features, out_feature_set->features[m]);
+          }
+          gst_caps_set_features_simple (out_caps, out_features);
 
           if (gst_caps_is_equal (in_caps, out_caps)) {
             GstCaps *tmp_caps, *tmp_caps2, *tmp_caps3;

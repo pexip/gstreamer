@@ -190,6 +190,7 @@ gst_remove_silence_class_init (GstRemoveSilenceClass * klass)
       "Tiago Katcipis <tiagokatcipis@gmail.com>, "
       "Paulo Pizarro  <paulo.pizarro@gmail.com>, "
       "Nicola Murino  <nicola.murino@gmail.com>");
+  gst_element_class_mark_as_untrusted_aware (gstelement_class);
 
   gst_element_class_add_static_pad_template (gstelement_class, &src_template);
   gst_element_class_add_static_pad_template (gstelement_class, &sink_template);
@@ -433,6 +434,7 @@ gst_remove_silence_transform_ip (GstBaseTransform * trans, GstBuffer * inbuf)
 static gboolean
 plugin_init (GstPlugin * plugin)
 {
+  gst_plugin_set_static_features_flag (plugin);
   return GST_ELEMENT_REGISTER (removesilence, plugin);
 }
 

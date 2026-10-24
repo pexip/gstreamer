@@ -512,6 +512,7 @@ gst_navigationtest_class_init (GstNavigationtestClass * klass)
       "Filter/Effect/Video",
       "Handle navigation events showing black squares following "
       "mouse pointer and touch points", "David Schleef <ds@schleef.org>");
+  gst_element_class_mark_as_untrusted_aware (element_class);
 
   gst_element_class_add_static_pad_template (element_class,
       &gst_navigationtest_sink_template);
@@ -539,6 +540,8 @@ gst_navigationtest_init (GstNavigationtest * navtest)
 static gboolean
 plugin_init (GstPlugin * plugin)
 {
+  gst_plugin_set_static_features_flag (plugin);
+
   return GST_ELEMENT_REGISTER (navigationtest, plugin);
 }
 

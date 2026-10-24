@@ -516,6 +516,84 @@ GST_START_TEST (test_parse_detect_stream_with_hdr_sei)
 
 GST_END_TEST;
 
+static inline GstBuffer *wrap_buffer (const guint8 * buf, gsize size,
+    GstClockTime pts, GstBufferFlags flags);
+static inline GstBuffer *composite_buffer (GstClockTime pts,
+    GstBufferFlags flags, gint count, ...);
+static GstCaps *pull_last_caps_event (GstHarness * h);
+
+/* Verify that mastering-display-info and content-light-level are removed from
+ * caps when HDR SEIs disappear from the bitstream.
+ *
+ * Sequence:
+ *   AU1: SPS+PPS+CLLI+MDC+IDR -> state PARSED->ACTIVE, caps WITH HDR fields
+ *   AU2: IDR only (no SEI)    -> state ACTIVE->EXPIRED, caps WITHOUT HDR fields
+ *   AU3: IDR only (no SEI)    -> state stays EXPIRED, no caps event
+ */
+#define bytestream_set_caps(h, in_align, out_align) \
+  gst_harness_set_caps_str (h, \
+      "video/x-h264, parsed=(boolean)false, stream-format=byte-stream, alignment=" in_align ", framerate=30/1", \
+      "video/x-h264, parsed=(boolean)true, stream-format=byte-stream, alignment=" out_align)
+
+GST_START_TEST (test_parse_detect_stream_hdr_sei_expiry)
+{
+  GstHarness *h = gst_harness_new ("h264parse");
+  GstCaps *caps;
+  GstStructure *s;
+  GstBuffer *buf;
+
+  bytestream_set_caps (h, "au", "au");
+
+  /* AU1: full headers + HDR SEIs + IDR -> parser emits caps with HDR fields */
+  buf = composite_buffer (10, 0, 5,
+      h264_sps, sizeof (h264_sps),
+      h264_pps, sizeof (h264_pps),
+      h264_sei_clli, sizeof (h264_sei_clli),
+      h264_sei_mdcv, sizeof (h264_sei_mdcv),
+      h264_idrframe, sizeof (h264_idrframe));
+  fail_unless_equals_int (gst_harness_push (h, buf), GST_FLOW_OK);
+  fail_unless_equals_int (gst_harness_buffers_in_queue (h), 1);
+
+  caps = pull_last_caps_event (h);
+  fail_unless (caps != NULL);
+  s = gst_caps_get_structure (caps, 0);
+  fail_unless (gst_structure_has_field (s, "mastering-display-info"));
+  fail_unless (gst_structure_has_field (s, "content-light-level"));
+  gst_caps_unref (caps);
+  while (gst_harness_buffers_in_queue (h) > 0) {
+    GstBuffer *b = gst_harness_pull (h);
+    gst_buffer_unref (b);
+  }
+
+  /* AU2: IDR without HDR SEIs -> state ACTIVE->EXPIRED -> caps WITHOUT HDR */
+  buf = wrap_buffer (h264_idrframe, sizeof (h264_idrframe), 20, 0);
+  fail_unless_equals_int (gst_harness_push (h, buf), GST_FLOW_OK);
+  caps = pull_last_caps_event (h);
+  fail_unless (caps != NULL);
+  s = gst_caps_get_structure (caps, 0);
+  fail_if (gst_structure_has_field (s, "mastering-display-info"));
+  fail_if (gst_structure_has_field (s, "content-light-level"));
+  gst_caps_unref (caps);
+  while (gst_harness_buffers_in_queue (h) > 0) {
+    GstBuffer *b = gst_harness_pull (h);
+    gst_buffer_unref (b);
+  }
+
+  /* AU3: IDR without HDR SEIs -> state is EXPIRED, no caps event */
+  buf = wrap_buffer (h264_idrframe, sizeof (h264_idrframe), 30, 0);
+  fail_unless_equals_int (gst_harness_push (h, buf), GST_FLOW_OK);
+  caps = pull_last_caps_event (h);
+  fail_if (caps != NULL);
+  while (gst_harness_buffers_in_queue (h) > 0) {
+    GstBuffer *b = gst_harness_pull (h);
+    gst_buffer_unref (b);
+  }
+
+  gst_harness_teardown (h);
+}
+
+GST_END_TEST;
+
 static GstStaticPadTemplate srctemplate_avc_au_and_bs_au =
     GST_STATIC_PAD_TEMPLATE ("src",
     GST_PAD_SRC,
@@ -707,6 +785,8 @@ h264parse_suite (void)
   tcase_add_test (tc_chain, test_parse_detect_stream);
   if (ctx_hdr_sei)
     tcase_add_test (tc_chain, test_parse_detect_stream_with_hdr_sei);
+  if (ctx_hdr_sei)
+    tcase_add_test (tc_chain, test_parse_detect_stream_hdr_sei_expiry);
   tcase_add_test (tc_chain, test_sink_caps_reordering);
 
   return s;
@@ -913,6 +993,28 @@ composite_buffer (GstClockTime pts, GstBufferFlags flags, gint count, ...)
   return buffer;
 }
 
+static GstCaps *
+pull_last_caps_event (GstHarness * h)
+{
+  GstCaps *caps = NULL;
+  GstEvent *event;
+
+  while ((event = gst_harness_try_pull_event (h)) != NULL) {
+    if (GST_EVENT_TYPE (event) == GST_EVENT_CAPS) {
+      GstCaps *event_caps;
+
+      gst_event_parse_caps (event, &event_caps);
+      if (caps)
+        gst_caps_unref (caps);
+      caps = gst_caps_copy (event_caps);
+    }
+
+    gst_event_unref (event);
+  }
+
+  return caps;
+}
+
 #define pull_and_check_full(h, data, size, pts, flags) \
 { \
   GstBuffer *b = gst_harness_pull (h); \
@@ -958,7 +1060,7 @@ GST_START_TEST (test_parse_sliced_nal_nal)
   fail_unless_equals_clocktime (gst_harness_query_latency (h), 0);
 
   /* test some flow with 2 slices.
-   * 1st slice gets the input PTS, second gets NONE */
+   * Both slices get the input PTS */
   buf = wrap_buffer (h264_idr_slice_1, sizeof (h264_idr_slice_1), 100, 0);
   fail_unless_equals_int (gst_harness_push (h, buf), GST_FLOW_OK);
   fail_unless_equals_int (gst_harness_buffers_in_queue (h), 1);
@@ -967,7 +1069,7 @@ GST_START_TEST (test_parse_sliced_nal_nal)
   buf = wrap_buffer (h264_idr_slice_2, sizeof (h264_idr_slice_2), 100, 0);
   fail_unless_equals_int (gst_harness_push (h, buf), GST_FLOW_OK);
   fail_unless_equals_int (gst_harness_buffers_in_queue (h), 1);
-  pull_and_check (h, h264_idr_slice_2, -1, 0);
+  pull_and_check (h, h264_idr_slice_2, 100, 0);
 
   buf = wrap_buffer (h264_idr_slice_1, sizeof (h264_idr_slice_1), 200, 0);
   fail_unless_equals_int (gst_harness_push (h, buf), GST_FLOW_OK);
@@ -978,7 +1080,7 @@ GST_START_TEST (test_parse_sliced_nal_nal)
   buf = wrap_buffer (h264_idr_slice_2, sizeof (h264_idr_slice_2), 200, 0);
   fail_unless_equals_int (gst_harness_push (h, buf), GST_FLOW_OK);
   fail_unless_equals_int (gst_harness_buffers_in_queue (h), 1);
-  pull_and_check (h, h264_idr_slice_2, -1, 0);
+  pull_and_check (h, h264_idr_slice_2, 200, 0);
 
   buf = wrap_buffer (h264_idr_slice_1, sizeof (h264_idr_slice_1), 250, 0);
   fail_unless_equals_int (gst_harness_push (h, buf), GST_FLOW_OK);
@@ -1028,10 +1130,9 @@ GST_START_TEST (test_parse_sliced_au_nal)
   /* reported latency must be zero */
   fail_unless_equals_clocktime (gst_harness_query_latency (h), 0);
 
-  /* 1st slice here doens't have a PTS
-   * because it was present in the first header NAL */
-  pull_and_check (h, h264_idr_slice_1, -1, 0);
-  pull_and_check (h, h264_idr_slice_2, -1, 0);
+  /* Both slices from the first AU get the PTS from the input buffer */
+  pull_and_check (h, h264_idr_slice_1, 100, 0);
+  pull_and_check (h, h264_idr_slice_2, 100, 0);
 
   /* new AU. we expect AUD to be inserted and 1st slice to have the same PTS */
   buf = composite_buffer (200, 0, 2,
@@ -1041,7 +1142,7 @@ GST_START_TEST (test_parse_sliced_au_nal)
   fail_unless_equals_int (gst_harness_buffers_in_queue (h), 3);
   pull_and_check (h, h264_aud, 200, 0);
   pull_and_check (h, h264_idr_slice_1, 200, 0);
-  pull_and_check (h, h264_idr_slice_2, -1, 0);
+  pull_and_check (h, h264_idr_slice_2, 200, 0);
 
   /* DISCONT must be propagated */
   buf = composite_buffer (400, GST_BUFFER_FLAG_DISCONT, 2,
@@ -1051,12 +1152,229 @@ GST_START_TEST (test_parse_sliced_au_nal)
   fail_unless_equals_int (gst_harness_buffers_in_queue (h), 3);
   pull_and_check (h, h264_aud, 400, 0);
   pull_and_check (h, h264_idr_slice_1, 400, GST_BUFFER_FLAG_DISCONT);
-  pull_and_check (h, h264_idr_slice_2, -1, 0);
+  pull_and_check (h, h264_idr_slice_2, 400, 0);
 
   gst_harness_teardown (h);
 }
 
 GST_END_TEST;
+
+GST_START_TEST (test_parse_sliced_sparse_pts)
+{
+  GstHarness *h = gst_harness_new ("h264parse");
+  GstBuffer *buf;
+
+  gst_harness_set_caps_str (h,
+      "video/x-h264,stream-format=byte-stream,alignment=nal,parsed=false,framerate=30/1",
+      "video/x-h264,stream-format=byte-stream,alignment=nal,parsed=true");
+
+  buf = wrap_buffer (h264_slicing_sps, sizeof (h264_slicing_sps), 10, 0);
+  fail_unless_equals_int (gst_harness_push (h, buf), GST_FLOW_OK);
+
+  buf = wrap_buffer (h264_slicing_pps, sizeof (h264_slicing_pps), 10, 0);
+  fail_unless_equals_int (gst_harness_push (h, buf), GST_FLOW_OK);
+
+  /* parser must have inserted AUD before the headers, with the same PTS */
+  pull_and_check (h, h264_aud, 10, 0);
+
+  /* drop the header buffers */
+  while ((buf = gst_harness_try_pull (h)))
+    gst_buffer_unref (buf);
+
+  /* First frame with PTS and DTS */
+  buf = wrap_buffer (h264_idr_slice_1, sizeof (h264_idr_slice_1), 100, 0);
+  /* MPEG-y DTS < PTS, by order of a few frame durations,
+   * say a typical duration here is 20 */
+  GST_BUFFER_DTS (buf) = 10;
+  fail_unless_equals_int (gst_harness_push (h, buf), GST_FLOW_OK);
+  fail_unless_equals_int (gst_harness_buffers_in_queue (h), 1);
+  pull_and_check (h, h264_idr_slice_1, 100, 0);
+
+  /* Second frame without PTS, different DTS (sparse PTS).
+   * PTS should not be carried over from the previous frame. */
+  buf = wrap_buffer (h264_idr_slice_1, sizeof (h264_idr_slice_1),
+      GST_CLOCK_TIME_NONE, 0);
+  GST_BUFFER_DTS (buf) = 10 + 20;
+  fail_unless_equals_int (gst_harness_push (h, buf), GST_FLOW_OK);
+  fail_unless_equals_int (gst_harness_buffers_in_queue (h), 2);
+  pull_and_check (h, h264_aud, -1, 0);
+  pull_and_check (h, h264_idr_slice_1, -1, 0);
+
+  /* Third frame with PTS and DTS again */
+  buf = wrap_buffer (h264_idr_slice_1, sizeof (h264_idr_slice_1), 100 + 40, 0);
+  GST_BUFFER_DTS (buf) = 10 + 40;
+  fail_unless_equals_int (gst_harness_push (h, buf), GST_FLOW_OK);
+  fail_unless_equals_int (gst_harness_buffers_in_queue (h), 2);
+  pull_and_check (h, h264_aud, 100 + 40, 0);
+  pull_and_check (h, h264_idr_slice_1, 100 + 40, 0);
+
+  gst_harness_teardown (h);
+}
+
+GST_END_TEST;
+
+GST_START_TEST (test_parse_sliced_duplicated_pts)
+{
+  GstHarness *h = gst_harness_new ("h264parse");
+  GstBuffer *buf;
+
+  gst_harness_set_caps_str (h,
+      "video/x-h264,stream-format=byte-stream,alignment=nal,parsed=false,framerate=30/1",
+      "video/x-h264,stream-format=byte-stream,alignment=nal,parsed=true");
+
+  buf = wrap_buffer (h264_slicing_sps, sizeof (h264_slicing_sps), 10, 0);
+  fail_unless_equals_int (gst_harness_push (h, buf), GST_FLOW_OK);
+
+  buf = wrap_buffer (h264_slicing_pps, sizeof (h264_slicing_pps), 10, 0);
+  fail_unless_equals_int (gst_harness_push (h, buf), GST_FLOW_OK);
+
+  /* parser must have inserted AUD before the headers, with the same PTS */
+  pull_and_check (h, h264_aud, 10, 0);
+
+  /* drop the header buffers */
+  while ((buf = gst_harness_try_pull (h)))
+    gst_buffer_unref (buf);
+
+  /* First frame with PTS and DTS */
+  buf = wrap_buffer (h264_idr_slice_1, sizeof (h264_idr_slice_1), 100, 0);
+  fail_unless_equals_int (gst_harness_push (h, buf), GST_FLOW_OK);
+  fail_unless_equals_int (gst_harness_buffers_in_queue (h), 1);
+  pull_and_check (h, h264_idr_slice_1, 100, 0);
+
+  /* Second frame with the same PTS as the first.
+   * The duplicated PTS must be preserved on the output. */
+  buf = wrap_buffer (h264_idr_slice_1, sizeof (h264_idr_slice_1), 100, 0);
+  fail_unless_equals_int (gst_harness_push (h, buf), GST_FLOW_OK);
+  fail_unless_equals_int (gst_harness_buffers_in_queue (h), 2);
+  pull_and_check (h, h264_aud, 100, 0);
+  pull_and_check (h, h264_idr_slice_1, 100, 0);
+
+  /* Third frame with a higher PTS again */
+  buf = wrap_buffer (h264_idr_slice_1, sizeof (h264_idr_slice_1), 200, 0);
+  fail_unless_equals_int (gst_harness_push (h, buf), GST_FLOW_OK);
+  fail_unless_equals_int (gst_harness_buffers_in_queue (h), 2);
+  pull_and_check (h, h264_aud, 200, 0);
+  pull_and_check (h, h264_idr_slice_1, 200, 0);
+
+  gst_harness_teardown (h);
+}
+
+GST_END_TEST;
+
+GST_START_TEST (test_parse_avc_duplicated_pts)
+{
+  GstHarness *h = gst_harness_new ("h264parse");
+  GstBuffer *buf;
+
+  /* AVC IDR frame NAL, length prefixed (one AU per buffer) */
+  static const guint8 h264_idr_avc[] = {
+    0x00, 0x00, 0x00, 0x14,
+    0x65, 0x88, 0x84, 0x00, 0x10, 0xff, 0xfe, 0xf6, 0xf0, 0xfe, 0x05, 0x36,
+    0x56, 0x04, 0x50, 0x96, 0x7b, 0x3f, 0x53, 0xe1
+  };
+
+  /* For the first frame the parser prepends the SPS/PPS from the caps
+   * codec_data, length prefixed */
+  static const guint8 h264_sps_pps_idr_avc[] = {
+    0x00, 0x00, 0x00, 0x17, 0x67, 0x4d, 0x40, 0x15, 0xec, 0xa4, 0xbf, 0x2e,
+    0x02, 0x20, 0x00, 0x00, 0x03, 0x00, 0x2e, 0xe6, 0xb2, 0x80, 0x01,
+    0xe2, 0xc5, 0xb2, 0xc0,
+    0x00, 0x00, 0x00, 0x04, 0x68, 0xeb, 0xec, 0xb2,
+    0x00, 0x00, 0x00, 0x14, 0x65, 0x88, 0x84, 0x00, 0x10, 0xff, 0xfe, 0xf6,
+    0xf0, 0xfe, 0x05, 0x36, 0x56, 0x04, 0x50, 0x96, 0x7b, 0x3f, 0x53, 0xe1
+  };
+
+  gst_harness_set_src_caps_str (h,
+      "video/x-h264, stream-format=(string)avc, alignment=(string)au,"
+      " codec_data=(buffer)014d4015ffe10017674d4015eca4bf2e0220000003002ee6b28001e2c5b2c001000468ebecb2,"
+      " width=(int)32, height=(int)24, framerate=(fraction)30/1,"
+      " pixel-aspect-ratio=(fraction)1/1");
+
+  buf = wrap_buffer (h264_idr_avc, sizeof (h264_idr_avc), 100, 0);
+  fail_unless_equals_int (gst_harness_push (h, buf), GST_FLOW_OK);
+  pull_and_check (h, h264_sps_pps_idr_avc, 100, 0);
+
+  /* Second frame with the same PTS as the first.
+   * The duplicated PTS must be preserved on the output. */
+  buf = wrap_buffer (h264_idr_avc, sizeof (h264_idr_avc), 100, 0);
+  fail_unless_equals_int (gst_harness_push (h, buf), GST_FLOW_OK);
+  pull_and_check (h, h264_idr_avc, 100, 0);
+
+  /* Third frame with a higher PTS again */
+  buf = wrap_buffer (h264_idr_avc, sizeof (h264_idr_avc), 200, 0);
+  fail_unless_equals_int (gst_harness_push (h, buf), GST_FLOW_OK);
+  pull_and_check (h, h264_idr_avc, 200, 0);
+
+  gst_harness_teardown (h);
+}
+
+GST_END_TEST;
+GST_START_TEST (test_parse_bs_au_duplicated_pts)
+{
+  GstHarness *h = gst_harness_new ("h264parse");
+  GstBuffer *buf;
+
+  /* Same SPS/PPS/IDR NALs as test_parse_avc_duplicated_pts, but with
+   * start codes (byte-stream) instead of length prefixes */
+  static const guint8 h264_sps_bs[] = {
+    0x00, 0x00, 0x00, 0x01, 0x67, 0x4d, 0x40, 0x15, 0xec, 0xa4, 0xbf, 0x2e,
+    0x02, 0x20, 0x00, 0x00, 0x03, 0x00, 0x2e, 0xe6, 0xb2, 0x80, 0x01, 0xe2,
+    0xc5, 0xb2, 0xc0
+  };
+  static const guint8 h264_pps_bs[] = {
+    0x00, 0x00, 0x00, 0x01, 0x68, 0xeb, 0xec, 0xb2
+  };
+  static const guint8 h264_idr_bs[] = {
+    0x00, 0x00, 0x00, 0x01,
+    0x65, 0x88, 0x84, 0x00, 0x10, 0xff, 0xfe, 0xf6, 0xf0, 0xfe, 0x05, 0x36,
+    0x56, 0x04, 0x50, 0x96, 0x7b, 0x3f, 0x53, 0xe1
+  };
+
+  /* For byte-stream output the parser prepends the SPS/PPS it learned from
+   * the first input buffer and inserts an AUD */
+  static const guint8 h264_aud_sps_pps_bs[] = {
+    0x00, 0x00, 0x00, 0x01, 0x09, 0xf0,
+    0x00, 0x00, 0x00, 0x01, 0x67, 0x4d, 0x40, 0x15, 0xec, 0xa4, 0xbf, 0x2e,
+    0x02, 0x20, 0x00, 0x00, 0x03, 0x00, 0x2e, 0xe6, 0xb2, 0x80, 0x01, 0xe2,
+    0xc5, 0xb2, 0xc0,
+    0x00, 0x00, 0x00, 0x01, 0x68, 0xeb, 0xec, 0xb2
+  };
+
+  static const guint8 h264_aud_idr_bs[] = {
+    0x00, 0x00, 0x00, 0x01, 0x09, 0xf0,
+    0x00, 0x00, 0x00, 0x01, 0x65, 0x88, 0x84, 0x00, 0x10, 0xff, 0xfe, 0xf6,
+    0xf0, 0xfe, 0x05, 0x36, 0x56, 0x04, 0x50, 0x96, 0x7b, 0x3f, 0x53, 0xe1
+  };
+
+  gst_harness_set_src_caps_str (h,
+      "video/x-h264, stream-format=(string)byte-stream, alignment=(string)au,"
+      " parsed=(boolean)false, framerate=(fraction)30/1");
+
+  buf = composite_buffer (10, 0, 2,
+      h264_sps_bs, sizeof (h264_sps_bs), h264_pps_bs, sizeof (h264_pps_bs));
+  fail_unless_equals_int (gst_harness_push (h, buf), GST_FLOW_OK);
+  pull_and_check (h, h264_aud_sps_pps_bs, 10, 0);
+
+  buf = wrap_buffer (h264_idr_bs, sizeof (h264_idr_bs), 100, 0);
+  fail_unless_equals_int (gst_harness_push (h, buf), GST_FLOW_OK);
+  pull_and_check (h, h264_idr_bs, 100, 0);
+
+  /* Second frame with the same PTS as the first.
+   * The duplicated PTS must be preserved on the output. */
+  buf = wrap_buffer (h264_idr_bs, sizeof (h264_idr_bs), 100, 0);
+  fail_unless_equals_int (gst_harness_push (h, buf), GST_FLOW_OK);
+  pull_and_check (h, h264_aud_idr_bs, 100, 0);
+
+  /* Third frame with a higher PTS again */
+  buf = wrap_buffer (h264_idr_bs, sizeof (h264_idr_bs), 200, 0);
+  fail_unless_equals_int (gst_harness_push (h, buf), GST_FLOW_OK);
+  pull_and_check (h, h264_aud_idr_bs, 200, 0);
+
+  gst_harness_teardown (h);
+}
+
+GST_END_TEST;
+
 
 GST_START_TEST (test_parse_sliced_nal_au)
 {
@@ -1193,7 +1511,10 @@ h264parse_sliced_suite (void)
   suite_add_tcase (s, tc_chain);
   tcase_add_test (tc_chain, test_parse_sliced_nal_nal);
   tcase_add_test (tc_chain, test_parse_sliced_au_nal);
+  tcase_add_test (tc_chain, test_parse_sliced_sparse_pts);
+  tcase_add_test (tc_chain, test_parse_sliced_duplicated_pts);
   tcase_add_test (tc_chain, test_parse_sliced_nal_au);
+  tcase_add_test (tc_chain, test_parse_bs_au_duplicated_pts);
   tcase_add_test (tc_chain, test_parse_sliced_sps_pps_sps);
 
   return s;
@@ -1806,6 +2127,7 @@ main (int argc, char **argv)
     s = suite_create ("h264parse");
     suite_add_tcase (s, tc_chain);
     tcase_add_test (tc_chain, test_parse_sei_closedcaptions);
+    tcase_add_test (tc_chain, test_parse_avc_duplicated_pts);
     tcase_add_test (tc_chain, test_parse_compatible_caps);
     tcase_add_test (tc_chain, test_parse_skip_to_4bytes_sc);
     tcase_add_test (tc_chain, test_parse_aud_insert);

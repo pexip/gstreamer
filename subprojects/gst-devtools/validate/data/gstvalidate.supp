@@ -9,6 +9,20 @@
 ###   - PENDING: if the bug/leak hasn't been fixed yet. In this case, please
 ###     add an url to the bug report.
 
+# PENDING: GLib one-time GTask thread pool init leak in GDBus initialization
+{
+   GLib GTask thread pool init via GDBus
+   Memcheck:Leak
+   match-leak-kinds: definite
+   fun:malloc
+   fun:g_malloc
+   fun:g_slice_alloc
+   ...
+   fun:g_thread_new_internal
+   ...
+   fun:g_task_get_type*
+}
+
 # PENDING: https://bugs.freedesktop.org/show_bug.cgi?id=90073
 {
    Leak in mesa fixed with http://lists.freedesktop.org/archives/mesa-dev/2015-April/082101.html
@@ -211,6 +225,19 @@
    fun:_draw_checker_background
    fun:_draw_background
    fun:gst_gl_video_mixer_callback
+}
+
+# PENDING: GL driver (llvmpipe/swrast) leak during the glvideomixer shader
+# draw - the mixer callback calls straight into the driver, which leaks.
+{
+   GL driver leak triggered by glvideomixer drawing
+   Memcheck:Leak
+   match-leak-kinds: definite,indirect
+   fun:calloc
+   obj:*
+   ...
+   fun:gst_gl_video_mixer_callback
+   fun:gst_gl_framebuffer_draw_to_texture
 }
 
 {

@@ -48,13 +48,16 @@ GstDebugCategory * _ges_debug (void);
 #define MIN_NLE_PRIO 2
 #define LAYER_HEIGHT 1000
 
-#define _START(obj) GES_TIMELINE_ELEMENT_START (obj)
-#define _INPOINT(obj) GES_TIMELINE_ELEMENT_INPOINT (obj)
-#define _DURATION(obj) GES_TIMELINE_ELEMENT_DURATION (obj)
-#define _MAXDURATION(obj) GES_TIMELINE_ELEMENT_MAX_DURATION (obj)
-#define _PRIORITY(obj) GES_TIMELINE_ELEMENT_PRIORITY (obj)
+/* Internal macros for direct field access - these do NOT call getters
+ * to avoid performance overhead.
+ * Use the public GES_TIMELINE_ELEMENT_* macros for MT-safe access from external code. */
+#define _START(obj) (((GESTimelineElement*)(obj))->start)
+#define _INPOINT(obj) (((GESTimelineElement*)(obj))->inpoint)
+#define _DURATION(obj) (((GESTimelineElement*)(obj))->duration)
+#define _MAXDURATION(obj) (((GESTimelineElement*)(obj))->maxduration)
+#define _PRIORITY(obj) (((GESTimelineElement*)(obj))->priority)
 #ifndef _END
-#define _END(obj) (_START (obj) + _DURATION (obj))
+#define _END(obj) (((GESTimelineElement*)(obj))->start + ((GESTimelineElement*)(obj))->duration)
 #endif
 #define _set_start0 ges_timeline_element_set_start
 #define _set_inpoint0 ges_timeline_element_set_inpoint
@@ -191,8 +194,17 @@ ges_timeline_get_smart_rendering (GESTimeline *timeline);
 G_GNUC_INTERNAL GstStreamCollection*
 ges_timeline_get_stream_collection (GESTimeline *timeline);
 
-G_GNUC_INTERNAL gboolean
-ges_timeline_in_current_thread (GESTimeline *timeline);
+G_GNUC_INTERNAL void
+_ges_timeline_lock (GESTimeline *timeline);
+
+G_GNUC_INTERNAL void
+_ges_timeline_unlock (GESTimeline *timeline);
+
+G_GNUC_INTERNAL GESTimeline *
+_ges_timeline_element_lock (GESTimelineElement *self);
+
+G_GNUC_INTERNAL void
+_ges_timeline_element_unlock (GESTimelineElement *self, GESTimeline *timeline);
 
 G_GNUC_INTERNAL void
 ges_auto_transition_set_source (GESAutoTransition * self, GESTrackElement * source, GESEdge edge);
@@ -240,6 +252,37 @@ G_GNUC_INTERNAL gchar *
 ges_effect_asset_id_get_type_and_bindesc (const char    *id,
                                           GESTrackType  *track_type,
                                           GError       **error);
+G_GNUC_INTERNAL gchar *
+ges_effect_asset_id_get_type_and_bindesc_full (const char *id,
+                                               GESTrackType *track_type,
+                                               GESAssetRequestFlags flags,
+                                               GError **error);
+G_GNUC_INTERNAL gchar *
+ges_effect_asset_id_get_bindesc (const char   *id,
+                                 GESTrackType *track_type);
+
+/* Process-wide record of refused untrusted content and what the application
+ * accepted. */
+G_GNUC_INTERNAL gchar * ges_extractable_type_check_id_full (GType type, const gchar *id,
+                                                            GESAssetRequestFlags flags,
+                                                            GError **error);
+G_GNUC_INTERNAL void          ges_untrusted_content_record   (const gchar *bin_desc,
+                                                              GstStructure *report);
+G_GNUC_INTERNAL GstStructure *ges_untrusted_content_get_report (const gchar *bin_desc);
+G_GNUC_INTERNAL void          ges_untrusted_content_approve  (const gchar *bin_desc);
+G_GNUC_INTERNAL gboolean      ges_untrusted_content_is_approved (const gchar *bin_desc);
+G_GNUC_INTERNAL void          ges_untrusted_property_approve (const gchar *type_name,
+                                                              const gchar *property,
+                                                              const GValue *value);
+G_GNUC_INTERNAL gboolean      ges_untrusted_property_is_approved (const gchar *type_name,
+                                                               const gchar *property,
+                                                               const GValue *value);
+
+G_GNUC_INTERNAL gboolean ges_project_ask_untrusted_content (GESProject   *project,
+                                                            const gchar  *id,
+                                                            GType         extractable_type,
+                                                            GstStructure *report,
+                                                            GError       *error);
 
 G_GNUC_INTERNAL void _ges_uri_asset_cleanup (void);
 
@@ -373,7 +416,9 @@ G_GNUC_INTERNAL void ges_base_xml_formatter_add_source          (GESBaseXmlForma
                                                                  const gchar * track_id,
                                                                  GstStructure *children_properties,
                                                                  GstStructure *properties,
-                                                                 const gchar *metadatas);
+                                                                 const gchar *metadatas,
+                                                                 gint stream_number,
+                                                                 GError **error);
 
 G_GNUC_INTERNAL void ges_base_xml_formatter_add_group           (GESBaseXmlFormatter *self,
                                                                  const gchar *name,
@@ -418,8 +463,107 @@ G_GNUC_INTERNAL gint element_start_compare                (GESTimelineElement * 
                                                            GESTimelineElement * b);
 G_GNUC_INTERNAL gint element_end_compare                  (GESTimelineElement * a,
                                                            GESTimelineElement * b);
-G_GNUC_INTERNAL GstElementFactory *
-ges_get_compositor_factory                                (void);
+/**
+ * GESVideoElementSelector:
+ *
+ * Process-lifetime singleton that resolves, for the compositor GES
+ * picks out of the registry, every raw-video primitive the source
+ * filter chain and smart mixer need. Access via the accessors /
+ * makers below - the struct is opaque.
+ */
+typedef struct _GESVideoElementSelector GESVideoElementSelector;
+
+G_GNUC_INTERNAL const GESVideoElementSelector *
+ges_video_element_selector                                (void);
+
+/* Release the singleton's factory references. Called from ges_deinit(). */
+G_GNUC_INTERNAL void
+ges_video_element_selector_deinit                         (void);
+
+/* %TRUE when the compositor's sink only accepts its native memory -
+ * downstream of the selector's makers must stay on native memory. */
+G_GNUC_INTERNAL gboolean
+ges_video_element_selector_is_strict                      (const GESVideoElementSelector * self);
+
+/* Create the compositor element the selector picked. */
+G_GNUC_INTERNAL GstElement *
+ges_video_element_selector_make_compositor                (const GESVideoElementSelector * self,
+                                                           const gchar * name);
+
+/* Create a `[uploader !] colorconvert [! downloader]` bin, or the
+ * bare colorconvert element when the selector represents a
+ * system-memory backend. The downloader is elided when @strict.
+ * @name, when non-%NULL, names the returned top-level element (the
+ * wrapper bin if any, otherwise the core element) — useful for
+ * pipeline debug dumps. @main_element, when non-%NULL, receives a
+ * non-owned pointer to the core element inside the returned bin so
+ * callers can configure it directly (e.g. set properties). */
+G_GNUC_INTERNAL GstElement *
+ges_video_element_selector_make_colorconvert              (const GESVideoElementSelector * self,
+                                                           const gchar * name,
+                                                           GstElement ** main_element);
+
+/* Create a bare colorconvert element (no uploader/downloader wrapper),
+ * intended for use downstream of a strict compositor whose output is
+ * already native memory. */
+G_GNUC_INTERNAL GstElement *
+ges_video_element_selector_make_colorconvert_bare         (const GESVideoElementSelector * self,
+                                                           const gchar * name);
+
+/* Build a convert+scale element for source chains that need both
+ * colorspace conversion and rescaling. Uses @convert_scale when
+ * available, else wraps a `colorconvert ! scale ! colorconvert` chain
+ * — sandwiching the scaler between two colorconverts so the scaler
+ * always sees a format it accepts regardless of the incoming caps.
+ * @main_element, when non-%NULL, receives a pointer to the scaler
+ * (or the combined convert+scale element). */
+G_GNUC_INTERNAL GstElement *
+ges_video_element_selector_make_convert_scale             (const GESVideoElementSelector * self,
+                                                           const gchar * name,
+                                                           GstElement ** main_element);
+
+/* Like _make_convert_scale, but guarantees @main_element exposes an
+ * `add-borders` property - falls back to a sysmem-wrapped videoscale
+ * when the backend's scaler doesn't have it. */
+G_GNUC_INTERNAL GstElement *
+ges_video_element_selector_make_convert_scale_add_borders (const GESVideoElementSelector * self,
+                                                           const gchar * name,
+                                                           GstElement ** main_element);
+
+/* Same shape as _make_colorconvert, but for the deinterlacer. */
+G_GNUC_INTERNAL GstElement *
+ges_video_element_selector_make_deinterlace               (const GESVideoElementSelector * self,
+                                                           const gchar * name,
+                                                           GstElement ** main_element);
+
+/* Same shape as _make_colorconvert, but for the video-flip /
+ * rotation element. */
+G_GNUC_INTERNAL GstElement *
+ges_video_element_selector_make_videoflip                 (const GESVideoElementSelector * self,
+                                                           const gchar * name,
+                                                           GstElement ** main_element);
+
+/* Create the uploader element a system-memory producer must place
+ * before its output when feeding the compositor. Returns %NULL when
+ * the compositor accepts system memory directly — i.e. whenever the
+ * selector is not @strict.
+ */
+GES_API GstElement *
+ges_video_element_selector_make_uploader                  (const GESVideoElementSelector * self);
+
+/* Return a parse-launch description for the colorconvert bin as
+ * built by _make_colorconvert(). Caller takes ownership. Useful when
+ * the result must be embedded in a larger gst_parse_bin_from_description
+ * expression (e.g. effect pad wrappers). */
+G_GNUC_INTERNAL gchar *
+ges_video_element_selector_colorconvert_bin_desc          (const GESVideoElementSelector * self);
+
+/* Snapshot the selector's resolved factories and flags into a
+ * GstStructure. Used by the `check-ges-video-element-selector` validate
+ * action to assert selector state without leaking internals into the
+ * ABI. Caller owns the returned structure. */
+G_GNUC_INTERNAL GstStructure *
+ges_video_element_selector_describe                       (const GESVideoElementSelector * self);
 
 G_GNUC_INTERNAL void
 ges_callback_add (GSourceFunc func, gpointer udata, GDestroyNotify notify);
@@ -535,6 +679,19 @@ G_GNUC_INTERNAL GstClockTime
 ges_base_effect_translate_sink_to_source_time (GESBaseEffect * effect,
                                                GstClockTime time,
                                                GHashTable * time_property_values);
+G_GNUC_INTERNAL void
+ges_base_effect_set_source                    (GESBaseEffect * effect,
+                                               GESSource * source);
+G_GNUC_INTERNAL GESSource *
+ges_base_effect_get_bound_source              (GESBaseEffect * effect);
+
+G_GNUC_INTERNAL void
+ges_source_set_wanted_track                   (GESSource * source,
+                                               GESTrack * track);
+G_GNUC_INTERNAL gboolean
+ges_source_has_wanted_track                   (GESSource * source);
+G_GNUC_INTERNAL GESTrack *
+ges_source_get_wanted_track                   (GESSource * source);
 G_GNUC_INTERNAL GstElement *
 ges_effect_from_description                   (const gchar *bin_desc,
                                                GESTrackType type,

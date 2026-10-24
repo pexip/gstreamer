@@ -23,6 +23,7 @@
 
 #include "gstd3d12.h"
 #include "gstd3d12-private.h"
+#include "gstd3d12device-converter-private.h"
 #include "gstd3d12cmdlistpool.h"
 #include <directx/d3dx12.h>
 #include <d3d11on12.h>
@@ -36,6 +37,7 @@
 #include <locale>
 #include <codecvt>
 #include <algorithm>
+#include <utility>
 #include <d3d12sdklayers.h>
 #include <memory>
 #include <queue>
@@ -109,9 +111,37 @@ enum
   PROP_HARDWARE,
   PROP_DESCRIPTION,
   PROP_DEVICE_REMOVED_REASON,
+  PROP_MEMORY_BUDGET,
+  PROP_RESIDENT_MEMORY_SIZE,
+  PROP_OVER_BUDGET_FACTOR,
+  PROP_REUSE_DECODER_SESSION,
 };
 
 static GParamSpec *pspec_removed_reason = nullptr;
+
+#define DEFAULT_OVER_BUDGET_FACTOR 0.8
+#define DEFAULT_REUSE_DECODER_SESSION GST_D3D12_DECODER_SESSION_REUSE_DISABLED
+
+GType
+gst_d3d12_decoder_session_reuse_get_type (void)
+{
+  static GType type = 0;
+  static const GEnumValue reuse_modes[] = {
+    {GST_D3D12_DECODER_SESSION_REUSE_DISABLED,
+        "GST_D3D12_DECODER_SESSION_REUSE_DISABLED", "disabled"},
+    {GST_D3D12_DECODER_SESSION_REUSE_ALL,
+        "GST_D3D12_DECODER_SESSION_REUSE_ALL", "all"},
+    {GST_D3D12_DECODER_SESSION_REUSE_WITHOUT_TEXTURES,
+        "GST_D3D12_DECODER_SESSION_REUSE_WITHOUT_TEXTURES", "without-textures"},
+    {0, nullptr, nullptr},
+  };
+
+  GST_D3D12_CALL_ONCE_BEGIN {
+    type = g_enum_register_static ("GstD3D12DecoderSessionReuse", reuse_modes);
+  } GST_D3D12_CALL_ONCE_END;
+
+  return type;
+}
 
 /* *INDENT-OFF* */
 using namespace Microsoft::WRL;
@@ -144,15 +174,31 @@ struct DeviceInner
 
     gst_clear_object (&fence_data_pool);
     gst_clear_object (&rtv_heap_pool);
+    gst_clear_object (&srv_heap_pool);
 
     gamma_dec_lut.clear();
     gamma_enc_lut.clear();
     samplers.clear ();
     gamma_lut_pso = nullptr;
     gamma_lut_rs = nullptr;
+    mipmap_cache.clear ();
+    copy_2d_pso = nullptr;
+    copy_2d_unaligned_pso = nullptr;
+    copy_2d_rs = nullptr;
+
+    if (adapter3) {
+      adapter3->UnregisterVideoMemoryBudgetChangeNotification (budget_change_cb_cookie);
+      SetEvent (cancellable);
+      g_clear_pointer (&budget_monitor_thread, g_thread_join);
+
+      CloseHandle (budget_change_event);
+      CloseHandle (cancellable);
+    }
 
     factory = nullptr;
     adapter = nullptr;
+    adapter3 = nullptr;
+    device3 = nullptr;
 
     if (removed_reason == S_OK)
       ReportLiveObjects ();
@@ -239,7 +285,9 @@ struct DeviceInner
   }
 
   ComPtr<ID3D12Device> device;
+  ComPtr<ID3D12Device3> device3;
   ComPtr<IDXGIAdapter1> adapter;
+  ComPtr<IDXGIAdapter3> adapter3;
   ComPtr<IDXGIFactory2> factory;
   ComPtr<ID3D11On12Device> device11on12;
   std::unordered_map<GstVideoFormat, GstD3D12Format> format_table;
@@ -275,8 +323,15 @@ struct DeviceInner
   std::unordered_map<DWORD, ComPtr<ID3D12Resource>> gamma_dec_lut;
   std::unordered_map<DWORD, ComPtr<ID3D12Resource>> gamma_enc_lut;
   GstD3D12DescHeapPool *rtv_heap_pool = nullptr;
+  GstD3D12DescHeapPool *srv_heap_pool = nullptr;
+
+  /* PSO for gst_d3d12_device_copy_buffer_2d */
+  ComPtr<ID3D12RootSignature> copy_2d_rs;
+  ComPtr<ID3D12PipelineState> copy_2d_pso;
+  ComPtr<ID3D12PipelineState> copy_2d_unaligned_pso;
 
   guint rtv_inc_size;
+  guint srv_inc_size;
 
   guint adapter_index = 0;
   guint device_id = 0;
@@ -290,9 +345,26 @@ struct DeviceInner
   ComPtr<ID3D12Fence> dev_removed_fence;
   std::atomic<HRESULT> removed_reason = { S_OK };
 
+  std::mutex make_resident_lock;
+  ComPtr<ID3D12Fence> make_resident_fence;
+  guint64 make_resident_fence_val = 1;
+  HANDLE budget_change_event = nullptr;
+  HANDLE cancellable = nullptr;
+  GThread *budget_monitor_thread = nullptr;
+  DWORD budget_change_cb_cookie = 0;
+  std::atomic<guint64> current_budget = { 0 };
+  std::atomic<gint64> resident_size = { 0 };
+  std::atomic<double> overbudget_factor = { DEFAULT_OVER_BUDGET_FACTOR };
+  std::atomic<bool> is_over_budget = { false };
+  std::atomic<GstD3D12DecoderSessionReuse> reuse_decoder_session =
+      { DEFAULT_REUSE_DECODER_SESSION };
+
   std::vector<GstD3D12Device*> clients;
 
   std::unordered_map<D3D12_FILTER, ComPtr<ID3D12DescriptorHeap>> samplers;
+
+  std::mutex mipmap_cache_lock;
+  std::unordered_map<std::string, std::weak_ptr<GstD3D12TextureEntry>> mipmap_cache;
 };
 
 typedef std::shared_ptr<DeviceInner> DeviceInnerPtr;
@@ -496,13 +568,34 @@ public:
     }
   }
 
-  void FlushAll ()
+  void RegisterFlushCallback (GDestroyNotify callback, gpointer user_data)
   {
     std::lock_guard <std::recursive_mutex> lk (lock_);
-    for (const auto & it : list_) {
-      it->Drain ();
-      it->ReportLiveObjects ();
+    auto entry = std::make_pair (callback, user_data);
+    if (std::find (flush_callbacks_.begin (), flush_callbacks_.end (), entry)
+        == flush_callbacks_.end ()) {
+      flush_callbacks_.push_back (entry);
     }
+  }
+
+  void FlushAll ()
+  {
+    std::vector<DeviceInnerPtr> devices;
+    std::vector<std::pair<GDestroyNotify, gpointer>> callbacks;
+    {
+      std::lock_guard <std::recursive_mutex> lk (lock_);
+      devices = list_;
+      callbacks = flush_callbacks_;
+      for (const auto & it : devices)
+        it->Drain ();
+    }
+
+    /* Callbacks may release devices or access the manager */
+    for (const auto & callback : callbacks)
+      callback.first (callback.second);
+
+    for (const auto & it : devices)
+      it->ReportLiveObjects ();
   }
 
 private:
@@ -527,6 +620,7 @@ private:
 private:
   std::recursive_mutex lock_;
   std::vector<DeviceInnerPtr> list_;
+  std::vector<std::pair<GDestroyNotify, gpointer>> flush_callbacks_;
   std::unordered_map<UINT,UINT> name_map_;
 };
 /* *INDENT-ON* */
@@ -667,6 +761,8 @@ static void gst_d3d12_device_dispose (GObject * object);
 static void gst_d3d12_device_finalize (GObject * object);
 static void gst_d3d12_device_get_property (GObject * object, guint prop_id,
     GValue * value, GParamSpec * pspec);
+static void gst_d3d12_device_set_property (GObject * object, guint prop_id,
+    const GValue * value, GParamSpec * pspec);
 static void gst_d3d12_device_setup_format_table (GstD3D12Device * self);
 
 static void
@@ -679,6 +775,7 @@ gst_d3d12_device_class_init (GstD3D12DeviceClass * klass)
   gobject_class->dispose = gst_d3d12_device_dispose;
   gobject_class->finalize = gst_d3d12_device_finalize;
   gobject_class->get_property = gst_d3d12_device_get_property;
+  gobject_class->set_property = gst_d3d12_device_set_property;
 
   g_object_class_install_property (gobject_class, PROP_ADAPTER_INDEX,
       g_param_spec_uint ("adapter-index", "Adapter Index",
@@ -708,6 +805,74 @@ gst_d3d12_device_class_init (GstD3D12DeviceClass * klass)
       G_MININT32, G_MAXINT32, 0, readable_flags);
   g_object_class_install_property (gobject_class, PROP_DEVICE_REMOVED_REASON,
       pspec_removed_reason);
+
+  /**
+   * GstD3D12Device:memory-budget:
+   *
+   * Current local video memory budget
+   *
+   * Since: 1.30
+   */
+  g_object_class_install_property (gobject_class, PROP_MEMORY_BUDGET,
+      g_param_spec_uint64 ("memory-budget", "Memory Budget",
+          "Current local video memory budget in bytes",
+          0, G_MAXUINT64, 0, readable_flags));
+
+  /**
+   * GstD3D12Device:resident-memory-size:
+   *
+   * Currently resident video memory size
+   *
+   * Since: 1.30
+   */
+  g_object_class_install_property (gobject_class, PROP_RESIDENT_MEMORY_SIZE,
+      g_param_spec_uint64 ("resident-memory-size", "Resident Memory Size",
+          "Tracked total size of resident resources in bytes",
+          0, G_MAXUINT64, 0, readable_flags));
+
+  /**
+   * GstD3D12Device:over-budget-factor:
+   *
+   * The factor applied to the memory budget to determine whether
+   * the device is over budget. D3D12 elements may try to evict unused
+   * resources when the device is over budget
+   *
+   * Since: 1.30
+   */
+  g_object_class_install_property (gobject_class, PROP_OVER_BUDGET_FACTOR,
+      g_param_spec_double ("over-budget-factor", "Over Budget Factor",
+          "Factor applied to the \"memory-budget\" for over-budget detection "
+          "(0.0 = always try to evict, "
+          "1.0 = try to evict when \"resident-memory-size\" is greater than "
+          "or equal to \"memory-budget\")",
+          0.0, 1.0, DEFAULT_OVER_BUDGET_FACTOR,
+          (GParamFlags) (G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS)));
+
+  /**
+   * GstD3D12Device:reuse-decoder-session:
+   *
+   * Keep video decoder sessions alive after decoder instances are destroyed,
+   * allowing compatible sessions to be reused by subsequent decoder instances.
+   *
+   * This avoids repeatedly creating and destroying D3D12 video decoder
+   * resources when compatible decoder instances are created sequentially.
+   *
+   * %GST_D3D12_DECODER_SESSION_REUSE_ALL keeps sessions that are not in use
+   * complete, textures included, so that reusing one needs no allocation.
+   *
+   * %GST_D3D12_DECODER_SESSION_REUSE_WITHOUT_TEXTURES keeps the decoder and
+   * its heap alive but releases the textures of sessions that are not in
+   * use. It suits use cases where the codec or resolution of the streams
+   * changes often.
+   *
+   * Since: 1.30
+   */
+  g_object_class_install_property (gobject_class, PROP_REUSE_DECODER_SESSION,
+      g_param_spec_enum ("reuse-decoder-session",
+          "Reuse Decoder Session",
+          "Keep and reuse compatible video decoder sessions",
+          GST_TYPE_D3D12_DECODER_SESSION_REUSE, DEFAULT_REUSE_DECODER_SESSION,
+          (GParamFlags) (G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS)));
 }
 
 static void
@@ -766,6 +931,42 @@ gst_d3d12_device_get_property (GObject * object, guint prop_id,
       break;
     case PROP_DEVICE_REMOVED_REASON:
       g_value_set_int (value, priv->removed_reason);
+      break;
+    case PROP_MEMORY_BUDGET:
+      g_value_set_uint64 (value, priv->current_budget.load ());
+      break;
+    case PROP_RESIDENT_MEMORY_SIZE:
+    {
+      auto size = priv->resident_size.load ();
+      g_value_set_uint64 (value, size > 0 ? (guint64) size : 0);
+      break;
+    }
+    case PROP_OVER_BUDGET_FACTOR:
+      g_value_set_double (value, priv->overbudget_factor.load ());
+      break;
+    case PROP_REUSE_DECODER_SESSION:
+      g_value_set_enum (value, priv->reuse_decoder_session.load ());
+      break;
+    default:
+      G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
+      break;
+  }
+}
+
+static void
+gst_d3d12_device_set_property (GObject * object, guint prop_id,
+    const GValue * value, GParamSpec * pspec)
+{
+  auto self = GST_D3D12_DEVICE (object);
+  auto priv = self->priv->inner;
+
+  switch (prop_id) {
+    case PROP_OVER_BUDGET_FACTOR:
+      priv->overbudget_factor = g_value_get_double (value);
+      break;
+    case PROP_REUSE_DECODER_SESSION:
+      priv->reuse_decoder_session =
+          (GstD3D12DecoderSessionReuse) g_value_get_enum (value);
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
@@ -1114,6 +1315,55 @@ struct TestFormatInfo
   D3D12_FORMAT_SUPPORT2 support2;
 };
 
+static gpointer
+gst_d3d12_device_budget_monitor_thread (DeviceInner * priv)
+{
+  HANDLE waitables[] = { priv->budget_change_event, priv->cancellable };
+  bool running = true;
+
+  GST_DEBUG ("Enter budget monitor thread");
+
+  while (running) {
+    auto wait_ret = WaitForMultipleObjects (G_N_ELEMENTS (waitables),
+        waitables, FALSE, INFINITE);
+
+    switch (wait_ret) {
+      case WAIT_OBJECT_0:
+      {
+        DXGI_QUERY_VIDEO_MEMORY_INFO info = { };
+        auto hr = priv->adapter3->QueryVideoMemoryInfo (0,
+            DXGI_MEMORY_SEGMENT_GROUP_LOCAL, &info);
+
+        if (SUCCEEDED (hr)) {
+          GST_DEBUG ("Budget updated, adapter-index: %u, vendor-id: 0x%04x, "
+              "device-id: 0x%04x, Budget: %" G_GUINT64_FORMAT
+              " MB, Current: %" G_GUINT64_FORMAT " MB, "
+              "AvailableForReservation: %" G_GUINT64_FORMAT " MB, "
+              "CurrentReservation: %" G_GUINT64_FORMAT " MB",
+              priv->adapter_index, priv->vendor_id, priv->device_id,
+              info.Budget / 1024 / 1024, info.CurrentUsage / 1024 / 1024,
+              info.AvailableForReservation / 1024 / 1024,
+              info.CurrentReservation / 1024 / 1024);
+          priv->current_budget = info.Budget;
+        }
+        break;
+      }
+      case WAIT_OBJECT_0 + 1:
+        GST_DEBUG ("Cancelled");
+        running = false;
+        break;
+      default:
+        GST_WARNING ("Unexpected wait ret %u", (guint) wait_ret);
+        running = false;
+        break;
+    }
+  }
+
+  GST_DEBUG ("Leave budget monitor thread");
+
+  return nullptr;
+}
+
 static GstD3D12Device *
 gst_d3d12_device_new_internal (const GstD3D12DeviceConstructData * data)
 {
@@ -1333,6 +1583,9 @@ gst_d3d12_device_new_internal (const GstD3D12DeviceConstructData * data)
 
   priv->rtv_inc_size =
       device->GetDescriptorHandleIncrementSize (D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
+  priv->srv_inc_size =
+      device->GetDescriptorHandleIncrementSize
+      (D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
 
   priv->fence_data_pool = gst_d3d12_fence_data_pool_new ();
 
@@ -1413,6 +1666,68 @@ gst_d3d12_device_new_internal (const GstD3D12DeviceConstructData * data)
     priv->rtv_heap_pool = gst_d3d12_desc_heap_pool_new (device.Get (),
         &rtv_desc);
     GST_OBJECT_FLAG_SET (priv->rtv_heap_pool, GST_OBJECT_FLAG_MAY_BE_LEAKED);
+  }
+
+  {
+    D3D12_DESCRIPTOR_HEAP_DESC srv_desc = { };
+    srv_desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
+    /* SRV/UAV for each planes  */
+    srv_desc.NumDescriptors = 2 * 4;
+    srv_desc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
+
+    priv->srv_heap_pool = gst_d3d12_desc_heap_pool_new (device.Get (),
+        &srv_desc);
+    GST_OBJECT_FLAG_SET (priv->srv_heap_pool, GST_OBJECT_FLAG_MAY_BE_LEAKED);
+  }
+
+  priv->device.As (&priv->device3);
+  if (priv->device3) {
+    device->CreateFence (0,
+        D3D12_FENCE_FLAG_SHARED, IID_PPV_ARGS (&priv->make_resident_fence));
+    if (!priv->make_resident_fence) {
+      GST_ERROR_OBJECT (self, "Couldn't create fence");
+      gst_object_unref (self);
+      return nullptr;
+    }
+
+
+    priv->adapter.As (&priv->adapter3);
+    if (priv->adapter3) {
+      DXGI_QUERY_VIDEO_MEMORY_INFO info = { };
+      hr = priv->adapter3->QueryVideoMemoryInfo (0,
+          DXGI_MEMORY_SEGMENT_GROUP_LOCAL, &info);
+      if (FAILED (hr)) {
+        priv->adapter3 = nullptr;
+      } else {
+        GST_INFO_OBJECT (self, "Current budget, adapter-index: %u, "
+            "vendor-id: 0x%04x, device-id: 0x%04x, Budget: %" G_GUINT64_FORMAT
+            " MB, Current: %" G_GUINT64_FORMAT " MB, "
+            "AvailableForReservation: %" G_GUINT64_FORMAT " MB, "
+            "CurrentReservation: %" G_GUINT64_FORMAT " MB",
+            priv->adapter_index, priv->vendor_id, priv->device_id,
+            info.Budget / 1024 / 1024,
+            info.CurrentUsage / 1024 / 1024,
+            info.AvailableForReservation / 1024 / 1024,
+            info.CurrentReservation / 1024 / 1024);
+
+        priv->current_budget = info.Budget;
+
+        priv->budget_change_event =
+            CreateEventW (nullptr, FALSE, FALSE, nullptr);
+        priv->cancellable = CreateEventW (nullptr, FALSE, FALSE, nullptr);
+        hr = priv->adapter3->RegisterVideoMemoryBudgetChangeNotificationEvent
+            (priv->budget_change_event, &priv->budget_change_cb_cookie);
+        if (FAILED (hr)) {
+          CloseHandle (priv->budget_change_event);
+          CloseHandle (priv->cancellable);
+          priv->adapter3 = nullptr;
+        } else {
+          priv->budget_monitor_thread = g_thread_new ("d3d12-mem-budget",
+              (GThreadFunc) gst_d3d12_device_budget_monitor_thread,
+              priv.get ());
+        }
+      }
+    }
   }
 
   return self;
@@ -1816,6 +2131,502 @@ gst_d3d12_device_copy_texture_region (GstD3D12Device * device,
   auto ret = gst_d3d12_result (hr, device);
 
   /* We can release command list since command list pool will hold it */
+  gst_d3d12_cmd_list_unref (gst_cl);
+
+  if (ret) {
+    gst_d3d12_cmd_queue_set_notify (queue, fence_val, fence_data,
+        (GDestroyNotify) gst_d3d12_fence_data_unref);
+  } else {
+    gst_d3d12_fence_data_unref (fence_data);
+  }
+
+  if (fence_value)
+    *fence_value = fence_val;
+
+  return ret;
+}
+
+gboolean
+gst_d3d12_device_copy_buffer_region (GstD3D12Device * device,
+    ID3D12Resource * dst, guint64 dst_offset, ID3D12Resource * src,
+    guint64 src_offset, guint64 size, GstD3D12FenceData * fence_data,
+    guint num_fences_to_wait, ID3D12Fence ** fences_to_wait,
+    const guint64 * fence_values_to_wait, D3D12_COMMAND_LIST_TYPE command_type,
+    guint64 * fence_value)
+{
+  g_return_val_if_fail (GST_IS_D3D12_DEVICE (device), FALSE);
+  g_return_val_if_fail (dst, FALSE);
+  g_return_val_if_fail (src, FALSE);
+  g_return_val_if_fail (size > 0, FALSE);
+
+  HRESULT hr;
+  auto priv = device->priv->inner;
+  GstD3D12CmdAllocPool *ca_pool;
+  GstD3D12CmdAlloc *gst_ca = nullptr;
+  GstD3D12CmdListPool *cl_pool;
+  GstD3D12CmdList *gst_cl = nullptr;
+  GstD3D12CmdQueue *queue = nullptr;
+  guint64 fence_val = 0;
+
+  if (!fence_data)
+    gst_d3d12_fence_data_pool_acquire (priv->fence_data_pool, &fence_data);
+
+  switch (command_type) {
+    case D3D12_COMMAND_LIST_TYPE_DIRECT:
+      queue = priv->direct_queue;
+      ca_pool = priv->direct_ca_pool;
+      cl_pool = priv->direct_cl_pool;
+      break;
+    case D3D12_COMMAND_LIST_TYPE_COMPUTE:
+      queue = priv->compute_queue;
+      ca_pool = priv->compute_ca_pool;
+      cl_pool = priv->compute_cl_pool;
+      break;
+    case D3D12_COMMAND_LIST_TYPE_COPY:
+      queue = priv->copy_queue;
+      ca_pool = priv->copy_ca_pool;
+      cl_pool = priv->copy_cl_pool;
+      break;
+    default:
+      GST_ERROR_OBJECT (device, "Not supported command list type %d",
+          command_type);
+      gst_d3d12_fence_data_unref (fence_data);
+      return FALSE;
+  }
+
+  gst_d3d12_cmd_alloc_pool_acquire (ca_pool, &gst_ca);
+  if (!gst_ca) {
+    GST_ERROR_OBJECT (device, "Couldn't acquire command allocator");
+    gst_d3d12_fence_data_unref (fence_data);
+    return FALSE;
+  }
+
+  gst_d3d12_fence_data_push (fence_data, FENCE_NOTIFY_MINI_OBJECT (gst_ca));
+
+  auto ca = gst_d3d12_cmd_alloc_get_handle (gst_ca);
+  gst_d3d12_cmd_list_pool_acquire (cl_pool, ca, &gst_cl);
+
+  if (!gst_cl) {
+    GST_ERROR_OBJECT (device, "Couldn't acquire command list");
+    gst_d3d12_fence_data_unref (fence_data);
+    return FALSE;
+  }
+
+  ComPtr < ID3D12CommandList > cl_base;
+  ComPtr < ID3D12GraphicsCommandList > cl;
+
+  cl_base = gst_d3d12_cmd_list_get_handle (gst_cl);
+  cl_base.As (&cl);
+
+  gboolean do_region_copy = TRUE;
+  if (src_offset == 0 && dst_offset == 0) {
+    auto src_desc = GetDesc (src);
+    auto dst_desc = GetDesc (dst);
+    if (src_desc.Width == dst_desc.Width && src_desc.Width == size) {
+      do_region_copy = FALSE;
+      cl->CopyResource (dst, src);
+    }
+  }
+
+  if (do_region_copy)
+    cl->CopyBufferRegion (dst, dst_offset, src, src_offset, size);
+
+  hr = cl->Close ();
+  if (!gst_d3d12_result (hr, device)) {
+    GST_ERROR_OBJECT (device, "Couldn't close command list");
+    gst_clear_d3d12_cmd_list (&gst_cl);
+    gst_d3d12_fence_data_unref (fence_data);
+    return FALSE;
+  }
+
+  ID3D12CommandList *cmd_list[] = { cl.Get () };
+
+  hr = gst_d3d12_cmd_queue_execute_command_lists_full (queue,
+      num_fences_to_wait, fences_to_wait, fence_values_to_wait, 1, cmd_list,
+      &fence_val);
+  auto ret = gst_d3d12_result (hr, device);
+
+  /* We can release command list since command list pool will hold it */
+  gst_d3d12_cmd_list_unref (gst_cl);
+
+  if (ret) {
+    gst_d3d12_cmd_queue_set_notify (queue, fence_val, fence_data,
+        (GDestroyNotify) gst_d3d12_fence_data_unref);
+  } else {
+    gst_d3d12_fence_data_unref (fence_data);
+  }
+
+  if (fence_value)
+    *fence_value = fence_val;
+
+  return ret;
+}
+
+static HRESULT
+gst_d3d12_device_copy_buffer_get_rs_blob (GstD3D12Device * device,
+    ID3DBlob ** blob)
+{
+  static ID3DBlob *rs_blob = nullptr;
+  static HRESULT hr = S_OK;
+
+  GST_D3D12_CALL_ONCE_BEGIN {
+    D3D12_VERSIONED_ROOT_SIGNATURE_DESC desc = { };
+    CD3DX12_ROOT_PARAMETER root_params[2];
+    CD3DX12_DESCRIPTOR_RANGE ranges[2];
+
+    root_params[0].InitAsConstants (8, 0);
+
+    ranges[0].Init (D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 0);
+    ranges[1].Init (D3D12_DESCRIPTOR_RANGE_TYPE_UAV, 1, 0);
+    root_params[1].InitAsDescriptorTable (2, ranges);
+
+    CD3DX12_VERSIONED_ROOT_SIGNATURE_DESC::Init_1_0 (desc,
+        G_N_ELEMENTS (root_params), root_params, 0, nullptr,
+        D3D12_ROOT_SIGNATURE_FLAG_DENY_VERTEX_SHADER_ROOT_ACCESS |
+        D3D12_ROOT_SIGNATURE_FLAG_DENY_HULL_SHADER_ROOT_ACCESS |
+        D3D12_ROOT_SIGNATURE_FLAG_DENY_DOMAIN_SHADER_ROOT_ACCESS |
+        D3D12_ROOT_SIGNATURE_FLAG_DENY_GEOMETRY_SHADER_ROOT_ACCESS);
+
+    ComPtr < ID3DBlob > error_blob;
+    hr = D3DX12SerializeVersionedRootSignature (&desc,
+        D3D_ROOT_SIGNATURE_VERSION_1_0, &rs_blob, &error_blob);
+    if (!gst_d3d12_result (hr, device)) {
+      const gchar *error_msg = nullptr;
+      if (error_blob)
+        error_msg = (const gchar *) error_blob->GetBufferPointer ();
+
+      GST_ERROR_OBJECT (device,
+          "Couldn't serialize root signature, hr: 0x%x, error detail: %s",
+          (guint) hr, GST_STR_NULL (error_msg));
+    }
+  } GST_D3D12_CALL_ONCE_END;
+
+  if (rs_blob) {
+    *blob = rs_blob;
+    rs_blob->AddRef ();
+  }
+
+  return hr;
+}
+
+static gboolean
+gst_d3d12_device_ensure_copy_buffer_2d_pso (GstD3D12Device * self)
+{
+  auto & priv = self->priv->inner;
+  std::lock_guard < std::mutex > lk (priv->lock);
+  if (priv->copy_2d_pso && priv->copy_2d_unaligned_pso)
+    return TRUE;
+
+  auto device = gst_d3d12_device_get_device_handle (self);
+  HRESULT hr;
+  if (!priv->copy_2d_rs) {
+    ComPtr < ID3DBlob > rs_blob;
+    hr = gst_d3d12_device_copy_buffer_get_rs_blob (self, &rs_blob);
+    if (!gst_d3d12_result (hr, self)) {
+      GST_ERROR_OBJECT (self, "Couldn't get RS");
+      return FALSE;
+    }
+
+    hr = device->CreateRootSignature (0,
+        rs_blob->GetBufferPointer (), rs_blob->GetBufferSize (),
+        IID_PPV_ARGS (&priv->copy_2d_rs));
+    if (!gst_d3d12_result (hr, self)) {
+      GST_ERROR_OBJECT (self, "Couldn't create root signature");
+      return FALSE;
+    }
+  }
+
+  if (!priv->copy_2d_pso) {
+    GstD3DShaderByteCode bytecode = { };
+    if (!gst_d3d_plugin_shader_get_cs_blob (GST_D3D_PLUGIN_CS_BUFFER_COPY_2D,
+            GST_D3D_SM_5_0, &bytecode)) {
+      GST_ERROR_OBJECT (self, "Couldn't compile copy buffer 2D shader");
+      return FALSE;
+    }
+
+    D3D12_COMPUTE_PIPELINE_STATE_DESC pso_desc = { };
+    pso_desc.pRootSignature = priv->copy_2d_rs.Get ();
+    pso_desc.CS.pShaderBytecode = bytecode.byte_code;
+    pso_desc.CS.BytecodeLength = bytecode.byte_code_len;
+
+    hr = device->CreateComputePipelineState (&pso_desc,
+        IID_PPV_ARGS (&priv->copy_2d_pso));
+    if (!gst_d3d12_result (hr, self)) {
+      GST_ERROR_OBJECT (self, "Couldn't create compute pipeline state");
+      return FALSE;
+    }
+  }
+
+  if (!priv->copy_2d_unaligned_pso) {
+    GstD3DShaderByteCode bytecode = { };
+    if (!gst_d3d_plugin_shader_get_cs_blob
+        (GST_D3D_PLUGIN_CS_BUFFER_COPY_2D_UNALIGNED, GST_D3D_SM_5_0,
+            &bytecode)) {
+      GST_ERROR_OBJECT (self, "Couldn't compile copy buffer 2D shader");
+      return FALSE;
+    }
+
+    D3D12_COMPUTE_PIPELINE_STATE_DESC pso_desc = { };
+    pso_desc.pRootSignature = priv->copy_2d_rs.Get ();
+    pso_desc.CS.pShaderBytecode = bytecode.byte_code;
+    pso_desc.CS.BytecodeLength = bytecode.byte_code_len;
+
+    hr = device->CreateComputePipelineState (&pso_desc,
+        IID_PPV_ARGS (&priv->copy_2d_unaligned_pso));
+    if (!gst_d3d12_result (hr, self)) {
+      GST_ERROR_OBJECT (self, "Couldn't create compute pipeline state");
+      return FALSE;
+    }
+  }
+
+  return TRUE;
+}
+
+gboolean
+gst_d3d12_device_copy_buffer_2d (GstD3D12Device * device, guint num_args,
+    const GstD3D12CopyBuffer2DArgs * args, GstD3D12FenceData * fence_data,
+    guint num_fences_to_wait, ID3D12Fence ** fences_to_wait,
+    const guint64 * fence_values_to_wait, D3D12_COMMAND_LIST_TYPE command_type,
+    guint64 * fence_value)
+{
+  g_return_val_if_fail (GST_IS_D3D12_DEVICE (device), FALSE);
+  g_return_val_if_fail (num_args > 0, FALSE);
+  g_return_val_if_fail (num_args <= 4, FALSE);
+  g_return_val_if_fail (args, FALSE);
+
+  HRESULT hr;
+  auto & priv = device->priv->inner;
+  GstD3D12CmdAllocPool *ca_pool;
+  GstD3D12CmdAlloc *gst_ca = nullptr;
+  GstD3D12CmdListPool *cl_pool;
+  GstD3D12CmdList *gst_cl = nullptr;
+  GstD3D12CmdQueue *queue = nullptr;
+  guint64 fence_val = 0;
+
+  switch (command_type) {
+    case D3D12_COMMAND_LIST_TYPE_DIRECT:
+      queue = priv->direct_queue;
+      ca_pool = priv->direct_ca_pool;
+      cl_pool = priv->direct_cl_pool;
+      break;
+    case D3D12_COMMAND_LIST_TYPE_COMPUTE:
+      queue = priv->compute_queue;
+      ca_pool = priv->compute_ca_pool;
+      cl_pool = priv->compute_cl_pool;
+      break;
+    default:
+      GST_ERROR_OBJECT (device, "Not supported command list type %d",
+          command_type);
+      return FALSE;
+  }
+
+  if (!gst_d3d12_device_ensure_copy_buffer_2d_pso (device)) {
+    GST_ERROR_OBJECT (device, "Couldn't prepare PSO");
+    return FALSE;
+  }
+
+  if (!fence_data)
+    gst_d3d12_fence_data_pool_acquire (priv->fence_data_pool, &fence_data);
+
+  gst_d3d12_cmd_alloc_pool_acquire (ca_pool, &gst_ca);
+  if (!gst_ca) {
+    GST_ERROR_OBJECT (device, "Couldn't acquire command allocator");
+    gst_d3d12_fence_data_unref (fence_data);
+    return FALSE;
+  }
+
+  gst_d3d12_fence_data_push (fence_data, FENCE_NOTIFY_MINI_OBJECT (gst_ca));
+
+  auto ca = gst_d3d12_cmd_alloc_get_handle (gst_ca);
+  gst_d3d12_cmd_list_pool_acquire (cl_pool, ca, &gst_cl);
+
+  if (!gst_cl) {
+    GST_ERROR_OBJECT (device, "Couldn't acquire command list");
+    gst_d3d12_fence_data_unref (fence_data);
+    return FALSE;
+  }
+
+  ComPtr < ID3D12CommandList > cl_base;
+  ComPtr < ID3D12GraphicsCommandList > cl;
+
+  cl_base = gst_d3d12_cmd_list_get_handle (gst_cl);
+  cl_base.As (&cl);
+
+  GstD3D12DescHeap *desc_heap = nullptr;
+  gst_d3d12_desc_heap_pool_acquire (priv->srv_heap_pool, &desc_heap);
+  if (!desc_heap) {
+    GST_ERROR_OBJECT (device, "Couldn't acquire descriptor heap");
+    gst_d3d12_cmd_list_unref (gst_cl);
+    gst_d3d12_fence_data_unref (fence_data);
+    return FALSE;
+  }
+
+  gst_d3d12_fence_data_push (fence_data, FENCE_NOTIFY_MINI_OBJECT (desc_heap));
+
+  auto d3d_device = gst_d3d12_device_get_device_handle (device);
+  auto desc_handle = gst_d3d12_desc_heap_get_handle (desc_heap);
+
+  auto cpu_handle =
+      CD3DX12_CPU_DESCRIPTOR_HANDLE (GetCPUDescriptorHandleForHeapStart
+      (desc_handle));
+  auto gpu_handle =
+      CD3DX12_GPU_DESCRIPTOR_HANDLE (GetGPUDescriptorHandleForHeapStart
+      (desc_handle));
+
+  cl->SetComputeRootSignature (priv->copy_2d_rs.Get ());
+
+  ID3D12DescriptorHeap *heaps[] = { desc_handle };
+  cl->SetDescriptorHeaps (1, heaps);
+
+  ID3D12PipelineState *current_pso = nullptr;
+
+  for (guint i = 0; i < num_args; i++) {
+    const auto & arg = args[i];
+
+    if (!arg.src || !arg.dst || !arg.width_in_bytes || !arg.height ||
+        arg.width_in_bytes > arg.src_stride ||
+        arg.width_in_bytes > arg.dst_stride) {
+      GST_ERROR_OBJECT (device, "Invalid buffer layout");
+      gst_d3d12_cmd_list_unref (gst_cl);
+      gst_d3d12_fence_data_unref (fence_data);
+      return FALSE;
+    }
+
+    auto src_desc = GetDesc (arg.src);
+    auto dst_desc = GetDesc (arg.dst);
+
+    if (src_desc.Dimension != D3D12_RESOURCE_DIMENSION_BUFFER ||
+        dst_desc.Dimension != D3D12_RESOURCE_DIMENSION_BUFFER) {
+      GST_ERROR_OBJECT (device, "Resource is not a buffer");
+      gst_d3d12_cmd_list_unref (gst_cl);
+      gst_d3d12_fence_data_unref (fence_data);
+      return FALSE;
+    }
+
+    gboolean is_aligned = !(arg.src_offset & 3) && !(arg.dst_offset & 3) &&
+        !(arg.src_stride & 3) && !(arg.dst_stride & 3);
+
+    guint64 src_base;
+    guint64 dst_base;
+    guint src_offset;
+    guint dst_offset;
+    ID3D12PipelineState *pso;
+
+    if (is_aligned) {
+      src_base = arg.src_offset;
+      dst_base = arg.dst_offset;
+      src_offset = 0;
+      dst_offset = 0;
+      pso = priv->copy_2d_pso.Get ();
+    } else {
+      src_base = arg.src_offset & ~3ull;
+      dst_base = arg.dst_offset & ~3ull;
+      src_offset = (guint) (arg.src_offset - src_base);
+      dst_offset = (guint) (arg.dst_offset - dst_base);
+      pso = priv->copy_2d_unaligned_pso.Get ();
+    }
+
+    if (pso != current_pso) {
+      cl->SetPipelineState (pso);
+      current_pso = pso;
+    }
+
+    guint64 src_end;
+    guint64 dst_end;
+
+    if (is_aligned) {
+      auto copy_width = GST_ROUND_UP_4 (arg.width_in_bytes);
+
+      src_end = arg.src_offset +
+          (guint64) (arg.height - 1) * arg.src_stride + copy_width;
+      dst_end = arg.dst_offset +
+          (guint64) (arg.height - 1) * arg.dst_stride + copy_width;
+    } else {
+      src_end = src_base + GST_ROUND_UP_4 (src_offset +
+          (guint64) (arg.height - 1) * arg.src_stride + arg.width_in_bytes + 3);
+
+      dst_end = dst_base + GST_ROUND_UP_4 (dst_offset +
+          (guint64) (arg.height - 1) * arg.dst_stride + arg.width_in_bytes);
+    }
+
+    if (src_end > src_desc.Width || dst_end > dst_desc.Width) {
+      GST_ERROR_OBJECT (device, "Buffer copy range exceeds resource size");
+      gst_d3d12_cmd_list_unref (gst_cl);
+      gst_d3d12_fence_data_unref (fence_data);
+      return FALSE;
+    }
+
+    D3D12_SHADER_RESOURCE_VIEW_DESC srv_desc = { };
+    srv_desc.Format = DXGI_FORMAT_R32_TYPELESS;
+    srv_desc.ViewDimension = D3D12_SRV_DIMENSION_BUFFER;
+    srv_desc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    srv_desc.Buffer.FirstElement = src_base / 4;
+    srv_desc.Buffer.NumElements = (UINT) ((src_desc.Width - src_base) / 4);
+    srv_desc.Buffer.Flags = D3D12_BUFFER_SRV_FLAG_RAW;
+
+    d3d_device->CreateShaderResourceView (arg.src, &srv_desc, cpu_handle);
+
+    cpu_handle.Offset (priv->srv_inc_size);
+
+    D3D12_UNORDERED_ACCESS_VIEW_DESC uav_desc = { };
+    uav_desc.Format = DXGI_FORMAT_R32_TYPELESS;
+    uav_desc.ViewDimension = D3D12_UAV_DIMENSION_BUFFER;
+    uav_desc.Buffer.FirstElement = dst_base / 4;
+    uav_desc.Buffer.NumElements = (UINT) ((dst_desc.Width - dst_base) / 4);
+    uav_desc.Buffer.Flags = D3D12_BUFFER_UAV_FLAG_RAW;
+
+    d3d_device->CreateUnorderedAccessView (arg.dst,
+        nullptr, &uav_desc, cpu_handle);
+
+    struct
+    {
+      guint src_stride;
+      guint dst_stride;
+      guint width_in_bytes;
+      guint height;
+      guint src_offset;
+      guint dst_offset;
+      guint padding[2];
+    } const_data = {
+      arg.src_stride,
+      arg.dst_stride,
+      arg.width_in_bytes,
+      arg.height,
+      src_offset,
+      dst_offset,
+      {0, 0},
+    };
+
+    cl->SetComputeRoot32BitConstants (0, 8, &const_data, 0);
+    cl->SetComputeRootDescriptorTable (1, gpu_handle);
+
+    guint num_dwords;
+    if (is_aligned)
+      num_dwords = (arg.width_in_bytes + 3) / 4;
+    else
+      num_dwords = (arg.width_in_bytes + 6) / 4;
+
+    cl->Dispatch ((num_dwords + 63) / 64, arg.height, 1);
+
+    cpu_handle.Offset (priv->srv_inc_size);
+    gpu_handle.Offset (2, priv->srv_inc_size);
+  }
+
+  hr = cl->Close ();
+  if (!gst_d3d12_result (hr, device)) {
+    GST_ERROR_OBJECT (device, "Couldn't close command list");
+    gst_d3d12_cmd_list_unref (gst_cl);
+    gst_d3d12_fence_data_unref (fence_data);
+    return FALSE;
+  }
+
+  ID3D12CommandList *cmd_list[] = { cl.Get () };
+
+  hr = gst_d3d12_cmd_queue_execute_command_lists_full (queue,
+      num_fences_to_wait, fences_to_wait, fence_values_to_wait,
+      1, cmd_list, &fence_val);
+  auto ret = gst_d3d12_result (hr, device);
+
   gst_d3d12_cmd_list_unref (gst_cl);
 
   if (ret) {
@@ -2265,6 +3076,15 @@ gst_d3d12_device_is_uma (GstD3D12Device * device)
   return device->priv->inner->feature_support.UMA ();
 }
 
+void
+gst_d3d12_register_flush_callback (GDestroyNotify callback, gpointer user_data)
+{
+  g_return_if_fail (callback != nullptr);
+
+  auto manager = DeviceCacheManager::GetInstance ();
+  manager->RegisterFlushCallback (callback, user_data);
+}
+
 /**
  * gst_d3d12_flush_all_devices:
  *
@@ -2481,6 +3301,8 @@ gst_d3d12_device_get_converter_resources (GstD3D12Device * device,
   cl_base = gst_d3d12_cmd_list_get_handle (gst_cl);
   cl_base.As (&cl);
 
+  gst_d3d12_fence_data_push (fence_data, FENCE_NOTIFY_MINI_OBJECT (gst_cl));
+
   cl->CopyResource (index_buf, index_upload);
   index_buf->AddRef ();
   gst_d3d12_fence_data_push (fence_data, FENCE_NOTIFY_COM (index_buf));
@@ -2578,6 +3400,7 @@ gst_d3d12_device_get_converter_resources (GstD3D12Device * device,
             IID_PPV_ARGS (&gamma_dec_resource));
         if (!gst_d3d12_result (hr, device)) {
           GST_ERROR_OBJECT (device, "Couldn't create LUT texture");
+          gst_d3d12_fence_data_unref (fence_data);
           return hr;
         }
 
@@ -2646,4 +3469,225 @@ gst_d3d12_device_get_converter_resources (GstD3D12Device * device,
   (*fence)->AddRef ();
 
   return S_OK;
+}
+
+GstD3D12TextureEntryPtr
+gst_d3d12_device_acquire_mipmap_texture (GstD3D12Device * device,
+    guint width, guint height, DXGI_FORMAT format)
+{
+  auto priv = device->priv->inner;
+
+  std::string key = std::to_string (width) + "_" + std::to_string (height) +
+      "_" + std::to_string ((guint) format);
+
+  GST_DEBUG_OBJECT (device, "Processing key %s", key.c_str ());
+
+  std::unique_lock < std::mutex > lk (priv->mipmap_cache_lock);
+  auto it = priv->mipmap_cache.find (key);
+  if (it != priv->mipmap_cache.end ()) {
+    auto locked = it->second.lock ();
+    if (locked) {
+      GST_DEBUG_OBJECT (device, "Found cached texture");
+      return locked;
+    }
+
+    priv->mipmap_cache.erase (it);
+  }
+
+  D3D12_HEAP_PROPERTIES heap_props =
+      CD3DX12_HEAP_PROPERTIES (D3D12_HEAP_TYPE_DEFAULT);
+  D3D12_HEAP_FLAGS heap_flags = D3D12_HEAP_FLAG_NONE;
+  if (priv->non_zeroed_supported)
+    heap_flags = D3D12_HEAP_FLAG_CREATE_NOT_ZEROED;
+
+  auto desc = CD3DX12_RESOURCE_DESC::Tex2D (format,
+      width, height, 1, 0, 1, 0,
+      D3D12_RESOURCE_FLAG_ALLOW_SIMULTANEOUS_ACCESS |
+      D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET |
+      D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
+
+  ComPtr < ID3D12Resource > resource;
+  auto hr = priv->device->CreateCommittedResource (&heap_props, heap_flags,
+      &desc, D3D12_RESOURCE_STATE_COMMON, nullptr, IID_PPV_ARGS (&resource));
+  if (FAILED (hr)) {
+    lk.unlock ();
+    gst_d3d12_result (hr, device);
+    return nullptr;
+  }
+
+  /* run GC */
+  it = priv->mipmap_cache.begin ();
+  while (it != priv->mipmap_cache.end ()) {
+    if (it->second.expired ()) {
+      GST_DEBUG_OBJECT (device, "%s expired", it->first.c_str ());
+      it = priv->mipmap_cache.erase (it);
+    } else {
+      it++;
+    }
+  }
+
+  auto entry = std::make_shared < GstD3D12TextureEntry > ();
+  entry->resource = resource;
+
+  priv->mipmap_cache[key] = entry;
+
+  return entry;
+}
+
+/**
+ * gst_d3d12_device_enqueue_make_resident:
+ * @device: a #GstD3D12Device
+ * @flags: a D3D12_RESIDENCY_FLAGS value
+ * @num_objects: the number of objects in @objects
+ * @objects: an array of ID3D12Pageable objects
+ * @fence: (out) (transfer full): a ID3D12Fence signalled when the residency operation completes
+ * @fence_value: (out): the fence value to wait for
+ *
+ * A utility wrapper around ID3D12Device3::EnqueueMakeResident using
+ * a fence managed by #GstD3D12Device.
+ *
+ * Returns: an HRESULT code
+ *
+ * Since: 1.30
+ */
+HRESULT
+gst_d3d12_device_enqueue_make_resident (GstD3D12Device * device,
+    D3D12_RESIDENCY_FLAGS flags, guint num_objects, ID3D12Pageable ** objects,
+    ID3D12Fence ** fence, guint64 * fence_value)
+{
+  g_return_val_if_fail (GST_IS_D3D12_DEVICE (device), E_INVALIDARG);
+  g_return_val_if_fail (num_objects > 0, E_INVALIDARG);
+  g_return_val_if_fail (objects, E_INVALIDARG);
+  g_return_val_if_fail (fence, E_INVALIDARG);
+  g_return_val_if_fail (fence_value, E_INVALIDARG);
+
+  auto priv = device->priv->inner;
+  if (!priv->device3)
+    return E_NOINTERFACE;
+
+  std::lock_guard < std::mutex > lk (priv->make_resident_lock);
+  auto hr = priv->device3->EnqueueMakeResident (flags, num_objects,
+      objects, priv->make_resident_fence.Get (), priv->make_resident_fence_val);
+  if (SUCCEEDED (hr)) {
+    *fence = priv->make_resident_fence.Get ();
+    (*fence)->AddRef ();
+    *fence_value = priv->make_resident_fence_val;
+    priv->make_resident_fence_val++;
+  }
+
+  return hr;
+}
+
+void
+gst_d3d12_device_update_resident_size (GstD3D12Device * device, gint64 size)
+{
+  auto priv = device->priv->inner;
+  priv->resident_size += size;
+
+  auto cur_s = priv->resident_size.load ();
+  auto cur_b = priv->current_budget.load ();
+
+  priv->is_over_budget = cur_b > 0 &&
+      (double) cur_s >= cur_b * priv->overbudget_factor;
+
+#ifndef GST_DISABLE_GST_DEBUG
+  if (gst_debug_category_get_threshold (GST_CAT_DEFAULT) >= GST_LEVEL_TRACE) {
+    auto cur_size = cur_s / 1024 / 1024;
+    auto cur_budget = cur_b / 1024 / 1024;
+    GST_TRACE_OBJECT (device, "Budget: %" G_GUINT64_FORMAT
+        " MB, Current: %" G_GINT64_FORMAT " MB", cur_budget, cur_size);
+  }
+#endif
+}
+
+gboolean
+gst_d3d12_device_is_over_budget (GstD3D12Device * device)
+{
+  g_return_val_if_fail (GST_IS_D3D12_DEVICE (device), FALSE);
+
+  return device->priv->inner->is_over_budget.load ();
+}
+
+/**
+ * gst_d3d12_device_prepare_graphics_cmd_list:
+ * @device: a #GstD3D12Device
+ * @cl: (inout): a pointer to an ID3D12GraphicsCommandList
+ * @ca_pool: a #GstD3D12CmdAllocPool
+ * @initial_state: (nullable): an initial pipeline state object
+ * @fence_data: a #GstD3D12FenceData
+ *
+ * Prepares @cl for command recording. If @cl points to %NULL, a new
+ * command list is created using the command list type configured for
+ * @ca_pool. Otherwise, the existing command list is reset. @initial_state
+ * is used as the initial pipeline state for the command list.
+ *
+ * The command allocator used for recording is acquired from @ca_pool
+ * and added to @fence_data.
+ *
+ * Returns: %TRUE if the command list was successfully prepared
+ *
+ * Since: 1.30
+ */
+gboolean
+gst_d3d12_device_prepare_graphics_cmd_list (GstD3D12Device * device,
+    ID3D12GraphicsCommandList ** cl, GstD3D12CmdAllocPool * ca_pool,
+    ID3D12PipelineState * initial_state, GstD3D12FenceData * fence_data)
+{
+  g_return_val_if_fail (GST_IS_D3D12_DEVICE (device), FALSE);
+  g_return_val_if_fail (cl, FALSE);
+  g_return_val_if_fail (GST_IS_D3D12_CMD_ALLOC_POOL (ca_pool), FALSE);
+  g_return_val_if_fail (fence_data, FALSE);
+
+  auto & priv = device->priv->inner;
+
+  GstD3D12CmdAlloc *gst_ca = nullptr;
+  if (!gst_d3d12_cmd_alloc_pool_acquire (ca_pool, &gst_ca)) {
+    GST_ERROR_OBJECT (device, "Couldn't acquire command allocator");
+    return FALSE;
+  }
+
+  auto ca = gst_d3d12_cmd_alloc_get_handle (gst_ca);
+  auto hr = ca->Reset ();
+  if (!gst_d3d12_result (hr, device)) {
+    GST_ERROR_OBJECT (device, "Couldn't reset command allocator");
+    gst_d3d12_cmd_alloc_unref (gst_ca);
+    return FALSE;
+  }
+
+  if (*cl == nullptr) {
+    ComPtr < ID3D12GraphicsCommandList > new_cl;
+    auto cmd_type = gst_d3d12_cmd_alloc_pool_get_cmd_list_type (ca_pool);
+
+    if (cmd_type != D3D12_COMMAND_LIST_TYPE_DIRECT &&
+        cmd_type != D3D12_COMMAND_LIST_TYPE_COMPUTE &&
+        cmd_type != D3D12_COMMAND_LIST_TYPE_COPY) {
+      GST_ERROR_OBJECT (device, "Unexpected command list type %d", cmd_type);
+      gst_d3d12_cmd_alloc_unref (gst_ca);
+      return FALSE;
+    }
+
+    GST_DEBUG_OBJECT (device, "Creating new command list for type %d",
+        cmd_type);
+
+    hr = priv->device->CreateCommandList (0, cmd_type, ca, initial_state,
+        IID_PPV_ARGS (&new_cl));
+    if (!gst_d3d12_result (hr, device)) {
+      GST_ERROR_OBJECT (device, "Couldn't create command list");
+      gst_d3d12_cmd_alloc_unref (gst_ca);
+      return FALSE;
+    }
+
+    *cl = new_cl.Detach ();
+  } else {
+    hr = (*cl)->Reset (ca, initial_state);
+    if (!gst_d3d12_result (hr, device)) {
+      GST_ERROR_OBJECT (device, "Couldn't reset command list");
+      gst_d3d12_cmd_alloc_unref (gst_ca);
+      return FALSE;
+    }
+  }
+
+  gst_d3d12_fence_data_push (fence_data, FENCE_NOTIFY_MINI_OBJECT (gst_ca));
+
+  return TRUE;
 }

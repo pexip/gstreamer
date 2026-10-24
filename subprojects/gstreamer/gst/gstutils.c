@@ -2202,6 +2202,9 @@ gst_element_link_pads_filtered (GstElement * src, const gchar * srcpadname,
       GST_CAT_ERROR (GST_CAT_ELEMENT_PADS, "Could not make a capsfilter");
       return FALSE;
     }
+    /* The bin could be in the middle of a state change, which would race
+     * against our own change to NULL in the failed case. */
+    gst_element_set_locked_state (capsfilter, TRUE);
 
     parent = gst_object_get_parent (GST_OBJECT (src));
     g_return_val_if_fail (GST_IS_BIN (parent), FALSE);
@@ -2226,6 +2229,8 @@ gst_element_link_pads_filtered (GstElement * src, const gchar * srcpadname,
     lr1 = gst_element_link_pads (src, srcpadname, capsfilter, "sink");
     lr2 = gst_element_link_pads (capsfilter, "src", dest, destpadname);
     if (lr1 && lr2) {
+      gst_element_set_locked_state (capsfilter, FALSE);
+      gst_element_sync_state_with_parent (capsfilter);
       return TRUE;
     } else {
       if (!lr1) {
@@ -4685,7 +4690,7 @@ gst_util_floor_log2 (guint32 v)
 /**
  * gst_calculate_linear_regression: (skip)
  * @xy: (array): Pairs of (x,y) values
- * @temp: Temporary scratch space used by the function
+ * @temp: (array) (nullable): Temporary scratch space used by the function
  * @n: number of (x,y) pairs
  * @m_num: (out): numerator of calculated slope
  * @m_denom: (out): denominator of calculated slope
@@ -5044,12 +5049,17 @@ gst_call_async_func (gpointer data, gpointer user_data)
   GstCallAsyncData *async_data = data;
 
   if (async_data->object) {
+    /* gst_element_call_async() or gst_object_call_async() */
     GstObjectCallAsyncFunc func = (GstObjectCallAsyncFunc) async_data->func;
     (*func) (async_data->object, async_data->user_data);
   } else {
+    /* gst_call_async() */
     async_data->func (async_data->user_data);
   }
 
+  /* gst_element_call_async() (deprecated) had a separate destroy callback
+   * for user_data, while newer APIs (gst_object_call_async() and
+   * gst_call_async()) do not */
   if (async_data->notify)
     async_data->notify (async_data->user_data);
   gst_clear_object (&async_data->object);

@@ -234,8 +234,13 @@ gst_vulkan_vp9_decoder_set_context (GstElement * element, GstContext * context)
 }
 
 static gboolean
-_query_context (GstVulkanVp9Decoder * self, GstQuery * query)
+_query_context (GstVulkanVp9Decoder * self, GstQuery * query,
+    GstPadDirection continue_direction)
 {
+  if (gst_vulkan_requested_extensions_handle_context_query (GST_ELEMENT
+          (self), query, continue_direction, self->instance))
+    return TRUE;
+
   if (gst_vulkan_handle_context_query (GST_ELEMENT (self), query, NULL,
           self->instance, self->device))
     return TRUE;
@@ -254,7 +259,8 @@ gst_vulkan_vp9_decoder_src_query (GstVideoDecoder * decoder, GstQuery * query)
 
   switch (GST_QUERY_TYPE (query)) {
     case GST_QUERY_CONTEXT:
-      ret = _query_context (GST_VULKAN_VP9_DECODER (decoder), query);
+      ret = _query_context (GST_VULKAN_VP9_DECODER (decoder), query,
+          GST_PAD_SINK);
       break;
     default:
       ret = GST_VIDEO_DECODER_CLASS (parent_class)->src_query (decoder, query);
@@ -271,7 +277,8 @@ gst_vulkan_vp9_decoder_sink_query (GstVideoDecoder * decoder, GstQuery * query)
 
   switch (GST_QUERY_TYPE (query)) {
     case GST_QUERY_CONTEXT:
-      ret = _query_context (GST_VULKAN_VP9_DECODER (decoder), query);
+      ret = _query_context (GST_VULKAN_VP9_DECODER (decoder), query,
+          GST_PAD_SRC);
       break;
     default:
       ret = GST_VIDEO_DECODER_CLASS (parent_class)->sink_query (decoder, query);
@@ -333,6 +340,12 @@ gst_vulkan_vp9_decoder_decide_allocation (GstVideoDecoder * decoder,
   VkImageUsageFlags usage;
   GstVulkanVideoCapabilities vk_caps;
 
+  if (self->dpb_size == 0) {
+    return
+        GST_VIDEO_DECODER_CLASS (parent_class)->decide_allocation (decoder,
+        query);
+  }
+
   gst_query_parse_allocation (query, &caps, NULL);
   if (!caps)
     return FALSE;
@@ -357,8 +370,7 @@ gst_vulkan_vp9_decoder_decide_allocation (GstVideoDecoder * decoder,
     pool = gst_vulkan_image_buffer_pool_new (self->device);
   }
 
-  usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_SAMPLED_BIT
-      | VK_IMAGE_USAGE_VIDEO_DECODE_DST_BIT_KHR;
+  usage = gst_vulkan_decoder_output_usage (pool);
 
   if (!self->decoder->dedicated_dpb) {
     min = MAX (min, MIN (self->dpb_size, vk_caps.caps.maxDpbSlots));
@@ -377,7 +389,7 @@ gst_vulkan_vp9_decoder_decide_allocation (GstVideoDecoder * decoder,
 
   gst_vulkan_image_buffer_pool_config_set_allocation_params (config, usage,
       VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, VK_IMAGE_LAYOUT_VIDEO_DECODE_DST_KHR,
-      VK_ACCESS_TRANSFER_WRITE_BIT);
+      VK_ACCESS_NONE);
   gst_vulkan_image_buffer_pool_config_set_decode_caps (config, profile_caps);
 
   gst_caps_unref (profile_caps);
@@ -889,7 +901,7 @@ gst_vulkan_vp9_decoder_decode_picture (GstVp9Decoder * decoder,
   };
   /* *INDENT-ON* */
 
-  for (i = 0; i < VK_MAX_VIDEO_VP9_REFERENCES_PER_FRAME_KHR; i++) {
+  for (i = 0; i < GST_VP9_REFS_PER_FRAME; i++) {
     GstVp9Picture *ref_pic = dpb->pic_list[fh->ref_frame_idx[i]];
     if (ref_pic) {
       GstVulkanVp9Picture *ref_vk_pic =
@@ -910,8 +922,8 @@ gst_vulkan_vp9_decoder_decode_picture (GstVp9Decoder * decoder,
   /* fill main slot */
   _fill_ref_slot (self, picture, &pic->base.slot, &pic->base.pic_res, NULL);
 
-  for (i = 0; i < GST_VP9_REF_FRAME_MAX; i++) {
-    GstVp9Picture *ref_pic = dpb->pic_list[i];
+  for (i = 0; i < GST_VP9_REFS_PER_FRAME; i++) {
+    GstVp9Picture *ref_pic = dpb->pic_list[fh->ref_frame_idx[i]];
     gboolean found = FALSE;
     GstVulkanVp9Picture *ref_vk_pic;
 
@@ -1182,7 +1194,7 @@ gst_vulkan_vp9_decoder_register (GstPlugin * plugin, GstVulkanDevice * device,
 
   gst_vulkan_create_feature_name (device, "GstVulkanVp9Decoder",
       "GstVulkanVp9Device%dDecoder", &type_name, "vulkanvp9dec",
-      "vulkanVp9device%ddec", &feature_name, &cdata->description, &rank);
+      "vulkanvp9device%ddec", &feature_name, &cdata->description, &rank);
 
   type_info.class_data = cdata;
 
@@ -1190,7 +1202,7 @@ gst_vulkan_vp9_decoder_register (GstPlugin * plugin, GstVulkanDevice * device,
   type = g_type_register_static (GST_TYPE_VP9_DECODER,
       type_name, &type_info, 0);
 
-  ret = gst_element_register (plugin, feature_name, rank, type);
+  ret = gst_vulkan_register_feature (plugin, device, type, feature_name, rank);
 
   g_free (type_name);
   g_free (feature_name);

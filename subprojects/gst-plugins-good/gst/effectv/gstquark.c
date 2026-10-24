@@ -51,6 +51,7 @@
 /* number of frames of time-buffer. It should be as a configurable parameter */
 /* This number also must be 2^n just for the speed. */
 #define PLANES 16
+#define MAX_PLANES 64
 
 enum
 {
@@ -84,13 +85,8 @@ gst_quarktv_set_info (GstVideoFilter * vfilter, GstCaps * incaps,
     GstVideoInfo * in_info, GstCaps * outcaps, GstVideoInfo * out_info)
 {
   GstQuarkTV *filter = GST_QUARKTV (vfilter);
-  gint width, height;
-
-  width = GST_VIDEO_INFO_WIDTH (in_info);
-  height = GST_VIDEO_INFO_HEIGHT (in_info);
 
   gst_quarktv_planetable_clear (filter);
-  filter->area = width * height;
 
   return TRUE;
 }
@@ -100,10 +96,10 @@ gst_quarktv_transform_frame (GstVideoFilter * vfilter, GstVideoFrame * in_frame,
     GstVideoFrame * out_frame)
 {
   GstQuarkTV *filter = GST_QUARKTV (vfilter);
-  gint area;
   guint32 *src, *dest;
   GstClockTime timestamp;
   GstBuffer **planetable;
+  gint width, height;
   gint planes, current_plane;
 
   timestamp = GST_BUFFER_TIMESTAMP (in_frame->buffer);
@@ -124,7 +120,8 @@ gst_quarktv_transform_frame (GstVideoFilter * vfilter, GstVideoFrame * in_frame,
   dest = GST_VIDEO_FRAME_PLANE_DATA (out_frame, 0);
 
   GST_OBJECT_LOCK (filter);
-  area = filter->area;
+  width = GST_VIDEO_FRAME_WIDTH (in_frame);
+  height = GST_VIDEO_FRAME_HEIGHT (in_frame);
   planetable = filter->planetable;
   planes = filter->planes;
   current_plane = filter->current_plane;
@@ -133,18 +130,46 @@ gst_quarktv_transform_frame (GstVideoFilter * vfilter, GstVideoFrame * in_frame,
     gst_buffer_unref (planetable[current_plane]);
   planetable[current_plane] = gst_buffer_ref (in_frame->buffer);
 
+  GstMapInfo map_infos[MAX_PLANES];
+  guint32 *map_ptrs[MAX_PLANES] = { NULL };
+  gint i, x, y, ss, ds;
+
+  ss = GST_VIDEO_FRAME_PLANE_STRIDE (in_frame, 0) / 4;
+  ds = GST_VIDEO_FRAME_PLANE_STRIDE (out_frame, 0) / 4;
+
+  gboolean ret = FALSE;
+  for (i = 0; i < planes; i++) {
+    if (planetable[i]) {
+      ret = gst_buffer_map (planetable[i], &map_infos[i], GST_MAP_READ);
+      if (ret) {
+        map_ptrs[i] = (guint32 *) map_infos[i].data;
+      } else {
+        map_ptrs[i] = NULL;
+      }
+    }
+  }
+
+  gint yds, yss;
   /* For each pixel */
-  while (--area) {
-    GstBuffer *rand;
+  for (y = 0; y < height; y++) {
+    yds = y * ds;
+    yss = y * ss;
+    for (x = 0; x < width; x++) {
+      /* pick a random buffer */
+      gint rand = (current_plane + (fastrand () >> 24)) % planes;
 
-    /* pick a random buffer */
-    rand = planetable[(current_plane + (fastrand () >> 24)) % planes];
+      /* Copy the pixel from a random mapped buffer to dest */
+      if (map_ptrs[rand])
+        dest[yds + x] = map_ptrs[rand][yss + x];
+      else
+        dest[yds + x] = src[yss + x];
+    }
+  }
 
-    /* Copy the pixel from the random buffer to dest, FIXME, slow */
-    if (rand)
-      gst_buffer_extract (rand, area * 4, &dest[area], 4);
-    else
-      dest[area] = src[area];
+  for (i = 0; i < planes; i++) {
+    if (planetable[i] && map_ptrs[i]) {
+      gst_buffer_unmap (planetable[i], &map_infos[i]);
+    }
   }
 
   filter->current_plane--;
@@ -274,12 +299,13 @@ gst_quarktv_class_init (GstQuarkTVClass * klass)
 
   g_object_class_install_property (gobject_class, PROP_PLANES,
       g_param_spec_int ("planes", "Planes",
-          "Number of planes", 1, 64, PLANES,
+          "Number of planes", 1, MAX_PLANES, PLANES,
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS | GST_PARAM_CONTROLLABLE));
 
   gst_element_class_set_static_metadata (gstelement_class, "QuarkTV effect",
       "Filter/Effect/Video",
-      "Motion dissolver", "FUKUCHI, Kentarou <fukuchi@users.sourceforge.net>");
+      "Motion dissolver", "Kentaro Fukuchi <fukuchi@users.sourceforge.net>");
+  gst_element_class_mark_as_untrusted_aware (gstelement_class);
 
   gst_element_class_add_static_pad_template (gstelement_class,
       &gst_quarktv_sink_template);

@@ -48,7 +48,6 @@ setup_appsrc (void)
   GstElement *appsrc;
 
   GST_DEBUG ("setup_appsrc");
-  g_mutex_init (&expected_mutex);
   appsrc = gst_check_setup_element ("appsrc");
   mysinkpad = gst_check_setup_sink_pad (appsrc, &sinktemplate);
 
@@ -65,7 +64,6 @@ cleanup_appsrc (GstElement * appsrc)
   gst_check_drop_buffers ();
   gst_check_teardown_sink_pad (appsrc);
   gst_check_teardown_element (appsrc);
-  g_mutex_clear (&expected_mutex);
 }
 
 /*
@@ -430,17 +428,36 @@ GST_END_TEST;
  * caps event into it's queue and then push it downstream when create() is
  * called. */
 
+typedef struct
+{
+  GMutex lock;
+  GCond cond;
+  gboolean caps_seen;
+} CapsEventWait;
+
 static GstPadProbeReturn
 caps_event_probe_cb (GstPad * pad, GstPadProbeInfo * info, gpointer user_data)
 {
-  GMainLoop *loop = user_data;
+  CapsEventWait *wait = user_data;
 
   if (GST_EVENT_TYPE (info->data) == GST_EVENT_CAPS) {
-    g_main_loop_quit (loop);
+    g_mutex_lock (&wait->lock);
+    wait->caps_seen = TRUE;
+    g_cond_signal (&wait->cond);
+    g_mutex_unlock (&wait->lock);
     return GST_PAD_PROBE_OK;
   }
 
   return GST_PAD_PROBE_PASS;
+}
+
+static void
+wait_for_caps_event (CapsEventWait * wait)
+{
+  g_mutex_lock (&wait->lock);
+  while (!wait->caps_seen)
+    g_cond_wait (&wait->cond, &wait->lock);
+  g_mutex_unlock (&wait->lock);
 }
 
 GST_START_TEST (test_appsrc_blocked_on_caps)
@@ -449,9 +466,10 @@ GST_START_TEST (test_appsrc_blocked_on_caps)
   GstPad *pad = NULL;
   GstCaps *caps = NULL;
   GError *error = NULL;
-  GMainLoop *loop;
+  CapsEventWait wait = { 0, };
 
-  loop = g_main_loop_new (NULL, FALSE);
+  g_mutex_init (&wait.lock);
+  g_cond_init (&wait.cond);
 
   pipeline = gst_parse_launch ("appsrc is-live=1 name=app ! fakesink", &error);
   g_assert_no_error (error);
@@ -461,7 +479,7 @@ GST_START_TEST (test_appsrc_blocked_on_caps)
 
   gst_pad_add_probe (pad,
       GST_PAD_PROBE_TYPE_BLOCK | GST_PAD_PROBE_TYPE_EVENT_DOWNSTREAM,
-      caps_event_probe_cb, loop, NULL);
+      caps_event_probe_cb, &wait, NULL);
   gst_object_unref (app);
   gst_object_unref (pad);
 
@@ -471,7 +489,7 @@ GST_START_TEST (test_appsrc_blocked_on_caps)
   gst_app_src_set_caps (GST_APP_SRC (app), caps);
   gst_caps_unref (caps);
 
-  g_main_loop_run (loop);
+  wait_for_caps_event (&wait);
 
 #if 0
   /* This would work around the issue by deblocking the source on older
@@ -483,10 +501,77 @@ GST_START_TEST (test_appsrc_blocked_on_caps)
    * lock use to remains held and prevented the state change from happening. */
   gst_element_set_state (pipeline, GST_STATE_NULL);
   gst_object_unref (pipeline);
-  g_main_loop_unref (loop);
+  g_cond_clear (&wait.cond);
+  g_mutex_clear (&wait.lock);
 }
 
 GST_END_TEST;
+
+/* Test that sending EOS to a blocked appsrc
+ * simply enqueues the event without hanging,
+ * and that subsequent push attempts return FLOW_EOS,
+ * and that unblocking eventually sends the EOS */
+GST_START_TEST (test_appsrc_blocked_eos)
+{
+  GstElement *pipeline = NULL, *app = NULL;
+  GstPad *pad = NULL;
+  GstCaps *caps = NULL;
+  GError *error = NULL;
+  CapsEventWait wait = { 0, };
+
+  g_mutex_init (&wait.lock);
+  g_cond_init (&wait.cond);
+
+  pipeline =
+      gst_parse_launch ("appsrc is-live=1 max-buffers=1 name=app ! fakesink",
+      &error);
+  g_assert_no_error (error);
+
+  app = gst_bin_get_by_name (GST_BIN (pipeline), "app");
+  pad = gst_element_get_static_pad (app, "src");
+
+  guint block_id = gst_pad_add_probe (pad,
+      GST_PAD_PROBE_TYPE_BLOCK | GST_PAD_PROBE_TYPE_EVENT_DOWNSTREAM,
+      caps_event_probe_cb, &wait, NULL);
+
+  gst_element_set_state (pipeline, GST_STATE_PLAYING);
+
+  caps = gst_caps_from_string ("application/x-test");
+  gst_app_src_set_caps (GST_APP_SRC (app), caps);
+  gst_caps_unref (caps);
+
+  wait_for_caps_event (&wait);
+
+  /* appsrc is now blocked - sending EOS should not hang */
+  GstEvent *eos = gst_event_new_eos ();
+  gst_element_send_event (GST_ELEMENT (pipeline), eos);
+
+  /* Pushing a buffer now must return FLOW_EOS */
+  GstBuffer *buf = gst_buffer_new ();
+  GstFlowReturn flow = gst_app_src_push_buffer (GST_APP_SRC (app), buf);
+  fail_unless (flow == GST_FLOW_EOS);
+
+  /* Now unblock and check EOS arrives */
+  gst_pad_remove_probe (pad, block_id);
+
+  GstMessage *msg = gst_bus_timed_pop_filtered (GST_ELEMENT_BUS (pipeline), -1,
+      GST_MESSAGE_EOS | GST_MESSAGE_ERROR);
+  fail_unless (msg);
+  fail_unless (GST_MESSAGE_TYPE (msg) == GST_MESSAGE_EOS);
+  gst_message_unref (msg);
+
+  /* Clean up */
+  gst_object_unref (app);
+  gst_object_unref (pad);
+
+  gst_element_set_state (pipeline, GST_STATE_NULL);
+  gst_object_unref (pipeline);
+  g_cond_clear (&wait.cond);
+  g_mutex_clear (&wait.lock);
+}
+
+GST_END_TEST;
+
 
 static guint expect_offset;
 static gboolean chainlist_called;
@@ -762,6 +847,7 @@ GST_START_TEST (test_appsrc_period_with_custom_segment)
   GList *expected = NULL;
   SegmentTestData test_data;
 
+  g_mutex_init (&expected_mutex);
   g_mutex_init (&test_data.lock);
   g_cond_init (&test_data.cond);
   test_data.last_buf_count = 0;
@@ -928,6 +1014,7 @@ GST_START_TEST (test_appsrc_period_with_custom_segment)
 
   g_mutex_clear (&test_data.lock);
   g_cond_clear (&test_data.cond);
+  g_mutex_clear (&expected_mutex);
 }
 
 GST_END_TEST;
@@ -947,6 +1034,8 @@ GST_START_TEST (test_appsrc_custom_segment_twice)
   GList *expected = NULL;
   GstSegment segment;
   GstBuffer *buffer;
+
+  g_mutex_init (&expected_mutex);
 
   for (tc = 0; tc < 4; tc++) {
     /* Case 0: Push segment1 without buffer,
@@ -1087,6 +1176,8 @@ GST_START_TEST (test_appsrc_custom_segment_twice)
       g_mutex_unlock (&expected_mutex);
     }
   }
+
+  g_mutex_clear (&expected_mutex);
 }
 
 GST_END_TEST;
@@ -1691,6 +1782,7 @@ appsrc_suite (void)
   tcase_add_test (tc_chain, test_appsrc_set_caps_twice);
   tcase_add_test (tc_chain, test_appsrc_caps_in_push_modes);
   tcase_add_test (tc_chain, test_appsrc_blocked_on_caps);
+  tcase_add_test (tc_chain, test_appsrc_blocked_eos);
   tcase_add_test (tc_chain, test_appsrc_push_buffer_list);
   tcase_add_test (tc_chain, test_appsrc_period_with_custom_segment);
   tcase_add_test (tc_chain, test_appsrc_custom_segment_twice);

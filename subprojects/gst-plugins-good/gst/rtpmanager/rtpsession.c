@@ -88,6 +88,9 @@ enum
 #define DEFAULT_TWCC_FEEDBACK_INTERVAL GST_CLOCK_TIME_NONE
 #define DEFAULT_UPDATE_NTP64_HEADER_EXT TRUE
 #define DEFAULT_TIMEOUT_INACTIVE_SOURCES TRUE
+#define DEFAULT_RTX_PERCENTAGE       -1
+#define DEFAULT_MAX_CSRCS            15
+#define DEFAULT_MAX_SOURCES          150
 #define DEFAULT_STATS_NOTIFY_MIN_INTERVAL   0
 
 enum
@@ -120,6 +123,9 @@ enum
   PROP_TWCC_FEEDBACK_INTERVAL,
   PROP_UPDATE_NTP64_HEADER_EXT,
   PROP_TIMEOUT_INACTIVE_SOURCES,
+  PROP_RTX_PERCENTAGE,
+  PROP_MAX_CSRCS,
+  PROP_MAX_SOURCES,
   PROP_TWCC_BASE_SEQNUM,
   PROP_LAST,
 };
@@ -180,6 +186,8 @@ static GstFlowReturn rtp_session_schedule_bye_locked (RTPSession * sess,
     GstClockTime current_time);
 static GstClockTime calculate_rtcp_interval (RTPSession * sess,
     gboolean deterministic, gboolean first);
+static void remove_source_from_lru_queue (RTPSession * sess,
+    RTPSource * source);
 
 static gboolean
 accumulate_trues (GSignalInvocationHint * ihint, GValue * return_accu,
@@ -805,6 +813,56 @@ rtp_session_class_init (RTPSessionClass * klass)
       G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS);
 
   /**
+   * RTPSession:rtx-percentage:
+   *
+   * The maximum amount of RTX as a percentage of the overall
+   * bitrate (-1 = no throttling)
+   *
+   * Since: 1.30
+   */
+  properties[PROP_RTX_PERCENTAGE] =
+      g_param_spec_int ("rtx-percentage", "RTX percentage",
+      "The maximum amount of RTX as a percentage of the overall bitrate (-1 = no throttling)",
+      -1, G_MAXINT, DEFAULT_RTX_PERCENTAGE,
+      G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS);
+
+  /**
+   * RTPSession:max-csrcs:
+   *
+   * How many contributing sources to track per SSRC. After the
+   * limit is reached the oldest CSRC is timed out. Only applies
+   * to receiver sources.
+   *
+   * Since: 1.28.7
+   */
+  properties[PROP_MAX_CSRCS] =
+      g_param_spec_uint ("max-csrcs",
+      "Max Contributing Sources",
+      "How many contributing sources to track per SSRC. After the "
+      "limit is reached the oldest CSRC is timed out. Only applies "
+      "to receiver sources.",
+      0, G_MAXUINT, DEFAULT_MAX_CSRCS,
+      G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS | GST_PARAM_MUTABLE_READY);
+
+  /**
+   * RTPSession:max-sources:
+   *
+   * How many sources to track. After the limit is reached the oldest
+   * CSRC / SSRC is timed out. Only applies to receiver sources.
+   *
+   * Since: 1.28.7
+   */
+  properties[PROP_MAX_SOURCES] =
+      g_param_spec_uint ("max-sources",
+      "Max Sources",
+      "How many sources to track. After the "
+      "limit is reached the oldest SSRC / CSRC is timed out. Only applies "
+      "to receiver sources, and acts as a global limit to the number of "
+      "tracked sources.",
+      0, G_MAXUINT, DEFAULT_MAX_SOURCES,
+      G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS | GST_PARAM_MUTABLE_READY);
+
+  /**
    * RTPSession::set_twcc_base_seqnum:
    * 
    * Set initial twcc sequence number for  outgoing packets.
@@ -849,6 +907,8 @@ rtp_session_init (RTPSession * sess)
         g_hash_table_new_full (NULL, NULL, NULL,
         (GDestroyNotify) g_object_unref);
   }
+
+  g_queue_init (&sess->ssrc_queue);
 
   rtp_stats_init_defaults (&sess->stats);
   INIT_AVG (sess->stats.avg_rtcp_packet_size, 100);
@@ -917,6 +977,13 @@ rtp_session_init (RTPSession * sess)
 
   sess->twcc = rtp_twcc_manager_new (sess->mtu);
   sess->timedout_ssrcs = g_hash_table_new (NULL, NULL);
+
+  sess->rtx_percentage = DEFAULT_RTX_PERCENTAGE;
+  sess->rtx_bitrate = 0;
+  sess->rtx_bytes_sent = 0;
+  sess->prev_rtx_time = GST_CLOCK_TIME_NONE;
+  sess->max_csrcs = DEFAULT_MAX_CSRCS;
+  sess->max_sources = DEFAULT_MAX_SOURCES;
 }
 
 static void
@@ -937,6 +1004,8 @@ rtp_session_finalize (GObject * object)
    */
   for (i = 0; i < 1; i++)
     g_hash_table_destroy (sess->ssrcs[i]);
+
+  g_queue_clear (&sess->ssrc_queue);
 
   g_object_unref (sess->twcc);
   g_hash_table_destroy (sess->timedout_ssrcs);
@@ -1142,6 +1211,15 @@ rtp_session_set_property (GObject * object, guint prop_id,
     case PROP_TIMEOUT_INACTIVE_SOURCES:
       sess->timeout_inactive_sources = g_value_get_boolean (value);
       break;
+    case PROP_RTX_PERCENTAGE:
+      sess->rtx_percentage = g_value_get_int (value);
+      break;
+    case PROP_MAX_CSRCS:
+      sess->max_csrcs = g_value_get_uint (value);
+      break;
+    case PROP_MAX_SOURCES:
+      sess->max_sources = g_value_get_uint (value);
+      break;
     case PROP_TWCC_BASE_SEQNUM:
       RTP_SESSION_LOCK (sess);
       rtp_twcc_manager_set_base_seqnum (sess->twcc,
@@ -1245,6 +1323,15 @@ rtp_session_get_property (GObject * object, guint prop_id,
       break;
     case PROP_TIMEOUT_INACTIVE_SOURCES:
       g_value_set_boolean (value, sess->timeout_inactive_sources);
+      break;
+    case PROP_RTX_PERCENTAGE:
+      g_value_set_int (value, sess->rtx_percentage);
+      break;
+    case PROP_MAX_CSRCS:
+      g_value_set_uint (value, sess->max_csrcs);
+      break;
+    case PROP_MAX_SOURCES:
+      g_value_set_uint (value, sess->max_sources);
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
@@ -1420,6 +1507,11 @@ rtp_session_reset (RTPSession * sess)
   sess->stats.nacks_dropped = 0;
   sess->stats.nacks_sent = 0;
   sess->stats.nacks_received = 0;
+
+  /* Reinitialize RTX throttling */
+  sess->rtx_bitrate = 0;
+  sess->rtx_bytes_sent = 0;
+  sess->prev_rtx_time = GST_CLOCK_TIME_NONE;
 
   sess->is_doing_ptp = TRUE;
 
@@ -2107,6 +2199,83 @@ find_source (RTPSession * sess, guint32 ssrc)
   return source;
 }
 
+static void
+remove_source (RTPSession * sess, RTPSource * source, gboolean byetimeout)
+{
+  /* mark the source as closing before the timeout callbacks, which may
+   * release the session lock, so that nobody else finds and uses it */
+  source->closing = TRUE;
+
+  sess->total_sources--;
+  if (RTP_SOURCE_IS_SENDER (source)) {
+    sess->stats.sender_sources--;
+    if (source->internal)
+      sess->stats.internal_sender_sources--;
+  }
+  if (RTP_SOURCE_IS_ACTIVE (source))
+    sess->stats.active_sources--;
+
+  if (source->internal)
+    sess->stats.internal_sources--;
+
+  if (rtp_source_is_as_csrc (source)) {
+    RTPSource *contributed_source = find_source (sess, source->csrc_ssrc);
+
+    if (contributed_source) {
+      rtp_source_remove_csrc (contributed_source, source->ssrc);
+    }
+  }
+
+  remove_source_from_lru_queue (sess, source);
+
+  if (byetimeout) {
+    on_bye_timeout (sess, source);
+  } else if (!g_hash_table_contains (sess->timedout_ssrcs,
+          GUINT_TO_POINTER (source->ssrc))) {
+    /* remember the SSRC so that we only report the timeout once and so that
+     * late RTCP packets (other than RR) do not resurrect the source */
+    g_hash_table_add (sess->timedout_ssrcs, GUINT_TO_POINTER (source->ssrc));
+    on_timeout (sess, source);
+  }
+}
+
+static void
+add_source_to_lru_queue (RTPSession * sess, RTPSource * source)
+{
+  GST_TRACE_OBJECT (sess, "adding source %08x to LRU queue", source->ssrc);
+
+  if (g_queue_get_length (&sess->ssrc_queue) >= sess->max_sources) {
+    guint32 existing = GPOINTER_TO_UINT (g_queue_pop_head (&sess->ssrc_queue));
+    RTPSource *old_source = find_source (sess, existing);
+
+    if (old_source) {
+      GST_DEBUG_OBJECT (sess, "trimming oldest source %08x from LRU queue",
+          old_source->ssrc);
+
+      g_assert (!old_source->internal);
+
+      old_source->lru_link = NULL;
+      remove_source (sess, old_source, FALSE);
+      g_hash_table_remove (sess->ssrcs[sess->mask_idx],
+          GUINT_TO_POINTER (old_source->ssrc));
+    }
+  }
+
+  g_queue_push_tail (&sess->ssrc_queue, GUINT_TO_POINTER (source->ssrc));
+  source->lru_link = sess->ssrc_queue.tail;
+}
+
+static void
+remove_source_from_lru_queue (RTPSession * sess, RTPSource * source)
+{
+  if (source->lru_link) {
+    GST_TRACE_OBJECT (sess, "removing old source %08x from LRU queue",
+        source->ssrc);
+    g_queue_delete_link (&sess->ssrc_queue, source->lru_link);
+  }
+  source->lru_link = NULL;
+}
+
 /* must be called with the session lock, the returned source needs to be
  * unreffed after usage. */
 static RTPSource *
@@ -2131,7 +2300,7 @@ obtain_source (RTPSession * sess, guint32 ssrc, gboolean * created,
     }
 
     /* make new Source in probation and insert */
-    source = rtp_source_new (ssrc);
+    source = rtp_source_new (ssrc, sess->max_csrcs);
 
     GST_DEBUG ("creating new source %08x %p", ssrc, source);
 
@@ -2155,9 +2324,21 @@ obtain_source (RTPSession * sess, guint32 ssrc, gboolean * created,
     rtp_source_set_callbacks (source, &callbacks, sess);
 
     add_source (sess, source);
+
+    add_source_to_lru_queue (sess, source);
+
     *created = TRUE;
   } else {
     *created = FALSE;
+
+    // When the source we obtained was an internal one (for example mixer sending us
+    // back a composite packet with one of our own sources contributing), we do not
+    // want to start tracking it in the LRU queue.
+    if (!source->internal) {
+      remove_source_from_lru_queue (sess, source);
+      add_source_to_lru_queue (sess, source);
+    }
+
     /* check for collision, this updates the address when not previously set */
     if (check_collision (sess, source, pinfo, (packet_type == PACKET_TYPE_RTP))) {
       return NULL;
@@ -2191,7 +2372,7 @@ obtain_internal_source (RTPSession * sess, guint32 ssrc, gboolean * created,
   source = find_source (sess, ssrc);
   if (source == NULL) {
     /* make new internal Source and insert */
-    source = rtp_source_new (ssrc);
+    source = rtp_source_new (ssrc, sess->max_csrcs);
 
     GST_INFO ("creating new internal source %08x %p", ssrc, source);
 
@@ -2385,6 +2566,9 @@ update_packet (GstBuffer ** buffer, guint idx, RTPPacketInfo * pinfo)
   /* get packet size including header overhead */
   pinfo->bytes += gst_buffer_get_size (*buffer) + pinfo->header_len;
   pinfo->packets++;
+
+  pinfo->is_rtx =
+      GST_BUFFER_FLAG_IS_SET (*buffer, GST_RTP_BUFFER_FLAG_RETRANSMISSION);
 
   if (pinfo->rtp) {
     GstRTPBuffer rtp = { NULL };
@@ -2666,17 +2850,14 @@ rtp_session_process_rtp (RTPSession * sess, GstBuffer * buffer,
   if (oldrate != source->bitrate)
     sess->recalc_bandwidth = TRUE;
 
-
   if (source->validated) {
     gboolean created;
     gint i;
 
     /* for validated sources, we add the CSRCs as well */
     for (i = 0; i < pinfo.csrc_count; i++) {
-      guint32 csrc;
+      guint32 csrc = pinfo.csrcs[i];
       RTPSource *csrc_src;
-
-      csrc = pinfo.csrcs[i];
 
       /* get source */
       csrc_src = obtain_source (sess, csrc, &created, &pinfo, PACKET_TYPE_RTP);
@@ -2685,7 +2866,24 @@ rtp_session_process_rtp (RTPSession * sess, GstBuffer * buffer,
 
       if (created) {
         GST_DEBUG ("created new CSRC: %08x", csrc);
-        rtp_source_set_as_csrc (csrc_src);
+
+        while (rtp_source_has_max_csrcs (source)) {
+          RTPSource *old_source =
+              find_source (sess, rtp_source_pop_csrc (source));
+
+          if (old_source) {
+            GST_DEBUG_OBJECT (sess,
+                "reached max number of CSRCs for SSRC %08x, trimming oldest (%08x)",
+                source->ssrc, old_source->ssrc);
+
+            remove_source (sess, old_source, FALSE);
+            g_hash_table_remove (sess->ssrcs[sess->mask_idx],
+                GUINT_TO_POINTER (old_source->ssrc));
+          }
+        }
+
+        rtp_source_set_as_csrc (csrc_src, source->ssrc);
+        rtp_source_add_csrc (source, csrc);
         source_update_active (sess, csrc_src, FALSE);
         on_new_ssrc (sess, csrc_src);
       }
@@ -2923,12 +3121,21 @@ rtp_session_process_sdes (RTPSession * sess, GstRTCPPacket * packet,
       gchar *name;
       gchar *value;
 
-      gst_rtcp_packet_sdes_get_entry (packet, &type, &len, &data);
+      if (!gst_rtcp_packet_sdes_get_entry (packet, &type, &len, &data)) {
+        GST_WARNING ("malformed SDES packet, ignoring item %d (SSRC %08x) "
+            "entry %d and the rest of the packet", i, ssrc, j);
+        break;
+      }
 
       GST_DEBUG ("entry %d, type %d, len %d, data %.*s", j, type, len, len,
           data);
 
       if (type == GST_RTCP_SDES_PRIV) {
+        if (len < data[0] + 1) {
+          GST_WARNING ("malformed SDES packet, ignoring item %d (SSRC %08x) "
+              "entry %d and the rest of the packet", i, ssrc, j);
+          break;
+        }
         name = g_strndup ((const gchar *) &data[1], data[0]);
         len -= data[0] + 1;
         data += data[0] + 1;
@@ -3771,6 +3978,55 @@ update_ntp64_header_ext (RTPPacketInfo * pinfo)
   }
 }
 
+typedef struct
+{
+  guint64 total;
+  guint64 rtx;
+  GstClockTime current_time;
+  guint64 current_window_rtx;
+} NonRTXBitrateData;
+
+static void
+add_up_non_rtx_bitrate (gpointer key, RTPSource * source, guint64 * total)
+{
+  if (!source->is_rtx) {
+    *total += source->bitrate;
+  }
+}
+
+#define RTX_BITRATE_WINDOW (100 * GST_MSECOND)
+
+/* With session lock */
+static void
+update_rtx_bitrate (RTPSession * sess, GstClockTime current_time,
+    guint64 * bytes_sent)
+{
+  if (GST_CLOCK_TIME_IS_VALID (sess->prev_rtx_time)) {
+    GstClockTime elapsed = current_time - sess->prev_rtx_time;
+
+    if (elapsed > RTX_BITRATE_WINDOW) {
+      guint64 rate;
+
+      rate = gst_util_uint64_scale (*bytes_sent, 8 * GST_SECOND, elapsed);
+
+      if (sess->rtx_bitrate == 0)
+        sess->rtx_bitrate = rate;
+      else
+        sess->rtx_bitrate = ((sess->rtx_bitrate * 3) + rate) / 4;
+
+      GST_LOG_OBJECT (sess, "new RTX rate calculated: %" G_GUINT64_FORMAT,
+          sess->rtx_bitrate);
+
+      sess->prev_rtx_time = current_time;
+      *bytes_sent = 0;
+    }
+  } else {
+    GST_LOG ("Reset instant bitrate measurement");
+    sess->prev_rtx_time = current_time;
+    sess->rtx_bitrate = 0;
+  }
+}
+
 /**
  * rtp_session_send_rtp:
  * @sess: an #RTPSession
@@ -3804,6 +4060,41 @@ rtp_session_send_rtp (RTPSession * sess, gpointer data, gboolean is_list,
   if (!update_packet_info (sess, &pinfo, TRUE, TRUE, is_list, data,
           current_time, running_time, ntpnstime))
     goto invalid_packet;
+
+  if (pinfo.is_rtx) {
+    guint64 non_rtx_bitrate = 0;
+    update_rtx_bitrate (sess, pinfo.current_time, &sess->rtx_bytes_sent);
+    g_hash_table_foreach (sess->ssrcs[sess->mask_idx],
+        (GHFunc) add_up_non_rtx_bitrate, &non_rtx_bitrate);
+
+    GST_LOG_OBJECT (sess,
+        "non RTX bitrate: %" G_GUINT64_FORMAT " RTX bitrate: %"
+        G_GUINT64_FORMAT, non_rtx_bitrate, sess->rtx_bitrate);
+
+    if (non_rtx_bitrate > 0 && sess->rtx_bitrate > 0
+        && sess->rtx_percentage >= 0) {
+      guint64 rtx_percentage = gst_util_uint64_scale (sess->rtx_bitrate, 100,
+          non_rtx_bitrate + sess->rtx_bitrate);
+      guint64 rtx_bitrate_budget =
+          gst_util_uint64_scale (non_rtx_bitrate, sess->rtx_percentage, 100);
+      guint64 used_rtx_bitrate =
+          gst_util_uint64_scale (sess->rtx_bytes_sent * 8, GST_SECOND,
+          RTX_BITRATE_WINDOW);
+
+      /* We want to ward against sudden RTX spikes, so also check whether the current window has exceeded the budget */
+      if (rtx_percentage > sess->rtx_percentage
+          || used_rtx_bitrate > rtx_bitrate_budget) {
+        GST_LOG_OBJECT (sess, "dropping RTX to remain within budget");
+        clean_packet_info (&pinfo);
+        RTP_SESSION_UNLOCK (sess);
+        return GST_FLOW_OK;
+      } else {
+        GST_LOG_OBJECT (sess, "We are within RTX budget, letting RTX through");
+      }
+    }
+
+    sess->rtx_bytes_sent += pinfo.bytes;
+  }
 
   /* Update any 64-bit NTP header extensions with the actual NTP time here */
   if (sess->update_ntp64_header_ext)
@@ -4504,7 +4795,7 @@ update_source (const gchar * key, RTPSource * source, ReportData * data)
   gboolean remove = FALSE;
   gboolean byetimeout = FALSE;
   gboolean sendertimeout = FALSE;
-  gboolean is_sender, is_active;
+  gboolean is_sender;
   RTPSession *sess = data->sess;
   GstClockTime interval, binterval;
   GstClockTime btime;
@@ -4524,7 +4815,6 @@ update_source (const gchar * key, RTPSource * source, ReportData * data)
     return;
 
   is_sender = RTP_SOURCE_IS_SENDER (source);
-  is_active = RTP_SOURCE_IS_ACTIVE (source);
 
   /* Fetching a new clock rate could release the RTPSession lock, so we need to
    * make sure this is done on a copy of the table */
@@ -4626,28 +4916,7 @@ update_source (const gchar * key, RTPSource * source, ReportData * data)
 
   if (remove) {
     GST_INFO ("removing source %08x", source->ssrc);
-    source->closing = TRUE;
-    sess->total_sources--;
-    if (is_sender) {
-      sess->stats.sender_sources--;
-      if (source->internal)
-        sess->stats.internal_sender_sources--;
-    }
-    if (is_active)
-      sess->stats.active_sources--;
-
-    if (source->internal)
-      sess->stats.internal_sources--;
-
-    if (byetimeout) {
-      on_bye_timeout (sess, source);
-
-    } else if (!g_hash_table_contains (sess->timedout_ssrcs,
-            GUINT_TO_POINTER (source->ssrc))) {
-      g_hash_table_add (sess->timedout_ssrcs, GUINT_TO_POINTER (source->ssrc));
-      on_timeout (sess, source);
-    }
-
+    remove_source (sess, source, byetimeout);
   } else {
     if (sendertimeout) {
       source->is_sender = FALSE;

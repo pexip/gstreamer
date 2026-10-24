@@ -1076,6 +1076,7 @@ gst_osx_audio_device_new (AudioDeviceID device_id, const gchar * device_name,
   gstdev->element = element_name;
 
   gst_structure_free (props);
+  gst_caps_unref (caps);
   g_free (uuid);
 
   return gstdev;

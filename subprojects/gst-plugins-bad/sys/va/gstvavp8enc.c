@@ -45,9 +45,11 @@
 
 #include <math.h>
 #include <gst/codecparsers/gstvp8parser.h>
+#include <gst/va/gstvavideoformat.h>
 
 #include "gstvabaseenc.h"
 #include "gstvapluginutils.h"
+#include "gstvadisplay_priv.h"
 
 GST_DEBUG_CATEGORY_STATIC (gst_va_vp8enc_debug);
 #define GST_CAT_DEFAULT gst_va_vp8enc_debug
@@ -333,6 +335,10 @@ _vp8_calculate_coded_size (GstVaVp8Enc * self)
 
   /* Safe choice, 2 times 4:2:0 framesize plus header. */
   base->codedbuf_size = 3 * width * height + 1278;
+
+  base->codedbuf_size = gst_va_base_enc_adjust_coded_buffer_size (base,
+      base->codedbuf_size, self->rc.rc_ctrl_mode, self->rc.target_bitrate_bits);
+
   GST_INFO_OBJECT (self, "Calculate codedbuf size: %u", base->codedbuf_size);
 }
 
@@ -426,7 +432,7 @@ _vp8_ensure_rate_control (GstVaVp8Enc * self)
   guint bitrate;
   guint32 rc_ctrl, rc_mode, quality_level;
 
-  quality_level = gst_va_encoder_get_quality_level (base->encoder,
+  quality_level = gst_va_display_get_quality_level (base->display,
       base->profile, GST_VA_BASE_ENC_ENTRYPOINT (base));
   if (self->rc.target_usage > quality_level) {
     GST_INFO_OBJECT (self, "User setting target-usage: %d is not supported, "
@@ -442,7 +448,7 @@ _vp8_ensure_rate_control (GstVaVp8Enc * self)
   GST_OBJECT_UNLOCK (self);
 
   if (rc_ctrl != VA_RC_NONE) {
-    rc_mode = gst_va_encoder_get_rate_control_mode (base->encoder,
+    rc_mode = gst_va_display_get_rate_control_mode (base->display,
         base->profile, GST_VA_BASE_ENC_ENTRYPOINT (base));
 
     if (!(rc_mode & rc_ctrl)) {
@@ -573,19 +579,18 @@ gst_va_vp8_enc_reconfig (GstVaBaseEnc * base)
   GstVaBaseEncClass *klass = GST_VA_BASE_ENC_GET_CLASS (base);
   GstVideoEncoder *venc = GST_VIDEO_ENCODER (base);
   GstVaVp8Enc *self = GST_VA_VP8_ENC (base);
-  GstCaps *out_caps, *reconf_caps = NULL;
+  GstCaps *out_caps;
   GstVideoCodecState *output_state;
-  GstVideoFormat format, reconf_format = GST_VIDEO_FORMAT_UNKNOWN;
+  GstVideoFormat format;
   const GstVideoFormatInfo *format_info;
-  gboolean do_renegotiation = TRUE, do_reopen, need_negotiation, rc_same;
-  guint max_ref_frames, max_surfaces = 0, codedbuf_size, latency_num;
+  gboolean do_renegotiation = TRUE;
+  guint max_ref_frames, latency_num, rt_format;
   gint width, height;
   GstClockTime latency;
 
   width = GST_VIDEO_INFO_WIDTH (&base->in_info);
   height = GST_VIDEO_INFO_HEIGHT (&base->in_info);
   format = GST_VIDEO_INFO_FORMAT (&base->in_info);
-  codedbuf_size = base->codedbuf_size;
   latency_num = base->preferred_output_delay;
 
   /* VP8 only support 4:2:0 formats so check that first */
@@ -594,27 +599,12 @@ gst_va_vp8_enc_reconfig (GstVaBaseEnc * base)
       GST_VIDEO_FORMAT_INFO_H_SUB (format_info, 1) != 1)
     return FALSE;
 
-  need_negotiation =
-      !gst_va_encoder_get_reconstruct_pool_config (base->encoder, &reconf_caps,
-      &max_surfaces);
-
-  if (!need_negotiation && reconf_caps) {
-    GstVideoInfo vi;
-    if (!gst_video_info_from_caps (&vi, reconf_caps))
-      return FALSE;
-    reconf_format = GST_VIDEO_INFO_FORMAT (&vi);
+  rt_format = gst_va_chroma_from_video_format (format);
+  if (!rt_format) {
+    GST_ERROR_OBJECT (self, "unrecognized input format: %s",
+        gst_video_format_to_string (format));
+    return FALSE;
   }
-
-  GST_OBJECT_LOCK (self);
-  rc_same = (self->prop.rc_ctrl == self->rc.rc_ctrl_mode);
-  GST_OBJECT_UNLOCK (self);
-
-  /* First check */
-  do_reopen = !(format == reconf_format && width == base->width
-      && height == base->height && rc_same);
-
-  if (do_reopen && gst_va_encoder_is_open (base->encoder))
-    gst_va_encoder_close (base->encoder);
 
   gst_va_base_enc_reset_state (base);
 
@@ -627,6 +617,7 @@ gst_va_vp8_enc_reconfig (GstVaBaseEnc * base)
   base->profile = VAProfileVP8Version0_3;
   base->width = width;
   base->height = height;
+  base->rt_format = rt_format;
 
   /* Frame rate is needed for rate control and PTS setting. */
   if (GST_VIDEO_INFO_FPS_N (&base->in_info) == 0
@@ -653,7 +644,6 @@ gst_va_vp8_enc_reconfig (GstVaBaseEnc * base)
 
   /* Let the downstream know the new latency. */
   if (latency_num != base->preferred_output_delay + 1) {
-    need_negotiation = TRUE;
     latency_num = base->preferred_output_delay + 1;
   }
 
@@ -669,12 +659,7 @@ gst_va_vp8_enc_reconfig (GstVaBaseEnc * base)
   max_ref_frames += 3;          /* scratch frames */
 
   /* Second check after calculations. */
-  do_reopen |= !(codedbuf_size == base->codedbuf_size);
-  if (do_reopen && gst_va_encoder_is_open (base->encoder))
-    gst_va_encoder_close (base->encoder);
-
-  if (!gst_va_encoder_is_open (base->encoder)
-      && !gst_va_encoder_open (base->encoder, base->profile,
+  if (!gst_va_encoder_open (base->encoder, base->profile,
           GST_VIDEO_INFO_FORMAT (&base->in_info), base->rt_format,
           base->width, base->height, base->codedbuf_size,
           max_ref_frames, self->rc.rc_ctrl_mode, 0)) {
@@ -692,17 +677,15 @@ gst_va_vp8_enc_reconfig (GstVaBaseEnc * base)
   gst_caps_set_simple (out_caps, "width", G_TYPE_INT, base->width,
       "height", G_TYPE_INT, base->height, NULL);
 
-  if (!need_negotiation) {
-    output_state = gst_video_encoder_get_output_state (venc);
-    do_renegotiation = TRUE;
-    if (output_state) {
-      do_renegotiation = !gst_caps_is_subset (output_state->caps, out_caps);
-      gst_video_codec_state_unref (output_state);
-    }
-    if (!do_renegotiation) {
-      gst_caps_unref (out_caps);
-      return TRUE;
-    }
+  output_state = gst_video_encoder_get_output_state (venc);
+  do_renegotiation = TRUE;
+  if (output_state) {
+    do_renegotiation = !gst_caps_is_subset (output_state->caps, out_caps);
+    gst_video_codec_state_unref (output_state);
+  }
+  if (!do_renegotiation) {
+    gst_caps_unref (out_caps);
+    return TRUE;
   }
 
   GST_DEBUG_OBJECT (self, "output caps is %" GST_PTR_FORMAT, out_caps);

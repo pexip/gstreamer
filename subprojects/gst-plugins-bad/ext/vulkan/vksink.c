@@ -238,7 +238,8 @@ gst_vulkan_sink_register (GstPlugin * plugin, GstVulkanDevice * device,
   G_IMPLEMENT_INTERFACE (GST_TYPE_NAVIGATION,
       gst_vulkan_sink_navigation_interface_init);
 
-  ret = gst_element_register (plugin, feature_name, rank, g_define_type_id);
+  ret = gst_vulkan_register_feature (plugin, device, g_define_type_id,
+      feature_name, rank);
 
   g_free (type_name);
   g_free (feature_name);
@@ -322,12 +323,24 @@ gst_vulkan_sink_query (GstBaseSink * bsink, GstQuery * query)
 
   switch (GST_QUERY_TYPE (query)) {
     case GST_QUERY_CONTEXT:{
+      GstVulkanQueue *queue = NULL;
+
+      if (gst_vulkan_requested_extensions_handle_context_query (GST_ELEMENT
+              (vk_sink), query, GST_PAD_SRC, vk_sink->instance))
+        return TRUE;
+
       if (gst_vulkan_handle_context_query (GST_ELEMENT (vk_sink), query,
               vk_sink->display, vk_sink->instance, vk_sink->device))
         return TRUE;
+
+      if (vk_sink->swapper->exec)
+        queue =
+            gst_vulkan_operation_get_command_pool (vk_sink->swapper->
+            exec)->queue;
+
       if (vk_sink->swapper &&
           gst_vulkan_queue_handle_context_query (GST_ELEMENT (vk_sink), query,
-              vk_sink->swapper->queue))
+              queue))
         return TRUE;
 
       break;

@@ -42,8 +42,6 @@ static GstStaticPadTemplate gst_gdk_pixbuf_dec_sink_template =
         /*"image/gif; " disabled because we can't handle animated gifs */
         "image/x-icon; "
         "application/x-navi-animation; "
-        "image/x-cmu-raster; "
-        "image/x-sun-raster; "
         "image/x-pixmap; "
         "image/tiff; "
         "image/x-portable-anymap; "
@@ -76,8 +74,7 @@ static gboolean gst_gdk_pixbuf_dec_sink_event (GstPad * pad, GstObject * parent,
 #define gst_gdk_pixbuf_dec_parent_class parent_class
 G_DEFINE_TYPE (GstGdkPixbufDec, gst_gdk_pixbuf_dec, GST_TYPE_ELEMENT);
 GST_ELEMENT_REGISTER_DEFINE_WITH_CODE (gdkpixbufdec, "gdkpixbufdec",
-    GST_RANK_SECONDARY, GST_TYPE_GDK_PIXBUF_DEC,
-    gdk_pixbuf_element_init (plugin));
+    GST_RANK_NONE, GST_TYPE_GDK_PIXBUF_DEC, gdk_pixbuf_element_init (plugin));
 
 static gboolean
 gst_gdk_pixbuf_dec_sink_setcaps (GstGdkPixbufDec * filter, GstCaps * caps)
@@ -293,6 +290,7 @@ gst_gdk_pixbuf_dec_flush (GstGdkPixbufDec * filter)
   gint width, height;
   gint n_channels;
   GstVideoFrame frame;
+  GstVideoFormat fmt;
 
   pixbuf = gdk_pixbuf_loader_get_pixbuf (filter->pixbuf_loader);
   if (pixbuf == NULL)
@@ -301,25 +299,25 @@ gst_gdk_pixbuf_dec_flush (GstGdkPixbufDec * filter)
   width = gdk_pixbuf_get_width (pixbuf);
   height = gdk_pixbuf_get_height (pixbuf);
 
-  if (GST_VIDEO_INFO_FORMAT (&filter->info) == GST_VIDEO_FORMAT_UNKNOWN) {
+  n_channels = gdk_pixbuf_get_n_channels (pixbuf);
+  switch (n_channels) {
+    case 3:
+      fmt = GST_VIDEO_FORMAT_RGB;
+      break;
+    case 4:
+      fmt = GST_VIDEO_FORMAT_RGBA;
+      break;
+    default:
+      goto channels_not_supported;
+  }
+
+  if (GST_VIDEO_INFO_FORMAT (&filter->info) != fmt ||
+      GST_VIDEO_INFO_WIDTH (&filter->info) != width ||
+      GST_VIDEO_INFO_HEIGHT (&filter->info) != height) {
     GstVideoInfo info;
-    GstVideoFormat fmt;
     GList *l;
 
     GST_DEBUG ("Set size to %dx%d", width, height);
-
-    n_channels = gdk_pixbuf_get_n_channels (pixbuf);
-    switch (n_channels) {
-      case 3:
-        fmt = GST_VIDEO_FORMAT_RGB;
-        break;
-      case 4:
-        fmt = GST_VIDEO_FORMAT_RGBA;
-        break;
-      default:
-        goto channels_not_supported;
-    }
-
 
     gst_video_info_init (&info);
     if (!gst_video_info_set_format (&info, fmt, width, height))

@@ -75,7 +75,8 @@ gst_vulkan_handle_init (GstVulkanHandle * handle, GstVulkanDevice * device,
 
   init_debug ();
 
-  GST_TRACE ("new %p", handle);
+  GST_TRACE ("new %p for vulkan handle %"
+      GST_VULKAN_NON_DISPATCHABLE_HANDLE_FORMAT, handle, handle_val);
 
   gst_mini_object_init (&handle->parent, 0, GST_TYPE_VULKAN_HANDLE, NULL, NULL,
       (GstMiniObjectFreeFunction) gst_vulkan_handle_free);
@@ -209,6 +210,96 @@ gst_vulkan_handle_free_sampler (GstVulkanHandle * handle, gpointer user_data)
 }
 
 /**
+ * gst_vulkan_handle_create_sampler_ycbcr_conversion:
+ * @device: a #GstVulkanDevice
+ * @create_info: a pointer to a `VkSamplerYcbcrConversionCreateInfo`
+ * @error: a #GError
+ *
+ * Creates a vulkan `VkSamplerYcbcrConversion` from @create_info.
+ *
+ * Returns: (transfer full) (nullable): a #GstVulkanHandle wrapping the created
+ *     `VkSamplerYcbcrConversion`
+ *
+ * Since: 1.30
+ */
+GstVulkanHandle *
+gst_vulkan_handle_create_sampler_ycbcr_conversion (GstVulkanDevice * device,
+    gpointer create_info, GError ** error)
+{
+  PFN_vkCreateSamplerYcbcrConversion create_conversion;
+  VkSamplerYcbcrConversion ycbcr_conversion;
+  VkResult res;
+
+  g_return_val_if_fail (GST_IS_VULKAN_DEVICE (device), NULL);
+  g_return_val_if_fail (create_info != NULL, NULL);
+
+  /* Resolve the Vulkan 1.1 core entry point dynamically, with the
+   * VK_KHR_sampler_ycbcr_conversion entry point as fallback. This also avoids
+   * a link-time dependency on Vulkan 1.1 for Android builds targeting API 26. */
+  create_conversion = (PFN_vkCreateSamplerYcbcrConversion)
+      gst_vulkan_device_get_proc_address (device,
+      "vkCreateSamplerYcbcrConversion");
+  if (!create_conversion) {
+    create_conversion = (PFN_vkCreateSamplerYcbcrConversion)
+        gst_vulkan_device_get_proc_address (device,
+        "vkCreateSamplerYcbcrConversionKHR");
+  }
+  if (!create_conversion) {
+    g_set_error (error, GST_VULKAN_ERROR, VK_ERROR_EXTENSION_NOT_PRESENT,
+        "Couldn't find vkCreateSamplerYcbcrConversion");
+    return NULL;
+  }
+
+  res = create_conversion (device->device, create_info, NULL,
+      &ycbcr_conversion);
+  if (gst_vulkan_error_to_g_error (res, error,
+          "vkCreateSamplerYcbcrConversion") != VK_SUCCESS)
+    return NULL;
+
+  return gst_vulkan_handle_new_wrapped (device,
+      GST_VULKAN_HANDLE_TYPE_SAMPLER_YCBCR_CONVERSION,
+      (GstVulkanHandleTypedef) ycbcr_conversion,
+      gst_vulkan_handle_free_sampler_ycbcr_conversion, NULL);
+}
+
+/**
+ * gst_vulkan_handle_free_sampler_ycbcr_conversion:
+ * @handle: a #GstVulkanHandle containing a vulkan `VkSamplerYcbcrConversion`
+ * @user_data: callback user data
+ *
+ * Frees the sampler YCbCr conversion in @handle
+ *
+ * Since: 1.30
+ */
+void
+gst_vulkan_handle_free_sampler_ycbcr_conversion (GstVulkanHandle * handle,
+    gpointer user_data)
+{
+  PFN_vkDestroySamplerYcbcrConversion destroy_conversion;
+
+  g_return_if_fail (handle != NULL);
+  g_return_if_fail (handle->handle != VK_NULL_HANDLE);
+  g_return_if_fail (handle->type ==
+      GST_VULKAN_HANDLE_TYPE_SAMPLER_YCBCR_CONVERSION);
+
+  /* Resolve the Vulkan 1.1 core entry point dynamically, with the
+   * VK_KHR_sampler_ycbcr_conversion entry point as fallback. This also avoids
+   * a link-time dependency on Vulkan 1.1 for Android builds targeting API 26. */
+  destroy_conversion = (PFN_vkDestroySamplerYcbcrConversion)
+      gst_vulkan_device_get_proc_address (handle->device,
+      "vkDestroySamplerYcbcrConversion");
+  if (!destroy_conversion) {
+    destroy_conversion = (PFN_vkDestroySamplerYcbcrConversion)
+        gst_vulkan_device_get_proc_address (handle->device,
+        "vkDestroySamplerYcbcrConversionKHR");
+  }
+  g_return_if_fail (destroy_conversion != NULL);
+
+  destroy_conversion (handle->device->device,
+      (VkSamplerYcbcrConversion) handle->handle, NULL);
+}
+
+/**
  * gst_vulkan_handle_free_framebuffer:
  * @handle: a #GstVulkanHandle containing a vulkan `VkFramebuffer`
  * @user_data: callback user data
@@ -247,4 +338,24 @@ gst_vulkan_handle_free_shader (GstVulkanHandle * handle, gpointer user_data)
 
   vkDestroyShaderModule (handle->device->device,
       (VkShaderModule) handle->handle, NULL);
+}
+
+/**
+ * gst_vulkan_handle_free_semaphore:
+ * @handle: a #GstVulkanHandle containing a vulkan `VkSemaphore`
+ * @user_data: callback user data
+ *
+ * Frees the semaphore in @handle
+ *
+ * Since: 1.30
+ */
+void
+gst_vulkan_handle_free_semaphore (GstVulkanHandle * handle, gpointer user_data)
+{
+  g_return_if_fail (handle != NULL);
+  g_return_if_fail (handle->handle != VK_NULL_HANDLE);
+  g_return_if_fail (handle->type == GST_VULKAN_HANDLE_TYPE_SEMAPHORE);
+
+  vkDestroySemaphore (handle->device->device,
+      (VkSemaphore) handle->handle, NULL);
 }

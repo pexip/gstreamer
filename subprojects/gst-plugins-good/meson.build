@@ -1,8 +1,9 @@
 project('gst-plugins-good', 'c',
-  version : '1.27.2.1',
+  version : '1.29.2.1',
   meson_version : '>= 1.4',
   default_options : [ 'warning_level=1',
-                      'buildtype=debugoptimized' ])
+                      'buildtype=debugoptimized',
+                      'c_std=gnu11,c11' ])
 
 gst_version = meson.project_version()
 version_arr = gst_version.split('.')
@@ -39,8 +40,16 @@ plugin_sources = {}
 static_build = get_option('default_library') == 'static'
 
 host_system = host_machine.system()
+subsystem = ''
+if host_system == 'ios'
+  warning('Setting system = \'ios\' in the cross file is deprecated, please use subsystem names')
+  host_system = 'darwin'
+  subsystem = 'ios'
+elif host_system == 'darwin'
+  subsystem = host_machine.subsystem()
+endif
 
-if host_system in ['ios', 'darwin']
+if host_system == 'darwin'
   have_objc = add_languages('objc', native: false)
   have_objcpp = add_languages('objcpp', native: false)
 
@@ -64,7 +73,10 @@ if cc.get_id() == 'msvc'
       '/wd4146', # unary minus on unsigned (beware INT_MIN)
       '/wd4244', # lossy type conversion (e.g. double -> int)
       '/wd4305', # truncating type conversion (e.g. double -> float)
-      cc.get_supported_arguments(['/utf-8']), # set the input encoding to utf-8
+      cc.get_supported_arguments([
+        '/utf-8', # set the input encoding to utf-8
+        '/Zc:preprocessor', # enable preprocessor conformance mode (disable legacy preprocessor)
+      ]),
   ]
 
   if get_option('glib-checks').enabled()
@@ -223,8 +235,6 @@ foreach f : check_functions
     cdata.set(f.get(0), 1)
   endif
 endforeach
-
-cdata.set('HAVE_IOS', host_system == 'ios')
 
 cdata.set('SIZEOF_CHAR', cc.sizeof('char'))
 cdata.set('SIZEOF_INT', cc.sizeof('int'))
@@ -420,15 +430,18 @@ have_orcc = false
 orcc_args = []
 orc_targets = []
 # Used by various libraries/elements that use Orc code
-orc_dep = dependency('orc-0.4', version : orc_req, required : get_option('orc'),
-    fallback : ['orc', 'orc_dep'])
-orcc = find_program('orcc', required : get_option('orc'))
-if orc_dep.found() and orcc.found()
-  have_orcc = true
-  orcc_args = [orcc, '--include', 'glib.h']
+orc_dep = dependency('orc-0.4', version: orc_req, required: get_option('orc'), allow_fallback: true)
+orcc = find_program('orcc', required: get_option('orc-compiler'))
+if orc_dep.found()
+  if orcc.found()
+    have_orcc = true
+    orcc_args = [orcc, '--include', 'glib.h']
+  else
+    message('Orc Compiler not found, not regenerating Orc sources')
+  endif
   cdata.set('HAVE_ORC', 1)
 else
-  message('Orc Compiler not found, will use backup C code')
+  warning('Orc not found or disabled, will use backup C code')
   cdata.set('DISABLE_ORC', 1)
 endif
 
@@ -576,7 +589,12 @@ endif
 
 configure_file(output : 'config.h', configuration : cdata)
 
-meson.add_dist_script('scripts/gen-changelog.py', meson.project_name(), '1.26.0', meson.project_version())
+meson.add_dist_script('scripts/gen-changelog.py', meson.project_name(), '1.28.0', meson.project_version())
+
+# dist common files from monorepo root
+if not meson.is_subproject()
+  meson.add_dist_script('scripts/dist-common-files.py', meson.project_version())
+endif
 
 plugin_names = []
 gst_plugins = []

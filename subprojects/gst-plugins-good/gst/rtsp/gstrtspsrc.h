@@ -268,6 +268,8 @@ struct _GstRTSPSrc {
   GTlsCertificateFlags tls_validation_flags;
   GTlsDatabase     *tls_database;
   GTlsInteraction  *tls_interaction;
+  gchar            *tls_client_cert_file;
+  gchar            *tls_client_key_file;
   gboolean          do_retransmission;
   gint              ntp_time_source;
   gchar            *user_agent;
@@ -283,6 +285,9 @@ struct _GstRTSPSrc {
   gboolean          onvif_rate_control;
   gboolean          is_live;
   gboolean          ignore_x_server_reply;
+  GstRTSPBackchannelHttpMethod backchannel_http_method;
+  gboolean          backchannel_fallback_armed;
+  gboolean          backchannel_fallen_back;
   GstStructure     *prop_extra_http_request_headers;
   gboolean          tcp_timestamp;
   gboolean          force_non_compliant_url;
@@ -323,6 +328,20 @@ struct _GstRTSPSrc {
 
   GstRTSPConnInfo  conninfo;
 
+  /* Independent keep-alive timer (non-live + TCP-interleaved only).  When
+   * downstream is paused the streaming loop blocks on data push and cannot
+   * fire the receive-timeout-based keep-alive, so this worker fires from a
+   * separate GMainContext to keep the RTSP session alive. */
+  GMainContext    *keep_alive_context;
+  GMainLoop       *keep_alive_loop;
+  GThread         *keep_alive_thread;
+  GSource         *keep_alive_source;
+  /* Queue of CSeq values of in-flight keep-alive requests.  Receivers look up
+   * incoming response CSeqs here and skip those that match, so a keep-alive
+   * response is never mistaken for the response to a synchronous caller. */
+  GMutex           keep_alive_cseq_lock;
+  GQueue           keep_alive_cseqs;     /* queue of GUINT_TO_POINTER(cseq) */
+
   /* SET/GET PARAMETER requests queue */
   GQueue set_get_param_q;
 
@@ -347,6 +366,7 @@ struct _GstRTSPSrcClass {
   gboolean (*set_parameter) (GstRTSPSrc *rtsp, const gchar *name, const gchar *value, const gchar *content_type, GstPromise *promise);
   gboolean (*set_mikey_parameter) (GstRTSPSrc *rtsp, guint id, GstCaps *mikey, GstPromise *promise);
   gboolean (*remove_key) (GstRTSPSrc *rtsp, guint id);
+  gboolean (*invalidate_key) (GstRTSPSrc *rtsp, guint id);
   GstFlowReturn (*push_backchannel_buffer) (GstRTSPSrc *src, guint id, GstSample *sample);
   GstFlowReturn (*push_backchannel_sample) (GstRTSPSrc *src, guint id, GstSample *sample);
 };

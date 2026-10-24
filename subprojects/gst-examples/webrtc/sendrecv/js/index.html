@@ -19,11 +19,40 @@
     <script src="webrtc.js"></script>
     <script>
       window.onload = websocketServerConnect;
+      window.addEventListener('DOMContentLoaded', () => {
+        const fragment = window.location.hash.substring(1); // strip the '#'
+        if (!fragment) return;
+
+        const pairs = fragment.split(',');
+        pairs.forEach(pair => {
+          const [id, val] = pair.split('=');
+          if (id === 'remote-offerer') {
+            const el = document.getElementById('remote-offerer');
+            el.checked = (val == '1');
+            el.dispatchEvent(new Event('change'));
+          } else if (id === 'data-channel') {
+            const el = document.getElementById('data-channel');
+            el.checked = (val == '1');
+            el.dispatchEvent(new Event('change'));
+          } else if (id === 'peer-id') {
+            document.getElementById('peer-connect').value = val;
+          } else if (id === 'connect' && val === '1') {
+            window.setTimeout(onConnectClicked, 2000);
+          }
+        });
+      });
     </script>
   </head>
 
   <body>
-    <div id="video"></div>
+    <div id="incoming"></div>
+    <div id="preview" style="position: relative; display: inline-block;">
+      <div style="position: absolute; bottom: 0; left: 0; padding: 0.5rem 1rem;
+        background: rgba(0,0,0,0.4); color: white; font-size: 2rem;
+        pointer-events: none;" hidden>
+      Preview
+      </div>
+    </div>
     <div>Status: <span id="status">unknown</span></div>
     <div><textarea id="text" cols=40 rows=4></textarea></div>
     <br/>
@@ -33,7 +62,8 @@
       <input id="peer-connect-button" onclick="onConnectClicked();" type="button" value="Connect">
       <!-- Request the peer to send the offer by sending the OFFER_REQUEST message.
         Same as the --remote-offerer flag in the sendrecv C example -->
-      <input id="remote-offerer" type="checkbox" autocomplete="off"><span>Remote offerer</span>
+      <input id="remote-offerer" type="checkbox" autocomplete="off" onchange="onRemoteOffererChanged();"><span>Remote offerer</span>
+      <input id="data-channel" type="checkbox" autocomplete="off" checked><label id="data-channel-label" for="data-channel">Data channel</label>
     </div>
 
     <div>Our id is <b id="peer-id">unknown</b></div>

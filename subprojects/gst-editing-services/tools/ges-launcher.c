@@ -1056,7 +1056,8 @@ bus_message_cb (GstBus * bus, GstMessage * message, GESLauncher * self)
       GST_DEBUG_BIN_TO_DOT_FILE_WITH_TS (GST_BIN (self->priv->pipeline),
           GST_DEBUG_GRAPH_SHOW_ALL, "ges-launch-error");
       ges_printerr ("ERROR from element %s: %s\n",
-          GST_OBJECT_NAME (message->src), err->message);
+          message->src ? GST_OBJECT_NAME (message->src) : "unknown",
+          err->message);
       ges_printerr ("Debugging info: %s\n", (dbg_info) ? dbg_info : "none");
       g_clear_error (&err);
       g_free (dbg_info);
@@ -1183,6 +1184,15 @@ _run_pipeline (GESLauncher * self)
       return FALSE;
     }
 
+    /* The testfile options (--outputuri, --format) are only parsed by
+     * ges_validate_activate() above, so switch the pipeline to render mode
+     * now, before the timeline tracks are added below and linked - otherwise
+     * they would be linked to the preview playsink. */
+    if (!_set_rendering_details (self)) {
+      g_error ("Failed to setup rendering details\n");
+      return FALSE;
+    }
+
     if (opts->sanitized_timeline) {
       GESProject *project = ges_project_new (opts->sanitized_timeline);
 
@@ -1198,11 +1208,6 @@ _run_pipeline (GESLauncher * self)
 
     if (!_timeline_set_user_options (self, self->priv->timeline, NULL)) {
       ges_printerr ("Could not properly set tracks\n");
-      return FALSE;
-    }
-
-    if (!_set_rendering_details (self)) {
-      g_error ("Failed to setup rendering details\n");
       return FALSE;
     }
   }
@@ -1239,6 +1244,12 @@ _create_pipeline (GESLauncher * self, const gchar * serialized_timeline)
 
   if (opts->outputuri)
     ges_pipeline_set_mode (self->priv->pipeline, 0);
+
+  /* Apply testfile `ges` meta (e.g. compositor-factory rank bump) before
+   * any track is instantiated - creating a GESVideoTrack triggers the
+   * smart mixer, which resolves GESVideoElementSelector once and caches
+   * the result for the rest of the process lifetime. */
+  ges_validate_apply_testfile_meta (opts->testfile);
 
   if (!_create_timeline (self, serialized_timeline, uri, opts->scenario
           || opts->testfile)) {

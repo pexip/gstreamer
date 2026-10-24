@@ -938,7 +938,8 @@ gst_tag_demux_seek_pull (GstTagDemux * tagdemux, GstEvent * event)
   /* restart our task since it might have been stopped when we did the
    * flush. */
   gst_pad_start_task (tagdemux->priv->sinkpad,
-      (GstTaskFunction) gst_tag_demux_element_loop, tagdemux, NULL);
+      (GstTaskFunction) gst_tag_demux_element_loop, gst_object_ref (tagdemux),
+      gst_object_unref);
 
   /* streaming can continue now */
   GST_PAD_STREAM_UNLOCK (tagdemux->priv->sinkpad);
@@ -1001,6 +1002,7 @@ gst_tag_demux_seek_push (GstTagDemux * tagdemux, GstEvent * event)
     }
     upstream = gst_event_new_seek (rate, format, flags,
         start_type, start, stop_type, stop);
+    gst_event_set_seqnum (upstream, gst_event_get_seqnum (event));
     res = gst_pad_push_event (tagdemux->priv->sinkpad, upstream);
   } else if (format == GST_FORMAT_TIME &&
       tagdemux->priv->state == GST_TAG_DEMUX_STREAMING &&
@@ -1602,7 +1604,8 @@ gst_tag_demux_sink_activate (GstPad * sinkpad, GstObject * parent)
 
   /* only start our task if we ourselves decide to start in pull mode */
   return gst_pad_start_task (sinkpad,
-      (GstTaskFunction) gst_tag_demux_element_loop, demux, NULL);
+      (GstTaskFunction) gst_tag_demux_element_loop, gst_object_ref (demux),
+      gst_object_unref);
 
 activate_push:
   {

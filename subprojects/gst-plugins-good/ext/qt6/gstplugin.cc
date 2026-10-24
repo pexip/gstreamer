@@ -20,7 +20,7 @@
 
 /**
  * plugin-qml6:
- * 
+ *
  * Since: 1.22
  */
 
@@ -35,9 +35,12 @@ plugin_init (GstPlugin * plugin)
 {
   gboolean ret = FALSE;
 
+  gst_plugin_set_static_features_flag (plugin);
+
   ret |= GST_ELEMENT_REGISTER (qml6glsink, plugin);
   ret |= GST_ELEMENT_REGISTER (qml6glsrc, plugin);
   ret |= GST_ELEMENT_REGISTER (qml6glmixer, plugin);
+  ret |= GST_ELEMENT_REGISTER (qml6glrendersrc, plugin);
   ret |= GST_ELEMENT_REGISTER (qml6gloverlay, plugin);
 
   return ret;

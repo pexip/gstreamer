@@ -98,6 +98,7 @@ typedef struct GstBaseTsPadData GstBaseTsPadData;
 
 typedef GstBuffer * (*GstBaseTsMuxPadPrepareFunction) (GstBuffer * buf,
     GstBaseTsMuxPad * data, GstBaseTsMux * mux);
+typedef gsize (*GstBaseTsMuxPadPreparedSizeFunction) (GstBaseTsMuxPad * data, GstBuffer * buf);
 
 typedef void (*GstBaseTsMuxPadFreePrepareDataFunction) (gpointer prepare_data);
 
@@ -119,6 +120,8 @@ struct _GstBaseTsMuxPad
 
   /* handler to prepare input data */
   GstBaseTsMuxPadPrepareFunction prepare_func;
+  /* handler to calculate size of prepared input data */
+  GstBaseTsMuxPadPreparedSizeFunction prepared_size_func;
   /* handler to free the private data */
   GstBaseTsMuxPadFreePrepareDataFunction free_func;
 
@@ -166,16 +169,22 @@ struct GstBaseTsMux {
   guint32 last_scte35_event_seqnum;
   gboolean enable_custom_mappings;
 
+  GstClockTime audio_pes_target_time;
+  guint audio_pes_target_time_ticks;
+  guint audio_pes_target_bytes;
+
   /* state */
   gboolean first;
   GstClockTime pending_key_unit_ts;
   GstEvent *force_key_unit_event;
   GstMpegtsSection *pending_scte35_section;
 
+  /* Used when accumulating multiple packets for a PES: */
+  GstBaseTsMuxPad *current_pad;
+  GstBuffer *current_buffer;
+  gint64 current_buffer_dts;
+
   /* write callback handling/state */
-  GstFlowReturn last_flow_ret;
-  GQueue streamheader;
-  gboolean streamheader_sent;
   gboolean is_delta;
   gboolean is_header;
   GstClockTime last_ts;

@@ -23,20 +23,19 @@
 import overrides_hack
 overrides_hack
 
-from common import TestCase
-import unittest
-import sys
-
 import gi
 gi.require_version("GLib", "2.0")
 gi.require_version("Gst", "1.0")
 gi.require_version("GstAnalytics", "1.0")
 gi.require_version("GstVideo", "1.0")
-from gi.repository import GLib
-from gi.repository import Gst
-from gi.repository import GstAnalytics
+
 from gi.repository import GstVideo
-Gst.init(None)
+from gi.repository import GstAnalytics
+from gi.repository import Gst
+from gi.repository import GLib
+from common import TestCase
+
+Gst.init([])
 
 
 class TestAnalyticsODMtd(TestCase):
@@ -126,8 +125,8 @@ class TestAnalyticsClsMtd(TestCase):
         self.assertIsNotNone(meta)
 
         qks = (GLib.quark_from_string("q1"),
-              GLib.quark_from_string("q2"),
-              GLib.quark_from_string("q3"))
+               GLib.quark_from_string("q2"),
+               GLib.quark_from_string("q3"))
 
         (ret, mtd) = meta.add_cls_mtd([0.1, 0.2, 0.3], qks)
         self.assertTrue(ret)
@@ -228,9 +227,9 @@ class TestAnalyticsTensorMeta(TestCase):
 
         data2 = Gst.Buffer.new_allocate(None, 2 * 3 * 4 * 5)
         tensor2 = GstAnalytics.Tensor.new_simple(0, GstAnalytics.TensorDataType.UINT16,
-                                                data2,
-                                                GstAnalytics.TensorDimOrder.ROW_MAJOR,
-                                                [1, 3, 4, 5])
+                                                 data2,
+                                                 GstAnalytics.TensorDimOrder.ROW_MAJOR,
+                                                 [1, 3, 4, 5])
         tmeta.set([tensor, tensor2])
 
         tmeta2 = GstAnalytics.buffer_get_tensor_meta(buf)
@@ -268,8 +267,8 @@ class TestAnalyticsRelationMetaIterator(TestCase):
         (_, trk_mtd) = rmeta.add_tracking_mtd(1, 10)
         (_, trk_mtd1) = rmeta.add_tracking_mtd(1, 11)
         (_, seg_mtd) = rmeta.add_segmentation_mtd(mask_buf,
-                                               GstAnalytics.SegmentationType.SEMANTIC,
-                                               [7, 4, 2], 0, 0, 7, 13)
+                                                  GstAnalytics.SegmentationType.SEMANTIC,
+                                                  [7, 4, 2], 0, 0, 7, 13)
 
         mtds = [
             (od_mtd, GstAnalytics.ODMtd.get_mtd_type()),
@@ -299,7 +298,6 @@ class TestAnalyticsRelationMetaIterator(TestCase):
             assert mtds[j][1] == i.get_mtd_type()
             # call a method to ensure it's a ODMtd
             loc = i.get_location()
-
 
         # Iterating on type GstAnalytics.ClsMtd
         for j, i in zip(cls_index_mtds, rmeta.iter_on_type(GstAnalytics.ClsMtd)):
@@ -354,26 +352,26 @@ class TestAnalyticsRelationMetaIterator(TestCase):
         # Iterate over all type
         for mtd in od_mtd.iter_direct_related(GstAnalytics.RelTypes.RELATE_TO):
             assert mtd.id == expected_mtd_ids[count]
-            assert type(mtd) == expected_mtd_type[count]
-            if (type(mtd) == GstAnalytics.ODMtd):
+            assert type(mtd) is expected_mtd_type[count]
+            if (type(mtd) is GstAnalytics.ODMtd):
                 assert mtd.get_obj_type() == GLib.quark_from_string("od")
-            elif (type(mtd) == GstAnalytics.ClsMtd):
+            elif (type(mtd) is GstAnalytics.ClsMtd):
                 assert mtd.get_quark(0) == GLib.quark_from_string("cls")
             count = count + 1
 
-        assert(count == len(expected_mtd_ids))
+        assert (count == len(expected_mtd_ids))
 
         # Iterate over only with type GstAnalytics.ODMtd
         count = 0
         for mtd in od_mtd.iter_direct_related(GstAnalytics.RelTypes.RELATE_TO, GstAnalytics.ODMtd):
             assert mtd.id == expected_mtd_ids[count]
-            assert  type(mtd) == GstAnalytics.ODMtd
+            assert type(mtd) is GstAnalytics.ODMtd
             count = count + 1
 
-        assert(count == 2)
+        assert (count == 2)
 
         # Create a relation path as od_mtd -> cls_mtd -> trk_mtd -> seg_mtd
-        rmeta.set_relation(GstAnalytics.RelTypes.NONE, od_mtd.id, trk_mtd.id) # clear relation
+        rmeta.set_relation(GstAnalytics.RelTypes.NONE, od_mtd.id, trk_mtd.id)  # clear relation
         rmeta.set_relation(GstAnalytics.RelTypes.RELATE_TO, cls_mtd.id, trk_mtd.id)
         rmeta.set_relation(GstAnalytics.RelTypes.RELATE_TO, trk_mtd.id, seg_mtd.id)
         count = 0
@@ -381,4 +379,817 @@ class TestAnalyticsRelationMetaIterator(TestCase):
         for i in od_mtd.relation_path(seg_mtd, max_span=4):
             assert i == expected_rel_ids[count]
             count += 1
-        assert(count == 4)
+        assert (count == 4)
+
+
+class TestModelInfo(TestCase):
+    def test_modelinfo_load_not_found(self):
+        """Test loading a modelinfo file that doesn't exist"""
+        modelinfo = GstAnalytics.ModelInfo.load("/nonexistent/model.onnx")
+        # Should return None if file not found
+        self.assertIsNone(modelinfo)
+
+    def test_modelinfo_with_temporary_file(self):
+        """Test modelinfo API with a temporary modelinfo file"""
+        import tempfile
+        import os
+
+        # Create a temporary modelinfo file
+        modelinfo_content = """
+[modelinfo]
+version=1.0
+group-id=test-model-v1
+
+[input_tensor]
+dims=1,224,224,3
+dir=input
+type=uint8
+ranges=0.0,255.0
+
+[output_tensor]
+dims=1,1000
+dir=output
+type=float32
+id=output_logits
+"""
+
+        # Create temporary file
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.modelinfo',
+                                         delete=False) as f:
+            f.write(modelinfo_content)
+            temp_modelinfo = f.name
+
+        try:
+            # Remove .modelinfo extension to get model filename
+            model_filename = temp_modelinfo[:-10]  # Remove '.modelinfo'
+
+            # Load the modelinfo using ModelInfo.load()
+            modelinfo = GstAnalytics.ModelInfo.load(model_filename)
+            self.assertIsNotNone(modelinfo)
+
+            # Verify it's a ModelInfo object
+            self.assertIsInstance(modelinfo, GstAnalytics.ModelInfo)
+
+            # Test get_version
+            version = modelinfo.get_version()
+            self.assertEqual(version, "1.0")
+
+            # Test get_group_id
+            group_id = modelinfo.get_group_id()
+            self.assertEqual(group_id, "test-model-v1")
+
+            # Test get_group_id as quark
+            group_id_quark = modelinfo.get_quark_group_id()
+            self.assertEqual(group_id_quark, GLib.quark_from_string("test-model-v1"))
+
+            # Test find_tensor_name by name
+            tensor_name = modelinfo.find_tensor_name(
+                GstAnalytics.ModelInfoTensorDirection.INPUT,
+                0,  # index
+                "input_tensor",  # in_tensor_name hint
+                GstAnalytics.TensorDataType.UINT8,
+                [1, 224, 224, 3]  # dims
+            )
+            self.assertEqual(tensor_name, "input_tensor")
+
+            # Test get_id
+            output_id = modelinfo.get_id("output_tensor")
+            self.assertEqual(output_id, "output_logits")
+
+            # Test get_id as quark
+            output_id_quark = modelinfo.get_quark_id("output_tensor")
+            self.assertEqual(output_id_quark, GLib.quark_from_string("output_logits"))
+
+            # Test get_input_scales_offsets
+            # Case 1: uint8 input [0, 255] to target range [0, 255] (passthrough)
+            # GObject Introspection returns (success, scales, offsets)
+            input_mins = [0.0]  # uint8 minimum
+            input_maxs = [255.0]  # uint8 maximum
+            result = modelinfo.get_input_scales_offsets("input_tensor",
+                                                        input_mins, input_maxs)
+            self.assertTrue(result[0])  # success
+            scales = result[1]
+            offsets = result[2]
+            self.assertEqual(len(scales), 1)  # scales should have 1 element
+            self.assertEqual(len(offsets), 1)  # offsets should have 1 element
+            self.assertAlmostEqual(scales[0], 1.0, 6)  # (255-0)/(255-0) = 1.0
+            self.assertAlmostEqual(offsets[0], 0.0, 6)  # 0 - 0*1.0 = 0.0
+
+            # Test get_dims_order (should default to row-major)
+            dims_order = modelinfo.get_dims_order("input_tensor")
+            self.assertEqual(dims_order, GstAnalytics.TensorDimOrder.ROW_MAJOR)
+
+            # Test get_target_ranges (returns arrays of min/max from ranges)
+            result = modelinfo.get_target_ranges("input_tensor")
+            # ranges field contains "0.0,255.0" so this should succeed
+            self.assertTrue(result[0])  # success
+            mins = result[1]
+            maxs = result[2]
+            self.assertEqual(len(mins), 1)  # should have 1 range
+            self.assertEqual(len(maxs), 1)  # should have 1 range
+            self.assertAlmostEqual(mins[0], 0.0, 6)
+            self.assertAlmostEqual(maxs[0], 255.0, 6)
+
+            # Free the modelinfo
+            modelinfo.free()
+
+        finally:
+            # Clean up temporary file
+            if os.path.exists(temp_modelinfo):
+                os.unlink(temp_modelinfo)
+            if os.path.exists(model_filename):
+                os.unlink(model_filename)
+
+    def test_modelinfo_version_major_minor(self):
+        """Test modelinfo version string parsing for major and minor versions"""
+        import tempfile
+        import os
+
+        # Test case: Version 1.0 (current format version)
+        modelinfo_content_1_0 = """
+[modelinfo]
+version=1.0
+group-id=test-model-v1
+
+[input_tensor]
+dims=1,224,224,3
+dir=input
+type=uint8
+
+[output_tensor]
+dims=1,1000
+dir=output
+type=float32
+id=output_logits
+"""
+
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.modelinfo',
+                                         delete=False) as f:
+            f.write(modelinfo_content_1_0)
+            temp_modelinfo = f.name
+
+        try:
+            model_filename = temp_modelinfo[:-10]  # Remove '.modelinfo'
+            modelinfo = GstAnalytics.ModelInfo.load(model_filename)
+            self.assertIsNotNone(modelinfo)
+
+            # Verify version string
+            version = modelinfo.get_version()
+            self.assertEqual(version, "1.0")
+
+            # Parse version string to verify major and minor components
+            version_parts = version.split('.')
+            self.assertEqual(len(version_parts), 2)
+            major_version = int(version_parts[0])
+            minor_version = int(version_parts[1])
+            self.assertEqual(major_version, 1)
+            self.assertEqual(minor_version, 0)
+
+            modelinfo.free()
+        finally:
+            if os.path.exists(temp_modelinfo):
+                os.unlink(temp_modelinfo)
+            if os.path.exists(model_filename):
+                os.unlink(model_filename)
+
+    def test_modelinfo_version_major_upgrade_rejected(self):
+        """Test that modelinfo with unsupported major version is rejected"""
+        import tempfile
+        import os
+
+        # Test case: Version 2.0 (unsupported major version)
+        # The version check should reject this
+        modelinfo_content_2_0 = """
+[modelinfo]
+version=2.0
+group-id=test-model-v2
+
+[input_tensor]
+dims=1,224,224,3
+dir=input
+type=uint8
+
+[output_tensor]
+dims=1,1000
+dir=output
+type=float32
+id=output_logits
+"""
+
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.modelinfo',
+                                         delete=False) as f:
+            f.write(modelinfo_content_2_0)
+            temp_modelinfo = f.name
+
+        try:
+            model_filename = temp_modelinfo[:-10]  # Remove '.modelinfo'
+            # Load should fail because version 2.0 is not supported
+            modelinfo = GstAnalytics.ModelInfo.load(model_filename)
+            self.assertIsNone(modelinfo)
+        finally:
+            if os.path.exists(temp_modelinfo):
+                os.unlink(temp_modelinfo)
+            if os.path.exists(model_filename):
+                os.unlink(model_filename)
+
+    def test_modelinfo_input_ranges_transformations(self):
+        """Test modelinfo get_input_scales_offsets with different input ranges"""
+        import tempfile
+        import os
+
+        # Create a modelinfo with a tensor that expects normalized [0, 1] range
+        modelinfo_content = """
+[modelinfo]
+version=1.0
+group-id=test-model-normalization
+
+[input_normalized]
+dims=1,224,224,3
+dir=input
+type=uint8
+ranges=0.0,1.0;0.0,1.0;0.0,1.0
+"""
+
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.modelinfo',
+                                         delete=False) as f:
+            f.write(modelinfo_content)
+            temp_modelinfo = f.name
+
+        try:
+            model_filename = temp_modelinfo[:-10]
+            modelinfo = GstAnalytics.ModelInfo.load(model_filename)
+            self.assertIsNotNone(modelinfo)
+
+            # Test 1: uint8 input [0, 255] to target [0, 1] (normalization)
+            # Expected: scale = (1-0)/(255-0) ≈ 0.00392, offset = 0 - 0*scale = 0.0
+            input_mins = [0.0, 0.0, 0.0]
+            input_maxs = [255.0, 255.0, 255.0]
+            result = modelinfo.get_input_scales_offsets("input_normalized",
+                                                        input_mins, input_maxs)
+            self.assertTrue(result[0])
+            scales = result[1]
+            offsets = result[2]
+            self.assertEqual(len(scales), 3)
+            for i in range(3):
+                self.assertAlmostEqual(scales[i], 1.0 / 255.0, 6)
+                self.assertAlmostEqual(offsets[i], 0.0, 6)
+
+            modelinfo.free()
+        finally:
+            if os.path.exists(temp_modelinfo):
+                os.unlink(temp_modelinfo)
+            if os.path.exists(model_filename):
+                os.unlink(model_filename)
+
+        # Create a modelinfo with a tensor that expects [-1, 1] range
+        modelinfo_content_signed = """
+[modelinfo]
+version=1.0
+group-id=test-model-signed
+
+[input_signed]
+dims=1,224,224,3
+dir=input
+type=int8
+ranges=-1.0,1.0;-1.0,1.0;-1.0,1.0
+"""
+
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.modelinfo',
+                                         delete=False) as f:
+            f.write(modelinfo_content_signed)
+            temp_modelinfo = f.name
+
+        try:
+            model_filename = temp_modelinfo[:-10]
+            modelinfo = GstAnalytics.ModelInfo.load(model_filename)
+            self.assertIsNotNone(modelinfo)
+
+            # Test 2: int8 input [-128, 127] to target [-1, 1]
+            # Expected: scale = (1-(-1))/(127-(-128)) = 2/255 ≈ 0.00784
+            #           offset = -1 - (-128)*scale = -1 + 128*0.00784 ≈ 0.00392
+            input_mins = [-128.0, -128.0, -128.0]
+            input_maxs = [127.0, 127.0, 127.0]
+            result = modelinfo.get_input_scales_offsets("input_signed",
+                                                        input_mins, input_maxs)
+            self.assertTrue(result[0])
+            scales = result[1]
+            offsets = result[2]
+            self.assertEqual(len(scales), 3)
+            expected_scale = 2.0 / 255.0
+            expected_offset = -1.0 - (-128.0) * expected_scale
+            for i in range(3):
+                self.assertAlmostEqual(scales[i], expected_scale, 6)
+                self.assertAlmostEqual(offsets[i], expected_offset, 6)
+
+            modelinfo.free()
+        finally:
+            if os.path.exists(temp_modelinfo):
+                os.unlink(temp_modelinfo)
+            if os.path.exists(model_filename):
+                os.unlink(model_filename)
+
+    def test_modelinfo_version_minor_upgrade_accepted(self):
+        """Test that modelinfo with same major version but higher minor version is accepted"""
+        import tempfile
+        import os
+
+        # Test case: Version 1.5 (same major version, higher minor version)
+        # The version check should accept this since it's backward compatible
+        modelinfo_content_1_5 = """[modelinfo]
+version=1.5
+group-id=test-model-v1-5
+
+[input_tensor]
+dims=1,224,224,3
+dir=input
+type=uint8
+caps=video/x-raw, format=RGB
+
+[output_tensor]
+dims=1,1000
+dir=output
+type=float32
+id=output_logits
+"""
+
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.modelinfo',
+                                         delete=False) as f:
+            f.write(modelinfo_content_1_5)
+            temp_modelinfo = f.name
+
+        try:
+            model_filename = temp_modelinfo[:-10]  # Remove '.modelinfo'
+            # Load should succeed because version 1.5 is compatible with 1.0
+            # (same major version)
+            modelinfo = GstAnalytics.ModelInfo.load(model_filename)
+            self.assertIsNotNone(modelinfo)
+
+            # Verify version string
+            version = modelinfo.get_version()
+            self.assertEqual(version, "1.5")
+
+            # Parse version string to verify major and minor components
+            version_parts = version.split('.')
+            self.assertEqual(len(version_parts), 2)
+            major_version = int(version_parts[0])
+            minor_version = int(version_parts[1])
+            self.assertEqual(major_version, 1)
+            self.assertEqual(minor_version, 5)
+
+            modelinfo.free()
+        finally:
+            if os.path.exists(temp_modelinfo):
+                os.unlink(temp_modelinfo)
+            if os.path.exists(model_filename):
+                os.unlink(model_filename)
+
+    def test_modelinfo_get_input_caps(self):
+        """Test get_input_caps() on a v1.1 modelinfo with caps declared"""
+        import tempfile
+        import os
+
+        modelinfo_content = """
+[modelinfo]
+version=1.1
+group-id=test-model-v1-1
+
+[input_tensor]
+dims=1,224,224,3
+dir=input
+type=uint8
+caps=video/x-raw, format=RGB
+
+[output_tensor]
+dims=1,1000
+dir=output
+type=float32
+id=output_logits
+"""
+
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.modelinfo',
+                                         delete=False) as f:
+            f.write(modelinfo_content)
+            temp_modelinfo = f.name
+
+        try:
+            model_filename = temp_modelinfo[:-10]
+            modelinfo = GstAnalytics.ModelInfo.load(model_filename)
+            self.assertIsNotNone(modelinfo)
+
+            caps = modelinfo.get_input_caps("input_tensor")
+            self.assertIsNotNone(caps)
+            expected_caps = Gst.Caps.from_string("video/x-raw, format=(string)RGB")
+            self.assertTrue(caps.is_equal(expected_caps))
+
+            modelinfo.free()
+        finally:
+            if os.path.exists(temp_modelinfo):
+                os.unlink(temp_modelinfo)
+            if os.path.exists(model_filename):
+                os.unlink(model_filename)
+
+    def test_modelinfo_get_input_caps_missing(self):
+        """Test get_input_caps() returns None for a v1.0 modelinfo (predates caps)"""
+        import tempfile
+        import os
+
+        modelinfo_content = """
+[modelinfo]
+version=1.0
+group-id=test-model-v1-0
+
+[input_tensor]
+dims=1,224,224,3
+dir=input
+type=uint8
+
+[output_tensor]
+dims=1,1000
+dir=output
+type=float32
+id=output_logits
+"""
+
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.modelinfo',
+                                         delete=False) as f:
+            f.write(modelinfo_content)
+            temp_modelinfo = f.name
+
+        try:
+            model_filename = temp_modelinfo[:-10]
+            modelinfo = GstAnalytics.ModelInfo.load(model_filename)
+            self.assertIsNotNone(modelinfo)
+
+            caps = modelinfo.get_input_caps("input_tensor")
+            self.assertIsNone(caps)
+
+            modelinfo.free()
+        finally:
+            if os.path.exists(temp_modelinfo):
+                os.unlink(temp_modelinfo)
+            if os.path.exists(model_filename):
+                os.unlink(model_filename)
+
+    def test_modelinfo_missing_mandatory_fields_rejected(self):
+        """Test that a v1.1 modelinfo missing caps on an input
+        tensor fails to load"""
+        import tempfile
+        import os
+
+        modelinfo_content = """
+[modelinfo]
+version=1.1
+group-id=test-model-v1-1
+
+[input_tensor]
+dims=1,224,224,3
+dir=input
+type=uint8
+
+[output_tensor]
+dims=1,1000
+dir=output
+type=float32
+id=output_logits
+"""
+
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.modelinfo',
+                                         delete=False) as f:
+            f.write(modelinfo_content)
+            temp_modelinfo = f.name
+
+        try:
+            model_filename = temp_modelinfo[:-10]
+            # Load should fail: v1.1 requires caps on input tensors
+            modelinfo = GstAnalytics.ModelInfo.load(model_filename)
+            self.assertIsNone(modelinfo)
+        finally:
+            if os.path.exists(temp_modelinfo):
+                os.unlink(temp_modelinfo)
+            if os.path.exists(model_filename):
+                os.unlink(model_filename)
+
+    def test_modelinfo_placeholder_caps_rejected(self):
+        """Test that a v1.1 modelinfo with an unresolved PLACEHOLDER caps
+        fails to load"""
+        import tempfile
+        import os
+
+        modelinfo_content = """
+[modelinfo]
+version=1.1
+group-id=test-model-v1-1
+
+[input_tensor]
+dims=1,224,224,3
+dir=input
+type=uint8
+caps=PLACEHOLDER-CAPS-REQUIRED
+
+[output_tensor]
+dims=1,1000
+dir=output
+type=float32
+id=output_logits
+"""
+
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.modelinfo',
+                                         delete=False) as f:
+            f.write(modelinfo_content)
+            temp_modelinfo = f.name
+
+        try:
+            model_filename = temp_modelinfo[:-10]
+            modelinfo = GstAnalytics.ModelInfo.load(model_filename)
+            self.assertIsNone(modelinfo)
+        finally:
+            if os.path.exists(temp_modelinfo):
+                os.unlink(temp_modelinfo)
+            if os.path.exists(model_filename):
+                os.unlink(model_filename)
+
+
+class TestAnalyticsGroupMtdIterator(TestCase):
+    def test_keypoint_group_iteration(self):
+        """Test iterating through keypoints in a group"""
+        buf = Gst.Buffer()
+        self.assertIsNotNone(buf)
+
+        rmeta = GstAnalytics.buffer_add_analytics_relation_meta(buf)
+        self.assertIsNotNone(rmeta)
+
+        # Create a group of 3 keypoints
+        positions = [10, 20, 30, 40, 50, 60]  # 3 keypoints (x, y pairs)
+        (ret, group) = rmeta.add_keypoints_group("test-3-kp",
+                                                 GstAnalytics.KeypointDimensions_2D,
+                                                 positions, None, None, None)
+        self.assertTrue(ret)
+        self.assertIsNotNone(group)
+
+        # Test iteration using __iter__
+        keypoints = list(group)
+        self.assertEqual(len(keypoints), 3)
+
+        # Verify each keypoint can be accessed and has correct data
+        for i, kp in enumerate(keypoints):
+            success, x, y, z, dim = kp.get_position()
+            self.assertTrue(success)
+            self.assertEqual(x, positions[i * 2])
+            self.assertEqual(y, positions[i * 2 + 1])
+            self.assertEqual(z, 0)  # 2D keypoint
+            self.assertEqual(dim, GstAnalytics.KeypointDimensions_2D)
+
+    def test_keypoint_group_iteration_with_type_filter(self):
+        """Test iterating through keypoints with type filtering"""
+        buf = Gst.Buffer()
+        self.assertIsNotNone(buf)
+
+        rmeta = GstAnalytics.buffer_add_analytics_relation_meta(buf)
+        self.assertIsNotNone(rmeta)
+
+        # Create a group of keypoints
+        positions = [10, 20, 30, 40]  # 2 keypoints
+        (ret, group) = rmeta.add_keypoints_group("test-2-kp",
+                                                 GstAnalytics.KeypointDimensions_2D,
+                                                 positions, None, None, None)
+        self.assertTrue(ret)
+        self.assertIsNotNone(group)
+
+        # Iterate with type filter - only get KeypointMtd
+        keypoints = list(group.iter_on_type(GstAnalytics.KeypointMtd))
+        self.assertEqual(len(keypoints), 2)
+
+        # Verify they're all KeypointMtd
+        for kp in keypoints:
+            self.assertIsInstance(kp, GstAnalytics.KeypointMtd)
+
+    def test_keypoint_group_with_skeleton(self):
+        """Test keypoint group with skeleton links"""
+        buf = Gst.Buffer()
+        self.assertIsNotNone(buf)
+
+        rmeta = GstAnalytics.buffer_add_analytics_relation_meta(buf)
+        self.assertIsNotNone(rmeta)
+
+        # Create keypoints with skeleton links
+        positions = [10, 20, 30, 40, 50, 60]  # 3 keypoints
+        confidences = [0.9, 0.8, 0.7]
+
+        # Skeleton links as flat array [kp1_idx, kp2_idx, kp1_idx, kp2_idx, ...]
+        # Creates links: 0<->1, 1<->2
+        skeleton_pairs = [0, 1, 1, 2]
+
+        (ret, group) = rmeta.add_keypoints_group("test-skeleton-3-kp",
+                                                 GstAnalytics.KeypointDimensions_2D,
+                                                 positions, confidences, None,
+                                                 skeleton_pairs)
+        self.assertTrue(ret)
+        self.assertIsNotNone(group)
+
+        # Verify group has 3 members
+        member_count = group.get_member_count()
+        self.assertEqual(member_count, 3)
+
+        # Verify skeleton relations exist
+        kp0 = group.get_member(0)
+        self.assertTrue(kp0[0])  # success
+        kp1 = group.get_member(1)
+        self.assertTrue(kp1[0])  # success
+        kp2 = group.get_member(2)
+        self.assertTrue(kp2[0])  # success
+
+        # Check if relation exists between first two keypoints (link 0<->1)
+        has_relation, _ = rmeta.exist(kp0[1].id, kp1[1].id, 1,
+                                      GstAnalytics.RelTypes.RELATE_TO)
+        self.assertTrue(has_relation)
+
+        # Check if relation exists between keypoints 1<->2
+        has_relation, _ = rmeta.exist(kp1[1].id, kp2[1].id, 1,
+                                      GstAnalytics.RelTypes.RELATE_TO)
+        self.assertTrue(has_relation)
+
+        # Verify confidences
+        keypoints = list(group)
+        for i, kp in enumerate(keypoints):
+            success, conf = kp.get_confidence()
+            self.assertTrue(success)
+            self.assertAlmostEqual(conf, confidences[i], places=5)
+
+    def test_keypoint_3d_group(self):
+        """Test 3D keypoint group"""
+        buf = Gst.Buffer()
+        self.assertIsNotNone(buf)
+
+        rmeta = GstAnalytics.buffer_add_analytics_relation_meta(buf)
+        self.assertIsNotNone(rmeta)
+
+        # Create 3D keypoints (2 keypoints with x, y, z)
+        positions = [10, 20, 100, 30, 40, 200]  # 2 keypoints (x, y, z pairs)
+        (ret, group) = rmeta.add_keypoints_group("test-3d-2-kp",
+                                                 GstAnalytics.KeypointDimensions_3D,
+                                                 positions, None, None, None)
+        self.assertTrue(ret)
+        self.assertIsNotNone(group)
+
+        # Iterate and verify 3D coordinates
+        keypoints = list(group)
+        self.assertEqual(len(keypoints), 2)
+
+        # First keypoint: (10, 20, 100)
+        success, x, y, z, dim = keypoints[0].get_position()
+        self.assertTrue(success)
+        self.assertEqual(x, 10)
+        self.assertEqual(y, 20)
+        self.assertEqual(z, 100)
+        self.assertEqual(dim, GstAnalytics.KeypointDimensions_3D)
+
+        # Second keypoint: (30, 40, 200)
+        success, x, y, z, dim = keypoints[1].get_position()
+        self.assertTrue(success)
+        self.assertEqual(x, 30)
+        self.assertEqual(y, 40)
+        self.assertEqual(z, 200)
+        self.assertEqual(dim, GstAnalytics.KeypointDimensions_3D)
+
+
+class TestAnalyticsGroupMtdSemanticTag(TestCase):
+    def _make_group(self, tag):
+        buf = Gst.Buffer()
+        rmeta = GstAnalytics.buffer_add_analytics_relation_meta(buf)
+        ret, group = rmeta.add_group_mtd_with_size(2)
+        self.assertTrue(ret)
+        group.set_semantic_tag(tag)
+        return buf, group
+
+    def test_has_semantic_tag_match(self):
+        """has_semantic_tag returns True for the exact stored tag"""
+        _, group = self._make_group("hand-21-kp")
+        self.assertTrue(group.has_semantic_tag("hand-21-kp"))
+
+    def test_has_semantic_tag_no_match(self):
+        """has_semantic_tag returns False for a different tag"""
+        _, group = self._make_group("hand-21-kp")
+        self.assertFalse(group.has_semantic_tag("pose-17-kp"))
+
+    def test_has_semantic_tag_unset(self):
+        """has_semantic_tag returns False when no tag is set"""
+        _, group = self._make_group(None)
+        self.assertFalse(group.has_semantic_tag("hand-21-kp"))
+
+    def test_semantic_tag_has_prefix_match(self):
+        """semantic_tag_has_prefix returns True for a matching prefix"""
+        _, group = self._make_group("posture/hand-21-kp")
+        self.assertTrue(group.semantic_tag_has_prefix("posture/"))
+
+    def test_semantic_tag_has_prefix_full_match(self):
+        """semantic_tag_has_prefix returns True when prefix equals the full tag"""
+        _, group = self._make_group("posture/hand-21-kp")
+        self.assertTrue(group.semantic_tag_has_prefix("posture/hand-21-kp"))
+
+    def test_semantic_tag_has_prefix_no_match(self):
+        """semantic_tag_has_prefix returns False for a non-matching prefix"""
+        _, group = self._make_group("posture/hand-21-kp")
+        self.assertFalse(group.semantic_tag_has_prefix("keypoint/"))
+
+    def test_semantic_tag_has_prefix_unset(self):
+        """semantic_tag_has_prefix returns False when no tag is set"""
+        _, group = self._make_group(None)
+        self.assertFalse(group.semantic_tag_has_prefix("posture/"))
+
+    def test_get_semantic_tag(self):
+        """get_semantic_tag returns the tag that was set"""
+        _, group = self._make_group("hand-21-kp")
+        self.assertEqual(group.get_semantic_tag(), "hand-21-kp")
+
+    def test_get_semantic_tag_unset(self):
+        """get_semantic_tag returns empty string when no tag is set"""
+        _, group = self._make_group(None)
+        self.assertEqual(group.get_semantic_tag(), "")
+
+    def test_get_semantic_tag_after_change(self):
+        """get_semantic_tag reflects the most recent set_semantic_tag call"""
+        _, group = self._make_group("hand-21-kp")
+        self.assertEqual(group.get_semantic_tag(), "hand-21-kp")
+        group.set_semantic_tag("pose-17-kp")
+        self.assertEqual(group.get_semantic_tag(), "pose-17-kp")
+
+    def test_get_semantic_tag_after_clear(self):
+        """get_semantic_tag returns empty string after tag is cleared"""
+        _, group = self._make_group("hand-21-kp")
+        self.assertEqual(group.get_semantic_tag(), "hand-21-kp")
+        group.set_semantic_tag(None)
+        self.assertEqual(group.get_semantic_tag(), "")
+
+
+class TestAnalyticsMtdSemanticTag(TestCase):
+    """Test generic semantic tag API on various metadata types."""
+
+    def test_semantic_tag_on_od_mtd(self):
+        """semantic tag can be set and read on object detection metadata"""
+        buf = Gst.Buffer()
+        rmeta = GstAnalytics.buffer_add_analytics_relation_meta(buf)
+        qk = GLib.quark_from_string("person")
+        ret, od = rmeta.add_od_mtd(qk, 10, 20, 30, 40, 0.9)
+        self.assertTrue(ret)
+
+        self.assertEqual(od.get_semantic_tag(), "")
+        od.set_semantic_tag("detector/yolov8")
+        self.assertEqual(od.get_semantic_tag(), "detector/yolov8")
+        self.assertTrue(od.has_semantic_tag("detector/yolov8"))
+        self.assertFalse(od.has_semantic_tag("detector/ssd"))
+        self.assertTrue(od.semantic_tag_has_prefix("detector/"))
+        self.assertFalse(od.semantic_tag_has_prefix("classifier/"))
+
+    def test_semantic_tag_on_cls_mtd(self):
+        """semantic tag can be set and read on classification metadata"""
+        buf = Gst.Buffer()
+        rmeta = GstAnalytics.buffer_add_analytics_relation_meta(buf)
+        qks = (GLib.quark_from_string("cat"), GLib.quark_from_string("dog"))
+        ret, cls = rmeta.add_cls_mtd([0.8, 0.2], qks)
+        self.assertTrue(ret)
+
+        cls.set_semantic_tag("classifier/resnet50")
+        self.assertEqual(cls.get_semantic_tag(), "classifier/resnet50")
+        self.assertTrue(cls.has_semantic_tag("classifier/resnet50"))
+
+    def test_semantic_tag_on_tracking_mtd(self):
+        """semantic tag can be set and read on tracking metadata"""
+        buf = Gst.Buffer()
+        rmeta = GstAnalytics.buffer_add_analytics_relation_meta(buf)
+        ret, trk = rmeta.add_tracking_mtd(42, 10)
+        self.assertTrue(ret)
+
+        trk.set_semantic_tag("tracker/deepsort")
+        self.assertEqual(trk.get_semantic_tag(), "tracker/deepsort")
+        self.assertTrue(trk.semantic_tag_has_prefix("tracker/"))
+
+    def test_semantic_tag_independent_across_mtd(self):
+        """different mtd on the same buffer have independent semantic tags"""
+        buf = Gst.Buffer()
+        rmeta = GstAnalytics.buffer_add_analytics_relation_meta(buf)
+
+        qk = GLib.quark_from_string("person")
+        _, od = rmeta.add_od_mtd(qk, 0, 0, 100, 200, 0.95)
+        _, cls = rmeta.add_cls_mtd([0.9], (GLib.quark_from_string("person"),))
+
+        od.set_semantic_tag("detector/yolo")
+        cls.set_semantic_tag("classifier/mobilenet")
+
+        self.assertEqual(od.get_semantic_tag(), "detector/yolo")
+        self.assertEqual(cls.get_semantic_tag(), "classifier/mobilenet")
+        self.assertFalse(od.has_semantic_tag("classifier/mobilenet"))
+        self.assertFalse(cls.has_semantic_tag("detector/yolo"))
+
+    def test_semantic_tag_clear_with_none(self):
+        """setting semantic tag to None clears it"""
+        buf = Gst.Buffer()
+        rmeta = GstAnalytics.buffer_add_analytics_relation_meta(buf)
+        qk = GLib.quark_from_string("car")
+        _, od = rmeta.add_od_mtd(qk, 5, 10, 50, 60, 0.85)
+
+        od.set_semantic_tag("detector/ssd")
+        self.assertEqual(od.get_semantic_tag(), "detector/ssd")
+
+        od.set_semantic_tag(None)
+        self.assertEqual(od.get_semantic_tag(), "")
+        self.assertFalse(od.has_semantic_tag("detector/ssd"))

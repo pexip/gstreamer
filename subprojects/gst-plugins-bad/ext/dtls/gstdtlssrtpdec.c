@@ -83,6 +83,7 @@ enum
   PROP_PEM,
   PROP_PEER_PEM,
   PROP_CONNECTION_STATE,
+  PROP_DTLS_VERSION,
   NUM_PROPERTIES
 };
 
@@ -153,6 +154,20 @@ gst_dtls_srtp_dec_class_init (GstDtlsSrtpDecClass * klass)
       GST_DTLS_TYPE_CONNECTION_STATE,
       GST_DTLS_CONNECTION_STATE_NEW, G_PARAM_READABLE | G_PARAM_STATIC_STRINGS);
 
+  /**
+   * GstDtlsSrtpDec:dtls-version:
+   *
+   * The negotiated DTLS protocol version, represented as 2 bytes. Each
+   * component of the version is translated to a byte using `hex(255 -
+   * component)`. For instance if the version is 1.3, the resulting value will
+   * be `0xFEFC`.
+   *
+   * Since: 1.30
+   */
+  properties[PROP_DTLS_VERSION] =
+      g_param_spec_uint ("dtls-version", "DTLS version", "Negotiated version",
+      0, G_MAXUINT16, 0, G_PARAM_READABLE | G_PARAM_STATIC_STRINGS);
+
   g_object_class_install_properties (gobject_class, NUM_PROPERTIES, properties);
 
   gst_element_class_add_static_pad_template (element_class, &sink_template);
@@ -164,7 +179,7 @@ gst_dtls_srtp_dec_class_init (GstDtlsSrtpDecClass * klass)
       "DTLS-SRTP Decoder",
       "Decoder/Network/DTLS/SRTP",
       "Decodes SRTP packets with a key received from DTLS",
-      "Patrik Oldsberg patrik.oldsberg@ericsson.com");
+      "Patrik Oldsberg <patrik.oldsberg@ericsson.com>");
 }
 
 static void
@@ -310,6 +325,14 @@ gst_dtls_srtp_dec_get_property (GObject * object,
             "tried to get connection-state after disabling DTLS");
       }
       break;
+    case PROP_DTLS_VERSION:
+      if (self->bin.dtls_element) {
+        g_object_get_property (G_OBJECT (self->bin.dtls_element), "version",
+            value);
+      } else {
+        GST_WARNING_OBJECT (self, "tried to get version after disabling DTLS");
+      }
+      break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (self, prop_id, pspec);
   }
@@ -424,14 +447,38 @@ on_decoder_request_key (GstElement * srtp_decoder,
     g_object_get (bin->dtls_element,
         "srtp-cipher", &cipher, "srtp-auth", &auth, NULL);
 
-    g_return_val_if_fail (cipher == GST_DTLS_SRTP_CIPHER_AES_128_ICM, NULL);
-
     key_caps = gst_caps_new_simple ("application/x-srtp",
-        "srtp-key", GST_TYPE_BUFFER, key_buffer,
-        "srtp-cipher", G_TYPE_STRING, "aes-128-icm",
-        "srtcp-cipher", G_TYPE_STRING, "aes-128-icm", NULL);
+        "srtp-key", GST_TYPE_BUFFER, key_buffer, NULL);
+
+    gst_clear_buffer (&key_buffer);
+
+    switch (cipher) {
+      case GST_DTLS_SRTP_CIPHER_AES_128_ICM:
+        gst_caps_set_simple (key_caps,
+            "srtp-cipher", G_TYPE_STRING, "aes-128-icm",
+            "srtcp-cipher", G_TYPE_STRING, "aes-128-icm", NULL);
+        break;
+      case GST_DTLS_SRTP_CIPHER_AES_128_GCM:
+        gst_caps_set_simple (key_caps,
+            "srtp-cipher", G_TYPE_STRING, "aes-128-gcm",
+            "srtcp-cipher", G_TYPE_STRING, "aes-128-gcm", NULL);
+        break;
+      case GST_DTLS_SRTP_CIPHER_AES_256_GCM:
+        gst_caps_set_simple (key_caps,
+            "srtp-cipher", G_TYPE_STRING, "aes-256-gcm",
+            "srtcp-cipher", G_TYPE_STRING, "aes-256-gcm", NULL);
+        break;
+      default:
+        gst_clear_caps (&key_caps);
+        g_return_val_if_reached (NULL);
+    }
 
     switch (auth) {
+      case GST_DTLS_SRTP_AUTH_NULL:
+        gst_caps_set_simple (key_caps,
+            "srtp-auth", G_TYPE_STRING, "null",
+            "srtcp-auth", G_TYPE_STRING, "null", NULL);
+        break;
       case GST_DTLS_SRTP_AUTH_HMAC_SHA1_32:
         gst_caps_set_simple (key_caps,
             "srtp-auth", G_TYPE_STRING, "hmac-sha1-32",
@@ -443,11 +490,10 @@ on_decoder_request_key (GstElement * srtp_decoder,
             "srtcp-auth", G_TYPE_STRING, "hmac-sha1-80", NULL);
         break;
       default:
+        gst_clear_caps (&key_caps);
         g_return_val_if_reached (NULL);
         break;
     }
-
-    gst_buffer_unref (key_buffer);
 
     return key_caps;
   } else {

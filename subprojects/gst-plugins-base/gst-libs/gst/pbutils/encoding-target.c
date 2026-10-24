@@ -919,11 +919,14 @@ gst_encoding_target_load (const gchar * name, const gchar * category,
     GError ** error)
 {
   gint i;
-  gchar *p, *lname, *lfilename = NULL, *tldir, **encoding_target_dirs;
+  gchar *p, *lname = NULL, *lfilename = NULL, *tldir, **encoding_target_dirs;
   const gchar *envvar;
   GstEncodingTarget *target = NULL;
 
   g_return_val_if_fail (name != NULL, NULL);
+
+  if (!g_utf8_validate (name, -1, NULL))
+    goto invalid_name;
 
   p = lname = g_str_to_ascii (name, NULL);
   for (; *p; ++p)
@@ -1111,7 +1114,8 @@ gst_encoding_target_save (GstEncodingTarget * target, GError ** error)
   if (g_mkdir_with_parents (dirname, 0755)) {
     GST_ERROR_OBJECT (target, "Could not create directory to save %s into: %s",
         target->name, g_strerror (errno));
-
+    g_free (dirname);
+    g_free (lfilename);
     return FALSE;
   }
   filename = g_build_filename (dirname, lfilename, NULL);

@@ -73,15 +73,16 @@ if build_gir
     'identifier_prefix' : 'Gst',
     'symbol_prefix' : 'gst',
     'export_packages' : pkg_name,
-    'includes' : ['Gst-1.0', 'GstVideo-1.0'],
+    'includes' : ['Gst-1.0', 'GstVideo-1.0', 'GstCodecParsers-1.0'],
     'install' : true,
     'extra_args' : gir_init_section + ['-DGST_USE_UNSTABLE_API'] +
-      ['--c-include=gst/codecs/gsth264decoder.h',
-      '--c-include=gst/codecs/gsth265decoder.h',
-      '--c-include=gst/codecs/gstvp9decoder.h',
-      '--c-include=gst/codecs/gstvp8decoder.h',
-      '--c-include=gst/codecs/gstmpeg2decoder.h',
-      '--c-include=gst/codecs/gsth266decoder.h',
+      ['--c-include=gst/codecs/gstav1decoder.h',
+       '--c-include=gst/codecs/gsth264decoder.h',
+       '--c-include=gst/codecs/gsth265decoder.h',
+       '--c-include=gst/codecs/gsth266decoder.h',
+       '--c-include=gst/codecs/gstmpeg2decoder.h',
+       '--c-include=gst/codecs/gstvp8decoder.h',
+       '--c-include=gst/codecs/gstvp9decoder.h',
       ],
     'dependencies' : [gstvideo_dep, gstcodecparsers_dep]
   }
@@ -98,4 +99,5 @@ gstcodecs_dep = declare_dependency(link_with : gstcodecs,
   include_directories : [libsinc],
   sources: gen_sources,
   dependencies : [gstvideo_dep, gstcodecparsers_dep])
+
 meson.override_dependency(pkg_name, gstcodecs_dep)

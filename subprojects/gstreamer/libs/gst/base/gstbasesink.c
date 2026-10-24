@@ -223,6 +223,7 @@ struct _GstBaseSinkPrivate
 
   /* the last buffer we prerolled or rendered. Useful for making snapshots */
   gint enable_last_sample;      /* atomic */
+  gint enable_last_sample_notify;       /* atomic */
   GstBuffer *last_buffer;
   GstCaps *last_caps;
   GstBufferList *last_buffer_list;
@@ -303,6 +304,7 @@ struct _GstBaseSinkPrivate
 #define DEFAULT_BLOCKSIZE           4096
 #define DEFAULT_RENDER_DELAY        0
 #define DEFAULT_ENABLE_LAST_SAMPLE  TRUE
+#define DEFAULT_ENABLE_LAST_SAMPLE_NOTIFY FALSE
 #define DEFAULT_THROTTLE_TIME       0
 #define DEFAULT_MAX_BITRATE         0
 #define DEFAULT_DROP_OUT_OF_SEGMENT TRUE
@@ -317,6 +319,7 @@ enum
   PROP_ASYNC,
   PROP_TS_OFFSET,
   PROP_ENABLE_LAST_SAMPLE,
+  PROP_ENABLE_LAST_SAMPLE_NOTIFY,
   PROP_LAST_SAMPLE,
   PROP_BLOCKSIZE,
   PROP_RENDER_DELAY,
@@ -326,6 +329,8 @@ enum
   PROP_STATS,
   PROP_LAST
 };
+
+static GParamSpec *properties[PROP_LAST];
 
 static GstElementClass *parent_class = NULL;
 static gint private_offset = 0;
@@ -404,7 +409,7 @@ static GstFlowReturn gst_base_sink_chain (GstPad * pad, GstObject * parent,
 static GstFlowReturn gst_base_sink_chain_list (GstPad * pad, GstObject * parent,
     GstBufferList * list);
 
-static void gst_base_sink_loop (GstPad * pad);
+static void gst_base_sink_loop (GstBaseSink * basesink);
 static gboolean gst_base_sink_pad_activate (GstPad * pad, GstObject * parent);
 static gboolean gst_base_sink_pad_activate_mode (GstPad * pad,
     GstObject * parent, GstPadMode mode, gboolean active);
@@ -449,20 +454,20 @@ gst_base_sink_class_init (GstBaseSinkClass * klass)
   gobject_class->set_property = gst_base_sink_set_property;
   gobject_class->get_property = gst_base_sink_get_property;
 
-  g_object_class_install_property (gobject_class, PROP_SYNC,
+  properties[PROP_SYNC] =
       g_param_spec_boolean ("sync", "Sync", "Sync on the clock", DEFAULT_SYNC,
-          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+      G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS);
 
-  g_object_class_install_property (gobject_class, PROP_MAX_LATENESS,
+  properties[PROP_MAX_LATENESS] =
       g_param_spec_int64 ("max-lateness", "Max Lateness",
-          "Maximum number of nanoseconds that a buffer can be late before it "
-          "is dropped (-1 unlimited)", -1, G_MAXINT64, DEFAULT_MAX_LATENESS,
-          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+      "Maximum number of nanoseconds that a buffer can be late before it "
+      "is dropped (-1 unlimited)", -1, G_MAXINT64, DEFAULT_MAX_LATENESS,
+      G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS);
 
-  g_object_class_install_property (gobject_class, PROP_QOS,
+  properties[PROP_QOS] =
       g_param_spec_boolean ("qos", "Qos",
-          "Generate Quality-of-Service events upstream", DEFAULT_QOS,
-          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+      "Generate Quality-of-Service events upstream", DEFAULT_QOS,
+      G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS);
   /**
    * GstBaseSink:async:
    *
@@ -471,10 +476,10 @@ gst_base_sink_class_init (GstBaseSinkClass * klass)
    * Use this option when dealing with sparse streams or when synchronisation is
    * not required.
    */
-  g_object_class_install_property (gobject_class, PROP_ASYNC,
+  properties[PROP_ASYNC] =
       g_param_spec_boolean ("async", "Async",
-          "Go asynchronously to PAUSED", DEFAULT_ASYNC,
-          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+      "Go asynchronously to PAUSED", DEFAULT_ASYNC,
+      G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS);
   /**
    * GstBaseSink:ts-offset:
    *
@@ -482,10 +487,10 @@ gst_base_sink_class_init (GstBaseSinkClass * klass)
    * earlier while a positive value delays playback. This property can be
    * used to fix synchronisation in bad files.
    */
-  g_object_class_install_property (gobject_class, PROP_TS_OFFSET,
+  properties[PROP_TS_OFFSET] =
       g_param_spec_int64 ("ts-offset", "TS Offset",
-          "Timestamp offset in nanoseconds", G_MININT64, G_MAXINT64,
-          DEFAULT_TS_OFFSET, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+      "Timestamp offset in nanoseconds", G_MININT64, G_MAXINT64,
+      DEFAULT_TS_OFFSET, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS);
 
   /**
    * GstBaseSink:enable-last-sample:
@@ -495,10 +500,27 @@ gst_base_sink_class_init (GstBaseSinkClass * klass)
    * set to %NULL. This can be useful if you need buffers to be released as soon
    * as possible, eg. if you're using a buffer pool.
    */
-  g_object_class_install_property (gobject_class, PROP_ENABLE_LAST_SAMPLE,
+  properties[PROP_ENABLE_LAST_SAMPLE] =
       g_param_spec_boolean ("enable-last-sample", "Enable Last Buffer",
-          "Enable the last-sample property", DEFAULT_ENABLE_LAST_SAMPLE,
-          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+      "Enable the last-sample property", DEFAULT_ENABLE_LAST_SAMPLE,
+      G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS);
+
+  /**
+   * GstBaseSink:enable-last-sample-notify:
+   *
+   * Enable emission of the "notify::last-sample" signal. This is disabled by
+   * default as it can be expensive: the notification is emitted for every
+   * buffer that updates the last sample. It has no effect unless
+   * #GstBaseSink:enable-last-sample is also %TRUE.
+   *
+   * Since: 1.30
+   */
+  properties[PROP_ENABLE_LAST_SAMPLE_NOTIFY] =
+      g_param_spec_boolean ("enable-last-sample-notify",
+      "Enable Last Sample Notify",
+      "Emit the notify::last-sample signal when the last sample changes",
+      DEFAULT_ENABLE_LAST_SAMPLE_NOTIFY,
+      G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS);
 
   /**
    * GstBaseSink:last-sample:
@@ -507,20 +529,20 @@ gst_base_sink_class_init (GstBaseSinkClass * klass)
    * rendering. This property can be used to generate thumbnails. This property
    * can be %NULL when the sink has not yet received a buffer.
    */
-  g_object_class_install_property (gobject_class, PROP_LAST_SAMPLE,
+  properties[PROP_LAST_SAMPLE] =
       g_param_spec_boxed ("last-sample", "Last Sample",
-          "The last sample received in the sink", GST_TYPE_SAMPLE,
-          G_PARAM_READABLE | G_PARAM_STATIC_STRINGS));
+      "The last sample received in the sink", GST_TYPE_SAMPLE,
+      G_PARAM_READABLE | G_PARAM_STATIC_STRINGS);
   /**
    * GstBaseSink:blocksize:
    *
    * The amount of bytes to pull when operating in pull mode.
    */
   /* FIXME 2.0: blocksize property should be int, otherwise min>max.. */
-  g_object_class_install_property (gobject_class, PROP_BLOCKSIZE,
+  properties[PROP_BLOCKSIZE] =
       g_param_spec_uint ("blocksize", "Block size",
-          "Size in bytes to pull per buffer (0 = default)", 0, G_MAXUINT,
-          DEFAULT_BLOCKSIZE, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+      "Size in bytes to pull per buffer (0 = default)", 0, G_MAXUINT,
+      DEFAULT_BLOCKSIZE, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS);
   /**
    * GstBaseSink:render-delay:
    *
@@ -528,10 +550,10 @@ gst_base_sink_class_init (GstBaseSinkClass * klass)
    * media. This property will add additional latency to the device in order to
    * make other sinks compensate for the delay.
    */
-  g_object_class_install_property (gobject_class, PROP_RENDER_DELAY,
+  properties[PROP_RENDER_DELAY] =
       g_param_spec_uint64 ("render-delay", "Render Delay",
-          "Additional render delay of the sink in nanoseconds", 0, G_MAXUINT64,
-          DEFAULT_RENDER_DELAY, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+      "Additional render delay of the sink in nanoseconds", 0, G_MAXUINT64,
+      DEFAULT_RENDER_DELAY, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS);
   /**
    * GstBaseSink:throttle-time:
    *
@@ -539,11 +561,11 @@ gst_base_sink_class_init (GstBaseSinkClass * klass)
    * the maximum amount of buffers per second to render. Setting this property
    * to a value bigger than 0 will make the sink create THROTTLE QoS events.
    */
-  g_object_class_install_property (gobject_class, PROP_THROTTLE_TIME,
+  properties[PROP_THROTTLE_TIME] =
       g_param_spec_uint64 ("throttle-time", "Throttle time",
-          "The time to keep between rendered buffers (0 = disabled)", 0,
-          G_MAXUINT64, DEFAULT_THROTTLE_TIME,
-          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+      "The time to keep between rendered buffers (0 = disabled)", 0,
+      G_MAXUINT64, DEFAULT_THROTTLE_TIME,
+      G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS);
   /**
    * GstBaseSink:max-bitrate:
    *
@@ -553,11 +575,11 @@ gst_base_sink_class_init (GstBaseSinkClass * klass)
    *
    * Since: 1.2
    */
-  g_object_class_install_property (gobject_class, PROP_MAX_BITRATE,
+  properties[PROP_MAX_BITRATE] =
       g_param_spec_uint64 ("max-bitrate", "Max Bitrate",
-          "The maximum bits per second to render (0 = disabled)", 0,
-          G_MAXUINT64, DEFAULT_MAX_BITRATE,
-          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+      "The maximum bits per second to render (0 = disabled)", 0,
+      G_MAXUINT64, DEFAULT_MAX_BITRATE,
+      G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS);
   /**
    * GstBaseSink:processing-deadline:
    *
@@ -567,12 +589,11 @@ gst_base_sink_class_init (GstBaseSinkClass * klass)
    *
    * Since: 1.16
    */
-  g_object_class_install_property (gobject_class, PROP_PROCESSING_DEADLINE,
+  properties[PROP_PROCESSING_DEADLINE] =
       g_param_spec_uint64 ("processing-deadline", "Processing deadline",
-          "Maximum processing time for a buffer in nanoseconds", 0,
-          G_MAXUINT64, DEFAULT_PROCESSING_DEADLINE,
-          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
-
+      "Maximum processing time for a buffer in nanoseconds", 0,
+      G_MAXUINT64, DEFAULT_PROCESSING_DEADLINE,
+      G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS);
 
   /**
    * GstBaseSink:stats:
@@ -586,10 +607,12 @@ gst_base_sink_class_init (GstBaseSinkClass * klass)
    *
    * Since: 1.18
    */
-  g_object_class_install_property (gobject_class, PROP_STATS,
+  properties[PROP_STATS] =
       g_param_spec_boxed ("stats", "Statistics",
-          "Sink Statistics", GST_TYPE_STRUCTURE,
-          G_PARAM_READABLE | G_PARAM_STATIC_STRINGS));
+      "Sink Statistics", GST_TYPE_STRUCTURE,
+      G_PARAM_READABLE | G_PARAM_STATIC_STRINGS);
+
+  g_object_class_install_properties (gobject_class, PROP_LAST, properties);
 
   gstelement_class->change_state =
       GST_DEBUG_FUNCPTR (gst_base_sink_change_state);
@@ -720,6 +743,8 @@ gst_base_sink_init (GstBaseSink * basesink, gpointer g_class)
   priv->blocksize = DEFAULT_BLOCKSIZE;
   priv->cached_clock_id = NULL;
   g_atomic_int_set (&priv->enable_last_sample, DEFAULT_ENABLE_LAST_SAMPLE);
+  g_atomic_int_set (&priv->enable_last_sample_notify,
+      DEFAULT_ENABLE_LAST_SAMPLE_NOTIFY);
   priv->throttle_time = DEFAULT_THROTTLE_TIME;
   priv->max_bitrate = DEFAULT_MAX_BITRATE;
 
@@ -1040,14 +1065,20 @@ gst_base_sink_get_last_sample (GstBaseSink * sink)
   return res;
 }
 
-/* with OBJECT_LOCK */
-static void
+/* with OBJECT_LOCK
+ *
+ * Returns %TRUE if the stored buffer actually changed, in which case the
+ * caller is responsible for emitting a notification on the "last-sample"
+ * property once it has dropped the OBJECT_LOCK. */
+static gboolean
 gst_base_sink_set_last_buffer_unlocked (GstBaseSink * sink, GstBuffer * buffer)
 {
   GstBuffer *old;
+  gboolean changed;
 
   old = sink->priv->last_buffer;
-  if (G_LIKELY (old != buffer)) {
+  changed = (old != buffer);
+  if (G_LIKELY (changed)) {
     GST_DEBUG_OBJECT (sink, "setting last buffer to %p", buffer);
     if (G_LIKELY (buffer))
       gst_buffer_ref (buffer);
@@ -1067,17 +1098,25 @@ gst_base_sink_set_last_buffer_unlocked (GstBaseSink * sink, GstBuffer * buffer)
     gst_buffer_unref (old);
     GST_OBJECT_LOCK (sink);
   }
+
+  return changed;
 }
 
-/* with OBJECT_LOCK */
-static void
+/* with OBJECT_LOCK
+ *
+ * Returns %TRUE if the stored buffer list actually changed, in which case the
+ * caller is responsible for emitting a notification on the "last-sample"
+ * property once it has dropped the OBJECT_LOCK. */
+static gboolean
 gst_base_sink_set_last_buffer_list_unlocked (GstBaseSink * sink,
     GstBufferList * buffer_list)
 {
   GstBufferList *old;
+  gboolean changed;
 
   old = sink->priv->last_buffer_list;
-  if (G_LIKELY (old != buffer_list)) {
+  changed = (old != buffer_list);
+  if (G_LIKELY (changed)) {
     GST_DEBUG_OBJECT (sink, "setting last buffer list to %p", buffer_list);
     if (G_LIKELY (buffer_list))
       gst_mini_object_ref (GST_MINI_OBJECT_CAST (buffer_list));
@@ -1093,29 +1132,45 @@ gst_base_sink_set_last_buffer_list_unlocked (GstBaseSink * sink,
     gst_mini_object_unref (GST_MINI_OBJECT_CAST (old));
     GST_OBJECT_LOCK (sink);
   }
+
+  return changed;
 }
 
 static void
 gst_base_sink_set_last_buffer (GstBaseSink * sink, GstBuffer * buffer)
 {
+  gboolean notify;
+
   if (!g_atomic_int_get (&sink->priv->enable_last_sample))
     return;
 
   GST_OBJECT_LOCK (sink);
-  gst_base_sink_set_last_buffer_unlocked (sink, buffer);
+  notify = gst_base_sink_set_last_buffer_unlocked (sink, buffer);
   GST_OBJECT_UNLOCK (sink);
+
+  /* g_object_notify() may re-enter application code, so only notify after
+   * dropping the OBJECT_LOCK to avoid lock-order issues. */
+  if (notify && g_atomic_int_get (&sink->priv->enable_last_sample_notify))
+    g_object_notify_by_pspec (G_OBJECT (sink), properties[PROP_LAST_SAMPLE]);
 }
 
 static void
 gst_base_sink_set_last_buffer_list (GstBaseSink * sink,
     GstBufferList * buffer_list)
 {
+  gboolean notify;
+
   if (!g_atomic_int_get (&sink->priv->enable_last_sample))
     return;
 
   GST_OBJECT_LOCK (sink);
-  gst_base_sink_set_last_buffer_list_unlocked (sink, buffer_list);
+  notify = gst_base_sink_set_last_buffer_list_unlocked (sink, buffer_list);
   GST_OBJECT_UNLOCK (sink);
+
+  /* g_object_notify() may re-enter application code, so only notify after
+   * dropping the OBJECT_LOCK to avoid lock-order issues. */
+  if (notify && g_atomic_int_get (&sink->priv->enable_last_sample_notify))
+    g_object_notify_by_pspec (G_OBJECT (sink), properties[PROP_LAST_SAMPLE]);
 }
 
 /**
@@ -1134,10 +1189,17 @@ gst_base_sink_set_last_sample_enabled (GstBaseSink * sink, gboolean enabled)
   /* Only take lock if we change the value */
   if (g_atomic_int_compare_and_exchange (&sink->priv->enable_last_sample,
           !enabled, enabled) && !enabled) {
+    gboolean notify;
+
     GST_OBJECT_LOCK (sink);
-    gst_base_sink_set_last_buffer_unlocked (sink, NULL);
-    gst_base_sink_set_last_buffer_list_unlocked (sink, NULL);
+    notify = gst_base_sink_set_last_buffer_unlocked (sink, NULL);
+    notify |= gst_base_sink_set_last_buffer_list_unlocked (sink, NULL);
     GST_OBJECT_UNLOCK (sink);
+
+    /* g_object_notify() may re-enter application code, so only notify after
+     * dropping the OBJECT_LOCK to avoid lock-order issues. */
+    if (notify && g_atomic_int_get (&sink->priv->enable_last_sample_notify))
+      g_object_notify_by_pspec (G_OBJECT (sink), properties[PROP_LAST_SAMPLE]);
   }
 }
 
@@ -1588,6 +1650,10 @@ gst_base_sink_set_property (GObject * object, guint prop_id,
     case PROP_ENABLE_LAST_SAMPLE:
       gst_base_sink_set_last_sample_enabled (sink, g_value_get_boolean (value));
       break;
+    case PROP_ENABLE_LAST_SAMPLE_NOTIFY:
+      g_atomic_int_set (&sink->priv->enable_last_sample_notify,
+          g_value_get_boolean (value));
+      break;
     case PROP_THROTTLE_TIME:
       gst_base_sink_set_throttle_time (sink, g_value_get_uint64 (value));
       break;
@@ -1630,6 +1696,10 @@ gst_base_sink_get_property (GObject * object, guint prop_id, GValue * value,
       break;
     case PROP_ENABLE_LAST_SAMPLE:
       g_value_set_boolean (value, gst_base_sink_is_last_sample_enabled (sink));
+      break;
+    case PROP_ENABLE_LAST_SAMPLE_NOTIFY:
+      g_value_set_boolean (value,
+          g_atomic_int_get (&sink->priv->enable_last_sample_notify));
       break;
     case PROP_BLOCKSIZE:
       g_value_set_uint (value, gst_base_sink_get_blocksize (sink));
@@ -2534,6 +2604,8 @@ gst_base_sink_do_preroll (GstBaseSink * sink, GstMiniObject * obj)
       ret = gst_base_sink_wait_preroll (sink);
       if ((ret != GST_FLOW_OK) && (ret != GST_FLOW_STEP))
         goto preroll_failed;
+    } else {
+      sink->have_preroll = FALSE;
     }
   }
   return GST_FLOW_OK;
@@ -4467,6 +4539,9 @@ gst_base_sink_perform_instant_rate_change (GstBaseSink * sink, GstPad * pad,
 
   GstClockTime switch_time;
   gint res;
+  guint64 segment_time;
+  gdouble segment_applied_rate;
+  GstSegmentFlags segment_flags;
 
   priv = sink->priv;
 
@@ -4535,10 +4610,18 @@ gst_base_sink_perform_instant_rate_change (GstBaseSink * sink, GstPad * pad,
   /* Calculate new output rate based on upstream value */
   rate *= sink->priv->upstream_segment.rate;
 
-  gst_segment_do_seek (&sink->segment, rate, GST_FORMAT_TIME,
-      sink->segment.flags & (~GST_SEEK_FLAG_FLUSH) &
-      GST_SEEK_FLAG_INSTANT_RATE_CHANGE, GST_SEEK_TYPE_NONE, -1,
-      GST_SEEK_TYPE_NONE, -1, NULL);
+  /* do_seek() below can change these, but an instant rate change shouldn't,
+   * so let's manually restore them afterwards to avoid e.g. stream time jumps */
+  segment_time = sink->segment.time;
+  segment_applied_rate = sink->segment.applied_rate;
+  segment_flags = sink->segment.flags;
+
+  gst_segment_do_seek (&sink->segment, rate, GST_FORMAT_TIME, 0,
+      GST_SEEK_TYPE_NONE, -1, GST_SEEK_TYPE_NONE, -1, NULL);
+
+  sink->segment.time = segment_time;
+  sink->segment.applied_rate = segment_applied_rate;
+  sink->segment.flags = segment_flags;
 
   GST_DEBUG_OBJECT (sink, "Adjusted segment is now %" GST_SEGMENT_FORMAT,
       &sink->segment);
@@ -4567,17 +4650,14 @@ gst_base_sink_perform_instant_rate_change (GstBaseSink * sink, GstPad * pad,
 /* with STREAM_LOCK
  */
 static void
-gst_base_sink_loop (GstPad * pad)
+gst_base_sink_loop (GstBaseSink * basesink)
 {
-  GstObject *parent;
-  GstBaseSink *basesink;
   GstBuffer *buf = NULL;
   GstFlowReturn result;
   guint blocksize;
   guint64 offset;
-
-  parent = GST_OBJECT_PARENT (pad);
-  basesink = GST_BASE_SINK (parent);
+  GstPad *pad = GST_BASE_SINK_PAD (basesink);
+  GstObject *parent = GST_OBJECT (basesink);
 
   g_assert (basesink->pad_mode == GST_PAD_MODE_PULL);
 
@@ -4711,7 +4791,8 @@ gst_base_sink_default_activate_pull (GstBaseSink * basesink, gboolean active)
   if (active) {
     /* start task */
     result = gst_pad_start_task (basesink->sinkpad,
-        (GstTaskFunction) gst_base_sink_loop, basesink->sinkpad, NULL);
+        (GstTaskFunction) gst_base_sink_loop,
+        gst_object_ref (basesink), gst_object_unref);
   } else {
     /* step 2, make sure streaming finishes */
     result = gst_pad_stop_task (basesink->sinkpad);

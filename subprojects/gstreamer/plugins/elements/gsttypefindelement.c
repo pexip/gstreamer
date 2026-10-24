@@ -286,6 +286,8 @@ gst_type_find_element_class_init (GstTypeFindElementClass * typefind_class)
       "Generic",
       "Finds the media type of a stream",
       "Benjamin Otte <in7y118@public.uni-hamburg.de>");
+
+  gst_element_class_mark_as_untrusted_aware (gstelement_class);
   gst_element_class_add_static_pad_template (gstelement_class,
       &type_find_element_src_template);
   gst_element_class_add_static_pad_template (gstelement_class,
@@ -535,7 +537,8 @@ gst_type_find_element_seek (GstTypeFindElement * typefind, GstEvent * event)
   /* restart our task since it might have been stopped when we did the
    * flush. */
   gst_pad_start_task (typefind->sink,
-      (GstTaskFunction) gst_type_find_element_loop, typefind->sink, NULL);
+      (GstTaskFunction) gst_type_find_element_loop,
+      gst_object_ref (typefind->sink), gst_object_unref);
 
   /* streaming can continue now */
   GST_PAD_STREAM_UNLOCK (typefind->sink);
@@ -1208,8 +1211,10 @@ gst_type_find_element_loop (GstPad * pad)
 
     /* Pull 4k blocks and send downstream */
     ret = gst_pad_pull_range (typefind->sink, typefind->offset, 4096, &outbuf);
-    if (ret != GST_FLOW_OK)
+    if (ret != GST_FLOW_OK) {
+      gst_clear_buffer (&outbuf);
       goto pause;
+    }
 
     typefind->offset += gst_buffer_get_size (outbuf);
 
@@ -1332,7 +1337,7 @@ gst_type_find_element_activate_sink (GstPad * pad, GstObject * parent)
 
   /* only start our task if we ourselves decide to start in pull mode */
   return gst_pad_start_task (pad, (GstTaskFunction) gst_type_find_element_loop,
-      pad, NULL);
+      gst_object_ref (pad), gst_object_unref);
 
 typefind_push:
   {

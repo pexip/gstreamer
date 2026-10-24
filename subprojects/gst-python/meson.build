@@ -1,5 +1,5 @@
 project('gst-python', 'c',
-  version : '1.27.2.1',
+  version : '1.29.2.1',
   meson_version : '>= 1.4',
   default_options : [ 'warning_level=1',
                       'buildtype=debugoptimized' ])
@@ -20,7 +20,7 @@ gst_dep = dependency('gstreamer-1.0', version : gst_req)
 gstbase_dep = dependency('gstreamer-base-1.0', version : gst_req)
 gstbad_dep = dependency('gstreamer-analytics-1.0', version :gst_req)
 gmodule_dep = dependency('gmodule-no-export-2.0')
-libdl = cc.find_library('dl', required: false)
+libdl = dependency('dl', required: false)
 pygobject_dep = dependency('pygobject-3.0', allow_fallback: true, version: '>= 3.8')
 
 pymod = import('python')
@@ -85,17 +85,21 @@ else
   endif
 endif
 pylib_fname = ''
-foreach loc: pylib_locs
-  foreach fname: pylib_fnames
-    fpath = loc / fname
-    debug(f'Looking for Python library at: @fpath@')
-    if fsmod.exists(fpath)
-      pylib_fname = fname
-      message(f'PY_LIB_FNAME = @fname@ (@loc@)')
-      break
-    endif
+if meson.is_cross_build()
+  pylib_fname = pylib_locs[0] / pylib_fnames[0]
+else
+  foreach loc: pylib_locs
+    foreach fname: pylib_fnames
+      fpath = loc / fname
+      debug(f'Looking for Python library at: @fpath@')
+      if fsmod.exists(fpath)
+        pylib_fname = fname
+        message(f'PY_LIB_FNAME = @fname@ (@loc@)')
+        break
+      endif
+    endforeach
   endforeach
-endforeach
+endif
 if pylib_fname == ''
   message('Could not find python library to load, will try loading at runtime')
 endif
@@ -125,7 +129,12 @@ cdata.set_quoted('PY_LIB_FNAME', pylib_fname)
 configure_file(output : 'config.h', configuration : cdata)
 configinc = include_directories('.')
 
-meson.add_dist_script('scripts/gen-changelog.py', meson.project_name(), '1.26.0', meson.project_version())
+meson.add_dist_script('scripts/gen-changelog.py', meson.project_name(), '1.28.0', meson.project_version())
+
+# dist common files from monorepo root
+if not meson.is_subproject()
+  meson.add_dist_script('scripts/dist-common-files.py', meson.project_version())
+endif
 
 pkgconfig = import('pkgconfig')
 plugins_install_dir = join_paths(get_option('libdir'), 'gstreamer-1.0')

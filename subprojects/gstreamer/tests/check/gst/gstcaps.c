@@ -145,6 +145,50 @@ GST_START_TEST (test_static_caps)
 
 GST_END_TEST;
 
+GST_START_TEST (test_static_caps_nested_may_be_leaked)
+{
+  /* *INDENT-OFF* */
+  static GstStaticCaps scaps = GST_STATIC_CAPS (
+      "video/x-raw,"
+        "tensors=(structure)["
+          "tensorgroups,"
+            "out=(/uniquelist){"
+              "(GstCaps)["
+                "tensor/strided,"
+                  "tensor-id=(string)out,"
+                  "type=(string)float32"
+              "]"
+            "}"
+        "]");
+  /* *INDENT-ON* */
+  GstCaps *caps;
+  const GValue *tensors, *uniquelist, *nested;
+
+  caps = gst_static_caps_get (&scaps);
+  fail_unless (caps != NULL);
+  fail_unless (GST_MINI_OBJECT_FLAG_IS_SET (caps,
+          GST_MINI_OBJECT_FLAG_MAY_BE_LEAKED));
+
+  /* Descend tensors -> tensorgroups -> out (uniquelist) -> (GstCaps) */
+  tensors = gst_structure_get_value (gst_caps_get_structure (caps, 0),
+      "tensors");
+  fail_unless (tensors != NULL && GST_VALUE_HOLDS_STRUCTURE (tensors));
+
+  uniquelist = gst_structure_get_value (gst_value_get_structure (tensors),
+      "out");
+  fail_unless (uniquelist != NULL && GST_VALUE_HOLDS_UNIQUE_LIST (uniquelist));
+  fail_unless (gst_value_unique_list_get_size (uniquelist) == 1);
+
+  nested = gst_value_unique_list_get_value (uniquelist, 0);
+  fail_unless (nested != NULL && GST_VALUE_HOLDS_CAPS (nested));
+  fail_unless (GST_MINI_OBJECT_FLAG_IS_SET (gst_value_get_caps (nested),
+          GST_MINI_OBJECT_FLAG_MAY_BE_LEAKED));
+
+  gst_caps_unref (caps);
+}
+
+GST_END_TEST;
+
 static const gchar non_simple_caps_string[] =
     "video/x-raw, format=(string)I420, framerate=(fraction)[ 1/100, 100 ], "
     "width=(int)[ 16, 4096 ], height=(int)[ 16, 4096 ]; video/x-raw, "
@@ -1145,6 +1189,207 @@ GST_START_TEST (test_intersect_flagset)
 
 GST_END_TEST;
 
+GST_START_TEST (test_intersect_caps_set_in_caps)
+{
+  GstCaps *superset, *subset, *intersect, *expected_intersect;
+
+  /* *INDENT-OFF* */
+  superset = gst_caps_from_string (
+    "video/x-raw,"
+    " width = 10,"
+    " tensors = (caps/uniquelist) {"
+    "   ["
+    "     tensor/strided,"
+    "       tensor-id = tensor-a,"
+    "       dims = <(int)[1, 5]>,"
+    "       dims-order = (string)row-major,"
+    "       type = (string)float32"
+    "   ]"
+    "}"
+  );
+
+  subset = gst_caps_from_string (
+    "video/x-raw,"
+    " width = 10,"
+    " tensors = (caps/uniquelist) {"
+    "   ["
+    "     tensor/strided,"
+    "       tensor-id = tensor-a,"
+    "       dims = <(int)3>,"
+    "       dims-order = (string)row-major,"
+    "       type = (string)float32"
+    "   ]"
+    "}"
+  );
+
+  expected_intersect = gst_caps_from_string (
+    "video/x-raw,"
+    " width = 10,"
+    " tensors = (caps/uniquelist) {"
+    "   ["
+    "     tensor/strided,"
+    "       tensor-id = tensor-a,"
+    "       dims = <(int)3>,"
+    "       dims-order = (string)row-major,"
+    "       type = (string)float32"
+    "   ]"
+    "}"
+  );
+
+  /* *INDENT-ON* */
+
+  /* Check simple intersect */
+  fail_unless (gst_caps_can_intersect (subset, superset));
+
+  intersect = gst_caps_intersect (superset, subset);
+
+  fail_unless (gst_caps_is_equal (intersect, expected_intersect));
+
+  gst_caps_unref (superset);
+  gst_caps_unref (subset);
+  gst_caps_unref (intersect);
+  gst_caps_unref (expected_intersect);
+
+  /* *INDENT-OFF* */
+  superset = gst_caps_from_string (
+    "video/x-raw,"
+    " width = 10,"
+    " tensors = (caps/uniquelist) {"
+    "   ["
+    "     tensor/strided,"
+    "       tensor-id = tensor-a,"
+    "       dims = <(int)[5, 10]>,"
+    "       dims-order = (string)row-major,"
+    "       type = (string)float32;"
+    "     tensor/strided,"
+    "       tensor-id = tensor-a,"
+    "       dims = <(int)[1, 5]>,"
+    "       dims-order = (string)row-major,"
+    "       type = (string)float32"
+    "   ]"
+    "}"
+  );
+
+  subset = gst_caps_from_string (
+    "video/x-raw,"
+    " width = 10,"
+    " tensors = (caps/uniquelist) {"
+    "   ["
+    "     tensor/strided,"
+    "       tensor-id = tensor-a,"
+    "       dims = <(int)3>,"
+    "       dims-order = (string)row-major,"
+    "       type = (string)float32"
+    "   ]"
+    "}"
+  );
+
+  expected_intersect = gst_caps_from_string (
+    "video/x-raw,"
+    " width = 10,"
+    " tensors = (caps/uniquelist) {"
+    "   ["
+    "     tensor/strided,"
+    "       tensor-id = tensor-a,"
+    "       dims = <(int)3>,"
+    "       dims-order = (string)row-major,"
+    "       type = (string)float32"
+    "   ]"
+    "}"
+  );
+
+  /* *INDENT-ON* */
+
+  /* Check intersect with multi-structure */
+  fail_unless (gst_caps_can_intersect (subset, superset));
+
+  intersect = gst_caps_intersect (superset, subset);
+
+  fail_unless (gst_caps_is_equal (intersect, expected_intersect));
+
+  gst_caps_unref (superset);
+  gst_caps_unref (subset);
+  gst_caps_unref (intersect);
+  gst_caps_unref (expected_intersect);
+
+
+}
+
+GST_END_TEST;
+
+GST_START_TEST (test_intersect_set)
+{
+  GstCaps *superset, *subset, *intersect, *expected_intersect;
+
+  /* *INDENT-OFF* */
+  superset = gst_caps_from_string (
+    "video/x-raw,"
+    " width = 10,"
+    " tensors = (caps/uniquelist) {"
+    "   ["
+    "     tensor/strided,"
+    "       tensor-id = tensor-a,"
+    "       dims = <(int)[5, 10]>,"
+    "       dims-order = (string)row-major,"
+    "       type = (string)float32"
+    "   ], ["
+    "     tensor/strided,"
+    "       tensor-id = tensor-a,"
+    "       dims = <(int)[1, 5]>,"
+  "       dims-order = (string)row-major,"
+  "       type = (string)float32"
+  "   ]"
+  "}"
+);
+
+subset = gst_caps_from_string (
+  "video/x-raw,"
+  " width = 10,"
+  " tensors = (caps/uniquelist) {"
+  "   ["
+  "     tensor/strided,"
+  "       tensor-id = tensor-a,"
+  "       dims = <(int)3>,"
+  "       dims-order = (string)row-major,"
+  "       type = (string)float32"
+  "   ]"
+  "}"
+);
+
+expected_intersect = gst_caps_from_string (
+  "video/x-raw,"
+  " width = 10,"
+  " tensors = (caps/uniquelist) {"
+  "   ["
+  "     tensor/strided,"
+  "       tensor-id = tensor-a,"
+  "       dims = <(int)3>,"
+  "       dims-order = (string)row-major,"
+  "       type = (string)float32"
+  "   ]"
+  "}"
+);
+
+/* *INDENT-ON* */
+
+/* Check intersect set where only one element of set match */
+  fail_unless (gst_caps_can_intersect (subset, superset));
+
+  intersect = gst_caps_intersect (superset, subset);
+
+  fail_unless (gst_caps_is_equal (intersect, expected_intersect));
+
+  gst_caps_unref (superset);
+  gst_caps_unref (subset);
+  gst_caps_unref (intersect);
+  gst_caps_unref (expected_intersect);
+
+}
+
+GST_END_TEST;
+
+
+
 GST_START_TEST (test_union)
 {
   GstCaps *c1, *c2, *test, *expect;
@@ -1886,6 +2131,45 @@ GST_START_TEST (test_fixed)
       ("video/x-raw, tensor = (GstCaps)[tensor/strided, dims=<0, 5>]");
   fail_unless (gst_caps_is_fixed (caps));
   gst_caps_unref (caps);
+
+  /* *INDENT-OFF* */
+  caps = gst_caps_from_string (
+    "video/x-raw,"
+    " width = 10,"
+    " tensors = (caps/uniquelist) {"
+    "   ["
+    "     tensor/strided,"
+    "       tensor-id = tensor-a,"
+    "       dims = <(int)[1, 5]>,"
+    "       dims-order = (string)row-major,"
+    "       type = (string)float32"
+    "   ]"
+    "}"
+  );
+  /* *INDENT-ON* */
+
+  fail_if (gst_caps_is_fixed (caps));
+  gst_caps_unref (caps);
+
+  /* *INDENT-OFF* */
+  caps = gst_caps_from_string (
+    "video/x-raw,"
+    " width = 10,"
+    " tensors = (caps/uniquelist) {"
+    "   ["
+    "     tensor/strided,"
+    "       tensor-id = tensor-a,"
+    "       dims = <(int)1>,"
+    "       dims-order = (string)row-major,"
+    "       type = (string)float32"
+    "   ]"
+    "}"
+  );
+  /* *INDENT-ON* */
+
+  fail_unless (gst_caps_is_fixed (caps));
+  gst_caps_unref (caps);
+
 }
 
 GST_END_TEST;
@@ -2030,6 +2314,331 @@ GST_START_TEST (test_array_subset)
 
 GST_END_TEST;
 
+GST_START_TEST (test_caps_in_set_in_caps_subset)
+{
+  GstCaps *superset, *subset;
+
+  /* *INDENT-OFF* */
+  superset = gst_caps_from_string (
+    "video/x-raw,"
+    " width = 10,"
+    " tensors = (caps/uniquelist) {"
+    "   ["
+    "     tensor/strided,"
+    "       tensor-id = tensor-a,"
+    "       dims = <(int)[1, 5]>,"
+    "       dims-order = (string)row-major,"
+    "       type = (string)float32"
+    "   ]"
+    "}"
+  );
+
+  subset = gst_caps_from_string (
+    "video/x-raw,"
+    " width = 10,"
+    " tensors = (caps/uniquelist) {"
+    "   ["
+    "     tensor/strided,"
+    "       tensor-id = tensor-a,"
+    "       dims = <(int)3>,"
+    "       dims-order = (string)row-major,"
+    "       type = (string)float32"
+    "   ]"
+    "}"
+  );
+  /* *INDENT-ON* */
+
+/* Check simple subset */
+  fail_unless (gst_caps_is_subset (subset, superset));
+
+  gst_caps_unref (superset);
+  gst_caps_unref (subset);
+
+  /* *INDENT-OFF* */
+  superset = gst_caps_from_string (
+    "video/x-raw,"
+    " width = 10,"
+    " tensors = (caps/uniquelist) {"
+    "   ["
+    "     tensor/strided,"
+    "       tensor-id = tensor-a,"
+    "       dims = <(int)[1, 5]>,"
+    "       dims-order = (string)row-major,"
+    "       type = (string)float32"
+    "   ]"
+    "}"
+  );
+
+  subset = gst_caps_from_string (
+    "video/x-raw,"
+    " width = 10,"
+    " tensors = (caps/uniquelist) {"
+    "   ["
+    "     tensor/strided,"
+    "       tensor-id = tensor-a,"
+    "       dims = <(int)10>,"
+    "       dims-order = (string)row-major,"
+    "       type = (string)float32"
+    "   ]"
+    "}"
+  );
+  /* *INDENT-ON* */
+
+  /* Check we non-subset are found */
+  fail_if (gst_caps_is_subset (subset, superset));
+
+  gst_caps_unref (superset);
+  gst_caps_unref (subset);
+
+  /* *INDENT-OFF* */
+  superset = gst_caps_from_string (
+    "video/x-raw,"
+    " width = 10,"
+    " tensors = (caps/uniquelist) {"
+    "   ["
+    "     tensor/strided,"
+    "       tensor-id = tensor-a,"
+    "       dims = <(int)[1, 5]>,"
+    "       dims-order = (string)row-major,"
+    "       type = (string)float32;"
+    "     tensor/strided,"
+    "       tensor-id = tensor-a,"
+    "       dims = <(int)[5, 15]>,"
+    "       dims-order = (string)row-major,"
+    "       type = (string)float32"
+    "   ]"
+    "}"
+  );
+
+  subset = gst_caps_from_string (
+    "video/x-raw,"
+    " width = 10,"
+    " tensors = (caps/uniquelist) {"
+    "   ["
+    "     tensor/strided,"
+    "       tensor-id = tensor-a,"
+    "       dims = <(int)10>,"
+    "       dims-order = (string)row-major,"
+    "       type = (string)float32"
+    "   ]"
+    "}"
+  );
+  /* *INDENT-ON* */
+
+  /* Check superset with alternative option work */
+  fail_unless (gst_caps_is_subset (subset, superset));
+
+  gst_caps_unref (superset);
+  gst_caps_unref (subset);
+
+  /* *INDENT-OFF* */
+  superset = gst_caps_from_string (
+    "video/x-raw,"
+    " width = 10,"
+    " tensors = (caps/uniquelist) {"
+    "   ["
+    "     tensor/strided,"
+    "       tensor-id = tensor-b,"
+    "       dims = <(int)[1, 15]>,"
+    "       dims-order = (string)row-major,"
+    "       type = (string)float32"
+    "   ]"
+    "}"
+  );
+
+  subset = gst_caps_from_string (
+    "video/x-raw,"
+    " width = 10,"
+    " tensors = (caps/uniquelist) {"
+    "   ["
+    "     tensor/strided,"
+    "       tensor-id = tensor-a,"
+    "       dims = <(int)10>,"
+    "       dims-order = (string)row-major,"
+    "       type = (string)float32"
+    "   ]"
+    "}"
+  );
+  /* *INDENT-ON* */
+
+  /* Check one field not matching */
+  fail_if (gst_caps_is_subset (subset, superset));
+
+  gst_caps_unref (superset);
+  gst_caps_unref (subset);
+
+  /* *INDENT-OFF* */
+  superset = gst_caps_from_string (
+    "video/x-raw,"
+    " width = 10,"
+    " tensors = (caps/uniquelist) {"
+    "   ["
+    "     tensor/strided,"
+    "       tensor-id = tensor-a,"
+    "       dims = <(int)[1, 15]>,"
+    "       dims-order = (string)row-major,"
+    "       type = (string)float32"
+    "   ]"
+    "}"
+  );
+
+  subset = gst_caps_from_string (
+    "video/x-raw,"
+    " width = 10,"
+    " tensors = (caps/uniquelist) {"
+    "   ["
+    "     tensor/strided,"
+    "       dims = <(int)10>,"
+    "       tensor-id = tensor-a,"
+    "       dims-order = (string)row-major,"
+    "       type = (string)float32"
+    "   ]"
+    "}"
+  );
+  /* *INDENT-ON* */
+
+  /* Check order of field have not impact */
+  fail_unless (gst_caps_is_subset (subset, superset));
+
+  gst_caps_unref (superset);
+  gst_caps_unref (subset);
+
+  /* *INDENT-OFF* */
+  superset = gst_caps_from_string (
+    "video/x-raw,"
+    " width = 10,"
+    " tensors = (caps/uniquelist) {"
+    "   ["
+    "     tensor/strided,"
+    "       tensor-id = tensor-a,"
+    "       dims = <(int)[1, 15]>,"
+    "       dims-order = (string)row-major,"
+    "       type = (string)float32"
+    "   ], ["
+    "     tensor/strided,"
+    "       tensor-id = tensor-b,"
+    "       dims = <(int)[1, 15]>,"
+    "       dims-order = (string)row-major,"
+    "       type = (string)float32"
+    "   ]"
+    "}"
+  );
+
+  subset = gst_caps_from_string (
+    "video/x-raw,"
+    " width = 10,"
+    " tensors = (caps/uniquelist) {"
+    "   ["
+    "     tensor/strided,"
+    "       tensor-id = tensor-a,"
+    "       dims = <(int)10>,"
+    "       dims-order = (string)row-major,"
+    "       type = (string)float32"
+    "   ]"
+    "}"
+  );
+  /* *INDENT-ON* */
+
+  /* Check that  superset 'set' contain subset 'set' and more. */
+  fail_unless (gst_caps_is_subset (subset, superset));
+
+  gst_caps_unref (superset);
+  gst_caps_unref (subset);
+
+  /* *INDENT-OFF* */
+  superset = gst_caps_from_string (
+    "video/x-raw,"
+    " width = 10,"
+    " tensors = (caps/uniquelist) {"
+    "   ["
+    "     tensor/strided,"
+    "       tensor-id = tensor-a,"
+    "       dims = <(int)[1, 5]>,"
+    "       dims-order = (string)row-major,"
+    "       type = (string)float32"
+    "   ], ["
+    "     tensor/strided,"
+    "       tensor-id = tensor-b,"
+    "       dims = <(int)[1, 15]>,"
+    "       dims-order = (string)row-major,"
+    "       type = (string)float32"
+    "   ]"
+    "}"
+  );
+
+  subset = gst_caps_from_string (
+    "video/x-raw,"
+    " width = 10,"
+    " tensors = (caps/uniquelist) {"
+    "   ["
+    "     tensor/strided,"
+    "       tensor-id = tensor-a,"
+    "       dims = <(int)3>,"
+    "       dims-order = (string)row-major,"
+    "       type = (string)float32"
+    "   ], ["
+    "     tensor/strided,"
+    "       tensor-id = tensor-b,"
+    "       dims = <(int)7>,"
+    "       dims-order = (string)row-major,"
+    "       type = (string)float32"
+    "   ]"
+    "}"
+  );
+  /* *INDENT-ON* */
+
+  /* multiple element in the set */
+  fail_unless (gst_caps_is_subset (subset, superset));
+
+  gst_caps_unref (superset);
+  gst_caps_unref (subset);
+
+  /* *INDENT-OFF* */
+  superset = gst_caps_from_string (
+    "video/x-raw,"
+    " width = 10,"
+    " tensors = (caps/uniquelist) {"
+    "   ["
+    "     tensor/strided,"
+    "       tensor-id = tensor-a,"
+    "       dims = <(int)[1, 5]>,"
+    "       dims-order = (string)row-major,"
+    "       type = (string)float32"
+    "   ]"
+    "}"
+  );
+
+  subset = gst_caps_from_string (
+    "video/x-raw,"
+    " width = 10,"
+    " tensors = (caps/uniquelist) {"
+    "   ["
+    "     tensor/strided,"
+    "       tensor-id = tensor-a,"
+    "       dims = <(int)3>,"
+    "       dims-order = (string)row-major,"
+    "       type = (string)float32"
+    "   ], ["
+    "     tensor/strided,"
+    "       tensor-id = tensor-b,"
+    "       dims = <(int)7>,"
+    "       dims-order = (string)row-major,"
+    "       type = (string)float32"
+    "   ]"
+    "}"
+  );
+  /* *INDENT-ON* */
+
+  /* Check of subset contain more then superset */
+  fail_if (gst_caps_is_subset (subset, superset));
+
+  gst_caps_unref (superset);
+  gst_caps_unref (subset);
+
+}
+
+GST_END_TEST;
+
 
 static Suite *
 gst_caps_suite (void)
@@ -2042,6 +2651,7 @@ gst_caps_suite (void)
   tcase_add_test (tc_chain, test_double_append);
   tcase_add_test (tc_chain, test_mutability);
   tcase_add_test (tc_chain, test_static_caps);
+  tcase_add_test (tc_chain, test_static_caps_nested_may_be_leaked);
   tcase_add_test (tc_chain, test_simplify);
   tcase_add_test (tc_chain, test_truncate);
   tcase_add_test (tc_chain, test_fixate);
@@ -2058,6 +2668,8 @@ gst_caps_suite (void)
   tcase_add_test (tc_chain, test_intersect_first2);
   tcase_add_test (tc_chain, test_intersect_duplication);
   tcase_add_test (tc_chain, test_intersect_flagset);
+  tcase_add_test (tc_chain, test_intersect_set);
+  tcase_add_test (tc_chain, test_intersect_caps_set_in_caps);
   tcase_add_test (tc_chain, test_union);
   tcase_add_test (tc_chain, test_normalize);
   tcase_add_test (tc_chain, test_broken);
@@ -2071,6 +2683,7 @@ gst_caps_suite (void)
   tcase_add_test (tc_chain, test_fixed);
   tcase_add_test (tc_chain, test_nested);
   tcase_add_test (tc_chain, test_array_subset);
+  tcase_add_test (tc_chain, test_caps_in_set_in_caps_subset);
 
   return s;
 }

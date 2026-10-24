@@ -30,6 +30,7 @@
 #include "gstglfuncs.h"
 
 #if GST_GL_HAVE_PLATFORM_EGL
+#include "egl/gstegl.h"
 #include "egl/gsteglimage.h"
 #include "egl/gsteglimage_private.h"
 #include "egl/gsteglimagecache.h"
@@ -39,6 +40,8 @@
 
 #if GST_GL_HAVE_DMABUF
 #include <gst/allocators/gstdmabuf.h>
+#include <gst/allocators/gstudmabufallocator.h>
+#include <gst/video/gstvideodmabufpool.h>
 #ifdef HAVE_LIBDRM
 #include <drm_fourcc.h>
 #endif
@@ -50,6 +53,11 @@
 #if GST_GL_HAVE_VIV_DIRECTVIV
 #include <gst/allocators/gstphysmemory.h>
 #include <gst/gl/gstglfuncs.h>
+#endif
+
+#if defined(__ANDROID__) && defined(EGL_ANDROID_get_native_client_buffer)
+#include <android/hardware_buffer.h>
+#include <gst/allocators/allocators.h>
 #endif
 
 /**
@@ -336,7 +344,9 @@ _passthrough_upload_new (GstGLUpload * upload)
 }
 
 static GstStaticCaps _passthrough_upload_caps =
-GST_STATIC_CAPS (GST_VIDEO_DMA_DRM_CAPS_MAKE);
+    GST_STATIC_CAPS (GST_VIDEO_DMA_DRM_CAPS_MAKE " ; "
+    GST_VIDEO_CAPS_MAKE_WITH_FEATURES ("memory:DMABuf,"
+        GST_CAPS_FEATURE_META_GST_VIDEO_OVERLAY_COMPOSITION, "DMA_DRM"));
 
 static GstCaps *
 _passthrough_upload_transform_caps (gpointer impl, GstGLContext * context,
@@ -398,6 +408,446 @@ static const UploadMethod _passthrough_upload = {
   &_passthrough_upload_perform,
   &_passthrough_upload_free
 };
+
+#if GST_GL_HAVE_DMABUF
+
+struct UdmabufUpload
+{
+  GstGLUpload *upload;
+
+  GstCaps *in_caps;
+  GstCaps *out_caps;
+  gboolean disabled;
+};
+
+static GstStaticCaps _udmabuf_upload_sink_caps =
+    GST_STATIC_CAPS (GST_VIDEO_CAPS_MAKE (GST_GL_MEMORY_VIDEO_FORMATS_STR) " ; "
+    GST_VIDEO_CAPS_MAKE_WITH_FEATURES (GST_CAPS_FEATURE_MEMORY_SYSTEM_MEMORY ","
+        GST_CAPS_FEATURE_META_GST_VIDEO_OVERLAY_COMPOSITION,
+        GST_GL_MEMORY_VIDEO_FORMATS_STR));
+
+static GstStaticCaps _udmabuf_upload_src_caps =
+    GST_STATIC_CAPS (GST_VIDEO_DMA_DRM_CAPS_MAKE " ; "
+    GST_VIDEO_CAPS_MAKE_WITH_FEATURES (GST_CAPS_FEATURE_MEMORY_DMABUF ","
+        GST_CAPS_FEATURE_META_GST_VIDEO_OVERLAY_COMPOSITION, "DMA_DRM"));
+
+static gpointer
+_udmabuf_upload_new (GstGLUpload * upload)
+{
+  struct UdmabufUpload *udmabuf = g_new0 (struct UdmabufUpload, 1);
+  GstAllocator *allocator = NULL;
+
+  udmabuf->upload = upload;
+
+  allocator = gst_udmabuf_allocator_get ();
+  if (!allocator) {
+    GST_DEBUG_OBJECT (upload, "No udmabuf support");
+    udmabuf->disabled = TRUE;
+  } else {
+    gst_object_unref (allocator);
+  }
+
+  return udmabuf;
+}
+
+static GstCaps *
+_udmabuf_upload_transform_caps (gpointer impl, GstGLContext * context,
+    GstPadDirection direction, GstCaps * caps)
+{
+  struct UdmabufUpload *upload = impl;
+  GstCaps *intersected_caps = NULL, *out_caps = NULL;
+  GstCapsFeatures *passthrough;
+
+  if (upload->disabled)
+    return NULL;
+
+  passthrough = gst_caps_features_from_string
+      (GST_CAPS_FEATURE_META_GST_VIDEO_OVERLAY_COMPOSITION);
+
+  if (direction == GST_PAD_SINK) {
+    GstCaps *static_caps;
+    GstCaps *tmp;
+    guint n;
+
+    static_caps = gst_static_caps_get (&_udmabuf_upload_sink_caps);
+    intersected_caps = gst_caps_intersect_full (caps, static_caps,
+        GST_CAPS_INTERSECT_FIRST);
+    gst_caps_unref (static_caps);
+
+    if (gst_caps_is_empty (intersected_caps)) {
+      goto out;
+    }
+
+    tmp = _set_caps_features_with_passthrough (intersected_caps,
+        GST_CAPS_FEATURE_MEMORY_DMABUF, passthrough);
+    gst_caps_unref (intersected_caps);
+    intersected_caps = tmp;
+
+    out_caps = gst_caps_new_empty ();
+    n = gst_caps_get_size (intersected_caps);
+    for (guint i = 0; i < n; i++) {
+      GstCapsFeatures *features;
+      GstStructure *structure;
+      const GValue *val;
+      GPtrArray *all_drm_formats = NULL;
+      GValue drm_formats = G_VALUE_INIT;
+
+      structure = gst_caps_get_structure (intersected_caps, i);
+      features = gst_caps_get_features (intersected_caps, i);
+
+      if (!(val = gst_structure_get_value (structure, "format"))) {
+        structure = gst_structure_copy (structure);
+        gst_structure_set (structure, "format", G_TYPE_STRING, "DMA_DRM", NULL);
+
+        gst_caps_append_structure_full (out_caps, structure,
+            gst_caps_features_copy (features));
+        continue;
+      }
+
+      all_drm_formats = g_ptr_array_new_with_free_func (g_free);
+
+      if (G_VALUE_HOLDS_STRING (val)) {
+        GstVideoFormat gst_format;
+
+        gst_format = gst_video_format_from_string (g_value_get_string (val));
+        if (gst_format != GST_VIDEO_FORMAT_UNKNOWN) {
+          guint32 fourcc = gst_video_dma_drm_fourcc_from_format (gst_format);
+          if (fourcc != DRM_FORMAT_INVALID) {
+            gchar *drm_format;
+
+            drm_format = gst_video_dma_drm_fourcc_to_string (fourcc, 0);
+            g_ptr_array_add (all_drm_formats, drm_format);
+          }
+        }
+      } else if (GST_VALUE_HOLDS_LIST (val)) {
+        guint m = gst_value_list_get_size (val);
+        for (guint j = 0; j < m; j++) {
+          const GValue *fmt_val = gst_value_list_get_value (val, j);
+          GstVideoFormat gst_format;
+
+          gst_format =
+              gst_video_format_from_string (g_value_get_string (fmt_val));
+          if (gst_format != GST_VIDEO_FORMAT_UNKNOWN) {
+            guint32 fourcc = gst_video_dma_drm_fourcc_from_format (gst_format);
+            if (fourcc != DRM_FORMAT_INVALID) {
+              char *drm_format;
+
+              drm_format = gst_video_dma_drm_fourcc_to_string (fourcc, 0);
+              g_ptr_array_add (all_drm_formats, drm_format);
+            }
+          }
+        }
+      }
+
+      if (all_drm_formats->len == 0) {
+        g_ptr_array_unref (all_drm_formats);
+        continue;
+      }
+
+      if (all_drm_formats->len == 1) {
+        g_value_init (&drm_formats, G_TYPE_STRING);
+        g_value_set_string (&drm_formats, g_ptr_array_index (all_drm_formats,
+                0));
+      } else {
+        gst_value_list_init (&drm_formats, all_drm_formats->len);
+
+        for (i = 0; i < all_drm_formats->len; i++) {
+          GValue item = G_VALUE_INIT;
+
+          g_value_init (&item, G_TYPE_STRING);
+          g_value_set_string (&item, g_ptr_array_index (all_drm_formats, i));
+          gst_value_list_append_value (&drm_formats, &item);
+          g_value_unset (&item);
+        }
+      }
+      g_ptr_array_unref (all_drm_formats);
+
+      structure = gst_structure_copy (structure);
+      gst_structure_set (structure, "format", G_TYPE_STRING, "DMA_DRM", NULL);
+      gst_structure_take_value (structure, "drm-format", &drm_formats);
+      g_value_unset (&drm_formats);
+
+      gst_caps_append_structure_full (out_caps, structure,
+          gst_caps_features_copy (features));
+    }
+  } else {
+    GstCaps *static_caps;
+    GstCaps *tmp;
+    guint n;
+
+    static_caps = gst_static_caps_get (&_udmabuf_upload_src_caps);
+    intersected_caps = gst_caps_intersect_full (caps, static_caps,
+        GST_CAPS_INTERSECT_FIRST);
+    gst_caps_unref (static_caps);
+
+    if (gst_caps_is_empty (intersected_caps)) {
+      goto out;
+    }
+
+    tmp =
+        _set_caps_features_with_passthrough (intersected_caps,
+        GST_CAPS_FEATURE_MEMORY_SYSTEM_MEMORY, passthrough);
+    gst_caps_unref (intersected_caps);
+    intersected_caps = tmp;
+
+    out_caps = gst_caps_new_empty ();
+    n = gst_caps_get_size (intersected_caps);
+    for (guint i = 0; i < n; i++) {
+      GstCapsFeatures *features;
+      GstStructure *structure;
+      const GValue *val;
+      GArray *all_gst_formats = NULL;
+      GValue gst_formats = G_VALUE_INIT;
+
+      structure = gst_caps_get_structure (intersected_caps, i);
+      features = gst_caps_get_features (intersected_caps, i);
+
+      if (!(val = gst_structure_get_value (structure, "drm-format"))) {
+        structure = gst_structure_copy (structure);
+
+        gst_caps_append_structure_full (out_caps, structure,
+            gst_caps_features_copy (features));
+      }
+
+      all_gst_formats = g_array_new (FALSE, FALSE, sizeof (GstVideoFormat));
+
+      if (G_VALUE_HOLDS_STRING (val)) {
+        GstVideoFormat gst_format;
+        guint32 fourcc;
+        guint64 modifier;
+
+        fourcc =
+            gst_video_dma_drm_fourcc_from_string (g_value_get_string (val),
+            &modifier);
+        gst_format = gst_video_dma_drm_format_to_gst_format (fourcc, modifier);
+        if (gst_format != GST_VIDEO_FORMAT_UNKNOWN
+            && modifier == DRM_FORMAT_MOD_LINEAR)
+          g_array_append_val (all_gst_formats, gst_format);
+      } else if (GST_VALUE_HOLDS_LIST (val)) {
+        guint m = gst_value_list_get_size (val);
+        for (guint j = 0; j < m; j++) {
+          const GValue *fmt_val = gst_value_list_get_value (val, j);
+          GstVideoFormat gst_format;
+          guint32 fourcc;
+          guint64 modifier;
+
+          fourcc =
+              gst_video_dma_drm_fourcc_from_string (g_value_get_string
+              (fmt_val), &modifier);
+          gst_format =
+              gst_video_dma_drm_format_to_gst_format (fourcc, modifier);
+          if (gst_format != GST_VIDEO_FORMAT_UNKNOWN
+              && modifier == DRM_FORMAT_MOD_LINEAR)
+            g_array_append_val (all_gst_formats, gst_format);
+        }
+      }
+
+      if (all_gst_formats->len == 0) {
+        g_array_unref (all_gst_formats);
+        continue;
+      }
+
+      if (all_gst_formats->len == 1) {
+        GstVideoFormat gst_format;
+
+        g_value_init (&gst_formats, G_TYPE_STRING);
+        gst_format = g_array_index (all_gst_formats, GstVideoFormat, 0);
+        g_value_set_string (&gst_formats,
+            gst_video_format_to_string (gst_format));
+      } else {
+        gst_value_list_init (&gst_formats, all_gst_formats->len);
+
+        for (gint j = 0; j < all_gst_formats->len; j++) {
+          GValue item = G_VALUE_INIT;
+          GstVideoFormat gst_format;
+
+          g_value_init (&item, G_TYPE_STRING);
+          gst_format = g_array_index (all_gst_formats, GstVideoFormat, j);
+          g_value_set_string (&item, gst_video_format_to_string (gst_format));
+          gst_value_list_append_value (&gst_formats, &item);
+          g_value_unset (&item);
+        }
+      }
+      g_array_unref (all_gst_formats);
+
+      structure = gst_structure_copy (structure);
+      gst_structure_take_value (structure, "format", &gst_formats);
+      g_value_unset (&gst_formats);
+      gst_structure_remove_field (structure, "drm-format");
+
+      gst_caps_append_structure_full (out_caps, structure,
+          gst_caps_features_copy (features));
+    }
+  }
+
+out:
+  gst_clear_caps (&intersected_caps);
+  gst_caps_features_free (passthrough);
+
+  GST_DEBUG_OBJECT (upload->upload, "direction %s, transformed\n%"
+      GST_PTR_FORMAT "\ninto\n%" GST_PTR_FORMAT,
+      direction == GST_PAD_SRC ? "src" : "sink", caps, out_caps);
+
+  return out_caps;
+}
+
+static gboolean
+_udmabuf_upload_accept (gpointer impl, GstBuffer * buffer,
+    GstCaps * in_caps, GstCaps * out_caps)
+{
+  struct UdmabufUpload *upload = impl;
+  GstCaps *static_sink_caps;
+  GstCaps *static_src_caps;
+  guint n_mem;
+  gboolean all_mem_udmabuf = TRUE;
+
+  if (upload->disabled)
+    return FALSE;
+
+  n_mem = gst_buffer_n_memory (buffer);
+  for (guint i = 0; i < n_mem; i++) {
+    GstMemory *mem = gst_buffer_peek_memory (buffer, i);
+
+    if (!GST_IS_UDMABUF_ALLOCATOR (mem->allocator)) {
+      all_mem_udmabuf = FALSE;
+      break;
+    }
+  }
+
+  if (n_mem == 0 || !all_mem_udmabuf) {
+    GstCapsFeatures *features;
+
+    features = gst_caps_get_features (out_caps, 0);
+    if (!gst_caps_features_contains (features, GST_CAPS_FEATURE_MEMORY_DMABUF))
+      return FALSE;
+
+    GST_DEBUG_OBJECT (upload->upload,
+        "Buffer not using udmabuf allocator but negotiated DMA_DRM caps. "
+        "Disable uploader and force renegotiation.");
+    upload->disabled = TRUE;
+    /* Renegotiation can only be triggered in upload_perform() */
+    return TRUE;
+  }
+
+  if (upload->in_caps && upload->out_caps &&
+      gst_caps_is_equal (upload->in_caps, in_caps) &&
+      gst_caps_is_equal (upload->out_caps, out_caps))
+    return TRUE;
+
+  gst_clear_caps (&upload->in_caps);
+  gst_clear_caps (&upload->out_caps);
+
+  static_sink_caps = gst_static_caps_get (&_udmabuf_upload_sink_caps);
+  if (!gst_caps_can_intersect (in_caps, static_sink_caps)) {
+    GST_DEBUG_OBJECT (upload->upload, "No common caps with upstream");
+    return FALSE;
+  }
+
+  static_src_caps = gst_static_caps_get (&_udmabuf_upload_src_caps);
+  if (!gst_caps_can_intersect (out_caps, static_src_caps)) {
+    GST_DEBUG_OBJECT (upload->upload, "No common caps with downstream");
+    return FALSE;
+  }
+
+  GST_DEBUG_OBJECT (upload->upload,
+      "New caps\nin: %" GST_PTR_FORMAT "\nout: %" GST_PTR_FORMAT, in_caps,
+      out_caps);
+
+  upload->in_caps = gst_caps_ref (in_caps);
+  upload->out_caps = gst_caps_ref (out_caps);
+
+  return TRUE;
+}
+
+static void
+_udmabuf_upload_propose_allocation (gpointer impl, GstQuery * decide_query,
+    GstQuery * query)
+{
+  struct UdmabufUpload *upload = impl;
+  GstAllocator *allocator = NULL;
+  GstBufferPool *pool = NULL;
+  GstCapsFeatures *features;
+  GstCaps *query_caps;
+  GstVideoInfo vinfo;
+  gboolean need_pool;
+
+  allocator = gst_udmabuf_allocator_get ();
+  if (!allocator) {
+    GST_DEBUG_OBJECT (upload->upload, "No udmabuf support");
+    return;
+  }
+
+  gst_query_parse_allocation (query, &query_caps, &need_pool);
+  if (!query_caps) {
+    GST_WARNING_OBJECT (upload->upload, "Query contained invalid caps");
+    goto done;
+  }
+
+  if (!need_pool)
+    goto done;
+
+  features = gst_caps_get_features (query_caps, 0);
+  if (!gst_caps_features_contains (features,
+          GST_CAPS_FEATURE_MEMORY_SYSTEM_MEMORY)) {
+    GST_DEBUG_OBJECT (upload->upload, "No sysmem caps, skipping");
+    goto done;
+  }
+
+  /* the pool requires supported caps to allocate */
+  if (!gst_video_info_from_caps (&vinfo, query_caps))
+    goto done;
+
+  /* The raw method always adds the GST_VIDEO_META_API_TYPE */
+  pool = gst_video_dmabuf_pool_new ();
+  gst_query_add_allocation_pool (query, pool, vinfo.size, 1, 0);
+  gst_object_unref (pool);
+
+  GST_DEBUG_OBJECT (upload->upload,
+      "Proposed udmabuf pool for caps:\n%" GST_PTR_FORMAT, query_caps);
+
+done:
+  gst_object_unref (allocator);
+}
+
+static GstGLUploadReturn
+_udmabuf_upload_perform (gpointer impl, GstBuffer * buffer, GstBuffer ** outbuf)
+{
+  struct UdmabufUpload *upload = impl;
+
+  if (upload->disabled) {
+    GST_DEBUG_OBJECT (upload->upload, "Force renegotiation");
+    return GST_GL_UPLOAD_RECONFIGURE;
+  }
+
+  *outbuf = gst_buffer_ref (buffer);
+  GST_DEBUG_OBJECT (upload->upload, "Pass through udmabuf pool buffer %p",
+      buffer);
+  return GST_GL_UPLOAD_DONE;
+}
+
+static void
+_udmabuf_upload_free (gpointer impl)
+{
+  struct UdmabufUpload *upload = impl;
+
+  g_clear_pointer (&upload->in_caps, gst_caps_unref);
+  g_clear_pointer (&upload->out_caps, gst_caps_unref);
+  g_free (upload);
+}
+
+static const UploadMethod _udmabuf_upload = {
+  "Udmabuf uploader",
+  0,
+  &_udmabuf_upload_sink_caps,
+  &_udmabuf_upload_new,
+  &_udmabuf_upload_transform_caps,
+  &_udmabuf_upload_accept,
+  &_udmabuf_upload_propose_allocation,
+  &_udmabuf_upload_perform,
+  &_udmabuf_upload_free
+};
+
+#endif /* GST_GL_HAVE_DMABUF */
 
 struct GLMemoryUpload
 {
@@ -838,6 +1288,10 @@ _dma_buf_filter_egl_supported_formats (GstGLContext * context,
   GstVideoFormat gst_format;
   guint32 fourcc;
 
+  /* Until we have a context, simply assume all formats are supported */
+  if (!context)
+    return TRUE;
+
   all_formats = gst_structure_get_value (structure, "format");
   if (!all_formats)
     return FALSE;
@@ -852,8 +1306,7 @@ _dma_buf_filter_egl_supported_formats (GstGLContext * context,
     if (fourcc == DRM_FORMAT_INVALID)
       return FALSE;
 
-    if (context &&
-        !gst_gl_context_egl_format_supports_modifier (context, fourcc,
+    if (!gst_gl_context_egl_format_supports_modifier (context, fourcc,
             DRM_FORMAT_MOD_LINEAR, include_external))
       return FALSE;
 
@@ -875,8 +1328,7 @@ _dma_buf_filter_egl_supported_formats (GstGLContext * context,
       if (fourcc == DRM_FORMAT_INVALID)
         continue;
 
-      if (context &&
-          !gst_gl_context_egl_format_supports_modifier (context, fourcc,
+      if (!gst_gl_context_egl_format_supports_modifier (context, fourcc,
               DRM_FORMAT_MOD_LINEAR, include_external))
         continue;
 
@@ -1058,6 +1510,19 @@ _dma_buf_upload_transform_caps (gpointer impl, GstGLContext * context,
     if (tmp)
       ret = gst_caps_merge (ret, tmp);
 
+    /* In case we don't have a context yet, we may endup linking gainst a narrow
+     * caps filter with dmabuf feature, make sure we allow linking, as this
+     * format may be supported as GLMemory with RGBA format (direct dmabuf
+     * uploads).
+     */
+    if (!ret && !context) {
+      ret = gst_caps_new_static_str_simple ("video/x-raw",
+          "format", G_TYPE_STRING, "RGBA", NULL);
+      gst_caps_set_features_simple (ret,
+          gst_caps_features_new_single_static_str
+          (GST_CAPS_FEATURE_MEMORY_GL_MEMORY));
+    }
+
     if (!ret) {
       GST_DEBUG_OBJECT (dmabuf->upload,
           "direction %s, fails to transformed DMA caps %" GST_PTR_FORMAT,
@@ -1143,6 +1608,14 @@ _dma_buf_upload_accept (gpointer impl, GstBuffer * buffer, GstCaps * in_caps,
     return FALSE;
   }
 
+  GstStructure *s = gst_caps_get_structure (out_caps, 0);
+  const gchar *target_str = gst_structure_get_string (s, "texture-target");
+  if (dmabuf->target != gst_gl_texture_target_from_string (target_str)) {
+    GST_DEBUG_OBJECT (dmabuf->upload, "cannot produce texture-target %s",
+        target_str);
+    return FALSE;
+  }
+
   if (!gst_gl_context_egl_supports_modifier (dmabuf->upload->context)) {
     GST_DEBUG_OBJECT (dmabuf->upload, "no modifier support");
     return FALSE;
@@ -1213,19 +1686,27 @@ _dma_buf_upload_accept (gpointer impl, GstBuffer * buffer, GstCaps * in_caps,
     if (!gst_video_info_from_caps (out_info, out_caps))
       return FALSE;
 
-    /*
-     * When we zero-copy tiles, we need to propagate the strides, which contains
-     * the tile dimension. This is because the shader needs to know the padded
-     * size in order to correctly sample into these special buffer.
-     */
-    if (!dmabuf->direct && meta &&
-        GST_VIDEO_FORMAT_INFO_IS_TILED (out_info->finfo)) {
+    if (meta) {
+      /*
+       * The display path needs to know the size of the texture to clip it, so we
+       * don't display padding data often seen at the bottom of videos. This size
+       * matches the size we use to import the dmabuf. @outcaps will remains
+       * display resolution as expected.
+       */
       out_info->width = meta->width;
       out_info->height = meta->height;
 
-      for (i = 0; i < meta->n_planes; i++) {
-        out_info->offset[i] = meta->offset[i];
-        out_info->stride[i] = meta->stride[i];
+      /*
+       * When we zero-copy tiles, we need to propagate the strides, which contains
+       * the tile dimension. This is because the shader needs to know the padded
+       * size in order to correctly sample into these special buffer.
+       */
+      if (!dmabuf->direct && GST_VIDEO_FORMAT_INFO_IS_TILED (out_info->finfo)) {
+
+        for (i = 0; i < meta->n_planes; i++) {
+          out_info->offset[i] = meta->offset[i];
+          out_info->stride[i] = meta->stride[i];
+        }
       }
     }
   }
@@ -1255,7 +1736,7 @@ _dma_buf_upload_accept (gpointer impl, GstBuffer * buffer, GstCaps * in_caps,
       return FALSE;
     }
 
-    /* We can't have more then one dmabuf per plane */
+    /* We can't have more than one dmabuf per plane */
     if (length != 1) {
       GST_DEBUG_OBJECT (dmabuf->upload, "data for plane %u spans %u memories",
           i, length);
@@ -2952,8 +3433,334 @@ static const UploadMethod _nvmm_upload = {
 
 #endif /* HAVE_NVMM */
 
+#if defined(__ANDROID__) && defined(EGL_ANDROID_get_native_client_buffer)
+struct AHardwareBufferUpload
+{
+  GstGLUpload *upload;
+
+  GstGLVideoAllocationParams *params;
+  guint n_mem;
+
+  GstVideoInfo out_info;
+  /* only used for pointer comparison */
+  gpointer out_caps;
+};
+
+#define GST_CAPS_FEATURE_MEMORY_AHARDWAREBUFFER "memory:AHardwareBuffer"
+
+/* FIXME: other formats? */
+static GstStaticCaps _ahardwarebuffer_upload_caps =
+GST_STATIC_CAPS (GST_VIDEO_CAPS_MAKE_WITH_FEATURES
+    (GST_CAPS_FEATURE_MEMORY_AHARDWAREBUFFER,
+        "AHARDWARE_BUFFER"));
+
+static gpointer
+_ahardwarebuffer_upload_new (GstGLUpload * upload)
+{
+  struct AHardwareBufferUpload *ahardwarebuffer =
+      g_new0 (struct AHardwareBufferUpload, 1);
+  ahardwarebuffer->upload = upload;
+  return ahardwarebuffer;
+}
+
+static GstCaps *
+_ahardwarebuffer_upload_transform_caps (gpointer impl, GstGLContext * context,
+    GstPadDirection direction, GstCaps * caps)
+{
+  struct AHardwareBufferUpload *ahardwarebuffer = impl;
+  GstCapsFeatures *passthrough;
+  GstCaps *ret;
+  guint i, n;
+
+  if (context) {
+    const GstGLFuncs *gl = context->gl_vtable;
+
+    if (!gl->EGLImageTargetTexture2D)
+      return NULL;
+
+    /* Don't propose AHardwareBuffer caps feature unless it can be supported */
+    if (gst_gl_context_get_gl_platform (context) != GST_GL_PLATFORM_EGL)
+      return NULL;
+
+    if (!gst_gl_context_check_feature (context, "EGL_KHR_image_base") ||
+        !gst_gl_context_check_feature (context,
+            "EGL_ANDROID_get_native_client_buffer"))
+      return NULL;
+  }
+
+  passthrough = gst_caps_features_from_string
+      (GST_CAPS_FEATURE_META_GST_VIDEO_OVERLAY_COMPOSITION);
+
+  if (direction == GST_PAD_SINK) {
+    GstCaps *tmp;
+    GstCapsFeatures *filter_features;
+
+    filter_features =
+        gst_caps_features_new_single_static_str
+        (GST_CAPS_FEATURE_MEMORY_AHARDWAREBUFFER);
+    if (!_filter_caps_with_features (caps, filter_features, &tmp)) {
+      gst_caps_features_free (filter_features);
+      gst_caps_features_free (passthrough);
+      return NULL;
+    }
+    gst_caps_features_free (filter_features);
+
+    ret = _set_caps_features_with_passthrough (tmp,
+        GST_CAPS_FEATURE_MEMORY_GL_MEMORY, passthrough);
+    gst_caps_unref (tmp);
+
+    tmp = _caps_intersect_texture_target (ret,
+        1 << GST_GL_TEXTURE_TARGET_EXTERNAL_OES);
+    gst_caps_unref (ret);
+    ret = tmp;
+
+    n = gst_caps_get_size (ret);
+    for (i = 0; i < n; i++) {
+      GstStructure *s = gst_caps_get_structure (ret, i);
+
+      gst_structure_remove_fields (s, "ahb-format", NULL);
+    }
+    gst_caps_set_simple (ret, "format", G_TYPE_STRING, "RGBA", NULL);
+  } else {
+    gint i, n;
+
+    ret =
+        _set_caps_features_with_passthrough (caps,
+        GST_CAPS_FEATURE_MEMORY_AHARDWAREBUFFER, passthrough);
+
+    n = gst_caps_get_size (ret);
+    for (i = 0; i < n; i++) {
+      GstStructure *s = gst_caps_get_structure (ret, i);
+
+      gst_structure_remove_fields (s, "texture-target", NULL);
+    }
+    gst_caps_set_simple (ret, "format", G_TYPE_STRING, "AHARDWARE_BUFFER",
+        NULL);
+  }
+
+  gst_caps_features_free (passthrough);
+
+  GST_DEBUG_OBJECT (ahardwarebuffer->upload,
+      "transformed %" GST_PTR_FORMAT " into %" GST_PTR_FORMAT, caps, ret);
+
+  return ret;
+}
+
+static gboolean
+_ahardwarebuffer_upload_accept (gpointer impl, GstBuffer * buffer,
+    GstCaps * in_caps, GstCaps * out_caps)
+{
+  struct AHardwareBufferUpload *ahardwarebuffer = impl;
+  GstVideoInfo *in_info = &ahardwarebuffer->upload->priv->in_info;
+  GstVideoInfo *out_info = &ahardwarebuffer->out_info;
+  GstVideoMeta *meta;
+  GstCapsFeatures *features;
+  guint n_mem;
+  guint i;
+
+  n_mem = gst_buffer_n_memory (buffer);
+  if (n_mem != 1) {
+    GST_DEBUG_OBJECT (ahardwarebuffer->upload,
+        "AHardwareBuffer uploader only supports 1 memory, not %u", n_mem);
+    return FALSE;
+  }
+
+  if (!gst_is_ahardware_buffer_buffer (buffer)) {
+    GST_DEBUG_OBJECT (ahardwarebuffer->upload, "Not an AHardwareBuffer");
+    return FALSE;
+  }
+
+  meta = gst_buffer_get_video_meta (buffer);
+
+  if (!ahardwarebuffer->upload->context->gl_vtable->EGLImageTargetTexture2D)
+    return FALSE;
+
+  /* AHardwareBuffer upload is only supported with EGL contexts. */
+  if (gst_gl_context_get_gl_platform (ahardwarebuffer->upload->context) !=
+      GST_GL_PLATFORM_EGL)
+    return FALSE;
+
+  if (!gst_gl_context_check_feature (ahardwarebuffer->upload->context,
+          "EGL_KHR_image_base")
+      || !gst_gl_context_check_feature (ahardwarebuffer->upload->context,
+          "EGL_ANDROID_get_native_client_buffer"))
+    return FALSE;
+
+  features = gst_caps_get_features (in_caps, 0);
+  if (!gst_caps_features_contains (features,
+          GST_CAPS_FEATURE_MEMORY_AHARDWAREBUFFER))
+    return FALSE;
+
+  /* Update video info based on video meta */
+  if (meta) {
+    in_info->width = meta->width;
+    in_info->height = meta->height;
+
+    for (i = 0; i < meta->n_planes; i++) {
+      in_info->offset[i] = meta->offset[i];
+      in_info->stride[i] = meta->stride[i];
+    }
+  }
+
+  if (out_caps != ahardwarebuffer->out_caps) {
+    ahardwarebuffer->out_caps = out_caps;
+    if (!gst_video_info_from_caps (out_info, out_caps))
+      return FALSE;
+  }
+
+  if (ahardwarebuffer->params)
+    gst_gl_allocation_params_free ((GstGLAllocationParams *)
+        ahardwarebuffer->params);
+  if (!(ahardwarebuffer->params =
+          gst_gl_video_allocation_params_new_wrapped_gl_handle
+          (ahardwarebuffer->upload->context, NULL, out_info, -1, NULL,
+              GST_GL_TEXTURE_TARGET_EXTERNAL_OES, 0, NULL, NULL, NULL))) {
+    return FALSE;
+  }
+
+  return TRUE;
+}
+
+static void
+_ahardwarebuffer_upload_propose_allocation (gpointer impl,
+    GstQuery * decide_query, GstQuery * query)
+{
+  /* nothing to do for now. */
+}
+
+static GstGLUploadReturn
+_ahardwarebuffer_upload_perform (gpointer impl, GstBuffer * buffer,
+    GstBuffer ** outbuf)
+{
+  EGLClientBuffer (*gst_eglGetNativeClientBufferANDROID) (AHardwareBuffer *
+      ahb);
+  struct AHardwareBufferUpload *ahardwarebuffer = impl;
+  GstGLMemoryAllocator *allocator = NULL;
+  GstEGLImage *eglimage = NULL;
+  GstMemory *mem;
+  AHardwareBuffer *ahb;
+  AHardwareBuffer_Desc desc;
+  GstGLUploadReturn ret = GST_GL_UPLOAD_ERROR;
+
+  if (gst_buffer_n_memory (buffer) != 1)
+    goto done;
+
+  mem = gst_buffer_peek_memory (buffer, 0);
+  if (!gst_ahardware_buffer_memory_peek_buffer (mem, &ahb) || !ahb)
+    goto done;
+
+  AHardwareBuffer_describe (ahb, &desc);
+
+  GST_TRACE_OBJECT (ahardwarebuffer->upload,
+      "Trying to upload AHardwareBuffer with "
+      "format %08x, width %u, height %u, layers %u, stride %u, usage %016"
+      G_GUINT64_FORMAT "x", desc.format, desc.width, desc.height, desc.layers,
+      desc.stride, desc.usage);
+
+  if (desc.width == 0 || desc.height == 0 || desc.layers == 0) {
+    GST_WARNING_OBJECT (ahardwarebuffer->upload,
+        "Invalid AHardwareBuffer dimensions");
+    goto done;
+  }
+
+  if ((desc.usage & AHARDWAREBUFFER_USAGE_GPU_SAMPLED_IMAGE) == 0) {
+    GST_WARNING_OBJECT (ahardwarebuffer->upload,
+        "AHardwareBuffer usage %016" G_GUINT64_FORMAT
+        "x does not include GPU sampled-image usage", desc.usage);
+    goto done;
+  }
+
+  gst_eglGetNativeClientBufferANDROID =
+      gst_gl_context_get_proc_address (ahardwarebuffer->upload->context,
+      "eglGetNativeClientBufferANDROID");
+  if (!gst_eglGetNativeClientBufferANDROID) {
+    GST_WARNING_OBJECT (ahardwarebuffer->upload,
+        "\"eglGetNativeClientBufferANDROID\" not exposed by the implementation");
+    goto done;
+  }
+
+  EGLClientBuffer client_buffer = gst_eglGetNativeClientBufferANDROID (ahb);
+  if (!client_buffer) {
+    GST_WARNING_OBJECT (ahardwarebuffer->upload,
+        "Failed to retrieve EGLClientBuffer from AHardwareBuffer");
+    goto done;
+  }
+
+  guintptr attribs[] = { EGL_IMAGE_PRESERVED_KHR, EGL_TRUE, EGL_NONE };
+  eglimage = gst_egl_image_create (ahardwarebuffer->upload->context,
+      EGL_NATIVE_BUFFER_ANDROID, GST_GL_RGBA, client_buffer, attribs,
+      gst_memory_ref (mem), (GDestroyNotify) gst_memory_unref);
+  if (!eglimage) {
+    GST_WARNING_OBJECT (ahardwarebuffer->upload, "Failed to wrap constructed "
+        "EGLImage from AHardwareBuffer");
+    goto done;
+  }
+
+  allocator =
+      GST_GL_MEMORY_ALLOCATOR (gst_allocator_find
+      (GST_GL_MEMORY_EGL_ALLOCATOR_NAME));
+
+  /* TODO: buffer pool */
+  *outbuf = gst_buffer_new ();
+  if (!gst_gl_memory_setup_buffer (allocator, *outbuf, ahardwarebuffer->params,
+          NULL, (gpointer *) & eglimage, 1)) {
+    GST_WARNING_OBJECT (ahardwarebuffer->upload, "Failed to setup "
+        "AHardwareBuffer -> EGLImage buffer");
+    goto done;
+  }
+  gst_egl_image_unref (eglimage);
+
+  gst_buffer_add_parent_buffer_meta (*outbuf, buffer);
+
+  {
+    GstGLSyncMeta *sync_meta;
+
+    sync_meta =
+        gst_buffer_add_gl_sync_meta (ahardwarebuffer->upload->context, *outbuf);
+    if (sync_meta) {
+      gst_gl_sync_meta_set_sync_point (sync_meta,
+          ahardwarebuffer->upload->context);
+    }
+  }
+
+  ret = GST_GL_UPLOAD_DONE;
+
+done:
+  gst_clear_object (&allocator);
+
+  return ret;
+}
+
+static void
+_ahardwarebuffer_upload_free (gpointer impl)
+{
+  struct AHardwareBufferUpload *ahardwarebuffer = impl;
+
+  if (ahardwarebuffer->params)
+    gst_gl_allocation_params_free ((GstGLAllocationParams *)
+        ahardwarebuffer->params);
+
+  g_free (impl);
+}
+
+static const UploadMethod _ahardwarebuffer_upload = {
+  "AHardwareBuffer",
+  0,
+  &_ahardwarebuffer_upload_caps,
+  &_ahardwarebuffer_upload_new,
+  &_ahardwarebuffer_upload_transform_caps,
+  &_ahardwarebuffer_upload_accept,
+  &_ahardwarebuffer_upload_propose_allocation,
+  &_ahardwarebuffer_upload_perform,
+  &_ahardwarebuffer_upload_free
+};
+#endif /* defined(__ANDROID__) && defined(EGL_ANDROID_get_native_client_buffer) */
+
 static const UploadMethod *upload_methods[] = {
   &_passthrough_upload,
+#if GST_GL_HAVE_DMABUF
+  &_udmabuf_upload,
+#endif /* GST_GL_HAVE_DMABUF */
   &_gl_memory_upload,
 #if GST_GL_HAVE_DMABUF
   &_direct_dma_buf_upload,
@@ -2966,6 +3773,9 @@ static const UploadMethod *upload_methods[] = {
 #if defined(HAVE_NVMM)
   &_nvmm_upload,
 #endif /* HAVE_NVMM */
+#if defined(__ANDROID__) && defined(EGL_ANDROID_get_native_client_buffer)
+  &_ahardwarebuffer_upload,
+#endif
   &_upload_meta_upload,
   /* Raw data must always be last / least preferred */
   &_raw_data_upload,

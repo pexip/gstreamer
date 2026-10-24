@@ -56,6 +56,7 @@
 #include <gst/base/gsttypefindhelper.h>
 #include <gst/pbutils/descriptions.h>
 #include <glib/gi18n-lib.h>
+#include <gst/tag/tag.h>
 
 GST_DEBUG_CATEGORY_STATIC (wavparse_debug);
 #define GST_CAT_DEFAULT (wavparse_debug)
@@ -63,6 +64,9 @@ GST_DEBUG_CATEGORY_STATIC (wavparse_debug);
 /* Data size chunk of RF64,
  * see http://tech.ebu.ch/docs/tech/tech3306-2009.pdf */
 #define GST_RS64_TAG_DS64 GST_MAKE_FOURCC ('d','s','6','4')
+
+/* Maximum valid size is INT32_MAX */
+#define MAX_CHUNK_SIZE ((guint32) G_MAXINT32)
 
 static void gst_wavparse_dispose (GObject * object);
 
@@ -84,7 +88,7 @@ static GstFlowReturn gst_wavparse_chain (GstPad * pad, GstObject * parent,
     GstBuffer * buf);
 static gboolean gst_wavparse_sink_event (GstPad * pad, GstObject * parent,
     GstEvent * event);
-static void gst_wavparse_loop (GstPad * pad);
+static void gst_wavparse_loop (GstWavParse * wav);
 static gboolean gst_wavparse_srcpad_event (GstPad * pad, GstObject * parent,
     GstEvent * event);
 
@@ -545,10 +549,12 @@ gst_wavparse_perform_seek (GstWavParse * wav, GstEvent * event)
     if (!gst_wavparse_time_to_bytepos (wav, stop, (gint64 *) & wav->end_offset))
       wav->end_offset = stop;
     GST_LOG_OBJECT (wav, "end_offset=%" G_GUINT64_FORMAT, wav->end_offset);
-    wav->end_offset -= (wav->end_offset % wav->bytes_per_sample);
-    GST_LOG_OBJECT (wav, "end_offset=%" G_GUINT64_FORMAT, wav->end_offset);
-    wav->end_offset += wav->datastart;
-    GST_LOG_OBJECT (wav, "end_offset=%" G_GUINT64_FORMAT, wav->end_offset);
+    if (wav->end_offset != -1) {
+      wav->end_offset -= (wav->end_offset % wav->bytes_per_sample);
+      GST_LOG_OBJECT (wav, "end_offset=%" G_GUINT64_FORMAT, wav->end_offset);
+      wav->end_offset += wav->datastart;
+      GST_LOG_OBJECT (wav, "end_offset=%" G_GUINT64_FORMAT, wav->end_offset);
+    }
   } else {
     GST_LOG_OBJECT (wav, "continue to end_offset=%" G_GUINT64_FORMAT,
         wav->end_offset);
@@ -560,12 +566,16 @@ gst_wavparse_perform_seek (GstWavParse * wav, GstEvent * event)
   if (gst_pad_peer_query_duration (wav->sinkpad, bformat, &upstream_size))
     wav->end_offset = MIN (wav->end_offset, upstream_size);
 
-  if (wav->datasize > 0 && wav->end_offset > wav->datastart + wav->datasize)
+  if (wav->datasize > 0 && (wav->end_offset != -1
+          || wav->end_offset > wav->datastart + wav->datasize))
     wav->end_offset = wav->datastart + wav->datasize;
 
   /* this is the range of bytes we will use for playback */
   wav->offset = MIN (wav->offset, wav->end_offset);
-  wav->dataleft = wav->end_offset - wav->offset;
+  if (wav->end_offset == -1)
+    wav->dataleft = 0;
+  else
+    wav->dataleft = wav->end_offset - wav->offset;
 
   GST_DEBUG_OBJECT (wav,
       "seek: rate %lf, offset %" G_GUINT64_FORMAT ", end %" G_GUINT64_FORMAT
@@ -616,7 +626,7 @@ gst_wavparse_perform_seek (GstWavParse * wav, GstEvent * event)
   /* and start the streaming task again */
   if (!wav->streaming) {
     gst_pad_start_task (wav->sinkpad, (GstTaskFunction) gst_wavparse_loop,
-        wav->sinkpad, NULL);
+        gst_object_ref (wav), gst_object_unref);
   }
 
   GST_PAD_STREAM_UNLOCK (wav->sinkpad);
@@ -694,14 +704,14 @@ gst_wavparse_peek_chunk (GstWavParse * wav, guint32 * tag, guint32 * size)
    * large size -> do not bother trying to squeeze that into adapter,
    * so we throw poor man's exception, which can be caught if caller really
    * wants to handle 0 size chunk */
-  if (!(*size) || (*size) >= (1 << 30)) {
+  if (!(*size) || (*size) > MAX_CHUNK_SIZE) {
     GST_INFO ("Invalid/unexpected chunk size %u for tag %" GST_FOURCC_FORMAT,
         *size, GST_FOURCC_ARGS (*tag));
     /* chain should give up */
     wav->abort_buffering = TRUE;
     return FALSE;
   }
-  peek_size = (*size + 1) & ~1;
+  peek_size = GST_ROUND_UP_2 (*size);
   available = gst_adapter_available (wav->adapter);
 
   if (available >= (8 + peek_size)) {
@@ -757,7 +767,9 @@ gst_waveparse_ignore_chunk (GstWavParse * wav, GstBuffer * buf, guint32 tag,
   }
   GST_DEBUG_OBJECT (wav, "Ignoring tag %" GST_FOURCC_FORMAT,
       GST_FOURCC_ARGS (tag));
-  flush = 8 + ((size + 1) & ~1);
+  /* Checked in all callers */
+  g_assert (size < MAX_CHUNK_SIZE);
+  flush = 8 + GST_ROUND_UP_2 (size);
   wav->offset += flush;
   if (wav->streaming) {
     gst_adapter_flush (wav->adapter, flush);
@@ -784,6 +796,7 @@ gst_wavparse_cue_chunk (GstWavParse * wav, const guint8 * data, guint32 size)
   guint32 i, ncues;
   GList *cues = NULL;
   GstWavParseCue *cue;
+  guint32 expected_size;
 
   if (wav->cues) {
     GST_WARNING_OBJECT (wav, "found another cue's");
@@ -796,14 +809,15 @@ gst_wavparse_cue_chunk (GstWavParse * wav, const guint8 * data, guint32 size)
   }
 
   ncues = GST_READ_UINT32_LE (data);
+  size -= 4;
+  data += 4;
 
-  if (size < 4 + ncues * 24) {
+  if (!g_uint_checked_mul (&expected_size, ncues, 24) || size < expected_size) {
     GST_WARNING_OBJECT (wav, "broken file %d %d", size, ncues);
     return FALSE;
   }
 
   /* parse data */
-  data += 4;
   for (i = 0; i < ncues; i++) {
     cue = g_new0 (GstWavParseCue, 1);
     cue->id = GST_READ_UINT32_LE (data);
@@ -812,11 +826,11 @@ gst_wavparse_cue_chunk (GstWavParse * wav, const guint8 * data, guint32 size)
     cue->chunk_start = GST_READ_UINT32_LE (data + 12);
     cue->block_start = GST_READ_UINT32_LE (data + 16);
     cue->sample_offset = GST_READ_UINT32_LE (data + 20);
-    cues = g_list_append (cues, cue);
+    cues = g_list_prepend (cues, cue);
     data += 24;
   }
 
-  wav->cues = cues;
+  wav->cues = g_list_reverse (cues);
 
   return TRUE;
 }
@@ -937,7 +951,7 @@ gst_wavparse_adtl_chunk (GstWavParse * wav, const guint8 * data, guint32 size)
     ltag = GST_READ_UINT32_LE (data + offset);
     lsize = GST_READ_UINT32_LE (data + offset + 4);
 
-    if (lsize > (G_MAXUINT - 8) || lsize + 8 > size) {
+    if (lsize > MAX_CHUNK_SIZE || GST_ROUND_UP_2 (lsize) + 8 > size) {
       GST_WARNING_OBJECT (wav, "Invalid adtl size: %u + 8 > %u", lsize, size);
       return FALSE;
     }
@@ -955,8 +969,9 @@ gst_wavparse_adtl_chunk (GstWavParse * wav, const guint8 * data, guint32 size)
         GST_MEMDUMP_OBJECT (wav, "Unknowm adtl", &data[offset], lsize);
         break;
     }
-    offset += 8 + GST_ROUND_UP_2 (lsize);
-    size -= 8 + GST_ROUND_UP_2 (lsize);
+    lsize = GST_ROUND_UP_2 (lsize);
+    offset += 8 + lsize;
+    size -= 8 + lsize;
   }
 
   return TRUE;
@@ -1047,7 +1062,7 @@ gst_wavparse_create_toc (GstWavParse * wav)
     id = g_strdup_printf ("%08x", labl->cue_point_id);
     tags = gst_wavparse_get_tags_toc_entry (toc, id);
     g_free (id);
-    if (tags != NULL) {
+    if (tags != NULL && strlen (labl->text) > 0) {
       gst_tag_list_add (tags, GST_TAG_MERGE_APPEND, GST_TAG_TITLE, labl->text,
           NULL);
     }
@@ -1059,7 +1074,7 @@ gst_wavparse_create_toc (GstWavParse * wav)
     id = g_strdup_printf ("%08x", note->cue_point_id);
     tags = gst_wavparse_get_tags_toc_entry (toc, id);
     g_free (id);
-    if (tags != NULL) {
+    if (tags != NULL && strlen (note->text) > 0) {
       gst_tag_list_add (tags, GST_TAG_MERGE_PREPEND, GST_TAG_COMMENT,
           note->text, NULL);
     }
@@ -1244,7 +1259,17 @@ gst_wavparse_stream_headers (GstWavParse * wav)
       case GST_RIFF_WAVE_FORMAT_PCM:
         if (wav->blockalign > wav->channels * ((wav->depth + 7) / 8))
           goto invalid_blockalign;
-        /* fall through */
+        /* For PCM, av_bps is fully determined by blockalign * rate. Some
+         * writers produce bogus av_bps values; recompute instead of failing
+         * so playback and seeking work correctly. */
+        if (wav->av_bps != wav->blockalign * wav->rate) {
+          GST_WARNING_OBJECT (wav,
+              "Stream claims av_bps = %u, expected %u for PCM - recomputing",
+              wav->av_bps, wav->blockalign * wav->rate);
+          wav->av_bps = wav->blockalign * wav->rate;
+        }
+        wav->bps = wav->av_bps;
+        break;
       default:
         if (wav->av_bps > wav->blockalign * wav->rate)
           goto invalid_bps;
@@ -1339,18 +1364,21 @@ gst_wavparse_stream_headers (GstWavParse * wav)
         "Got TAG: %" GST_FOURCC_FORMAT ", offset %" G_GUINT64_FORMAT ", size %"
         G_GUINT32_FORMAT, GST_FOURCC_ARGS (tag), wav->offset, size);
 
-    /* Maximum valid size is INT_MAX */
-    if (size & 0x80000000) {
-      GST_WARNING_OBJECT (wav, "Invalid size, clipping to 0x7fffffff");
-      size = 0x7fffffff;
+    /* Ignore size limit for data chunks to support RF64 and RIFF files above 2GiB */
+    if (tag != GST_RIFF_TAG_data && size > MAX_CHUNK_SIZE) {
+      GST_WARNING_OBJECT (wav, "Invalid size, clipping to %u", MAX_CHUNK_SIZE);
+      size = MAX_CHUNK_SIZE;
     }
 
     /* Clip to upstream size if known */
-    if (upstream_size > 0 && size + 8 + wav->offset > upstream_size) {
-      GST_WARNING_OBJECT (wav, "Clipping chunk size to file size");
-      g_assert (upstream_size >= wav->offset);
-      g_assert (upstream_size - wav->offset >= 8);
-      size = upstream_size - wav->offset - 8;
+    if (upstream_size > 0) {
+      if (upstream_size < wav->offset + 8) {
+        GST_WARNING_OBJECT (wav, "Bogus file size");
+        upstream_size = -1;
+      } else if (size > upstream_size - wav->offset - 8) {
+        GST_WARNING_OBJECT (wav, "Clipping chunk size to file size");
+        size = upstream_size - wav->offset - 8;
+      }
     }
 
     /* wav is a st00pid format, we don't know for sure where data starts.
@@ -1374,7 +1402,7 @@ gst_wavparse_stream_headers (GstWavParse * wav)
         wav->offset += 8;
         wav->datastart = wav->offset;
         /* use size from ds64 chunk if available */
-        if (size64 == -1 && wav->datasize > 0) {
+        if (size64 == G_MAXUINT32 && wav->datasize > 0) {
           GST_DEBUG_OBJECT (wav, "Using ds64 datasize");
           size64 = wav->datasize;
         }
@@ -1535,7 +1563,7 @@ gst_wavparse_stream_headers (GstWavParse * wav)
         }
         switch (ltag) {
           case GST_RIFF_LIST_INFO:{
-            const gint data_size = size - 4;
+            const guint data_size = size - 4;
             GstTagList *new;
 
             GST_INFO_OBJECT (wav, "Have LIST chunk INFO size %u", data_size);
@@ -1581,12 +1609,15 @@ gst_wavparse_stream_headers (GstWavParse * wav)
             break;
           }
           case GST_RIFF_LIST_adtl:{
-            const gint data_size = size - 4;
+            const guint data_size = size - 4;
 
             GST_INFO_OBJECT (wav, "Have 'adtl' LIST, size %u", data_size);
             if (wav->streaming) {
               const guint8 *data = NULL;
 
+              if (!gst_wavparse_peek_chunk (wav, &tag, &size)) {
+                goto exit;
+              }
               gst_adapter_flush (wav->adapter, 12);
               wav->offset += 12;
               data = gst_adapter_map (wav->adapter, data_size);
@@ -1666,12 +1697,11 @@ gst_wavparse_stream_headers (GstWavParse * wav)
         } else {
           gst_buffer_unref (buf);
         }
-        size = GST_ROUND_UP_2 (size);
         wav->offset += size;
         break;
       }
       case GST_RIFF_TAG_smpl:{
-        const gint data_size = size;
+        const guint data_size = size;
 
         GST_DEBUG_OBJECT (wav, "Have 'smpl' TAG, size : %u", data_size);
         if (wav->streaming) {
@@ -1712,7 +1742,48 @@ gst_wavparse_stream_headers (GstWavParse * wav)
         } else {
           gst_buffer_unref (buf);
         }
+        wav->offset += size;
+        break;
+      }
+      case GST_RIFF_TAG_ID3:
+      case GST_RIFF_TAG_id3:
+      {
+        const guint data_size = size;
+        GstTagList *new_tags;
+
+        GST_DEBUG_OBJECT (wav, "Have ID3 TAG, size: %u", data_size);
+        if (wav->streaming) {
+          if (!gst_wavparse_peek_chunk (wav, &tag, &size)) {
+            goto exit;
+          }
+          gst_adapter_flush (wav->adapter, 8);
+          wav->offset += 8;
+          buf = gst_adapter_get_buffer (wav->adapter, data_size);
+        } else {
+          wav->offset += 8;
+          gst_buffer_unref (buf);
+          buf = NULL;
+          res =
+              gst_wavparse_pull_range_exact (wav, wav->offset, data_size, &buf);
+          if (res == GST_FLOW_EOS)
+            break;
+          else if (res != GST_FLOW_OK)
+            goto header_pull_error;
+        }
+
+        if ((new_tags = gst_tag_list_from_id3v2_tag (buf))) {
+          GstTagList *old_tags = wav->tags;
+          wav->tags =
+              gst_tag_list_merge (old_tags, new_tags, GST_TAG_MERGE_REPLACE);
+          if (old_tags)
+            gst_tag_list_unref (old_tags);
+          gst_tag_list_unref (new_tags);
+        }
+
+        gst_buffer_unref (buf);
         size = GST_ROUND_UP_2 (size);
+        if (wav->streaming)
+          gst_adapter_flush (wav->adapter, size);
         wav->offset += size;
         break;
       }
@@ -2297,12 +2368,12 @@ push_error:
 }
 
 static void
-gst_wavparse_loop (GstPad * pad)
+gst_wavparse_loop (GstWavParse * wav)
 {
   GstFlowReturn ret;
-  GstWavParse *wav = GST_WAVPARSE (GST_PAD_PARENT (pad));
   GstEvent *event;
   gchar *stream_id;
+  GstPad *pad = wav->sinkpad;
 
   GST_LOG_OBJECT (wav, "process data");
 
@@ -3020,7 +3091,7 @@ gst_wavparse_sink_activate_mode (GstPad * sinkpad, GstObject * parent,
       if (active) {
         /* if we have a scheduler we can start the task */
         res = gst_pad_start_task (sinkpad, (GstTaskFunction) gst_wavparse_loop,
-            sinkpad, NULL);
+            gst_object_ref (parent), gst_object_unref);
       } else {
         res = gst_pad_stop_task (sinkpad);
       }
@@ -3105,6 +3176,8 @@ gst_wavparse_get_property (GObject * object, guint prop_id,
 static gboolean
 plugin_init (GstPlugin * plugin)
 {
+  gst_plugin_set_static_features_flag (plugin);
+
   return GST_ELEMENT_REGISTER (wavparse, plugin);
 }
 

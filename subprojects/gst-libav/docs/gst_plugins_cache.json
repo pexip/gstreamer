@@ -3258,7 +3258,7 @@
                         "presence": "always"
                     },
                     "src": {
-                        "caps": "video/x-raw:\n         format: BGR\n\nvideo/x-raw(format:Interlaced):\n         format: BGR\n interlace-mode: alternate\n",
+                        "caps": "video/x-raw:\n         format: { I420, YUY2, RGB, BGR, Y42B, Y444, YUV9, Y41B, GRAY8, RGB8P, I420, Y42B, Y444, UYVY, NV12, NV21, ARGB, RGBA, ABGR, BGRA, GRAY16_BE, GRAY16_LE, A420, RGB16, RGB15, I420_10BE, I420_10LE, I422_10BE, I422_10LE, Y444_10BE, Y444_10LE, GBR, GBR_10BE, GBR_10LE, A420_10BE, A420_10LE, A422_10BE, A422_10LE, A444_10BE, A444_10LE, GBRA, xRGB, RGBx, xBGR, BGRx, I420_12BE, I420_12LE, I422_12BE, I422_12LE, Y444_12BE, Y444_12LE, GBR_12BE, GBR_12LE, P010_10LE, GBRA_12BE, GBRA_12LE, GBRA_10BE, GBRA_10LE, GRAY10_LE16, VUYA, P012_LE, Y212_LE, Y410, Y412_LE }\n\nvideo/x-raw(format:Interlaced):\n         format: { I420, YUY2, RGB, BGR, Y42B, Y444, YUV9, Y41B, GRAY8, RGB8P, I420, Y42B, Y444, UYVY, NV12, NV21, ARGB, RGBA, ABGR, BGRA, GRAY16_BE, GRAY16_LE, A420, RGB16, RGB15, I420_10BE, I420_10LE, I422_10BE, I422_10LE, Y444_10BE, Y444_10LE, GBR, GBR_10BE, GBR_10LE, A420_10BE, A420_10LE, A422_10BE, A422_10LE, A444_10BE, A444_10LE, GBRA, xRGB, RGBx, xBGR, BGRx, I420_12BE, I420_12LE, I422_12BE, I422_12LE, Y444_12BE, Y444_12LE, GBR_12BE, GBR_12LE, P010_10LE, GBRA_12BE, GBRA_12LE, GBRA_10BE, GBRA_10LE, GRAY10_LE16, VUYA, P012_LE, Y212_LE, Y410, Y412_LE }\n interlace-mode: alternate\n",
                         "direction": "src",
                         "presence": "always"
                     }
@@ -3347,7 +3347,7 @@
                         "presence": "always"
                     },
                     "src": {
-                        "caps": "video/x-raw:\n         format: BGR\n\nvideo/x-raw(format:Interlaced):\n         format: BGR\n interlace-mode: alternate\n",
+                        "caps": "video/x-raw:\n         format: { I420, YUY2, RGB, BGR, Y42B, Y444, YUV9, Y41B, GRAY8, RGB8P, I420, Y42B, Y444, UYVY, NV12, NV21, ARGB, RGBA, ABGR, BGRA, GRAY16_BE, GRAY16_LE, A420, RGB16, RGB15, I420_10BE, I420_10LE, I422_10BE, I422_10LE, Y444_10BE, Y444_10LE, GBR, GBR_10BE, GBR_10LE, A420_10BE, A420_10LE, A422_10BE, A422_10LE, A444_10BE, A444_10LE, GBRA, xRGB, RGBx, xBGR, BGRx, I420_12BE, I420_12LE, I422_12BE, I422_12LE, Y444_12BE, Y444_12LE, GBR_12BE, GBR_12LE, P010_10LE, GBRA_12BE, GBRA_12LE, GBRA_10BE, GBRA_10LE, GRAY10_LE16, VUYA, P012_LE, Y212_LE, Y410, Y412_LE }\n\nvideo/x-raw(format:Interlaced):\n         format: { I420, YUY2, RGB, BGR, Y42B, Y444, YUV9, Y41B, GRAY8, RGB8P, I420, Y42B, Y444, UYVY, NV12, NV21, ARGB, RGBA, ABGR, BGRA, GRAY16_BE, GRAY16_LE, A420, RGB16, RGB15, I420_10BE, I420_10LE, I422_10BE, I422_10LE, Y444_10BE, Y444_10LE, GBR, GBR_10BE, GBR_10LE, A420_10BE, A420_10LE, A422_10BE, A422_10LE, A444_10BE, A444_10LE, GBRA, xRGB, RGBx, xBGR, BGRx, I420_12BE, I420_12LE, I422_12BE, I422_12LE, Y444_12BE, Y444_12LE, GBR_12BE, GBR_12LE, P010_10LE, GBRA_12BE, GBRA_12LE, GBRA_10BE, GBRA_10LE, GRAY10_LE16, VUYA, P012_LE, Y212_LE, Y410, Y412_LE }\n interlace-mode: alternate\n",
                         "direction": "src",
                         "presence": "always"
                     }
@@ -3525,7 +3525,7 @@
                         "presence": "always"
                     },
                     "src": {
-                        "caps": "video/x-raw:\n         format: I420\n\nvideo/x-raw(format:Interlaced):\n         format: I420\n interlace-mode: alternate\n",
+                        "caps": "video/x-raw:\n         format: { I420, YUY2, RGB, BGR, Y42B, Y444, YUV9, Y41B, GRAY8, RGB8P, I420, Y42B, Y444, UYVY, NV12, NV21, ARGB, RGBA, ABGR, BGRA, GRAY16_BE, GRAY16_LE, A420, RGB16, RGB15, I420_10BE, I420_10LE, I422_10BE, I422_10LE, Y444_10BE, Y444_10LE, GBR, GBR_10BE, GBR_10LE, A420_10BE, A420_10LE, A422_10BE, A422_10LE, A444_10BE, A444_10LE, GBRA, xRGB, RGBx, xBGR, BGRx, I420_12BE, I420_12LE, I422_12BE, I422_12LE, Y444_12BE, Y444_12LE, GBR_12BE, GBR_12LE, P010_10LE, GBRA_12BE, GBRA_12LE, GBRA_10BE, GBRA_10LE, GRAY10_LE16, VUYA, P012_LE, Y212_LE, Y410, Y412_LE }\n\nvideo/x-raw(format:Interlaced):\n         format: { I420, YUY2, RGB, BGR, Y42B, Y444, YUV9, Y41B, GRAY8, RGB8P, I420, Y42B, Y444, UYVY, NV12, NV21, ARGB, RGBA, ABGR, BGRA, GRAY16_BE, GRAY16_LE, A420, RGB16, RGB15, I420_10BE, I420_10LE, I422_10BE, I422_10LE, Y444_10BE, Y444_10LE, GBR, GBR_10BE, GBR_10LE, A420_10BE, A420_10LE, A422_10BE, A422_10LE, A444_10BE, A444_10LE, GBRA, xRGB, RGBx, xBGR, BGRx, I420_12BE, I420_12LE, I422_12BE, I422_12LE, Y444_12BE, Y444_12LE, GBR_12BE, GBR_12LE, P010_10LE, GBRA_12BE, GBRA_12LE, GBRA_10BE, GBRA_10LE, GRAY10_LE16, VUYA, P012_LE, Y212_LE, Y410, Y412_LE }\n interlace-mode: alternate\n",
                         "direction": "src",
                         "presence": "always"
                     }
@@ -4037,7 +4037,7 @@
                         "presence": "always"
                     },
                     "src": {
-                        "caps": "video/x-raw:\n         format: I420\n\nvideo/x-raw(format:Interlaced):\n         format: I420\n interlace-mode: alternate\n",
+                        "caps": "video/x-raw:\n         format: { I420, YUY2, RGB, BGR, Y42B, Y444, YUV9, Y41B, GRAY8, RGB8P, I420, Y42B, Y444, UYVY, NV12, NV21, ARGB, RGBA, ABGR, BGRA, GRAY16_BE, GRAY16_LE, A420, RGB16, RGB15, I420_10BE, I420_10LE, I422_10BE, I422_10LE, Y444_10BE, Y444_10LE, GBR, GBR_10BE, GBR_10LE, A420_10BE, A420_10LE, A422_10BE, A422_10LE, A444_10BE, A444_10LE, GBRA, xRGB, RGBx, xBGR, BGRx, I420_12BE, I420_12LE, I422_12BE, I422_12LE, Y444_12BE, Y444_12LE, GBR_12BE, GBR_12LE, P010_10LE, GBRA_12BE, GBRA_12LE, GBRA_10BE, GBRA_10LE, GRAY10_LE16, VUYA, P012_LE, Y212_LE, Y410, Y412_LE }\n\nvideo/x-raw(format:Interlaced):\n         format: { I420, YUY2, RGB, BGR, Y42B, Y444, YUV9, Y41B, GRAY8, RGB8P, I420, Y42B, Y444, UYVY, NV12, NV21, ARGB, RGBA, ABGR, BGRA, GRAY16_BE, GRAY16_LE, A420, RGB16, RGB15, I420_10BE, I420_10LE, I422_10BE, I422_10LE, Y444_10BE, Y444_10LE, GBR, GBR_10BE, GBR_10LE, A420_10BE, A420_10LE, A422_10BE, A422_10LE, A444_10BE, A444_10LE, GBRA, xRGB, RGBx, xBGR, BGRx, I420_12BE, I420_12LE, I422_12BE, I422_12LE, Y444_12BE, Y444_12LE, GBR_12BE, GBR_12LE, P010_10LE, GBRA_12BE, GBRA_12LE, GBRA_10BE, GBRA_10LE, GRAY10_LE16, VUYA, P012_LE, Y212_LE, Y410, Y412_LE }\n interlace-mode: alternate\n",
                         "direction": "src",
                         "presence": "always"
                     }
@@ -4126,7 +4126,7 @@
                         "presence": "always"
                     },
                     "src": {
-                        "caps": "video/x-raw:\n         format: I420\n\nvideo/x-raw(format:Interlaced):\n         format: I420\n interlace-mode: alternate\n",
+                        "caps": "video/x-raw:\n         format: { I420, YUY2, RGB, BGR, Y42B, Y444, YUV9, Y41B, GRAY8, RGB8P, I420, Y42B, Y444, UYVY, NV12, NV21, ARGB, RGBA, ABGR, BGRA, GRAY16_BE, GRAY16_LE, A420, RGB16, RGB15, I420_10BE, I420_10LE, I422_10BE, I422_10LE, Y444_10BE, Y444_10LE, GBR, GBR_10BE, GBR_10LE, A420_10BE, A420_10LE, A422_10BE, A422_10LE, A444_10BE, A444_10LE, GBRA, xRGB, RGBx, xBGR, BGRx, I420_12BE, I420_12LE, I422_12BE, I422_12LE, Y444_12BE, Y444_12LE, GBR_12BE, GBR_12LE, P010_10LE, GBRA_12BE, GBRA_12LE, GBRA_10BE, GBRA_10LE, GRAY10_LE16, VUYA, P012_LE, Y212_LE, Y410, Y412_LE }\n\nvideo/x-raw(format:Interlaced):\n         format: { I420, YUY2, RGB, BGR, Y42B, Y444, YUV9, Y41B, GRAY8, RGB8P, I420, Y42B, Y444, UYVY, NV12, NV21, ARGB, RGBA, ABGR, BGRA, GRAY16_BE, GRAY16_LE, A420, RGB16, RGB15, I420_10BE, I420_10LE, I422_10BE, I422_10LE, Y444_10BE, Y444_10LE, GBR, GBR_10BE, GBR_10LE, A420_10BE, A420_10LE, A422_10BE, A422_10LE, A444_10BE, A444_10LE, GBRA, xRGB, RGBx, xBGR, BGRx, I420_12BE, I420_12LE, I422_12BE, I422_12LE, Y444_12BE, Y444_12LE, GBR_12BE, GBR_12LE, P010_10LE, GBRA_12BE, GBRA_12LE, GBRA_10BE, GBRA_10LE, GRAY10_LE16, VUYA, P012_LE, Y212_LE, Y410, Y412_LE }\n interlace-mode: alternate\n",
                         "direction": "src",
                         "presence": "always"
                     }
@@ -4215,7 +4215,7 @@
                         "presence": "always"
                     },
                     "src": {
-                        "caps": "video/x-raw:\n         format: I420\n\nvideo/x-raw(format:Interlaced):\n         format: I420\n interlace-mode: alternate\n",
+                        "caps": "video/x-raw:\n         format: { I420, YUY2, RGB, BGR, Y42B, Y444, YUV9, Y41B, GRAY8, RGB8P, I420, Y42B, Y444, UYVY, NV12, NV21, ARGB, RGBA, ABGR, BGRA, GRAY16_BE, GRAY16_LE, A420, RGB16, RGB15, I420_10BE, I420_10LE, I422_10BE, I422_10LE, Y444_10BE, Y444_10LE, GBR, GBR_10BE, GBR_10LE, A420_10BE, A420_10LE, A422_10BE, A422_10LE, A444_10BE, A444_10LE, GBRA, xRGB, RGBx, xBGR, BGRx, I420_12BE, I420_12LE, I422_12BE, I422_12LE, Y444_12BE, Y444_12LE, GBR_12BE, GBR_12LE, P010_10LE, GBRA_12BE, GBRA_12LE, GBRA_10BE, GBRA_10LE, GRAY10_LE16, VUYA, P012_LE, Y212_LE, Y410, Y412_LE }\n\nvideo/x-raw(format:Interlaced):\n         format: { I420, YUY2, RGB, BGR, Y42B, Y444, YUV9, Y41B, GRAY8, RGB8P, I420, Y42B, Y444, UYVY, NV12, NV21, ARGB, RGBA, ABGR, BGRA, GRAY16_BE, GRAY16_LE, A420, RGB16, RGB15, I420_10BE, I420_10LE, I422_10BE, I422_10LE, Y444_10BE, Y444_10LE, GBR, GBR_10BE, GBR_10LE, A420_10BE, A420_10LE, A422_10BE, A422_10LE, A444_10BE, A444_10LE, GBRA, xRGB, RGBx, xBGR, BGRx, I420_12BE, I420_12LE, I422_12BE, I422_12LE, Y444_12BE, Y444_12LE, GBR_12BE, GBR_12LE, P010_10LE, GBRA_12BE, GBRA_12LE, GBRA_10BE, GBRA_10LE, GRAY10_LE16, VUYA, P012_LE, Y212_LE, Y410, Y412_LE }\n interlace-mode: alternate\n",
                         "direction": "src",
                         "presence": "always"
                     }
@@ -4509,6 +4509,95 @@
                         "mutable": "null",
                         "readable": true,
                         "type": "GstLibAVVidDecThreadType",
+                        "writable": true
+                    }
+                },
+                "rank": "primary"
+            },
+            "avdec_h266": {
+                "author": "Wim Taymans <wim.taymans@gmail.com>, Ronald Bultje <rbultje@ronald.bitfreak.net>, Edward Hervey <bilboed@bilboed.com>",
+                "description": "libav vvc decoder",
+                "hierarchy": [
+                    "avdec_h266",
+                    "GstFFMpegVidDec",
+                    "GstVideoDecoder",
+                    "GstElement",
+                    "GstObject",
+                    "GInitiallyUnowned",
+                    "GObject"
+                ],
+                "klass": "Codec/Decoder/Video",
+                "pad-templates": {
+                    "sink": {
+                        "caps": "video/x-h266:\n      alignment: au\n  stream-format: { (string)vvc1, (string)vvi1, (string)byte-stream }\n",
+                        "direction": "sink",
+                        "presence": "always"
+                    },
+                    "src": {
+                        "caps": "video/x-raw:\n         format: { I420, YUY2, RGB, BGR, Y42B, Y444, YUV9, Y41B, GRAY8, RGB8P, I420, Y42B, Y444, UYVY, NV12, NV21, ARGB, RGBA, ABGR, BGRA, GRAY16_BE, GRAY16_LE, A420, RGB16, RGB15, I420_10BE, I420_10LE, I422_10BE, I422_10LE, Y444_10BE, Y444_10LE, GBR, GBR_10BE, GBR_10LE, A420_10BE, A420_10LE, A422_10BE, A422_10LE, A444_10BE, A444_10LE, GBRA, xRGB, RGBx, xBGR, BGRx, I420_12BE, I420_12LE, I422_12BE, I422_12LE, Y444_12BE, Y444_12LE, GBR_12BE, GBR_12LE, P010_10LE, GBRA_12BE, GBRA_12LE, GBRA_10BE, GBRA_10LE, GRAY10_LE16, VUYA, P012_LE, Y212_LE, Y410, Y412_LE }\n\nvideo/x-raw(format:Interlaced):\n         format: { I420, YUY2, RGB, BGR, Y42B, Y444, YUV9, Y41B, GRAY8, RGB8P, I420, Y42B, Y444, UYVY, NV12, NV21, ARGB, RGBA, ABGR, BGRA, GRAY16_BE, GRAY16_LE, A420, RGB16, RGB15, I420_10BE, I420_10LE, I422_10BE, I422_10LE, Y444_10BE, Y444_10LE, GBR, GBR_10BE, GBR_10LE, A420_10BE, A420_10LE, A422_10BE, A422_10LE, A444_10BE, A444_10LE, GBRA, xRGB, RGBx, xBGR, BGRx, I420_12BE, I420_12LE, I422_12BE, I422_12LE, Y444_12BE, Y444_12LE, GBR_12BE, GBR_12LE, P010_10LE, GBRA_12BE, GBRA_12LE, GBRA_10BE, GBRA_10LE, GRAY10_LE16, VUYA, P012_LE, Y212_LE, Y410, Y412_LE }\n interlace-mode: alternate\n",
+                        "direction": "src",
+                        "presence": "always"
+                    }
+                },
+                "properties": {
+                    "debug-mv": {
+                        "blurb": "Whether to print motion vectors on top of the image (deprecated, non-functional)",
+                        "conditionally-available": false,
+                        "construct": false,
+                        "construct-only": false,
+                        "controllable": false,
+                        "default": "false",
+                        "mutable": "null",
+                        "readable": true,
+                        "type": "gboolean",
+                        "writable": true
+                    },
+                    "direct-rendering": {
+                        "blurb": "Enable direct rendering",
+                        "conditionally-available": false,
+                        "construct": false,
+                        "construct-only": false,
+                        "controllable": false,
+                        "default": "true",
+                        "mutable": "null",
+                        "readable": true,
+                        "type": "gboolean",
+                        "writable": true
+                    },
+                    "lowres": {
+                        "blurb": "At which resolution to decode images",
+                        "conditionally-available": false,
+                        "construct": false,
+                        "construct-only": false,
+                        "controllable": false,
+                        "default": "full (0)",
+                        "mutable": "null",
+                        "readable": true,
+                        "type": "GstLibAVVidDecLowres",
+                        "writable": true
+                    },
+                    "output-corrupt": {
+                        "blurb": "Whether libav should output frames even if corrupted",
+                        "conditionally-available": false,
+                        "construct": false,
+                        "construct-only": false,
+                        "controllable": false,
+                        "default": "true",
+                        "mutable": "null",
+                        "readable": true,
+                        "type": "gboolean",
+                        "writable": true
+                    },
+                    "skip-frame": {
+                        "blurb": "Which types of frames to skip during decoding",
+                        "conditionally-available": false,
+                        "construct": false,
+                        "construct-only": false,
+                        "controllable": false,
+                        "default": "default (0)",
+                        "mutable": "null",
+                        "readable": true,
+                        "type": "GstLibAVVidDecSkipFrame",
                         "writable": true
                     }
                 },
@@ -6823,7 +6912,7 @@
                         "presence": "always"
                     },
                     "src": {
-                        "caps": "video/x-raw:\n         format: I420\n\nvideo/x-raw(format:Interlaced):\n         format: I420\n interlace-mode: alternate\n",
+                        "caps": "video/x-raw:\n         format: { I420, YUY2, RGB, BGR, Y42B, Y444, YUV9, Y41B, GRAY8, RGB8P, I420, Y42B, Y444, UYVY, NV12, NV21, ARGB, RGBA, ABGR, BGRA, GRAY16_BE, GRAY16_LE, A420, RGB16, RGB15, I420_10BE, I420_10LE, I422_10BE, I422_10LE, Y444_10BE, Y444_10LE, GBR, GBR_10BE, GBR_10LE, A420_10BE, A420_10LE, A422_10BE, A422_10LE, A444_10BE, A444_10LE, GBRA, xRGB, RGBx, xBGR, BGRx, I420_12BE, I420_12LE, I422_12BE, I422_12LE, Y444_12BE, Y444_12LE, GBR_12BE, GBR_12LE, P010_10LE, GBRA_12BE, GBRA_12LE, GBRA_10BE, GBRA_10LE, GRAY10_LE16, VUYA, P012_LE, Y212_LE, Y410, Y412_LE }\n\nvideo/x-raw(format:Interlaced):\n         format: { I420, YUY2, RGB, BGR, Y42B, Y444, YUV9, Y41B, GRAY8, RGB8P, I420, Y42B, Y444, UYVY, NV12, NV21, ARGB, RGBA, ABGR, BGRA, GRAY16_BE, GRAY16_LE, A420, RGB16, RGB15, I420_10BE, I420_10LE, I422_10BE, I422_10LE, Y444_10BE, Y444_10LE, GBR, GBR_10BE, GBR_10LE, A420_10BE, A420_10LE, A422_10BE, A422_10LE, A444_10BE, A444_10LE, GBRA, xRGB, RGBx, xBGR, BGRx, I420_12BE, I420_12LE, I422_12BE, I422_12LE, Y444_12BE, Y444_12LE, GBR_12BE, GBR_12LE, P010_10LE, GBRA_12BE, GBRA_12LE, GBRA_10BE, GBRA_10LE, GRAY10_LE16, VUYA, P012_LE, Y212_LE, Y410, Y412_LE }\n interlace-mode: alternate\n",
                         "direction": "src",
                         "presence": "always"
                     }
@@ -7053,7 +7142,7 @@
                         "presence": "always"
                     },
                     "src": {
-                        "caps": "video/x-raw:\n         format: I420\n\nvideo/x-raw(format:Interlaced):\n         format: I420\n interlace-mode: alternate\n",
+                        "caps": "video/x-raw:\n         format: { I420, YUY2, RGB, BGR, Y42B, Y444, YUV9, Y41B, GRAY8, RGB8P, I420, Y42B, Y444, UYVY, NV12, NV21, ARGB, RGBA, ABGR, BGRA, GRAY16_BE, GRAY16_LE, A420, RGB16, RGB15, I420_10BE, I420_10LE, I422_10BE, I422_10LE, Y444_10BE, Y444_10LE, GBR, GBR_10BE, GBR_10LE, A420_10BE, A420_10LE, A422_10BE, A422_10LE, A444_10BE, A444_10LE, GBRA, xRGB, RGBx, xBGR, BGRx, I420_12BE, I420_12LE, I422_12BE, I422_12LE, Y444_12BE, Y444_12LE, GBR_12BE, GBR_12LE, P010_10LE, GBRA_12BE, GBRA_12LE, GBRA_10BE, GBRA_10LE, GRAY10_LE16, VUYA, P012_LE, Y212_LE, Y410, Y412_LE }\n\nvideo/x-raw(format:Interlaced):\n         format: { I420, YUY2, RGB, BGR, Y42B, Y444, YUV9, Y41B, GRAY8, RGB8P, I420, Y42B, Y444, UYVY, NV12, NV21, ARGB, RGBA, ABGR, BGRA, GRAY16_BE, GRAY16_LE, A420, RGB16, RGB15, I420_10BE, I420_10LE, I422_10BE, I422_10LE, Y444_10BE, Y444_10LE, GBR, GBR_10BE, GBR_10LE, A420_10BE, A420_10LE, A422_10BE, A422_10LE, A444_10BE, A444_10LE, GBRA, xRGB, RGBx, xBGR, BGRx, I420_12BE, I420_12LE, I422_12BE, I422_12LE, Y444_12BE, Y444_12LE, GBR_12BE, GBR_12LE, P010_10LE, GBRA_12BE, GBRA_12LE, GBRA_10BE, GBRA_10LE, GRAY10_LE16, VUYA, P012_LE, Y212_LE, Y410, Y412_LE }\n interlace-mode: alternate\n",
                         "direction": "src",
                         "presence": "always"
                     }
@@ -7142,7 +7231,7 @@
                         "presence": "always"
                     },
                     "src": {
-                        "caps": "video/x-raw:\n         format: I420\n\nvideo/x-raw(format:Interlaced):\n         format: I420\n interlace-mode: alternate\n",
+                        "caps": "video/x-raw:\n         format: { I420, YUY2, RGB, BGR, Y42B, Y444, YUV9, Y41B, GRAY8, RGB8P, I420, Y42B, Y444, UYVY, NV12, NV21, ARGB, RGBA, ABGR, BGRA, GRAY16_BE, GRAY16_LE, A420, RGB16, RGB15, I420_10BE, I420_10LE, I422_10BE, I422_10LE, Y444_10BE, Y444_10LE, GBR, GBR_10BE, GBR_10LE, A420_10BE, A420_10LE, A422_10BE, A422_10LE, A444_10BE, A444_10LE, GBRA, xRGB, RGBx, xBGR, BGRx, I420_12BE, I420_12LE, I422_12BE, I422_12LE, Y444_12BE, Y444_12LE, GBR_12BE, GBR_12LE, P010_10LE, GBRA_12BE, GBRA_12LE, GBRA_10BE, GBRA_10LE, GRAY10_LE16, VUYA, P012_LE, Y212_LE, Y410, Y412_LE }\n\nvideo/x-raw(format:Interlaced):\n         format: { I420, YUY2, RGB, BGR, Y42B, Y444, YUV9, Y41B, GRAY8, RGB8P, I420, Y42B, Y444, UYVY, NV12, NV21, ARGB, RGBA, ABGR, BGRA, GRAY16_BE, GRAY16_LE, A420, RGB16, RGB15, I420_10BE, I420_10LE, I422_10BE, I422_10LE, Y444_10BE, Y444_10LE, GBR, GBR_10BE, GBR_10LE, A420_10BE, A420_10LE, A422_10BE, A422_10LE, A444_10BE, A444_10LE, GBRA, xRGB, RGBx, xBGR, BGRx, I420_12BE, I420_12LE, I422_12BE, I422_12LE, Y444_12BE, Y444_12LE, GBR_12BE, GBR_12LE, P010_10LE, GBRA_12BE, GBRA_12LE, GBRA_10BE, GBRA_10LE, GRAY10_LE16, VUYA, P012_LE, Y212_LE, Y410, Y412_LE }\n interlace-mode: alternate\n",
                         "direction": "src",
                         "presence": "always"
                     }
@@ -7231,7 +7320,7 @@
                         "presence": "always"
                     },
                     "src": {
-                        "caps": "video/x-raw:\n         format: I420\n\nvideo/x-raw(format:Interlaced):\n         format: I420\n interlace-mode: alternate\n",
+                        "caps": "video/x-raw:\n         format: { I420, YUY2, RGB, BGR, Y42B, Y444, YUV9, Y41B, GRAY8, RGB8P, I420, Y42B, Y444, UYVY, NV12, NV21, ARGB, RGBA, ABGR, BGRA, GRAY16_BE, GRAY16_LE, A420, RGB16, RGB15, I420_10BE, I420_10LE, I422_10BE, I422_10LE, Y444_10BE, Y444_10LE, GBR, GBR_10BE, GBR_10LE, A420_10BE, A420_10LE, A422_10BE, A422_10LE, A444_10BE, A444_10LE, GBRA, xRGB, RGBx, xBGR, BGRx, I420_12BE, I420_12LE, I422_12BE, I422_12LE, Y444_12BE, Y444_12LE, GBR_12BE, GBR_12LE, P010_10LE, GBRA_12BE, GBRA_12LE, GBRA_10BE, GBRA_10LE, GRAY10_LE16, VUYA, P012_LE, Y212_LE, Y410, Y412_LE }\n\nvideo/x-raw(format:Interlaced):\n         format: { I420, YUY2, RGB, BGR, Y42B, Y444, YUV9, Y41B, GRAY8, RGB8P, I420, Y42B, Y444, UYVY, NV12, NV21, ARGB, RGBA, ABGR, BGRA, GRAY16_BE, GRAY16_LE, A420, RGB16, RGB15, I420_10BE, I420_10LE, I422_10BE, I422_10LE, Y444_10BE, Y444_10LE, GBR, GBR_10BE, GBR_10LE, A420_10BE, A420_10LE, A422_10BE, A422_10LE, A444_10BE, A444_10LE, GBRA, xRGB, RGBx, xBGR, BGRx, I420_12BE, I420_12LE, I422_12BE, I422_12LE, Y444_12BE, Y444_12LE, GBR_12BE, GBR_12LE, P010_10LE, GBRA_12BE, GBRA_12LE, GBRA_10BE, GBRA_10LE, GRAY10_LE16, VUYA, P012_LE, Y212_LE, Y410, Y412_LE }\n interlace-mode: alternate\n",
                         "direction": "src",
                         "presence": "always"
                     }
@@ -9475,7 +9564,7 @@
                         "presence": "always"
                     },
                     "src": {
-                        "caps": "video/x-raw:\n         format: I420\n\nvideo/x-raw(format:Interlaced):\n         format: I420\n interlace-mode: alternate\n",
+                        "caps": "video/x-raw:\n         format: { I420, YUY2, RGB, BGR, Y42B, Y444, YUV9, Y41B, GRAY8, RGB8P, I420, Y42B, Y444, UYVY, NV12, NV21, ARGB, RGBA, ABGR, BGRA, GRAY16_BE, GRAY16_LE, A420, RGB16, RGB15, I420_10BE, I420_10LE, I422_10BE, I422_10LE, Y444_10BE, Y444_10LE, GBR, GBR_10BE, GBR_10LE, A420_10BE, A420_10LE, A422_10BE, A422_10LE, A444_10BE, A444_10LE, GBRA, xRGB, RGBx, xBGR, BGRx, I420_12BE, I420_12LE, I422_12BE, I422_12LE, Y444_12BE, Y444_12LE, GBR_12BE, GBR_12LE, P010_10LE, GBRA_12BE, GBRA_12LE, GBRA_10BE, GBRA_10LE, GRAY10_LE16, VUYA, P012_LE, Y212_LE, Y410, Y412_LE }\n\nvideo/x-raw(format:Interlaced):\n         format: { I420, YUY2, RGB, BGR, Y42B, Y444, YUV9, Y41B, GRAY8, RGB8P, I420, Y42B, Y444, UYVY, NV12, NV21, ARGB, RGBA, ABGR, BGRA, GRAY16_BE, GRAY16_LE, A420, RGB16, RGB15, I420_10BE, I420_10LE, I422_10BE, I422_10LE, Y444_10BE, Y444_10LE, GBR, GBR_10BE, GBR_10LE, A420_10BE, A420_10LE, A422_10BE, A422_10LE, A444_10BE, A444_10LE, GBRA, xRGB, RGBx, xBGR, BGRx, I420_12BE, I420_12LE, I422_12BE, I422_12LE, Y444_12BE, Y444_12LE, GBR_12BE, GBR_12LE, P010_10LE, GBRA_12BE, GBRA_12LE, GBRA_10BE, GBRA_10LE, GRAY10_LE16, VUYA, P012_LE, Y212_LE, Y410, Y412_LE }\n interlace-mode: alternate\n",
                         "direction": "src",
                         "presence": "always"
                     }
@@ -9564,7 +9653,7 @@
                         "presence": "always"
                     },
                     "src": {
-                        "caps": "video/x-raw:\n         format: I420\n\nvideo/x-raw(format:Interlaced):\n         format: I420\n interlace-mode: alternate\n",
+                        "caps": "video/x-raw:\n         format: { I420, YUY2, RGB, BGR, Y42B, Y444, YUV9, Y41B, GRAY8, RGB8P, I420, Y42B, Y444, UYVY, NV12, NV21, ARGB, RGBA, ABGR, BGRA, GRAY16_BE, GRAY16_LE, A420, RGB16, RGB15, I420_10BE, I420_10LE, I422_10BE, I422_10LE, Y444_10BE, Y444_10LE, GBR, GBR_10BE, GBR_10LE, A420_10BE, A420_10LE, A422_10BE, A422_10LE, A444_10BE, A444_10LE, GBRA, xRGB, RGBx, xBGR, BGRx, I420_12BE, I420_12LE, I422_12BE, I422_12LE, Y444_12BE, Y444_12LE, GBR_12BE, GBR_12LE, P010_10LE, GBRA_12BE, GBRA_12LE, GBRA_10BE, GBRA_10LE, GRAY10_LE16, VUYA, P012_LE, Y212_LE, Y410, Y412_LE }\n\nvideo/x-raw(format:Interlaced):\n         format: { I420, YUY2, RGB, BGR, Y42B, Y444, YUV9, Y41B, GRAY8, RGB8P, I420, Y42B, Y444, UYVY, NV12, NV21, ARGB, RGBA, ABGR, BGRA, GRAY16_BE, GRAY16_LE, A420, RGB16, RGB15, I420_10BE, I420_10LE, I422_10BE, I422_10LE, Y444_10BE, Y444_10LE, GBR, GBR_10BE, GBR_10LE, A420_10BE, A420_10LE, A422_10BE, A422_10LE, A444_10BE, A444_10LE, GBRA, xRGB, RGBx, xBGR, BGRx, I420_12BE, I420_12LE, I422_12BE, I422_12LE, Y444_12BE, Y444_12LE, GBR_12BE, GBR_12LE, P010_10LE, GBRA_12BE, GBRA_12LE, GBRA_10BE, GBRA_10LE, GRAY10_LE16, VUYA, P012_LE, Y212_LE, Y410, Y412_LE }\n interlace-mode: alternate\n",
                         "direction": "src",
                         "presence": "always"
                     }
@@ -9653,7 +9742,7 @@
                         "presence": "always"
                     },
                     "src": {
-                        "caps": "video/x-raw:\n         format: I420\n\nvideo/x-raw(format:Interlaced):\n         format: I420\n interlace-mode: alternate\n",
+                        "caps": "video/x-raw:\n         format: { I420, YUY2, RGB, BGR, Y42B, Y444, YUV9, Y41B, GRAY8, RGB8P, I420, Y42B, Y444, UYVY, NV12, NV21, ARGB, RGBA, ABGR, BGRA, GRAY16_BE, GRAY16_LE, A420, RGB16, RGB15, I420_10BE, I420_10LE, I422_10BE, I422_10LE, Y444_10BE, Y444_10LE, GBR, GBR_10BE, GBR_10LE, A420_10BE, A420_10LE, A422_10BE, A422_10LE, A444_10BE, A444_10LE, GBRA, xRGB, RGBx, xBGR, BGRx, I420_12BE, I420_12LE, I422_12BE, I422_12LE, Y444_12BE, Y444_12LE, GBR_12BE, GBR_12LE, P010_10LE, GBRA_12BE, GBRA_12LE, GBRA_10BE, GBRA_10LE, GRAY10_LE16, VUYA, P012_LE, Y212_LE, Y410, Y412_LE }\n\nvideo/x-raw(format:Interlaced):\n         format: { I420, YUY2, RGB, BGR, Y42B, Y444, YUV9, Y41B, GRAY8, RGB8P, I420, Y42B, Y444, UYVY, NV12, NV21, ARGB, RGBA, ABGR, BGRA, GRAY16_BE, GRAY16_LE, A420, RGB16, RGB15, I420_10BE, I420_10LE, I422_10BE, I422_10LE, Y444_10BE, Y444_10LE, GBR, GBR_10BE, GBR_10LE, A420_10BE, A420_10LE, A422_10BE, A422_10LE, A444_10BE, A444_10LE, GBRA, xRGB, RGBx, xBGR, BGRx, I420_12BE, I420_12LE, I422_12BE, I422_12LE, Y444_12BE, Y444_12LE, GBR_12BE, GBR_12LE, P010_10LE, GBRA_12BE, GBRA_12LE, GBRA_10BE, GBRA_10LE, GRAY10_LE16, VUYA, P012_LE, Y212_LE, Y410, Y412_LE }\n interlace-mode: alternate\n",
                         "direction": "src",
                         "presence": "always"
                     }
@@ -9768,7 +9857,7 @@
                         "presence": "always"
                     },
                     "src": {
-                        "caps": "video/x-raw:\n         format: I420\n\nvideo/x-raw(format:Interlaced):\n         format: I420\n interlace-mode: alternate\n",
+                        "caps": "video/x-raw:\n         format: { I420, YUY2, RGB, BGR, Y42B, Y444, YUV9, Y41B, GRAY8, RGB8P, I420, Y42B, Y444, UYVY, NV12, NV21, ARGB, RGBA, ABGR, BGRA, GRAY16_BE, GRAY16_LE, A420, RGB16, RGB15, I420_10BE, I420_10LE, I422_10BE, I422_10LE, Y444_10BE, Y444_10LE, GBR, GBR_10BE, GBR_10LE, A420_10BE, A420_10LE, A422_10BE, A422_10LE, A444_10BE, A444_10LE, GBRA, xRGB, RGBx, xBGR, BGRx, I420_12BE, I420_12LE, I422_12BE, I422_12LE, Y444_12BE, Y444_12LE, GBR_12BE, GBR_12LE, P010_10LE, GBRA_12BE, GBRA_12LE, GBRA_10BE, GBRA_10LE, GRAY10_LE16, VUYA, P012_LE, Y212_LE, Y410, Y412_LE }\n\nvideo/x-raw(format:Interlaced):\n         format: { I420, YUY2, RGB, BGR, Y42B, Y444, YUV9, Y41B, GRAY8, RGB8P, I420, Y42B, Y444, UYVY, NV12, NV21, ARGB, RGBA, ABGR, BGRA, GRAY16_BE, GRAY16_LE, A420, RGB16, RGB15, I420_10BE, I420_10LE, I422_10BE, I422_10LE, Y444_10BE, Y444_10LE, GBR, GBR_10BE, GBR_10LE, A420_10BE, A420_10LE, A422_10BE, A422_10LE, A444_10BE, A444_10LE, GBRA, xRGB, RGBx, xBGR, BGRx, I420_12BE, I420_12LE, I422_12BE, I422_12LE, Y444_12BE, Y444_12LE, GBR_12BE, GBR_12LE, P010_10LE, GBRA_12BE, GBRA_12LE, GBRA_10BE, GBRA_10LE, GRAY10_LE16, VUYA, P012_LE, Y212_LE, Y410, Y412_LE }\n interlace-mode: alternate\n",
                         "direction": "src",
                         "presence": "always"
                     }
@@ -10296,6 +10385,20 @@
                         "type": "GstLibAVVidDecLowres",
                         "writable": true
                     },
+                    "max-threads": {
+                        "blurb": "Maximum number of worker threads to spawn. (0 = auto)",
+                        "conditionally-available": false,
+                        "construct": false,
+                        "construct-only": false,
+                        "controllable": false,
+                        "default": "0",
+                        "max": "2147483647",
+                        "min": "0",
+                        "mutable": "null",
+                        "readable": true,
+                        "type": "gint",
+                        "writable": true
+                    },
                     "output-corrupt": {
                         "blurb": "Whether libav should output frames even if corrupted",
                         "conditionally-available": false,
@@ -10318,6 +10421,18 @@
                         "mutable": "null",
                         "readable": true,
                         "type": "GstLibAVVidDecSkipFrame",
+                        "writable": true
+                    },
+                    "thread-type": {
+                        "blurb": "Multithreading methods to use",
+                        "conditionally-available": false,
+                        "construct": false,
+                        "construct-only": false,
+                        "controllable": false,
+                        "default": "auto",
+                        "mutable": "null",
+                        "readable": true,
+                        "type": "GstLibAVVidDecThreadType",
                         "writable": true
                     }
                 },
@@ -10432,7 +10547,7 @@
                         "presence": "always"
                     },
                     "src": {
-                        "caps": "video/x-raw:\n         format: YUV9\n\nvideo/x-raw(format:Interlaced):\n         format: YUV9\n interlace-mode: alternate\n",
+                        "caps": "video/x-raw:\n         format: { I420, YUY2, RGB, BGR, Y42B, Y444, YUV9, Y41B, GRAY8, RGB8P, I420, Y42B, Y444, UYVY, NV12, NV21, ARGB, RGBA, ABGR, BGRA, GRAY16_BE, GRAY16_LE, A420, RGB16, RGB15, I420_10BE, I420_10LE, I422_10BE, I422_10LE, Y444_10BE, Y444_10LE, GBR, GBR_10BE, GBR_10LE, A420_10BE, A420_10LE, A422_10BE, A422_10LE, A444_10BE, A444_10LE, GBRA, xRGB, RGBx, xBGR, BGRx, I420_12BE, I420_12LE, I422_12BE, I422_12LE, Y444_12BE, Y444_12LE, GBR_12BE, GBR_12LE, P010_10LE, GBRA_12BE, GBRA_12LE, GBRA_10BE, GBRA_10LE, GRAY10_LE16, VUYA, P012_LE, Y212_LE, Y410, Y412_LE }\n\nvideo/x-raw(format:Interlaced):\n         format: { I420, YUY2, RGB, BGR, Y42B, Y444, YUV9, Y41B, GRAY8, RGB8P, I420, Y42B, Y444, UYVY, NV12, NV21, ARGB, RGBA, ABGR, BGRA, GRAY16_BE, GRAY16_LE, A420, RGB16, RGB15, I420_10BE, I420_10LE, I422_10BE, I422_10LE, Y444_10BE, Y444_10LE, GBR, GBR_10BE, GBR_10LE, A420_10BE, A420_10LE, A422_10BE, A422_10LE, A444_10BE, A444_10LE, GBRA, xRGB, RGBx, xBGR, BGRx, I420_12BE, I420_12LE, I422_12BE, I422_12LE, Y444_12BE, Y444_12LE, GBR_12BE, GBR_12LE, P010_10LE, GBRA_12BE, GBRA_12LE, GBRA_10BE, GBRA_10LE, GRAY10_LE16, VUYA, P012_LE, Y212_LE, Y410, Y412_LE }\n interlace-mode: alternate\n",
                         "direction": "src",
                         "presence": "always"
                     }
@@ -10521,7 +10636,7 @@
                         "presence": "always"
                     },
                     "src": {
-                        "caps": "video/x-raw:\n         format: I420\n\nvideo/x-raw(format:Interlaced):\n         format: I420\n interlace-mode: alternate\n",
+                        "caps": "video/x-raw:\n         format: { I420, YUY2, RGB, BGR, Y42B, Y444, YUV9, Y41B, GRAY8, RGB8P, I420, Y42B, Y444, UYVY, NV12, NV21, ARGB, RGBA, ABGR, BGRA, GRAY16_BE, GRAY16_LE, A420, RGB16, RGB15, I420_10BE, I420_10LE, I422_10BE, I422_10LE, Y444_10BE, Y444_10LE, GBR, GBR_10BE, GBR_10LE, A420_10BE, A420_10LE, A422_10BE, A422_10LE, A444_10BE, A444_10LE, GBRA, xRGB, RGBx, xBGR, BGRx, I420_12BE, I420_12LE, I422_12BE, I422_12LE, Y444_12BE, Y444_12LE, GBR_12BE, GBR_12LE, P010_10LE, GBRA_12BE, GBRA_12LE, GBRA_10BE, GBRA_10LE, GRAY10_LE16, VUYA, P012_LE, Y212_LE, Y410, Y412_LE }\n\nvideo/x-raw(format:Interlaced):\n         format: { I420, YUY2, RGB, BGR, Y42B, Y444, YUV9, Y41B, GRAY8, RGB8P, I420, Y42B, Y444, UYVY, NV12, NV21, ARGB, RGBA, ABGR, BGRA, GRAY16_BE, GRAY16_LE, A420, RGB16, RGB15, I420_10BE, I420_10LE, I422_10BE, I422_10LE, Y444_10BE, Y444_10LE, GBR, GBR_10BE, GBR_10LE, A420_10BE, A420_10LE, A422_10BE, A422_10LE, A444_10BE, A444_10LE, GBRA, xRGB, RGBx, xBGR, BGRx, I420_12BE, I420_12LE, I422_12BE, I422_12LE, Y444_12BE, Y444_12LE, GBR_12BE, GBR_12LE, P010_10LE, GBRA_12BE, GBRA_12LE, GBRA_10BE, GBRA_10LE, GRAY10_LE16, VUYA, P012_LE, Y212_LE, Y410, Y412_LE }\n interlace-mode: alternate\n",
                         "direction": "src",
                         "presence": "always"
                     }
@@ -11274,7 +11389,7 @@
                         "presence": "always"
                     },
                     "src": {
-                        "caps": "video/x-raw:\n         format: I420\n\nvideo/x-raw(format:Interlaced):\n         format: I420\n interlace-mode: alternate\n",
+                        "caps": "video/x-raw:\n         format: { I420, YUY2, RGB, BGR, Y42B, Y444, YUV9, Y41B, GRAY8, RGB8P, I420, Y42B, Y444, UYVY, NV12, NV21, ARGB, RGBA, ABGR, BGRA, GRAY16_BE, GRAY16_LE, A420, RGB16, RGB15, I420_10BE, I420_10LE, I422_10BE, I422_10LE, Y444_10BE, Y444_10LE, GBR, GBR_10BE, GBR_10LE, A420_10BE, A420_10LE, A422_10BE, A422_10LE, A444_10BE, A444_10LE, GBRA, xRGB, RGBx, xBGR, BGRx, I420_12BE, I420_12LE, I422_12BE, I422_12LE, Y444_12BE, Y444_12LE, GBR_12BE, GBR_12LE, P010_10LE, GBRA_12BE, GBRA_12LE, GBRA_10BE, GBRA_10LE, GRAY10_LE16, VUYA, P012_LE, Y212_LE, Y410, Y412_LE }\n\nvideo/x-raw(format:Interlaced):\n         format: { I420, YUY2, RGB, BGR, Y42B, Y444, YUV9, Y41B, GRAY8, RGB8P, I420, Y42B, Y444, UYVY, NV12, NV21, ARGB, RGBA, ABGR, BGRA, GRAY16_BE, GRAY16_LE, A420, RGB16, RGB15, I420_10BE, I420_10LE, I422_10BE, I422_10LE, Y444_10BE, Y444_10LE, GBR, GBR_10BE, GBR_10LE, A420_10BE, A420_10LE, A422_10BE, A422_10LE, A444_10BE, A444_10LE, GBRA, xRGB, RGBx, xBGR, BGRx, I420_12BE, I420_12LE, I422_12BE, I422_12LE, Y444_12BE, Y444_12LE, GBR_12BE, GBR_12LE, P010_10LE, GBRA_12BE, GBRA_12LE, GBRA_10BE, GBRA_10LE, GRAY10_LE16, VUYA, P012_LE, Y212_LE, Y410, Y412_LE }\n interlace-mode: alternate\n",
                         "direction": "src",
                         "presence": "always"
                     }
@@ -12602,7 +12717,7 @@
                         "presence": "always"
                     },
                     "src": {
-                        "caps": "video/x-raw:\n         format: I420\n\nvideo/x-raw(format:Interlaced):\n         format: I420\n interlace-mode: alternate\n",
+                        "caps": "video/x-raw:\n         format: { I420, YUY2, RGB, BGR, Y42B, Y444, YUV9, Y41B, GRAY8, RGB8P, I420, Y42B, Y444, UYVY, NV12, NV21, ARGB, RGBA, ABGR, BGRA, GRAY16_BE, GRAY16_LE, A420, RGB16, RGB15, I420_10BE, I420_10LE, I422_10BE, I422_10LE, Y444_10BE, Y444_10LE, GBR, GBR_10BE, GBR_10LE, A420_10BE, A420_10LE, A422_10BE, A422_10LE, A444_10BE, A444_10LE, GBRA, xRGB, RGBx, xBGR, BGRx, I420_12BE, I420_12LE, I422_12BE, I422_12LE, Y444_12BE, Y444_12LE, GBR_12BE, GBR_12LE, P010_10LE, GBRA_12BE, GBRA_12LE, GBRA_10BE, GBRA_10LE, GRAY10_LE16, VUYA, P012_LE, Y212_LE, Y410, Y412_LE }\n\nvideo/x-raw(format:Interlaced):\n         format: { I420, YUY2, RGB, BGR, Y42B, Y444, YUV9, Y41B, GRAY8, RGB8P, I420, Y42B, Y444, UYVY, NV12, NV21, ARGB, RGBA, ABGR, BGRA, GRAY16_BE, GRAY16_LE, A420, RGB16, RGB15, I420_10BE, I420_10LE, I422_10BE, I422_10LE, Y444_10BE, Y444_10LE, GBR, GBR_10BE, GBR_10LE, A420_10BE, A420_10LE, A422_10BE, A422_10LE, A444_10BE, A444_10LE, GBRA, xRGB, RGBx, xBGR, BGRx, I420_12BE, I420_12LE, I422_12BE, I422_12LE, Y444_12BE, Y444_12LE, GBR_12BE, GBR_12LE, P010_10LE, GBRA_12BE, GBRA_12LE, GBRA_10BE, GBRA_10LE, GRAY10_LE16, VUYA, P012_LE, Y212_LE, Y410, Y412_LE }\n interlace-mode: alternate\n",
                         "direction": "src",
                         "presence": "always"
                     }
@@ -12691,7 +12806,7 @@
                         "presence": "always"
                     },
                     "src": {
-                        "caps": "video/x-raw:\n         format: I420\n\nvideo/x-raw(format:Interlaced):\n         format: I420\n interlace-mode: alternate\n",
+                        "caps": "video/x-raw:\n         format: { I420, YUY2, RGB, BGR, Y42B, Y444, YUV9, Y41B, GRAY8, RGB8P, I420, Y42B, Y444, UYVY, NV12, NV21, ARGB, RGBA, ABGR, BGRA, GRAY16_BE, GRAY16_LE, A420, RGB16, RGB15, I420_10BE, I420_10LE, I422_10BE, I422_10LE, Y444_10BE, Y444_10LE, GBR, GBR_10BE, GBR_10LE, A420_10BE, A420_10LE, A422_10BE, A422_10LE, A444_10BE, A444_10LE, GBRA, xRGB, RGBx, xBGR, BGRx, I420_12BE, I420_12LE, I422_12BE, I422_12LE, Y444_12BE, Y444_12LE, GBR_12BE, GBR_12LE, P010_10LE, GBRA_12BE, GBRA_12LE, GBRA_10BE, GBRA_10LE, GRAY10_LE16, VUYA, P012_LE, Y212_LE, Y410, Y412_LE }\n\nvideo/x-raw(format:Interlaced):\n         format: { I420, YUY2, RGB, BGR, Y42B, Y444, YUV9, Y41B, GRAY8, RGB8P, I420, Y42B, Y444, UYVY, NV12, NV21, ARGB, RGBA, ABGR, BGRA, GRAY16_BE, GRAY16_LE, A420, RGB16, RGB15, I420_10BE, I420_10LE, I422_10BE, I422_10LE, Y444_10BE, Y444_10LE, GBR, GBR_10BE, GBR_10LE, A420_10BE, A420_10LE, A422_10BE, A422_10LE, A444_10BE, A444_10LE, GBRA, xRGB, RGBx, xBGR, BGRx, I420_12BE, I420_12LE, I422_12BE, I422_12LE, Y444_12BE, Y444_12LE, GBR_12BE, GBR_12LE, P010_10LE, GBRA_12BE, GBRA_12LE, GBRA_10BE, GBRA_10LE, GRAY10_LE16, VUYA, P012_LE, Y212_LE, Y410, Y412_LE }\n interlace-mode: alternate\n",
                         "direction": "src",
                         "presence": "always"
                     }
@@ -12780,7 +12895,7 @@
                         "presence": "always"
                     },
                     "src": {
-                        "caps": "video/x-raw:\n         format: I420\n\nvideo/x-raw(format:Interlaced):\n         format: I420\n interlace-mode: alternate\n",
+                        "caps": "video/x-raw:\n         format: { I420, YUY2, RGB, BGR, Y42B, Y444, YUV9, Y41B, GRAY8, RGB8P, I420, Y42B, Y444, UYVY, NV12, NV21, ARGB, RGBA, ABGR, BGRA, GRAY16_BE, GRAY16_LE, A420, RGB16, RGB15, I420_10BE, I420_10LE, I422_10BE, I422_10LE, Y444_10BE, Y444_10LE, GBR, GBR_10BE, GBR_10LE, A420_10BE, A420_10LE, A422_10BE, A422_10LE, A444_10BE, A444_10LE, GBRA, xRGB, RGBx, xBGR, BGRx, I420_12BE, I420_12LE, I422_12BE, I422_12LE, Y444_12BE, Y444_12LE, GBR_12BE, GBR_12LE, P010_10LE, GBRA_12BE, GBRA_12LE, GBRA_10BE, GBRA_10LE, GRAY10_LE16, VUYA, P012_LE, Y212_LE, Y410, Y412_LE }\n\nvideo/x-raw(format:Interlaced):\n         format: { I420, YUY2, RGB, BGR, Y42B, Y444, YUV9, Y41B, GRAY8, RGB8P, I420, Y42B, Y444, UYVY, NV12, NV21, ARGB, RGBA, ABGR, BGRA, GRAY16_BE, GRAY16_LE, A420, RGB16, RGB15, I420_10BE, I420_10LE, I422_10BE, I422_10LE, Y444_10BE, Y444_10LE, GBR, GBR_10BE, GBR_10LE, A420_10BE, A420_10LE, A422_10BE, A422_10LE, A444_10BE, A444_10LE, GBRA, xRGB, RGBx, xBGR, BGRx, I420_12BE, I420_12LE, I422_12BE, I422_12LE, Y444_12BE, Y444_12LE, GBR_12BE, GBR_12LE, P010_10LE, GBRA_12BE, GBRA_12LE, GBRA_10BE, GBRA_10LE, GRAY10_LE16, VUYA, P012_LE, Y212_LE, Y410, Y412_LE }\n interlace-mode: alternate\n",
                         "direction": "src",
                         "presence": "always"
                     }
@@ -13435,7 +13550,8 @@
                         "writable": true
                     }
                 },
-                "rank": "none"
+                "rank": "none",
+                "untrusted-aware": "true"
             },
             "avdemux_4xm": {
                 "author": "Wim Taymans <wim@fluendo.com>, Ronald Bultje <rbultje@ronald.bitfreak.net>, Edward Hervey <bilboed@bilboed.com>",
@@ -78071,12 +78187,12 @@
                 "klass": "Codec/Encoder/Audio",
                 "pad-templates": {
                     "sink": {
-                        "caps": "audio/x-raw:\n       channels: [ 1, 2 ]\n           rate: [ 4000, 96000 ]\n         format: { U8, S16LE, S32LE }\n         layout: interleaved\n",
+                        "caps": "audio/x-raw:\n       channels: [ 1, 16 ]\n           rate: [ 4000, 96000 ]\n         format: { U8, S16LE, S32LE }\n         layout: interleaved\n",
                         "direction": "sink",
                         "presence": "always"
                     },
                     "src": {
-                        "caps": "audio/x-tta:\n       channels: [ 1, 2 ]\n           rate: [ 4000, 96000 ]\n",
+                        "caps": "audio/x-tta:\n       channels: [ 1, 16 ]\n           rate: [ 4000, 96000 ]\n",
                         "direction": "src",
                         "presence": "always"
                     }
@@ -82813,6 +82929,64 @@
                 },
                 "rank": "marginal"
             },
+            "avmux_aea": {
+                "author": "Wim Taymans <wim.taymans@chello.be>, Ronald Bultje <rbultje@ronald.bitfreak.net>",
+                "description": "libav MD STUDIO audio muxer",
+                "hierarchy": [
+                    "avmux_aea",
+                    "GstElement",
+                    "GstObject",
+                    "GInitiallyUnowned",
+                    "GObject"
+                ],
+                "interfaces": [
+                    "GstTagSetter"
+                ],
+                "klass": "Codec/Muxer",
+                "pad-templates": {
+                    "audio_%%u": {
+                        "caps": "audio/x-vnd.sony.atrac1:\n       channels: [ 1, 2 ]\n           rate: [ 4000, 96000 ]\n",
+                        "direction": "sink",
+                        "presence": "request"
+                    },
+                    "src": {
+                        "caps": "application/x-gst-av-aea:\n",
+                        "direction": "src",
+                        "presence": "always"
+                    }
+                },
+                "properties": {
+                    "maxdelay": {
+                        "blurb": "Set the maximum demux-decode delay (in microseconds)",
+                        "conditionally-available": false,
+                        "construct": false,
+                        "construct-only": false,
+                        "controllable": false,
+                        "default": "0",
+                        "max": "2147483647",
+                        "min": "0",
+                        "mutable": "null",
+                        "readable": true,
+                        "type": "gint",
+                        "writable": true
+                    },
+                    "preload": {
+                        "blurb": "Set the initial demux-decode delay (in microseconds)",
+                        "conditionally-available": false,
+                        "construct": false,
+                        "construct-only": false,
+                        "controllable": false,
+                        "default": "0",
+                        "max": "2147483647",
+                        "min": "0",
+                        "mutable": "null",
+                        "readable": true,
+                        "type": "gint",
+                        "writable": true
+                    }
+                },
+                "rank": "marginal"
+            },
             "avmux_aiff": {
                 "author": "Wim Taymans <wim.taymans@chello.be>, Ronald Bultje <rbultje@ronald.bitfreak.net>",
                 "description": "libav Audio IFF muxer (not recommended, use aiffmux instead)",
@@ -84757,6 +84931,59 @@
                 },
                 "rank": "marginal"
             },
+            "avmux_iamf": {
+                "author": "Wim Taymans <wim.taymans@chello.be>, Ronald Bultje <rbultje@ronald.bitfreak.net>",
+                "description": "libav Raw Immersive Audio Model and Formats muxer",
+                "hierarchy": [
+                    "avmux_iamf",
+                    "GstElement",
+                    "GstObject",
+                    "GInitiallyUnowned",
+                    "GObject"
+                ],
+                "interfaces": [
+                    "GstTagSetter"
+                ],
+                "klass": "Codec/Muxer",
+                "pad-templates": {
+                    "src": {
+                        "caps": "application/x-gst-av-iamf:\n",
+                        "direction": "src",
+                        "presence": "always"
+                    }
+                },
+                "properties": {
+                    "maxdelay": {
+                        "blurb": "Set the maximum demux-decode delay (in microseconds)",
+                        "conditionally-available": false,
+                        "construct": false,
+                        "construct-only": false,
+                        "controllable": false,
+                        "default": "0",
+                        "max": "2147483647",
+                        "min": "0",
+                        "mutable": "null",
+                        "readable": true,
+                        "type": "gint",
+                        "writable": true
+                    },
+                    "preload": {
+                        "blurb": "Set the initial demux-decode delay (in microseconds)",
+                        "conditionally-available": false,
+                        "construct": false,
+                        "construct-only": false,
+                        "controllable": false,
+                        "default": "0",
+                        "max": "2147483647",
+                        "min": "0",
+                        "mutable": "null",
+                        "readable": true,
+                        "type": "gint",
+                        "writable": true
+                    }
+                },
+                "rank": "marginal"
+            },
             "avmux_ico": {
                 "author": "Wim Taymans <wim.taymans@chello.be>, Ronald Bultje <rbultje@ronald.bitfreak.net>",
                 "description": "libav Microsoft Windows ICO muxer",
@@ -85185,6 +85412,59 @@
                     },
                     "src": {
                         "caps": "application/x-gst-av-latm:\n",
+                        "direction": "src",
+                        "presence": "always"
+                    }
+                },
+                "properties": {
+                    "maxdelay": {
+                        "blurb": "Set the maximum demux-decode delay (in microseconds)",
+                        "conditionally-available": false,
+                        "construct": false,
+                        "construct-only": false,
+                        "controllable": false,
+                        "default": "0",
+                        "max": "2147483647",
+                        "min": "0",
+                        "mutable": "null",
+                        "readable": true,
+                        "type": "gint",
+                        "writable": true
+                    },
+                    "preload": {
+                        "blurb": "Set the initial demux-decode delay (in microseconds)",
+                        "conditionally-available": false,
+                        "construct": false,
+                        "construct-only": false,
+                        "controllable": false,
+                        "default": "0",
+                        "max": "2147483647",
+                        "min": "0",
+                        "mutable": "null",
+                        "readable": true,
+                        "type": "gint",
+                        "writable": true
+                    }
+                },
+                "rank": "marginal"
+            },
+            "avmux_lc3": {
+                "author": "Wim Taymans <wim.taymans@chello.be>, Ronald Bultje <rbultje@ronald.bitfreak.net>",
+                "description": "libav LC3 (Low Complexity Communication Codec) muxer",
+                "hierarchy": [
+                    "avmux_lc3",
+                    "GstElement",
+                    "GstObject",
+                    "GInitiallyUnowned",
+                    "GObject"
+                ],
+                "interfaces": [
+                    "GstTagSetter"
+                ],
+                "klass": "Codec/Muxer",
+                "pad-templates": {
+                    "src": {
+                        "caps": "application/x-gst-av-lc3:\n",
                         "direction": "src",
                         "presence": "always"
                     }
@@ -87279,7 +87559,7 @@
                 "klass": "Codec/Muxer",
                 "pad-templates": {
                     "audio_%%u": {
-                        "caps": "audio/x-tta:\n       channels: [ 1, 2 ]\n           rate: [ 4000, 96000 ]\n",
+                        "caps": "audio/x-tta:\n       channels: [ 1, 16 ]\n           rate: [ 4000, 96000 ]\n",
                         "direction": "sink",
                         "presence": "request"
                     },
@@ -88023,7 +88303,7 @@
                 "rank": "none"
             },
             "avvideocompare": {
-                "author": "U. Artie Eoff <ullysses.a.eoff@intel.com",
+                "author": "U. Artie Eoff <ullysses.a.eoff@intel.com>",
                 "description": "Compare Video",
                 "hierarchy": [
                     "GstFFMpegVidCmp",
@@ -88076,7 +88356,8 @@
                         "writable": true
                     }
                 },
-                "rank": "none"
+                "rank": "none",
+                "untrusted-aware": "true"
             }
         },
         "filename": "gstlibav",
@@ -88346,7 +88627,7 @@
                         "value": "1"
                     },
                     {
-                        "desc": "Default fast search",
+                        "desc": "Fast search",
                         "name": "fast",
                         "value": "2"
                     }
@@ -88864,6 +89145,11 @@
                         "desc": "floating point AAN DCT",
                         "name": "faan",
                         "value": "6"
+                    },
+                    {
+                        "desc": "neon",
+                        "name": "neon",
+                        "value": "7"
                     }
                 ]
             },
@@ -89014,6 +89300,11 @@
                         "desc": "export film grain parameters through frame side data",
                         "name": "film_grain",
                         "value": "0x00000008"
+                    },
+                    {
+                        "desc": "export picture enhancement metadata through frame side data",
+                        "name": "enhancements",
+                        "value": "0x00000010"
                     }
                 ]
             },

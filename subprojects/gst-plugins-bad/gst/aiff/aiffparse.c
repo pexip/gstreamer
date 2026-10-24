@@ -83,7 +83,7 @@ static gboolean gst_aiff_parse_pad_convert (GstPad * pad,
 
 static GstFlowReturn gst_aiff_parse_chain (GstPad * pad, GstObject * parent,
     GstBuffer * buf);
-static void gst_aiff_parse_loop (GstPad * pad);
+static void gst_aiff_parse_loop (GstAiffParse * aiff);
 static gboolean gst_aiff_parse_srcpad_event (GstPad * pad, GstObject * parent,
     GstEvent * event);
 
@@ -526,7 +526,7 @@ gst_aiff_parse_perform_seek (GstAiffParse * aiff, GstEvent * event,
     aiff->segment_running = TRUE;
     if (!aiff->streaming) {
       gst_pad_start_task (aiff->sinkpad, (GstTaskFunction) gst_aiff_parse_loop,
-          aiff->sinkpad, NULL);
+          gst_object_ref (aiff), gst_object_unref);
     }
 
     GST_PAD_STREAM_UNLOCK (aiff->sinkpad);
@@ -1361,11 +1361,7 @@ iterate_adapter:
       goto pull_error;
   }
 
-  /* If we have a pending close/start segment, send it now. */
-  if (G_UNLIKELY (aiff->close_segment != NULL)) {
-    gst_pad_push_event (aiff->srcpad, aiff->close_segment);
-    aiff->close_segment = NULL;
-  }
+  /* If we have a pending start segment, send it now. */
   if (G_UNLIKELY (aiff->start_segment != NULL)) {
     gst_pad_push_event (aiff->srcpad, aiff->start_segment);
     aiff->start_segment = NULL;
@@ -1468,10 +1464,10 @@ push_error:
 }
 
 static void
-gst_aiff_parse_loop (GstPad * pad)
+gst_aiff_parse_loop (GstAiffParse * aiff)
 {
   GstFlowReturn ret;
-  GstAiffParse *aiff = GST_AIFF_PARSE (GST_PAD_PARENT (pad));
+  GstPad *pad = aiff->sinkpad;
 
   GST_LOG_OBJECT (aiff, "process data");
 
@@ -1825,7 +1821,7 @@ gst_aiff_parse_sink_activate_mode (GstPad * sinkpad, GstObject * parent,
         aiff->segment_running = TRUE;
         res =
             gst_pad_start_task (sinkpad, (GstTaskFunction) gst_aiff_parse_loop,
-            sinkpad, NULL);
+            gst_object_ref (parent), gst_object_unref);
       } else {
         aiff->segment_running = FALSE;
         res = gst_pad_stop_task (sinkpad);

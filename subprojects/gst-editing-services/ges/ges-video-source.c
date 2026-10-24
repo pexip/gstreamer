@@ -130,26 +130,38 @@ ges_video_source_create_filters (GESVideoSource * self, GPtrArray * elements,
       G_MAXUINT - GES_TIMELINE_ELEMENT_PRIORITY (self), NULL);
   g_ptr_array_add (elements, positioner);
 
-  if (needs_converters)
-    g_ptr_array_add (elements, gst_element_factory_make ("videoconvert", NULL));
+  if (needs_converters) {
+    ename = g_strdup_printf ("ges%s-convert", GES_TIMELINE_ELEMENT_NAME (self));
+    g_ptr_array_add (elements,
+        ges_video_element_selector_make_colorconvert
+        (ges_video_element_selector (), ename, NULL));
+    g_free (ename);
+  }
 
   /* If there's image-orientation tag, make sure the image is correctly oriented
-   * before we scale it. */
-  videoflip = gst_element_factory_make ("videoflip", "track-element-videoflip");
-  g_object_set (videoflip, "video-direction", GST_VIDEO_ORIENTATION_AUTO, NULL);
-  g_ptr_array_add (elements, videoflip);
+   * before we scale it. The selector may return a bin wrapping the
+   * core flip with uploader/downloader; the main_element out-param
+   * gives us the element that carries "video-direction". */
+  {
+    GstElement *flip_core = NULL;
+    videoflip = ges_video_element_selector_make_videoflip
+        (ges_video_element_selector (), "track-element-videoflip", &flip_core);
+    g_object_set (flip_core, "video-direction", GST_VIDEO_ORIENTATION_AUTO,
+        NULL);
+    g_ptr_array_add (elements, videoflip);
+  }
 
 
   if (needs_converters) {
     ename =
-        g_strdup_printf ("ges%s-videoscale", GES_TIMELINE_ELEMENT_NAME (self));
-    g_ptr_array_add (elements, gst_element_factory_make ("videoscale", ename));
-    g_free (ename);
-    ename = g_strdup_printf ("ges%s-convert", GES_TIMELINE_ELEMENT_NAME (self));
-    g_ptr_array_add (elements, gst_element_factory_make ("videoconvert",
-            ename));
+        g_strdup_printf ("ges%s-convertscale",
+        GES_TIMELINE_ELEMENT_NAME (self));
+    g_ptr_array_add (elements,
+        ges_video_element_selector_make_convert_scale
+        (ges_video_element_selector (), ename, NULL));
     g_free (ename);
   }
+
   ename = g_strdup_printf ("ges%s-rate", GES_TIMELINE_ELEMENT_NAME (self));
   videorate = gst_element_factory_make ("videorate", ename);
   g_object_set (videorate, "max-closing-segment-duplication-duration",
@@ -297,10 +309,20 @@ gboolean
 ges_video_source_get_natural_size (GESVideoSource * self, gint * width,
     gint * height)
 {
-  GESVideoSourceClass *klass = GES_VIDEO_SOURCE_GET_CLASS (self);
+  gboolean ret;
+  GESVideoSourceClass *klass;
+  GESTimeline *_locked_timeline;
+
+  g_return_val_if_fail (GES_IS_VIDEO_SOURCE (self), FALSE);
+
+  klass = GES_VIDEO_SOURCE_GET_CLASS (self);
 
   if (!klass->ABI.abi.get_natural_size)
     return FALSE;
 
-  return klass->ABI.abi.get_natural_size (self, width, height);
+  _locked_timeline = _ges_timeline_element_lock (GES_TIMELINE_ELEMENT (self));
+  ret = klass->ABI.abi.get_natural_size (self, width, height);
+  _ges_timeline_element_unlock (GES_TIMELINE_ELEMENT (self), _locked_timeline);
+
+  return ret;
 }

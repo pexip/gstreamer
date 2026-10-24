@@ -384,20 +384,26 @@ gst_ffmpegauddec_negotiate (GstFFMpegAudDec * ffmpegdec,
       frame->sample_rate, channels, format,
       layout == GST_AUDIO_LAYOUT_INTERLEAVED);
 
+  if (channels <= 64) {
 #if LIBAVUTIL_VERSION_INT >= AV_VERSION_INT(57, 28, 100)
-  gst_ffmpeg_channel_layout_to_gst (&frame->ch_layout, channels, pos);
+    gst_ffmpeg_channel_layout_to_gst (&frame->ch_layout, channels, pos);
 #else
-  gst_ffmpeg_channel_layout_to_gst (frame->channel_layout, channels, pos);
+    gst_ffmpeg_channel_layout_to_gst (frame->channel_layout, channels, pos);
 #endif
-  memcpy (ffmpegdec->ffmpeg_layout, pos,
-      sizeof (GstAudioChannelPosition) * channels);
+    memcpy (ffmpegdec->ffmpeg_layout, pos,
+        sizeof (GstAudioChannelPosition) * channels);
 
-  /* Get GStreamer channel layout */
-  gst_audio_channel_positions_to_valid_order (pos, channels);
-  ffmpegdec->needs_reorder =
-      memcmp (pos, ffmpegdec->ffmpeg_layout, sizeof (pos[0]) * channels) != 0;
-  gst_audio_info_set_format (&ffmpegdec->info, format,
-      frame->sample_rate, channels, pos);
+    /* Get GStreamer channel layout */
+    gst_audio_channel_positions_to_valid_order (pos, channels);
+    ffmpegdec->needs_reorder =
+        memcmp (pos, ffmpegdec->ffmpeg_layout, sizeof (pos[0]) * channels) != 0;
+    gst_audio_info_set_format (&ffmpegdec->info, format,
+        frame->sample_rate, channels, pos);
+  } else {
+    ffmpegdec->needs_reorder = FALSE;
+    gst_audio_info_set_format (&ffmpegdec->info, format,
+        frame->sample_rate, channels, NULL);
+  }
   ffmpegdec->info.layout = layout;
 
   if (!gst_audio_decoder_set_output_format (GST_AUDIO_DECODER (ffmpegdec),
@@ -554,11 +560,6 @@ gst_ffmpegauddec_frame (GstFFMpegAudDec * ffmpegdec, GstFlowReturn * ret,
     goto no_codec;
 
   *ret = GST_FLOW_OK;
-#if LIBAVCODEC_VERSION_MAJOR >= 60
-  ffmpegdec->context->frame_num++;
-#else
-  ffmpegdec->context->frame_number++;
-#endif
 
   oclass = (GstFFMpegAudDecClass *) (G_OBJECT_GET_CLASS (ffmpegdec));
 
@@ -903,7 +904,8 @@ gst_ffmpegauddec_register (GstPlugin * plugin)
         !strcmp (in_plugin->name, "srt") ||
         !strcmp (in_plugin->name, "pgssub") ||
         !strcmp (in_plugin->name, "dvdsub") ||
-        !strcmp (in_plugin->name, "dvbsub")) {
+        !strcmp (in_plugin->name, "dvbsub") ||
+        g_str_has_suffix (in_plugin->name, "_omx")) {
       GST_LOG ("Ignoring decoder %s", in_plugin->name);
       continue;
     }

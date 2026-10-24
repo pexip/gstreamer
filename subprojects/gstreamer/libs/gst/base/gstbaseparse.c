@@ -224,6 +224,7 @@ struct _GstBaseParsePrivate
   gboolean passthrough;
   gboolean pts_interpolate;
   gboolean infer_ts;
+  gboolean allow_duplicated_pts;
   gboolean syncable;
   gboolean has_timing_info;
   guint fps_num, fps_den;
@@ -247,6 +248,7 @@ struct _GstBaseParsePrivate
   GstClockTime prev_pts;
   GstClockTime prev_dts;
   gboolean prev_dts_from_pts;
+  guint64 last_frame_buf_seq;
   GstClockTime frame_duration;
   gboolean seen_keyframe;
   gboolean is_video;
@@ -673,6 +675,12 @@ gst_base_parse_init (GstBaseParse * parse, GstBaseParseClass * bclass)
 
   /* init state */
   gst_base_parse_reset (parse);
+
+  /* default parser configuration. subclasses override this in their _init() */
+  parse->priv->pts_interpolate = TRUE;
+  parse->priv->infer_ts = TRUE;
+  parse->priv->allow_duplicated_pts = FALSE;
+
   GST_DEBUG_OBJECT (parse, "init ok");
 
   GST_OBJECT_FLAG_SET (parse, GST_ELEMENT_FLAG_INDEXABLE);
@@ -739,6 +747,8 @@ gst_base_parse_frame_copy (GstBaseParseFrame * frame)
 
   copy = g_memdup2 (frame, sizeof (GstBaseParseFrame));
   copy->buffer = gst_buffer_ref (frame->buffer);
+  if (copy->out_buffer)
+    gst_buffer_ref (copy->out_buffer);
   copy->_private_flags &= ~GST_BASE_PARSE_FRAME_PRIVATE_FLAG_NOALLOC;
 
   GST_TRACE ("copied frame %p -> %p", frame, copy);
@@ -760,6 +770,11 @@ gst_base_parse_frame_free (GstBaseParseFrame * frame)
   if (frame->buffer) {
     gst_buffer_unref (frame->buffer);
     frame->buffer = NULL;
+  }
+
+  if (frame->out_buffer) {
+    gst_buffer_unref (frame->out_buffer);
+    frame->out_buffer = NULL;
   }
 
   if (!(frame->_private_flags & GST_BASE_PARSE_FRAME_PRIVATE_FLAG_NOALLOC)) {
@@ -882,8 +897,6 @@ gst_base_parse_reset (GstBaseParse * parse)
   parse->priv->next_dts = 0;
   parse->priv->syncable = TRUE;
   parse->priv->passthrough = FALSE;
-  parse->priv->pts_interpolate = TRUE;
-  parse->priv->infer_ts = TRUE;
   parse->priv->has_timing_info = FALSE;
   parse->priv->min_bitrate = G_MAXUINT;
   parse->priv->max_bitrate = 0;
@@ -1423,6 +1436,7 @@ gst_base_parse_sink_event_default (GstBaseParse * parse, GstEvent * event)
       parse->priv->prev_pts = GST_CLOCK_TIME_NONE;
       parse->priv->prev_dts = GST_CLOCK_TIME_NONE;
       parse->priv->prev_dts_from_pts = FALSE;
+      parse->priv->last_frame_buf_seq = G_MAXUINT64;
       parse->priv->discont = TRUE;
       parse->priv->seen_keyframe = FALSE;
       parse->priv->skip = 0;
@@ -3205,20 +3219,16 @@ gst_base_parse_chain (GstPad * pad, GstObject * parent, GstBuffer * buffer)
       detect_buf = gst_buffer_ref (buffer);
     } else {
       GList *l;
-      guint offset = 0;
 
       detect_buf = gst_buffer_new ();
 
       for (l = parse->priv->detect_buffers; l; l = l->next) {
-        gsize tmpsize = gst_buffer_get_size (l->data);
-
         gst_buffer_copy_into (detect_buf, GST_BUFFER_CAST (l->data),
-            GST_BUFFER_COPY_MEMORY, offset, tmpsize);
-        offset += tmpsize;
+            GST_BUFFER_COPY_MEMORY, 0, -1);
       }
       if (buffer)
-        gst_buffer_copy_into (detect_buf, buffer, GST_BUFFER_COPY_MEMORY,
-            offset, gst_buffer_get_size (buffer));
+        gst_buffer_copy_into (detect_buf, buffer, GST_BUFFER_COPY_MEMORY, 0,
+            -1);
     }
 
     ret = bclass->detect (parse, detect_buf);
@@ -3243,6 +3253,7 @@ gst_base_parse_chain (GstPad * pad, GstObject * parent, GstBuffer * buffer)
       parse->priv->detect_buffers_size = 0;
 
       if (ret != GST_FLOW_OK) {
+        gst_buffer_unref (buffer);
         return ret;
       }
 
@@ -3252,6 +3263,7 @@ gst_base_parse_chain (GstPad * pad, GstObject * parent, GstBuffer * buffer)
 
       if (parse->priv->drain) {
         GST_DEBUG_OBJECT (parse, "Draining but did not detect format yet");
+        gst_buffer_unref (buffer);
         return GST_FLOW_ERROR;
       } else if (parse->priv->flushing) {
         g_list_foreach (parse->priv->detect_buffers, (GFunc) gst_buffer_unref,
@@ -3267,6 +3279,12 @@ gst_base_parse_chain (GstPad * pad, GstObject * parent, GstBuffer * buffer)
       }
     } else {
       /* Something went wrong, subclass responsible for error reporting */
+      gst_buffer_unref (buffer);
+      g_list_foreach (parse->priv->detect_buffers, (GFunc) gst_buffer_unref,
+          NULL);
+      g_list_free (parse->priv->detect_buffers);
+      parse->priv->detect_buffers = NULL;
+      parse->priv->detect_buffers_size = 0;
       return ret;
     }
 
@@ -3334,11 +3352,28 @@ gst_base_parse_chain (GstPad * pad, GstObject * parent, GstBuffer * buffer)
 
     /* move along with upstream timestamp (if any),
      * but interpolate in between */
-    pts = gst_adapter_prev_pts (parse->priv->adapter, NULL);
     dts = gst_adapter_prev_dts (parse->priv->adapter, NULL);
-    if (GST_CLOCK_TIME_IS_VALID (pts) && (parse->priv->prev_pts != pts)) {
-      parse->priv->prev_pts = parse->priv->next_pts = pts;
-      updated_prev_pts = TRUE;
+    if (parse->priv->allow_duplicated_pts) {
+      /* Detect whether we've advanced into a new input buffer by comparing
+       * the buffer sequence number rather than PTS values. This correctly
+       * handles duplicated PTS (same PTS on consecutive buffers) and sparse
+       * PTS (a buffer without PTS after a buffer with PTS). */
+      guint64 buf_seq =
+          gst_adapter_buffer_seq_at_offset (parse->priv->adapter, 0);
+      pts = gst_adapter_pts_at_offset (parse->priv->adapter, 0, NULL);
+      if (buf_seq != parse->priv->last_frame_buf_seq) {
+        if (GST_CLOCK_TIME_IS_VALID (pts)) {
+          parse->priv->prev_pts = parse->priv->next_pts = pts;
+          updated_prev_pts = TRUE;
+        }
+        parse->priv->last_frame_buf_seq = buf_seq;
+      }
+    } else {
+      pts = gst_adapter_prev_pts (parse->priv->adapter, NULL);
+      if (GST_CLOCK_TIME_IS_VALID (pts) && (parse->priv->prev_pts != pts)) {
+        parse->priv->prev_pts = parse->priv->next_pts = pts;
+        updated_prev_pts = TRUE;
+      }
     }
 
     if (GST_CLOCK_TIME_IS_VALID (dts) && (parse->priv->prev_dts != dts)) {
@@ -3365,10 +3400,21 @@ gst_base_parse_chain (GstPad * pad, GstObject * parent, GstBuffer * buffer)
     /* already inform subclass what timestamps we have planned,
      * at least if provided by time-based upstream */
     if (parse->priv->upstream_format == GST_FORMAT_TIME) {
-      tmpbuf = gst_buffer_make_writable (tmpbuf);
-      GST_BUFFER_PTS (tmpbuf) = parse->priv->next_pts;
-      GST_BUFFER_DTS (tmpbuf) = parse->priv->next_dts;
-      GST_BUFFER_DURATION (tmpbuf) = GST_CLOCK_TIME_NONE;
+      gboolean timestamp_updated = FALSE;
+      if (GST_BUFFER_PTS (tmpbuf) != parse->priv->next_pts ||
+          GST_BUFFER_DTS (tmpbuf) != parse->priv->next_dts) {
+        timestamp_updated = TRUE;
+      }
+
+      /* Preserve upstream buffer duration if timestamp is the same as expected
+       * ones already and subclass disabled pts interpolation/inferring */
+      if (timestamp_updated || parse->priv->infer_ts ||
+          parse->priv->pts_interpolate) {
+        tmpbuf = gst_buffer_make_writable (tmpbuf);
+        GST_BUFFER_PTS (tmpbuf) = parse->priv->next_pts;
+        GST_BUFFER_DTS (tmpbuf) = parse->priv->next_dts;
+        GST_BUFFER_DURATION (tmpbuf) = GST_CLOCK_TIME_NONE;
+      }
     }
 
     /* keep the adapter mapped, so keep track of what has to be flushed */
@@ -3810,7 +3856,7 @@ gst_base_parse_sink_activate (GstPad * sinkpad, GstObject * parent)
   parse->priv->upstream_format = GST_FORMAT_BYTES;
 
   return gst_pad_start_task (sinkpad, (GstTaskFunction) gst_base_parse_loop,
-      sinkpad, NULL);
+      gst_object_ref (sinkpad), gst_object_unref);
   /* fallback */
 baseparse_push:
   {
@@ -3915,6 +3961,9 @@ activate_failed:
  * duration.  Alternatively, if @interval is non-zero (default), then stream
  * duration is determined based on estimated bitrate, and updated every @interval
  * frames.
+ *
+ * This value is reset during PAUSED->READY state changes. Subclasses must
+ * call this function from #GstBaseParseClass::start if they want to set a static value.
  */
 void
 gst_base_parse_set_duration (GstBaseParse * parse,
@@ -3966,6 +4015,9 @@ exit:
  * is used to estimate the total duration of the stream and to estimate
  * a seek position, if there's no index and the format is syncable
  * (see gst_base_parse_set_syncable()).
+ *
+ * This value is reset during PAUSED->READY state changes. Subclasses must
+ * call this function from #GstBaseParseClass::start if they want to set a static value.
  */
 void
 gst_base_parse_set_average_bitrate (GstBaseParse * parse, guint bitrate)
@@ -3982,6 +4034,9 @@ gst_base_parse_set_average_bitrate (GstBaseParse * parse, guint bitrate)
  *
  * Subclass can use this function to tell the base class that it needs to
  * be given buffers of at least @min_size bytes.
+ *
+ * This value is reset during PAUSED->READY state changes. Subclasses must
+ * call this function from #GstBaseParseClass::start if they want to set a static value.
  */
 void
 gst_base_parse_set_min_frame_size (GstBaseParse * parse, guint min_size)
@@ -4005,6 +4060,9 @@ gst_base_parse_set_min_frame_size (GstBaseParse * parse, guint min_size)
  * location, a corresponding decoder might need an initial @lead_in and a
  * following @lead_out number of frames to ensure the desired segment is
  * entirely filled upon decoding.
+ *
+ * This value is reset during PAUSED->READY state changes. Subclasses must
+ * call this function from #GstBaseParseClass::start if they want to set a static value.
  */
 void
 gst_base_parse_set_frame_rate (GstBaseParse * parse, guint fps_num,
@@ -4057,6 +4115,9 @@ gst_base_parse_set_frame_rate (GstBaseParse * parse, guint fps_num,
  * Set if frames carry timing information which the subclass can (generally)
  * parse and provide.  In particular, intrinsic (rather than estimated) time
  * can be obtained following a seek.
+ *
+ * This value is reset during PAUSED->READY state changes. Subclasses must
+ * call this function from #GstBaseParseClass::start if they want to set a static value.
  */
 void
 gst_base_parse_set_has_timing_info (GstBaseParse * parse, gboolean has_timing)
@@ -4073,6 +4134,9 @@ gst_base_parse_set_has_timing_info (GstBaseParse * parse, gboolean has_timing)
  * Set if frame starts can be identified. This is set by default and
  * determines whether seeking based on bitrate averages
  * is possible for a format/stream.
+ *
+ * This value is reset during PAUSED->READY state changes. Subclasses must
+ * call this function from #GstBaseParseClass::start if they want to set a static value.
  */
 void
 gst_base_parse_set_syncable (GstBaseParse * parse, gboolean syncable)
@@ -4093,6 +4157,9 @@ gst_base_parse_set_syncable (GstBaseParse * parse, gboolean syncable)
  * will be invoked, but #GstBaseParseClass::pre_push_frame will still be
  * invoked, so subclass can perform as much or as little is appropriate for
  * passthrough semantics in #GstBaseParseClass::pre_push_frame.
+ *
+ * This value is reset during PAUSED->READY state changes. Subclasses must
+ * call this function from #GstBaseParseClass::start if they want to set a static value.
  */
 void
 gst_base_parse_set_passthrough (GstBaseParse * parse, gboolean passthrough)
@@ -4110,6 +4177,9 @@ gst_base_parse_set_passthrough (GstBaseParse * parse, gboolean passthrough)
  * interpolation (previous timestamp + duration), which is incorrect for
  * data streams with reordering, where PTS can go backward. Sub-classes
  * implementing such formats should disable PTS interpolation.
+ *
+ * This value is retained over PAUSED->READY state changes. Subclasses
+ * can call this function from their instance init function.
  */
 void
 gst_base_parse_set_pts_interpolation (GstBaseParse * parse,
@@ -4129,12 +4199,48 @@ gst_base_parse_set_pts_interpolation (GstBaseParse * parse,
  * versa.  While this is generally correct for audio data, it may not
  * be otherwise. Sub-classes implementing such formats should disable
  * timestamp inferring.
+ *
+ * This value is retained over PAUSED->READY state changes. Subclasses
+ * can call this function from their instance init function.
  */
 void
 gst_base_parse_set_infer_ts (GstBaseParse * parse, gboolean infer_ts)
 {
   parse->priv->infer_ts = infer_ts;
   GST_INFO_OBJECT (parse, "TS inferring: %s", (infer_ts) ? "yes" : "no");
+}
+
+/**
+ * gst_base_parse_set_allow_duplicated_pts:
+ * @parse: a #GstBaseParse
+ * @allow_duplicated_pts: %TRUE if parser should allow duplicated PTS on the output
+ *
+ * By default, the base class will not allow two frames in a row to have the
+ * same PTS but instead will set the second frame's PTS to GST_CLOCK_TIME_NONE.
+ * Setting @allow_duplicated_pts would allow outputting the same PTS multiple
+ * times.
+ *
+ * For audio parsers this is generally not a good idea to allow as it can lead to
+ * unnecessary resyncs if upstream provides coarse grained timestamps and
+ * decoders and other elements generally interpolate missing timestamps based on
+ * the number of samples so missing timestamps would be fixed up later.
+ *
+ * For video parsers this generally should be allowed as various elements expect
+ * valid timestamps on all video frames and will error out or misbehave
+ * otherwise.
+ *
+ * This value is not reset during PAUSED->READY state changes. Subclasses
+ * can call this function from their instance init function.
+ *
+ * Since: 1.30
+ */
+void
+gst_base_parse_set_allow_duplicated_pts (GstBaseParse * parse,
+    gboolean allow_duplicated_pts)
+{
+  parse->priv->allow_duplicated_pts = allow_duplicated_pts;
+  GST_INFO_OBJECT (parse, "Allow duplicated PTS: %s",
+      allow_duplicated_pts ? "yes" : "no");
 }
 
 /**
@@ -4150,6 +4256,9 @@ gst_base_parse_set_infer_ts (GstBaseParse * parse, gboolean infer_ts)
  * If the provided values changed from previously provided ones, this will
  * also post a LATENCY message on the bus so the pipeline can reconfigure its
  * global latency.
+ *
+ * This value is retained over PAUSED->READY state changes. Subclasses
+ * can call this function from their instance init function.
  */
 void
 gst_base_parse_set_latency (GstBaseParse * parse, GstClockTime min_latency,
@@ -4865,7 +4974,8 @@ gst_base_parse_handle_seek (GstBaseParse * parse, GstEvent * event)
 
     /* Start streaming thread if paused */
     gst_pad_start_task (parse->sinkpad,
-        (GstTaskFunction) gst_base_parse_loop, parse->sinkpad, NULL);
+        (GstTaskFunction) gst_base_parse_loop, gst_object_ref (parse->sinkpad),
+        gst_object_unref);
 
     GST_PAD_STREAM_UNLOCK (parse->sinkpad);
 
@@ -5068,16 +5178,23 @@ gst_base_parse_set_ts_at_offset (GstBaseParse * parse, gsize offset)
 
   g_return_if_fail (GST_IS_BASE_PARSE (parse));
 
-  pts = gst_adapter_prev_pts_at_offset (parse->priv->adapter, offset, NULL);
   dts = gst_adapter_prev_dts_at_offset (parse->priv->adapter, offset, NULL);
+  if (parse->priv->allow_duplicated_pts)
+    pts = gst_adapter_pts_at_offset (parse->priv->adapter, offset, NULL);
+  else
+    pts = gst_adapter_prev_pts_at_offset (parse->priv->adapter, offset, NULL);
 
   if (!GST_CLOCK_TIME_IS_VALID (pts) || !GST_CLOCK_TIME_IS_VALID (dts)) {
     GST_DEBUG_OBJECT (parse,
         "offset adapter timestamps dts=%" GST_TIME_FORMAT " pts=%"
         GST_TIME_FORMAT, GST_TIME_ARGS (dts), GST_TIME_ARGS (pts));
   }
-  if (GST_CLOCK_TIME_IS_VALID (pts) && (parse->priv->prev_pts != pts))
+  if (parse->priv->allow_duplicated_pts) {
+    if (GST_CLOCK_TIME_IS_VALID (pts))
+      parse->priv->prev_pts = parse->priv->next_pts = pts;
+  } else if (GST_CLOCK_TIME_IS_VALID (pts) && (parse->priv->prev_pts != pts)) {
     parse->priv->prev_pts = parse->priv->next_pts = pts;
+  }
 
   if (GST_CLOCK_TIME_IS_VALID (dts) && (parse->priv->prev_dts != dts)) {
     parse->priv->prev_dts = parse->priv->next_dts = dts;

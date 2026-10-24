@@ -60,6 +60,12 @@
 #include <ajantv2/includes/ntv2rp188.h>
 #include <ajantv2/includes/ntv2vpid.h>
 
+#ifdef _WIN32
+#include <windows.h>
+#else
+#include <pthread.h>
+#endif
+
 #include "gstajacommon.h"
 #include "gstajasrc.h"
 
@@ -102,7 +108,9 @@ enum {
   PROP_START_FRAME,
   PROP_END_FRAME,
   PROP_QUEUE_SIZE,
+#if !defined(__APPLE__)
   PROP_CAPTURE_CPU_CORE,
+#endif
   PROP_SIGNAL,
   PROP_ATTACH_ANCILLARY_META,
 };
@@ -345,6 +353,7 @@ static void gst_aja_src_class_init(GstAjaSrcClass *klass) {
           (GParamFlags)(G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
                         G_PARAM_CONSTRUCT)));
 
+#if !defined(__APPLE__)
   g_object_class_install_property(
       gobject_class, PROP_CAPTURE_CPU_CORE,
       g_param_spec_uint(
@@ -354,6 +363,7 @@ static void gst_aja_src_class_init(GstAjaSrcClass *klass) {
           0, G_MAXUINT, DEFAULT_CAPTURE_CPU_CORE,
           (GParamFlags)(G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
                         G_PARAM_CONSTRUCT)));
+#endif
 
   g_object_class_install_property(
       gobject_class, PROP_SIGNAL,
@@ -423,7 +433,9 @@ static void gst_aja_src_init(GstAjaSrc *self) {
   self->timecode_index = DEFAULT_TIMECODE_INDEX;
   self->reference_source = DEFAULT_REFERENCE_SOURCE;
   self->closed_caption_capture_mode = DEFAULT_CLOSED_CAPTION_CAPTURE_MODE;
+#if !defined(__APPLE__)
   self->capture_cpu_core = DEFAULT_CAPTURE_CPU_CORE;
+#endif
   self->attach_ancillary_meta = DEFAULT_ATTACH_ANCILLARY_META;
 
   self->queue =
@@ -487,9 +499,11 @@ void gst_aja_src_set_property(GObject *object, guint property_id,
       self->closed_caption_capture_mode =
           (GstAjaClosedCaptionCaptureMode)g_value_get_enum(value);
       break;
+#if !defined(__APPLE__)
     case PROP_CAPTURE_CPU_CORE:
       self->capture_cpu_core = g_value_get_uint(value);
       break;
+#endif
     case PROP_ATTACH_ANCILLARY_META:
       self->attach_ancillary_meta = g_value_get_boolean(value);
       break;
@@ -549,9 +563,11 @@ void gst_aja_src_get_property(GObject *object, guint property_id, GValue *value,
     case PROP_CLOSED_CAPTION_CAPTURE_MODE:
       g_value_set_enum(value, self->closed_caption_capture_mode);
       break;
+#if !defined(__APPLE__)
     case PROP_CAPTURE_CPU_CORE:
       g_value_set_uint(value, self->capture_cpu_core);
       break;
+#endif
     case PROP_SIGNAL:
       g_value_set_boolean(value, self->signal);
       break;
@@ -570,9 +586,7 @@ void gst_aja_src_constructed(GObject *object) {
   G_OBJECT_CLASS(parent_class)->constructed(object);
 
   gchar *aja_clock_name = g_strdup_printf("ajaclock-%s", GST_OBJECT_NAME(self));
-  self->clock =
-      GST_CLOCK(g_object_new(GST_TYPE_SYSTEM_CLOCK, "name", aja_clock_name,
-                             "clock-type", GST_CLOCK_TYPE_MONOTONIC, NULL));
+  self->clock = gst_system_clock_new (aja_clock_name, GST_CLOCK_TYPE_MONOTONIC);
   g_free(aja_clock_name);
 }
 
@@ -1766,9 +1780,7 @@ static gboolean gst_aja_src_unlock_stop(GstBaseSrc *bsrc) {
 static GstFlowReturn gst_aja_src_create(GstPushSrc *psrc, GstBuffer **buffer) {
   GstAjaSrc *self = GST_AJA_SRC(psrc);
   GstFlowReturn flow_ret = GST_FLOW_OK;
-  QueueItem item = {
-      .type = QUEUE_ITEM_TYPE_DUMMY,
-  };
+  QueueItem item = {QUEUE_ITEM_TYPE_DUMMY};
 
 next_item:
   item.type = QUEUE_ITEM_TYPE_DUMMY;
@@ -2288,7 +2300,8 @@ next_item:
     g_free(__name);                                                         \
     g_free(__dbg);                                                          \
     __msg = gst_message_new_error(GST_OBJECT(el), __err, __fmt_dbg);        \
-    QueueItem item = {.type = QUEUE_ITEM_TYPE_ERROR, .error{.msg = __msg}}; \
+    QueueItem item = {QUEUE_ITEM_TYPE_ERROR};                               \
+    item.error = { __msg };                                                 \
     gst_vec_deque_push_tail_struct(el->queue, &item);                       \
     g_cond_signal(&el->queue_cond);                                         \
   }                                                                         \
@@ -2301,7 +2314,26 @@ static void capture_thread_func(AJAThread *thread, void *data) {
   AUTOCIRCULATE_TRANSFER transfer;
   NTV2VideoFormat last_detected_video_format = ::NTV2_FORMAT_UNKNOWN;
 
+#if defined(__APPLE__)
+  pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
+#else
   if (self->capture_cpu_core != G_MAXUINT) {
+#ifdef _WIN32
+    if (self->capture_cpu_core < 64) {
+      const DWORD_PTR mask = 1ULL << self->capture_cpu_core;
+      HANDLE current_thread = GetCurrentThread();
+
+      if (SetThreadAffinityMask(current_thread, mask) == 0) {
+        GST_ERROR_OBJECT(self,
+                         "Failed to set affinity for current thread to core %u",
+                         self->capture_cpu_core);
+      }
+    } else {
+      // SetThreadAffinityMask can only handle up to 64 processors
+      GST_ERROR_OBJECT(self, "Invalid or out of range core %u",
+                       self->capture_cpu_core);
+    }
+#else
     cpu_set_t mask;
     pthread_t current_thread = pthread_self();
 
@@ -2313,19 +2345,20 @@ static void capture_thread_func(AJAThread *thread, void *data) {
                        "Failed to set affinity for current thread to core %u",
                        self->capture_cpu_core);
     }
+#endif
   }
+#endif  // defined(__APPLE__)
 
   // We're getting a system clock for the real-time clock here because
   // g_get_real_time() is less accurate generally.
-  real_time_clock = GST_CLOCK(g_object_new(GST_TYPE_SYSTEM_CLOCK, "clock-type",
-                                           GST_CLOCK_TYPE_REALTIME, NULL));
+  real_time_clock = gst_system_clock_new (NULL, GST_CLOCK_TYPE_REALTIME);
 
   // if we currently have signal
   bool have_signal = true;
   // if the *next* output frame should have the discont flag set
   bool discont = true;
   // if the pipeline clock is the monotonic system clock
-  bool clock_is_monotonic_system_clock = false;
+  bool clock_is_system_monotonic = false;
   // if the next frame is the first one after autocirculate was started
   bool first_frame_after_start = true;
   // acFrameTime of the last captured frame. Used to detect
@@ -2360,17 +2393,7 @@ restart:
   gst_clear_object(&clock);
   clock = gst_element_get_clock(GST_ELEMENT_CAST(self));
 
-  clock_is_monotonic_system_clock = false;
-  if (G_OBJECT_TYPE(clock) == GST_TYPE_SYSTEM_CLOCK) {
-    GstClock *system_clock = gst_system_clock_obtain();
-
-    if (clock == system_clock) {
-      GstClockType clock_type;
-      g_object_get(clock, "clock-type", &clock_type, NULL);
-      clock_is_monotonic_system_clock = clock_type == GST_CLOCK_TYPE_MONOTONIC;
-    }
-    gst_clear_object(&system_clock);
-  }
+  clock_is_system_monotonic = gst_clock_is_system_monotonic(clock);
 
   // Reset all local state after restart
   have_signal = true;
@@ -2409,11 +2432,8 @@ restart:
       if (self->video_format == ::NTV2_FORMAT_UNKNOWN) {
         GST_DEBUG_OBJECT(self, "No signal, waiting");
         if (have_signal) {
-          QueueItem item = {
-              .type = QUEUE_ITEM_TYPE_SIGNAL_CHANGE,
-              .signal_change = {.have_signal = FALSE,
-                                .detected_format = ::NTV2_FORMAT_UNKNOWN,
-                                .vpid = 0}};
+          QueueItem item = {QUEUE_ITEM_TYPE_SIGNAL_CHANGE};
+          item.signal_change = {FALSE, ::NTV2_FORMAT_UNKNOWN, 0};
           gst_vec_deque_push_tail_struct(self->queue, &item);
           g_cond_signal(&self->queue_cond);
           have_signal = false;
@@ -2531,11 +2551,8 @@ restart:
       GST_DEBUG_OBJECT(self, "No signal, waiting");
       g_mutex_unlock(&self->queue_lock);
       if (have_signal || current_video_format != last_detected_video_format) {
-        QueueItem item = {
-            .type = QUEUE_ITEM_TYPE_SIGNAL_CHANGE,
-            .signal_change = {.have_signal = FALSE,
-                              .detected_format = ::NTV2_FORMAT_UNKNOWN,
-                              .vpid = 0}};
+        QueueItem item = {QUEUE_ITEM_TYPE_SIGNAL_CHANGE};
+        item.signal_change = {FALSE, ::NTV2_FORMAT_UNKNOWN, 0};
         last_detected_video_format = ::NTV2_FORMAT_UNKNOWN;
         gst_vec_deque_push_tail_struct(self->queue, &item);
         g_cond_signal(&self->queue_cond);
@@ -2566,11 +2583,8 @@ restart:
                        effective_string.c_str());
       g_mutex_unlock(&self->queue_lock);
       if (have_signal || current_video_format != last_detected_video_format) {
-        QueueItem item = {
-            .type = QUEUE_ITEM_TYPE_SIGNAL_CHANGE,
-            .signal_change = {.have_signal = FALSE,
-                              .detected_format = current_video_format,
-                              .vpid = vpid_a}};
+        QueueItem item = {QUEUE_ITEM_TYPE_SIGNAL_CHANGE};
+        item.signal_change = {FALSE, current_video_format, vpid_a};
         last_detected_video_format = current_video_format;
         gst_vec_deque_push_tail_struct(self->queue, &item);
         g_cond_signal(&self->queue_cond);
@@ -2581,11 +2595,8 @@ restart:
       continue;
     } else if (have_signal &&
                current_video_format != last_detected_video_format) {
-      QueueItem item = {
-          .type = QUEUE_ITEM_TYPE_SIGNAL_CHANGE,
-          .signal_change = {.have_signal = TRUE,
-                            .detected_format = current_video_format,
-                            .vpid = vpid_a}};
+      QueueItem item = {QUEUE_ITEM_TYPE_SIGNAL_CHANGE};
+      item.signal_change = {TRUE, current_video_format, vpid_a};
       last_detected_video_format = current_video_format;
       gst_vec_deque_push_tail_struct(self->queue, &item);
       g_cond_signal(&self->queue_cond);
@@ -2624,11 +2635,8 @@ restart:
       AUTOCIRCULATE_TRANSFER transfer;
 
       if (!have_signal) {
-        QueueItem item = {
-            .type = QUEUE_ITEM_TYPE_SIGNAL_CHANGE,
-            .signal_change = {.have_signal = TRUE,
-                              .detected_format = current_video_format,
-                              .vpid = vpid_a}};
+        QueueItem item = {QUEUE_ITEM_TYPE_SIGNAL_CHANGE};
+        item.signal_change = {TRUE, current_video_format, vpid_a};
         gst_vec_deque_push_tail_struct(self->queue, &item);
         g_cond_signal(&self->queue_cond);
         have_signal = true;
@@ -2800,10 +2808,8 @@ restart:
                              "Frame drop of %" GST_TIME_FORMAT " detected",
                              GST_TIME_ARGS(timestamp_end - timestamp));
 
-          QueueItem item = {.type = QUEUE_ITEM_TYPE_FRAMES_DROPPED,
-                            .frames_dropped = {.driver_side = TRUE,
-                                               .timestamp_start = timestamp,
-                                               .timestamp_end = timestamp_end}};
+          QueueItem item = {QUEUE_ITEM_TYPE_FRAMES_DROPPED};
+          item.frames_dropped = {TRUE, timestamp, timestamp_end};
           gst_vec_deque_push_tail_struct(self->queue, &item);
           g_cond_signal(&self->queue_cond);
 
@@ -2890,7 +2896,7 @@ restart:
             gst_clock_unadjust_with_calibration(NULL, frame_src_time, internal,
                                                 external, num, denom);
 
-        if (clock_is_monotonic_system_clock) {
+        if (clock_is_system_monotonic) {
           // If the pipeline is using the monotonic system clock then we can
           // just use this.
           GST_OBJECT_LOCK(clock);
@@ -2974,16 +2980,13 @@ restart:
             GST_WARNING_OBJECT(self,
                                "Element queue overrun, dropping old frame");
 
-            QueueItem item = {
-                .type = QUEUE_ITEM_TYPE_FRAMES_DROPPED,
-                .frames_dropped = {
-                    .driver_side = FALSE,
-                    .timestamp_start = tmp->frame.capture_time,
-                    .timestamp_end =
-                        tmp->frame.capture_time +
-                        gst_util_uint64_scale(GST_SECOND,
-                                              self->configured_info.fps_d,
-                                              self->configured_info.fps_n)}};
+            QueueItem item = {QUEUE_ITEM_TYPE_FRAMES_DROPPED};
+            item.frames_dropped = {
+                FALSE, tmp->frame.capture_time,
+                tmp->frame.capture_time +
+                    gst_util_uint64_scale(GST_SECOND,
+                                          self->configured_info.fps_d,
+                                          self->configured_info.fps_n)};
             queue_item_clear(tmp);
             gst_vec_deque_drop_struct(self->queue, i, NULL);
             gst_vec_deque_push_tail_struct(self->queue, &item);
@@ -3001,19 +3004,17 @@ restart:
         discont = false;
       }
 
-      QueueItem item = {
-          .type = QUEUE_ITEM_TYPE_FRAME,
-          .frame = {.capture_time = capture_time,
-                    .video_buffer = video_buffer,
-                    .audio_buffer = audio_buffer,
-                    .anc_buffer = anc_buffer,
-                    .anc_buffer2 = anc_buffer2,
-                    .tc = time_code,
-                    .detected_format =
-                        (self->quad_mode
-                             ? ::GetQuadSizedVideoFormat(current_video_format)
-                             : current_video_format),
-                    .vpid = vpid_a}};
+      QueueItem item = {QUEUE_ITEM_TYPE_FRAME};
+      item.frame = {
+          capture_time,
+          video_buffer,
+          audio_buffer,
+          anc_buffer,
+          anc_buffer2,
+          time_code,
+          (self->quad_mode ? ::GetQuadSizedVideoFormat(current_video_format)
+                           : current_video_format),
+          vpid_a};
 
       GST_TRACE_OBJECT(self, "Queuing frame %" GST_TIME_FORMAT,
                        GST_TIME_ARGS(capture_time));
@@ -3031,11 +3032,8 @@ restart:
         iterations_without_frame++;
       } else {
         if (have_signal || last_detected_video_format != current_video_format) {
-          QueueItem item = {
-              .type = QUEUE_ITEM_TYPE_SIGNAL_CHANGE,
-              .signal_change = {.have_signal = TRUE,
-                                .detected_format = current_video_format,
-                                .vpid = vpid_a}};
+          QueueItem item = {QUEUE_ITEM_TYPE_SIGNAL_CHANGE};
+          item.signal_change = {TRUE, current_video_format, vpid_a};
           last_detected_video_format = current_video_format;
           gst_vec_deque_push_tail_struct(self->queue, &item);
           g_cond_signal(&self->queue_cond);

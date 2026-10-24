@@ -220,7 +220,10 @@ models are merged into one model removing the need the multi-level inference,
 but again, this is a design decision involving compromise on re-usability,
 performance and effort. We aim to provide support for all these use cases,
 and to allow the analytics pipeline designer to make the best design decisions based
-on his specific context.
+on his specific context. It is important to remember that tensor decoders generally
+require media details, such as dimensions, to decode a tensor. If the media is
+modified between the analysis phase and tensor decoding, the tensor decoder
+must be able to retrieve the media details from the time of inference.
 
 #### Analytics Meta
 The Analytics Meta (GstAnalyticsRelationMeta) is the foundation of re-usability of
@@ -255,20 +258,304 @@ specific to machine learning techniques and can also be used to store analysis
 results from computer vision, heuristics or other techniques. It can be used as
 a bridge between different techniques.
 
+The conventions producers are expected to follow when wiring those results
+together are described in
+[Analytics Metadata Relation Conventions](#analytics-metadata-relation-conventions).
+
+#### Impact of Tensor Decoder Modifying Media
+
+It is preferable for tensor decoders to limit themselves to producing normalized
+analytics results. This approach makes tensor decoders more reusable and the overall
+system more flexible. Interpretation and utilization of analytics results should
+be delegated to other elements. For example, `ssdtensordecoder` adds only normalized
+analytics results to the output without modifying the media itself. This design allows
+normalized analytics results to be consumed by both `objectdetectionoverlay` and
+`relationmeta2onvifmeta` elements. Even when tensor decoders can generate new media,
+it is preferable to delegate media rendering to a dedicated renderer element
+if visualization is the objective.
+
 ### Tensor Transport Mode
 Two transport mode are envisioned as Meta or as Media. Both mode have pros and
 cons which justify supporting both mode. Currently tensor are only transported
 as meta.
 
 #### Tensor Transport As Meta
-In this mode tensor is attached to the buffer (the media) on which the analysis
-was performed. The advantage of this mode if the original media is kept in a
-direct association with analytics results. Further refinement analysis or
-consumption (like overlay) of the analytics result are easier when the media on
-which the analysis was performed is available and easily identifiable. Another
-advantage is the ability to keep a relation description between tensors in a
-refinement context On the other hand this mode of transporting analytics result
-make negotiation of tensor-decoder in particular difficult.
+
+In this mode, the tensor is attached to the buffer (the media) on which the analysis was performed. The advantage of this mode is that the original media is kept in a direct association with the analytics results. Further refinement analysis or consumption (like overlay) of the analytics result are easier when the media on which the analysis was performed is available and easily identifiable. Another advantage is the ability to keep a relation description between tensors in a refinement context. On the other hand, this mode of transporting analytics results makes negotiation of tensor-decoder, in particular, difficult.
+
+### Pre/Post Processing Negotiation
+
+Allowing the negotiation of required analysis pre/post-processing and automatically injecting the required elements to enable their processing would be very valuable and minimize the effort of porting an analytics pipeline between different platforms and making use of available acceleration. Tensor-decoders bin, auto-plugging of pre-processing (considering available acceleration), auto-plugging of inference element (optimized for the platform), post-processing, tensor-decoder bin selecting required tensor-decoders potentially from multiple functionally equivalent, but more adapted to the platform, are all aspects to consider when designing negotiation involved in an analytics pipeline.
+
+#### Tensor Decoder Negotiation
+
+Goals:
+- Validate compatibility of tensor decoder with tensors produced upstream.
+- Ability to create tensordecoderbin
+
+Pipeline examples:
+
+Example 1: simplest inference pipeline
+```
+... ! inference model-file=ssd ! ssdtensordecoder ! ...
+```
+
+Example 2: Cascaded inferences
+```
+... ! inference model-file=ssd
+    ! inference model-file=mobilenet !
+    ! ssdtensordecoder ! classifiertensordecoder ! ...
+```
+
+Example 3: Tensor decoders auto-plugging
+```
+... ! inference model-file=ssd
+    ! inference model-file=mobilenet ! tensordecoderbin ! ...
+```
+
+#### Tensor Capabilities Anatomy
+Tensor capabilities are describing the capabilities of elements that produce
+or can use a specific tensor.
+
+Example of tensor capability. Capitalized words are placeholders.
+```
+video/x-raw,
+  width=1920,
+  height=1080,
+  ...
+  tensors=(structure)[
+    tensorgroups,
+      TENSOR_GROUP_ID = (/set) {
+        "(GstCaps)["
+          "tensor/strided,"
+            "tensor-id"=TENSOR_ID,
+            "dims=<(int[0,1], (int)[1,max])>,"
+            "dims-order"=(string)row-major,
+            "type"={float32, uint8};
+          "tensor/strided,"
+            "tensor-id"=TENSOR_ID,
+            "dims=<(int)[1, max]>",
+            "dims-order"=(string)row-major,
+            "type={float32, uint8}"
+      }
+  ]
+}
+```
+When an element can produce a tensor, it will add or append to the `tensors` field. This
+field describes the tensor(s) that will be attached to the media buffer. Also
+note the media can be of any type: `audio/x-raw` `text/x-raw`. It's more common
+to have a raw media, but there is no limitation on the media type.
+
+Tensor capability explained line by line.
+
+```
+  tensors=(structure)[
+```
+This is the top-level tensor caps constraint. By having all tensor capabilities
+in a single field, negotiation complexity and impact on other elements that are
+not handling tensors is limited. Additionally, it allows inference elements to know
+which field contains the tensor capability description. Inference
+elements are generic and don't know about tensor-group-id or tensor-id other
+than the one from the model they are loading. Without this top-level tensor caps constraint,
+generic elements would have to inspect all fields and try to identify if a
+field contains a tensor capability description. The first inference element in
+the pipeline needs to remove the tensor capabilities from the
+overall capabilities when transforming srcpad capabilities to sinkpad
+capabilities to avoid propagating tensor capabilities upstream from the first
+inference element. To accomplish this task, it needs to be able to recognize tensor
+capabilities from the overall capabilities.
+
+Capabilities without top-level `tensors` field:
+```
+video/x-raw,
+  ...
+  "ssd-mobilenet-v1-variant-1-out" = (/set) {
+    "(GstCaps)["
+      "tensor/strided,"
+        "tensor-id"=TENSOR_ID,
+        "dims=<(int[0,1], (int)[1,max])>,"
+        "dims-order"=(string)row-major,
+        "type"={float32, uint8};
+      "tensor/strided,"
+        "tensor-id"=TENSOR_ID,
+        "dims=<(int)[1, max]>",
+        "dims-order"=(string)row-major,
+        "type"={float32, uint8}
+  },
+  "classification-generic-out" = (/set) {
+    "(GstCaps)["
+      "tensor/strided,"
+        "tensor-id"=TENSOR_ID,
+        "dims=<(int[0,1], (int)[1,max])>,"
+        "dims-order"=(string)row-major,
+        "type"={float32, uint8};
+      "tensor/strided,"
+        "tensor-id"=TENSOR_ID,
+        "dims=<(int)[1, max]>",
+        "dims-order"=(string)row-major,
+        "type"={float32, uint8}
+  }
+}
+```
+
+and the following pipeline:
+
+```
+... ! inference name=i1 model-file=./ssd-model.onnx
+    ! inference name=i2 model-file=./mobilenet.onnx ! ...
+```
+
+The tensor capability `ssd-mobilenet-v1-variant-1-out` is added by `i1`, and
+`classification-generic-out` is added by `i2`. Since inference `i1` is the
+first inference element in the pipeline, during negotiation, it must
+ensure that no tensor capabilities are propagated upstream
+from itself. Without the top-level `tensors` field, `i1` would need to know that
+`classification-generic-out` is a tensor capability. However, since it doesn't know
+about the tensor-group-id `classification-generic-out`, it would have to inspect the
+value of this field to determine if it's a tensor capability. Additionally, `i1` needs
+to identify that it is the most upstream element in the pipeline. To achieve
+this, it must verify if there are tensor capabilities on its sinkpad without knowing
+about any specific tensor-group-id or tensor-id. With the assurance that
+all tensor capabilities are within the `tensors` field, `i1` and `i2` can simply
+verify if `tensors` is present in the upstream capabilities. If `i1` is first, it
+removes the `tensors` field before intersecting its srcpad capabilities with its sinkpad
+capabilities. In the future, other elements like tensor batch splitting, which
+is generic, as they don't need to know about tensor-group-id or tensor-id,
+will need to be able to identify tensor capabilities from the overall
+capabilities without knowing any specific tensor-group-id or tensor-id.
+
+```
+ tensorgroups,
+```
+Simply the name of the structure that is required. This level contains tensor
+groups.
+
+```
+ TENSOR_GROUP_ID = (/set) {
+```
+
+`TENSOR_GROUP_ID` is a placeholder that would be replaced with a specific tensor
+group id from the tensor registry. This level describes tensors that are related.
+For example ssd models produce 4 tensors that need to be interpreted together during
+tensor decoding. We use a `GstSet` because the order is irrelevant and a fixed value is required.
+
+```
+ "(GstCaps)["
+```
+This level uses `GstCaps` to allow the tensor decoder to describe one or more shapes of tensors that it can accept.
+
+```
+ "tensor/strided,"
+```
+This indicates the tensor is dense. It's mainly present to indicate the tensor is
+not sparse. A sparse tensor will require additional handling at the tensor decoder.
+
+
+```
+ "tensor-id"=TENSOR_ID,
+```
+
+TENSOR_ID is a placeholder that would have the value of a specific tensor-id
+from the tensor-id registry. A tensor-id identify an tensor encoding. Tensor
+encoding can present some flexibility that is described by other tensor caps
+parameters like dims, datatype and dims-order, but the encoding pattern remains
+the same.
+
+```
+ "dims=<(int[0,1], (int)[1,max])>,"
+```
+
+This field describes the dimensions of the tensors. In many models, the outermost dimension is
+where the batch size would be specified if explicitly described. This field can be interpreted in the context of a specific tensor-id.
+In this example, the first dimension allow 0 and 1. A value of 1 is an explicit batch size
+of 1, which also means no batching is used. Here, the tensor decoder is guaranteed to receive tensors with a batch size of 1.
+A value of 0 means the batch size is dynamic and therefore can be different for each
+tensor. It's also possible that batching is not used and first dimension isn't a batch size.
+
+```
+ "dims-order"=(string)row-major,
+```
+
+This field indicates how the tensor is stored in memory. Possible values are
+row-major and col-major. Typically, dims-order is an artifact of the training
+framework. For example, JAX use col-major to store its data, which result in
+tensor memory encoding to be [column major](https://en.wikipedia.org/wiki/Row-_and_column-major_order).
+
+Here's an example:
+
+YOLOv8 mask tensor's logical tensor encoding:
+
+```
+[X, Y, W, H, C0, C1, ..., C79]
+```
+X, Y, W, H : Describe the object location
+C0, ..., C79: Confidence level for 80 different class of objects for the object
+located at (X, Y, W, H)
+
+**For 3 objects**, we have:
+
+| x-1 | y-1, | w-1 | h-1 | c0-1 | ... | c79-1 |
+| x-2 | y-2, | w-2 | h-2 | c0-2 | ... | c79-2 |
+| x-3 | y-3, | w-3 | h-3 | c0-3 | ... | c79-3 |
+
+Memory encoding: dims-order=row-major
+With this encoding the object properties are contiguous in memory.
+
+| x-1 | y-1 | w-1 | h-1 | c0-1 | ... | c79-1 | x-2 | y-2 | w-2 | h-2 | ... |
+c79-3 |
+
+Memory encoding: dims-order=col-major
+With this encoding all objects properties of same type are contiguous in memory.
+
+| x-1 | x-2 | x-3 | y-1 | y-2 | y-3 | ... | c79-1 | c79-2 | c79-3 |
+
+If we draw an analogy between tensor and image, row-major is analogous to interleaved color
+components of pixels and col-major is planar color components of pixels.
+
+```
+ "type"={float32, uint8};
+```
+This field indicates the datatype of the tensor.
+
+```
+ "tensor/strided,"
+   "tensor-id"=TENSOR_ID,
+   "dims=<(int)[1, max]>",
+   "dims-order"=(string)row-major,
+   "type={float32, uint8}"
+```
+
+This is a alternative description of the tensor where the dims field is different.
+In this case a batch of 1 is implicit.
+
+Cascaded inferences:
+
+If the tensor-group-id is different then the second inference would simply add a new
+tensor group.
+
+If two inference share the same tensor-group-id, the second inference will have to
+modify the tensor caps to describe both tensors. Since tensor-group-id and
+tensor-id remain the same, the same tensor decoder can process tensors from both
+inferences. For example, if we have two inference elements loading a
+classifications models, where the first inference loads a model classifying the
+input/image as genuine or generated and second inference loads a model classifying
+input/image based on the city seen in the image. Since classification's tensor
+output is frequently a vector of confidence level for each classes then encoding
+will be the same for both models and therefore tensor-group-id and tensor-id
+will also be the same. The first model would have two classes: genuine and
+generated, while the second model might have 1000 classes where each one
+represents a city. Assuming an implicit batch of 1, first inference tensor
+capabilities will be `dims=<2>` while second inference will be `dims=<1000>`.
+Second inference element will have to reconcile `dims` field as they share
+the same encoding therefore represented by same tensor-id. Second inference
+might set the tensor capabilities to `dims=<0>` meaning a vector of dynamic size or
+`dims=(/set){2, 1000}` meaning the vector size can be 2 or 1000.
+
+Selecting a tensor decoder:
+
+A subset operation between upstream tensor caps and tensor decoder caps is
+performed and if the upstream tensor caps is a subset, then the tensor decoder can be
+selected. Inference elements produce fully constrained (fixed) tensor caps.
 
 ### Inference Sinkpad(s) Capabilities
 Sinkpad capability, before been constrained based on model, can be any
@@ -277,6 +564,424 @@ media type.
 ### Inference Srcpad(s) Capabilities
 
 Srcpads capabilities, will be identical to sinkpads capabilities.
+
+## Analytics Metadata Relation Conventions
+
+`GstAnalyticsRelationMeta` only provides the storage and the adjacency matrix; it
+does not mandate how producers wire results together. This section describes the
+conventions a producer is expected to follow so that a consumer can navigate the
+graph without knowing which element produced which result. It covers object
+detection, classification, keypoints, segmentation, raw tensors and tracking, and
+the difference between **full-frame** and **per-region (ROI)** results.
+
+### Relation Types
+
+```
+  Parent mtd  --CONTAIN-->      Child mtd
+  Child mtd   --IS_PART_OF-->   Parent mtd
+  mtd X       ..RELATE_TO..>    mtd Y
+  Group mtd 1 ==N_TO_N==>       Group mtd 2
+```
+
+- **CONTAIN** (`GST_ANALYTICS_REL_TYPE_CONTAIN`): parent owns child. Used for
+  `ODMtd -> {ClsMtd, GroupMtd, TensorMtd}` and parent -> child `ODMtd`.
+- **IS_PART_OF** (`GST_ANALYTICS_REL_TYPE_IS_PART_OF`): the inverse edge, set
+  together with every `CONTAIN` so the graph is navigable both ways.
+- **RELATE_TO** (`GST_ANALYTICS_REL_TYPE_RELATE_TO`): non-ownership association,
+  used for tracking and for keypoint skeleton edges.
+- **N_TO_N** (`GST_ANALYTICS_REL_TYPE_N_TO_N`): a component-wise relation between
+  two groups, where each component of one group corresponds to the respective
+  component of the other group. For example a `SegmentationMtd` (a group of
+  region ids) linked to a `ClsMtd` (a group of labels) so that region *i* maps to
+  label *i*.
+
+Every relation is stored as a **directed** edge:
+`gst_analytics_relation_meta_set_relation (type, a, b)` records `a -> b` only.
+`CONTAIN` / `IS_PART_OF` are therefore set as a pair, while `RELATE_TO` and
+`N_TO_N` are written once, in the direction chosen by the producer.
+
+To keep the diagrams below readable, only the `CONTAIN` direction is drawn; the
+matching `IS_PART_OF` edge is always set as well.
+
+### Object Detection
+
+An object-detection stage adds one `ODMtd` per detected object. In full-frame
+detection the detections are top-level; when detection runs per region, inside an
+existing ROI, each new detection is nested under the parent ROI's `ODMtd`.
+
+Each `ODMtd` stores the detection's **bounding box** `(x, y, w, h)`, a
+**confidence**, and an optional **object type**, a label quark identifying the
+detected class (`gst_analytics_od_mtd_get_obj_type`, which returns `0` when no
+class is set). When present, the object type is the detection's primary class and
+is part of the `ODMtd` itself; any *additional* classification of the same object
+is expressed as a separate `ClsMtd` linked via `CONTAIN`.
+
+Full frame:
+
+```
++---------------------------------------------------------------------+
+| GstAnalyticsRelationMeta (buffer)                                   |
+|                                                                     |
+|   ODMtd (obj_type=car, x,y,w,h, confidence,                         |
+|          semantic_tag=detector)                                     |
+|                                                                     |
+|   ODMtd (obj_type=person, ...)                                      |
++---------------------------------------------------------------------+
+```
+
+Per-region, second-stage detection inside a parent ROI:
+
+```
+   ODMtd parent (ROI)
+     |
+     +--CONTAIN--> ODMtd child (new detection)
+```
+
+### Classification
+
+A `ClsMtd` attaches a classification to an existing `ODMtd` via `CONTAIN`. It
+carries a **label** and a **confidence**, and represents a classification of the
+object *in addition to* the object type stored on the `ODMtd` itself.
+
+Per-region, attached to the detection:
+
+```
+   ODMtd (obj_type=person, semantic_tag=detector)
+     |
+     +--CONTAIN--> ClsMtd (label=wearing_hat, confidence=0.95,
+                           semantic_tag=hat-classifier)
+```
+
+Full-frame classification is frame-level, with no parent `ODMtd`; chained models
+add sibling `ClsMtd`s:
+
+```
++---------------------------------------------------------------------+
+| GstAnalyticsRelationMeta (frame-level)                              |
+|                                                                     |
+|   ClsMtd (label=golden_retriever, semantic_tag=classifier-a)        |
+|                                                                     |
+|   ClsMtd (label=happy, semantic_tag=classifier-b)                   |
++---------------------------------------------------------------------+
+```
+
+### Keypoints
+
+Keypoints are stored as an **ordered** `GroupMtd` whose members are
+`KeypointMtd`s; the skeleton is expressed as `RELATE_TO` edges between keypoints.
+The group can be attached to a detection or emitted at frame level.
+
+Per-region, group attached to the detection:
+
+```
+   ODMtd (obj_type=person)
+     |
+     +--CONTAIN--> GroupMtd (semantic_tag=pose-model/body-pose/coco-17)
+                     |
+                     |--CONTAIN--> KeypointMtd (idx 0=nose; x,y, confidence)
+                     |                  :
+                     |                  : RELATE_TO
+                     |                  v
+                     |--CONTAIN--> KeypointMtd (idx 1=eye_l; x,y, confidence)
+                     |                  :
+                     |                  : RELATE_TO
+                     |                  v
+                     +--CONTAIN--> KeypointMtd (idx 2=shoulder_l; x,y, confidence)
+```
+
+Full frame, single-person pose, group is frame-level with no parent `ODMtd`:
+
+```
++---------------------------------------------------------------------+
+| GstAnalyticsRelationMeta (frame-level)                              |
+|                                                                     |
+|   GroupMtd (semantic_tag=pose-model/body-pose/coco-17)              |
+|     |                                                               |
+|     |--CONTAIN--> KeypointMtd (idx 0; x,y, confidence)              |
+|     |                  :                                            |
+|     |                  : RELATE_TO                                  |
+|     |                  v                                            |
+|     +--CONTAIN--> KeypointMtd (idx 1; x,y, confidence)              |
++---------------------------------------------------------------------+
+```
+
+- Each `KeypointMtd` stores a **position** (`x, y`, plus `z` for 3D), its
+  **dimensionality** (2D/3D) and a **confidence**
+  (`gst_analytics_keypoint_mtd_get_position` and `..._get_confidence`). The point
+  *name* (nose, left eye, ...) is not stored in the mtd, it is implied by the
+  member index. That index is meaningful only within the group's `semantic_tag`
+  context, the keypoint layout, not universally: index `0` is the nose in
+  `coco-17`, but the same index means something else under a different layout.
+- `KeypointMtd`s are **ordered group members**: a `GroupMtd` keeps its members in
+  an index-addressable array, accessed with
+  `gst_analytics_group_mtd_get_member_count` and
+  `gst_analytics_group_mtd_get_member`, so member *i* always maps to a fixed slot
+  in the keypoint layout (e.g. index 0 = nose, 1 = left eye, ...). The order is
+  the insertion order set by `gst_analytics_group_mtd_add_member`; a group is an
+  **ordered sequence**, not an unordered set.
+- `gst_analytics_group_mtd_add_member` also sets the inverse relation pair
+  `GroupMtd -CONTAIN-> KeypointMtd` and `KeypointMtd -IS_PART_OF-> GroupMtd`.
+- Skeleton edges are stored as **directional** `RELATE_TO` relations. The relation
+  store is an asymmetric adjacency: `set_relation(RELATE_TO, a, b)` records only
+  `a->b`, so each skeleton edge is written once, in the direction defined by the
+  layout. A consumer that treats the skeleton as undirected must query both
+  `a->b` and `b->a` to find an edge. This is independent of the member ordering
+  above.
+
+### Segmentation
+
+Segmentation results appear in the relation meta in a few shapes. A
+`SegmentationMtd` stores a **discrete label mask** that tags each pixel with a
+**region id**; its `GstSegmentationType` says how to read those ids:
+
+- **semantic** (`GST_SEGMENTATION_TYPE_SEMANTIC`): all objects of the same class
+  share a single region id, so the mask has one region per class present, see
+  [Semantic Segmentation](#semantic-segmentation);
+- **instance** (`GST_SEGMENTATION_TYPE_INSTANCE`): each object instance gets its
+  own region id, so two objects of the same class end up in different regions,
+  see [Instance Segmentation With Region ID](#instance-segmentation-with-region-id).
+
+Alternatively, a per-object **soft mask** (probabilities) can be stored as a
+`TensorMtd` instead of a discrete mask, see
+[Instance Segmentation With Soft Mask](#instance-segmentation-with-soft-mask).
+
+Both `SegmentationMtd` forms use the same storage and the same relations; only
+the meaning of a region id differs. A `SegmentationMtd` stores:
+
+- the **segmentation type** above (`GstSegmentationType`);
+- a **mask** as a `GstBuffer`, a single-plane `GRAY8` image, or `GRAY16_LE` for
+  more than 255 regions, with an attached `GstVideoMeta`. **Every pixel value is
+  a region id**: the number the segmentation stage wrote for that pixel, *not* a
+  class id. The `GstVideoMeta` gives the mask's **own** width/height, stride and
+  format;
+- the **mask location** rectangle `(x, y, w, h)` in image pixels that the mask
+  covers, returned by `gst_analytics_segmentation_mtd_get_mask`; for a full-frame
+  result this is `(0, 0, image_width, image_height)`. This rectangle is
+  independent of the mask's own pixel size, see *How the mask maps to the image*
+  below;
+- the set of **region ids** present in the mask, accessed with
+  `gst_analytics_segmentation_mtd_get_region_count` and
+  `gst_analytics_segmentation_mtd_get_region_id`. A region id is the per-pixel
+  marker above: all pixels carrying the same id form one region. The value itself
+  is assigned by the segmentation stage and means nothing on its own (it is not a
+  class id), it only lets a region be identified and then linked to other
+  metadata. This holds for **both** segmentation types; only the assignment
+  differs (semantic: one id per class, instance: one id per object). To give a
+  region a meaning, for example a class, the ids are exposed through a contiguous index
+  map, index `0..N-1` even when the raw ids are not sequential, via
+  `gst_analytics_segmentation_mtd_get_region_index`, so region *index i* can be
+  paired with component *i* of another mtd via `N_TO_N`, see
+  [Semantic Segmentation](#semantic-segmentation).
+
+**How the mask maps to the image.** The location rectangle `(x, y, w, h)` is
+given in *original image* pixel coordinates and marks the image region the mask
+describes: columns `x .. x+w` and rows `y .. y+h`. The mask buffer has its **own**
+pixel dimensions, taken from its `GstVideoMeta`, which are **independent** of
+`(w, h)`: the mask is not required to be `w x h` pixels. The metadata itself does
+**not** resample anything, it only stores the mask at its own resolution plus the
+rectangle it maps onto. Establishing the pixel correspondence is left to the
+**consumer**, which scales the mask onto the rectangle however it sees fit, for
+example with nearest-neighbour an image position `(x + dx, y + dy)` inside the
+rectangle reads the mask pixel at `col = dx * mask_width / w`,
+`row = dy * mask_height / h`. Only when the mask's own size equals `(w, h)` is the
+mapping 1:1 regardless of the scaling method.
+
+For example, for a `600x600` image and a `SegmentationMtd` with location
+`(100, 100, 200, 200)`, the mask applies to the image square
+`x in [100, 300)`, `y in [100, 300)`. If the mask buffer is `200x200` each mask
+pixel maps to exactly one image pixel; if it is `100x100` it is stretched 2x so
+each mask pixel covers a `2x2` image block. A full-frame result would use
+`(0, 0, 600, 600)`.
+
+A `SegmentationMtd` is typically emitted at frame level with no parent `ODMtd`:
+
+```
++---------------------------------------------------------------------+
+| GstAnalyticsRelationMeta (frame-level)                              |
+|                                                                     |
+|   SegmentationMtd (type=SEMANTIC|INSTANCE,                          |
+|                    mask=GstBuffer + GstVideoMeta                    |
+|                         [GRAY8 / GRAY16_LE],                        |
+|                    loc=(0,0,W,H),                                   |
+|                    region_ids indexed 0..N-1)                       |
++---------------------------------------------------------------------+
+```
+
+To describe *what* each region represents, the `SegmentationMtd` is associated
+with a `ClsMtd` through an `N_TO_N` relation: region *index i* maps to class
+*index i*, so `region_ids[i]` is labelled by the class quark at classification
+index *i* (`gst_analytics_cls_mtd_get_quark`).
+
+```
+   SegmentationMtd (region_ids 0..N-1) ==N_TO_N==> ClsMtd (class quarks 0..N-1)
+```
+
+#### Semantic Segmentation
+
+For semantic segmentation each region groups all pixels of one class, so every
+region maps to one class label. For a mask with three regions (`background`,
+`strawberry`, `leaf`), the two groups are matched slot by slot, region *index i*
+to class *index i*, while the raw `region_id` painted in the mask (e.g. `12`,
+`31`) stays an opaque marker:
+
+```
+   SegmentationMtd.region_ids               ClsMtd (class quarks)
+   +--------------------------+             +------------------------+
+   | index 0 -> region_id  0  | ==N_TO_N==> | index 0 -> background  |
+   | index 1 -> region_id 12  | ==N_TO_N==> | index 1 -> strawberry  |
+   | index 2 -> region_id 31  | ==N_TO_N==> | index 2 -> leaf        |
+   +--------------------------+             +------------------------+
+```
+
+In this example the mask paints `region_id` 0 for the background, `12` for the
+strawberry and `31` for the leaf. The `N_TO_N` relation resolves those markers to
+classes through their matching index, so `region_id` 0 = `background`,
+`region_id` 12 = `strawberry` and `region_id` 31 = `leaf`.
+
+#### Instance Segmentation With Region ID
+
+> *To be documented.*
+
+#### Instance Segmentation With Soft Mask
+
+Instead of a discrete `SegmentationMtd`, a per-object **soft mask**, per-pixel
+`FP32` probabilities, is stored as a `TensorMtd` attached to the owning
+detection. The tensor's `semantic_tag` carries a `.../seg-mask` suffix so
+consumers can tell it apart from a plain raw tensor, the leading part being up to
+the producer.
+
+```
+   ODMtd (obj_type=person, semantic_tag=seg-model)
+     |
+     +--CONTAIN--> TensorMtd (GstTensor: data_type=FLOAT32, dims=[H,W],
+                              semantic_tag=seg-model/seg-mask)
+```
+
+This is inherently a per-detection relation, so there is no frame-level variant.
+
+### Generic Raw Tensor
+
+Any raw tensor payload is stored as a `TensorMtd`, which wraps a `GstTensor`
+(`id`, `data_type`, `dims`, and a data `GstBuffer`) and can carry a
+`semantic_tag`. It can be attached to a detection or emitted at frame level.
+
+Per-region, for example an embedding or a raw head:
+
+```
+   ODMtd
+     |
+     +--CONTAIN--> TensorMtd (GstTensor: data_type, dims, data GstBuffer,
+                              semantic_tag=model)
+```
+
+Frame-level, for example from a generic inference stage, with no parent `ODMtd`:
+
+```
++---------------------------------------------------------------------+
+| GstAnalyticsRelationMeta (frame-level)                              |
+|                                                                     |
+|   TensorMtd (GstTensor: data_type, dims, data GstBuffer,            |
+|              semantic_tag=model)                                    |
++---------------------------------------------------------------------+
+```
+
+### Tracking
+
+A tracking stage associates a persistent `TrackingMtd` (`tracking_id`,
+`tracking_first_seen`, `tracking_last_seen`, `tracking_lost`) with each `ODMtd`
+via `RELATE_TO`.
+
+```
+   ODMtd (obj_type=car)
+        :
+        : RELATE_TO
+        v
+   TrackingMtd (tracking_id=42, tracking_first_seen,
+                tracking_last_seen, tracking_lost)
+```
+
+Tracking always relates to an `ODMtd`, independent of how the detection was
+produced, full-frame or per-region.
+
+### Combined Example
+
+A pipeline running a frame-level detection model, per-region classification,
+per-region pose and a per-region segmentation soft mask, along with object
+tracking, produces:
+
+```
+   ODMtd (obj_type=person, semantic_tag=detector)
+     |
+     |--CONTAIN--> ClsMtd (label=wearing_hat,
+     |                     semantic_tag=hat-classifier)
+     |
+     |--CONTAIN--> GroupMtd (semantic_tag=pose-model/body-pose/coco-17)
+     |               |
+     |               |--CONTAIN--> KeypointMtd (idx 0=nose)
+     |               |                  :
+     |               |                  : RELATE_TO
+     |               |                  v
+     |               +--CONTAIN--> KeypointMtd (idx 1=eye_l)
+     |
+     |--CONTAIN--> TensorMtd (soft mask,
+     |                        semantic_tag=seg-model/seg-mask)
+     |
+     +..RELATE_TO..> TrackingMtd (tracking_id=42)
+```
+
+### Combined Example, Frame-Level Analytics Only
+
+Several frame-level analytic models chained: two classifiers, a single-person
+pose model and a segmentation model. **Every** result is frame-level, entries are
+siblings in the container with **no parent `ODMtd`**. Only the keypoint group has
+internal relations.
+
+```
++---------------------------------------------------------------------+
+| GstAnalyticsRelationMeta (all frame-level, no parent ODMtd)         |
+|                                                                     |
+|   ClsMtd (label=golden_retriever, semantic_tag=classifier-a)        |
+|                                                                     |
+|   ClsMtd (label=happy, semantic_tag=classifier-b)                   |
+|                                                                     |
+|   SegmentationMtd (type=SEMANTIC, loc=(0,0,W,H),                    |
+|                    region_ids indexed 0..N-1)                       |
+|                                                                     |
+|   GroupMtd (semantic_tag=pose-model/body-pose/coco-17)              |
+|     |                                                               |
+|     |--CONTAIN--> KeypointMtd (idx 0)                               |
+|     |                  :                                            |
+|     |                  : RELATE_TO                                  |
+|     |                  v                                            |
+|     +--CONTAIN--> KeypointMtd (idx 1)                               |
++---------------------------------------------------------------------+
+```
+
+### Combined Example, Frame-Level And Per-Region Together
+
+A single buffer can carry both: some stages run per region while others run on
+the full frame. The per-object result is contained by its `ODMtd`, while the
+full-frame results sit alongside as frame-level entries with no parent.
+
+```
++---------------------------------------------------------------------+
+| GstAnalyticsRelationMeta (buffer)                                   |
+|                                                                     |
+|   ODMtd (obj_type=person, semantic_tag=detector)                    |
+|     |                                                               |
+|     +--CONTAIN--> ClsMtd (label=wearing_hat,                        |
+|                           semantic_tag=hat-classifier)              |
+|                                                                     |
+|   ClsMtd (frame-level, label=indoor,                                |
+|           semantic_tag=scene-classifier)                            |
+|                                                                     |
+|   SegmentationMtd (frame-level, type=SEMANTIC, loc=(0,0,W,H))       |
++---------------------------------------------------------------------+
+```
+
+The `ODMtd` and its `ClsMtd` form the per-region part. The frame-level `ClsMtd`
+and `SegmentationMtd` are **not** related to any `ODMtd`; consumers distinguish
+them exactly by this absence of a parent.
 
 # Reference
 - [Onnx-Refactor-MR](https://gitlab.freedesktop.org/gstreamer/gstreamer/-/merge_requests/4916)

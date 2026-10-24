@@ -169,6 +169,49 @@ GST_START_TEST (test_shm_alloc)
 
 GST_END_TEST;
 
+GST_START_TEST (test_shm_no_fallback_alloc)
+{
+  GstQuery *query;
+  GstCaps *caps = gst_caps_new_empty_simple ("application/x-test");
+  GstAllocator *alloc;
+  GstAllocationParams params;
+  GstMemory *mem1, *mem2;
+  guint size;
+  GstSegment segment;
+
+  gst_pad_push_event (srcpad, gst_event_new_stream_start ("test"));
+  gst_pad_push_event (srcpad, gst_event_new_caps (caps));
+  gst_segment_init (&segment, GST_FORMAT_BYTES);
+  gst_pad_push_event (srcpad, gst_event_new_segment (&segment));
+
+  query = gst_query_new_allocation (caps, FALSE);
+  gst_caps_unref (caps);
+
+  fail_unless (gst_pad_peer_query (srcpad, query));
+  fail_unless (gst_query_get_n_allocation_params (query) == 1);
+
+  gst_query_parse_nth_allocation_param (query, 0, &alloc, &params);
+  fail_unless (alloc != NULL);
+  gst_query_unref (query);
+
+  g_object_get (sink, "shm-size", &size, NULL);
+  size -= params.align | gst_memory_alignment;
+
+  /* fill all shm space */
+  mem1 = gst_allocator_alloc (alloc, size, &params);
+  fail_unless (mem1 != NULL);
+
+  /* second alloc must return NULL, not fall back to system memory */
+  mem2 = gst_allocator_alloc (alloc, 64, &params);
+  fail_unless (mem2 == NULL);
+
+  gst_memory_unref (mem1);
+  gst_object_unref (alloc);
+  teardown_shm ();
+}
+
+GST_END_TEST;
+
 GST_START_TEST (test_shm_live)
 {
   GstElement *producer, *consumer;
@@ -229,6 +272,127 @@ GST_START_TEST (test_shm_live)
 
 GST_END_TEST;
 
+GST_START_TEST (test_shm_stop_no_error)
+{
+  GstElement *pipeline, *fakesrc, *shmsink;
+  GstBus *bus;
+  GstMessage *msg;
+  GstStateChangeReturn state_res;
+
+  fakesrc = gst_element_factory_make ("fakesrc", NULL);
+  g_object_set (fakesrc, "num-buffers", 5, "sizetype", 2, NULL);
+
+  shmsink = gst_element_factory_make ("shmsink", NULL);
+  g_object_set (shmsink, "socket-path", "shm-stop-test",
+      "wait-for-connection", FALSE, NULL);
+
+  pipeline = gst_pipeline_new ("stop-test");
+  gst_bin_add_many (GST_BIN (pipeline), fakesrc, shmsink, NULL);
+  fail_unless (gst_element_link (fakesrc, shmsink));
+
+  bus = gst_element_get_bus (pipeline);
+
+  state_res = gst_element_set_state (pipeline, GST_STATE_PLAYING);
+  fail_unless (state_res != GST_STATE_CHANGE_FAILURE);
+
+  /* Wait for EOS */
+  msg = gst_bus_timed_pop_filtered (bus, 5 * GST_SECOND,
+      GST_MESSAGE_EOS | GST_MESSAGE_ERROR);
+  fail_unless (msg != NULL);
+  fail_unless (GST_MESSAGE_TYPE (msg) == GST_MESSAGE_EOS,
+      "Expected EOS but got %s", GST_MESSAGE_TYPE_NAME (msg));
+  gst_message_unref (msg);
+
+  /* Set to NULL — this triggers gst_poll_set_flushing() in the poll thread.
+   * Before the fix, this would post a spurious GST_MESSAGE_ERROR with
+   * errno=EBUSY on the bus. */
+  gst_element_set_state (pipeline, GST_STATE_NULL);
+
+  /* Check no error was posted during shutdown */
+  msg = gst_bus_pop_filtered (bus, GST_MESSAGE_ERROR);
+  fail_unless (msg == NULL, "Unexpected error on bus during clean shutdown");
+
+  gst_object_unref (bus);
+  gst_object_unref (pipeline);
+}
+
+GST_END_TEST;
+
+/* Like test_shm_live but with a small shm-size so the producer must wait
+ * for the consumer to ack buffers and free space.  Exercises the ack path
+ * including the area-id fix in sp_client_recv_finish(). */
+GST_START_TEST (test_shm_fill_resume)
+{
+  GstElement *producer, *consumer;
+  GstElement *src, *sink;
+  gchar *socket_path = NULL;
+  GstStateChangeReturn state_res;
+  GstSample *sample = NULL;
+  int i;
+
+  src = gst_element_factory_make ("fakesrc", NULL);
+  /* fixed 200-byte buffers */
+  g_object_set (src, "sizetype", 2, "sizemax", 200, NULL);
+
+  sink = gst_element_factory_make ("shmsink", NULL);
+  /* shm fits ~3 buffers after alignment, forces ack-reclaim cycle.
+   * wait-for-connection=TRUE so the producer blocks until the consumer is
+   * accepted instead of free-running and starving the shmsink poll thread
+   * of the OBJECT_LOCK it needs to accept the client, which livelocks the
+   * test under valgrind (same pathology as test_shm_live, issue #790). */
+  g_object_set (sink,
+      "socket-path", "shm-fill-test",
+      "shm-size", (guint) 1024, "wait-for-connection", TRUE, NULL);
+
+  producer = gst_pipeline_new ("producer-pipeline");
+  gst_bin_add_many (GST_BIN (producer), src, sink, NULL);
+  fail_unless (gst_element_link (src, sink));
+
+  state_res = gst_element_set_state (producer, GST_STATE_PLAYING);
+  fail_unless (state_res != GST_STATE_CHANGE_FAILURE);
+
+  g_object_get (sink, "socket-path", &socket_path, NULL);
+  fail_unless (socket_path != NULL);
+
+  src = gst_element_factory_make ("shmsrc", NULL);
+  sink = gst_element_factory_make ("appsink", NULL);
+  g_object_set (src, "is-live", TRUE, NULL);
+  g_object_set (sink, "async", FALSE, "enable-last-sample", FALSE, NULL);
+
+  consumer = gst_pipeline_new ("consumer-pipeline");
+  gst_bin_add_many (GST_BIN (consumer), src, sink, NULL);
+  fail_unless (gst_element_link (src, sink));
+
+  g_object_set (src, "socket-path", socket_path, NULL);
+
+  state_res = gst_element_set_state (consumer, GST_STATE_PLAYING);
+  fail_unless (state_res != GST_STATE_CHANGE_FAILURE);
+
+  /* wait for preroll */
+  state_res = gst_element_get_state (consumer, NULL, NULL, GST_CLOCK_TIME_NONE);
+  fail_unless (state_res == GST_STATE_CHANGE_SUCCESS);
+
+  /* pull multiple buffers to exercise the ack/reclaim path */
+  for (i = 0; i < 5; i++) {
+    g_signal_emit_by_name (sink, "pull-sample", &sample);
+    fail_unless (sample != NULL);
+    gst_sample_unref (sample);
+  }
+
+  state_res = gst_element_set_state (producer, GST_STATE_NULL);
+  fail_unless (state_res != GST_STATE_CHANGE_FAILURE);
+
+  state_res = gst_element_set_state (consumer, GST_STATE_NULL);
+  fail_unless (state_res != GST_STATE_CHANGE_FAILURE);
+
+  gst_object_unref (consumer);
+  gst_object_unref (producer);
+
+  g_free (socket_path);
+}
+
+GST_END_TEST;
+
 static Suite *
 shm_suite (void)
 {
@@ -239,10 +403,13 @@ shm_suite (void)
   tcase_add_checked_fixture (tc, setup_shm, NULL);
   tcase_add_test (tc, test_shm_sysmem_alloc);
   tcase_add_test (tc, test_shm_alloc);
+  tcase_add_test (tc, test_shm_no_fallback_alloc);
   suite_add_tcase (s, tc);
 
   tc = tcase_create ("shm2");
   tcase_add_test (tc, test_shm_live);
+  tcase_add_test (tc, test_shm_stop_no_error);
+  tcase_add_test (tc, test_shm_fill_resume);
   suite_add_tcase (s, tc);
 
   return s;

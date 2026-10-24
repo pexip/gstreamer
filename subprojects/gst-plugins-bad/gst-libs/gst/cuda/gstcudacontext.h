@@ -19,9 +19,7 @@
 
 #pragma once
 
-#include <gst/gst.h>
-#include <gst/cuda/cuda-prelude.h>
-#include <gst/cuda/cuda-gst.h>
+#include <gst/cuda/gstcuda_fwd.h>
 
 G_BEGIN_DECLS
 
@@ -45,10 +43,6 @@ G_BEGIN_DECLS
  * Since: 1.22
  */
 #define GST_CUDA_CONTEXT_TYPE "gst.cuda.context"
-
-typedef struct _GstCudaContext GstCudaContext;
-typedef struct _GstCudaContextClass GstCudaContextClass;
-typedef struct _GstCudaContextPrivate GstCudaContextPrivate;
 
 /**
  * GstCudaContext:
@@ -92,6 +86,9 @@ gint             gst_cuda_context_get_texture_alignment (GstCudaContext * ctx);
 GST_CUDA_API
 gboolean         gst_cuda_context_can_access_peer (GstCudaContext * ctx,
                                                    GstCudaContext * peer);
+
+GST_CUDA_API
+gint64           gst_cuda_context_find_dxgi_adapter_luid (CUdevice cuda_device);
 
 G_END_DECLS
 

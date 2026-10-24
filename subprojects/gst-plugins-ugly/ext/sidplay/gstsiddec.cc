@@ -488,7 +488,8 @@ start_play_tune (GstSidDec * siddec)
   siddec->group_id = G_MAXUINT;
 
   res = gst_pad_start_task (siddec->srcpad,
-      (GstTaskFunction) play_loop, siddec->srcpad, NULL);
+      (GstTaskFunction) play_loop, gst_object_ref (siddec->srcpad),
+      gst_object_unref);
   return res;
 
   /* ERRORS */
@@ -770,6 +771,7 @@ gst_siddec_get_property (GObject * object, guint prop_id, GValue * value,
 static gboolean
 plugin_init (GstPlugin * plugin)
 {
+  gst_plugin_set_static_features_flag(plugin);
   return GST_ELEMENT_REGISTER (siddec, plugin);
 }
 

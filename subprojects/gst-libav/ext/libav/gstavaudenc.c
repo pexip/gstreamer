@@ -192,6 +192,7 @@ gst_ffmpegaudenc_start (GstAudioEncoder * encoder)
   avcodec_free_context (&ffmpegaudenc->context);
   av_frame_free (&ffmpegaudenc->frame);
   ffmpegaudenc->need_reopen = FALSE;
+  ffmpegaudenc->drained = FALSE;
 
   ffmpegaudenc->frame = av_frame_alloc ();
 
@@ -207,6 +208,7 @@ gst_ffmpegaudenc_stop (GstAudioEncoder * encoder)
   avcodec_free_context (&ffmpegaudenc->context);
   av_frame_free (&ffmpegaudenc->frame);
   ffmpegaudenc->need_reopen = FALSE;
+  ffmpegaudenc->drained = FALSE;
 
   return TRUE;
 }
@@ -219,6 +221,7 @@ gst_ffmpegaudenc_flush (GstAudioEncoder * encoder)
   if (ffmpegaudenc->context) {
     avcodec_flush_buffers (ffmpegaudenc->context);
   }
+  ffmpegaudenc->drained = FALSE;
 }
 
 static gboolean
@@ -233,6 +236,7 @@ gst_ffmpegaudenc_set_format (GstAudioEncoder * encoder, GstAudioInfo * info)
       (GstFFMpegAudEncClass *) G_OBJECT_GET_CLASS (ffmpegaudenc);
 
   ffmpegaudenc->need_reopen = FALSE;
+  ffmpegaudenc->drained = FALSE;
 
   /* close old session */
   avcodec_free_context (&ffmpegaudenc->context);
@@ -254,7 +258,8 @@ gst_ffmpegaudenc_set_format (GstAudioEncoder * encoder, GstAudioInfo * info)
 #endif
   }
 #if LIBAVUTIL_VERSION_INT >= AV_VERSION_INT(57, 28, 100)
-  if (ffmpegaudenc->context->ch_layout.order != AV_CHANNEL_ORDER_UNSPEC) {
+  if (ffmpegaudenc->context->ch_layout.order != AV_CHANNEL_ORDER_UNSPEC
+      && ffmpegaudenc->context->ch_layout.nb_channels <= 64) {
     gst_ffmpeg_channel_layout_to_gst (&ffmpegaudenc->context->ch_layout,
         ffmpegaudenc->context->ch_layout.nb_channels,
         ffmpegaudenc->ffmpeg_layout);
@@ -262,15 +267,20 @@ gst_ffmpegaudenc_set_format (GstAudioEncoder * encoder, GstAudioInfo * info)
         (memcmp (ffmpegaudenc->ffmpeg_layout, info->position,
             sizeof (GstAudioChannelPosition) *
             ffmpegaudenc->context->ch_layout.nb_channels) != 0);
+  } else {
+    ffmpegaudenc->needs_reorder = FALSE;
   }
 #else
-  if (ffmpegaudenc->context->channel_layout) {
+  if (ffmpegaudenc->context->channel_layout
+      && ffmpegaudenc->context->channels <= 64) {
     gst_ffmpeg_channel_layout_to_gst (ffmpegaudenc->context->channel_layout,
         ffmpegaudenc->context->channels, ffmpegaudenc->ffmpeg_layout);
     ffmpegaudenc->needs_reorder =
         (memcmp (ffmpegaudenc->ffmpeg_layout, info->position,
             sizeof (GstAudioChannelPosition) *
             ffmpegaudenc->context->channels) != 0);
+  } else {
+    ffmpegaudenc->needs_reorder = FALSE;
   }
 #endif
 
@@ -654,6 +664,14 @@ gst_ffmpegaudenc_drain (GstFFMpegAudEnc * ffmpegaudenc)
   if (!ffmpegaudenc->context)
     return GST_FLOW_OK;
 
+  /* A codec that advertises AV_CODEC_CAP_ENCODER_FLUSH accepts new input after
+   * avcodec_flush_buffers() below, so a second drain starts over and emits more
+   * packets. Every packet clears the drained flag of the base class, which then
+   * calls this function again, and the two never settle. The AudioToolbox
+   * encoders behave this way. Report one drain per run of input instead. */
+  if (ffmpegaudenc->drained)
+    return GST_FLOW_OK;
+
   ret = gst_ffmpegaudenc_send_frame (ffmpegaudenc, NULL);
 
   if (ret == GST_FLOW_OK) {
@@ -666,6 +684,7 @@ gst_ffmpegaudenc_drain (GstFFMpegAudEnc * ffmpegaudenc)
 
   /* NOTE: this may or may not work depending on capability */
   avcodec_flush_buffers (ffmpegaudenc->context);
+  ffmpegaudenc->drained = TRUE;
 
   /* FFMpeg will return AVERROR_EOF if it's internal was fully drained
    * then we are translating it to GST_FLOW_EOS. However, because this behavior
@@ -692,6 +711,8 @@ gst_ffmpegaudenc_handle_frame (GstAudioEncoder * encoder, GstBuffer * inbuf)
 
   if (!inbuf)
     return gst_ffmpegaudenc_drain (ffmpegaudenc);
+
+  ffmpegaudenc->drained = FALSE;
 
   /* endoder was drained or flushed, and ffmpeg encoder doesn't support
    * flushing. We need to re-open encoder then */
@@ -851,7 +872,8 @@ gst_ffmpegaudenc_register (GstPlugin * plugin)
 
     /* no codecs for which we're GUARANTEED to have better alternatives */
     if (!strcmp (in_plugin->name, "vorbis")
-        || !strcmp (in_plugin->name, "flac")) {
+        || !strcmp (in_plugin->name, "flac") ||
+        g_str_has_suffix (in_plugin->name, "_omx")) {
       GST_LOG ("Ignoring encoder %s", in_plugin->name);
       continue;
     }

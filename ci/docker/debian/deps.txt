@@ -37,7 +37,6 @@ iso-codes
 itstool
 ladspa-sdk
 liba52-0.7.4-dev
-libaa1-dev
 liballeggl4-dev
 libaom-dev
 libasound2-dev
@@ -55,7 +54,6 @@ libavutil-dev
 libbluetooth-dev
 libboost-system-dev
 libbs2b-dev
-libcaca-dev
 libcairo2-dev
 libcamera-dev
 libcanberra-dev

@@ -300,6 +300,8 @@ gst_video_rate_class_init (GstVideoRateClass * klass)
       "Drops/duplicates/adjusts timestamps on video frames to make a perfect stream",
       "Wim Taymans <wim@fluendo.com>");
 
+  gst_element_class_mark_as_untrusted_aware (element_class);
+
   gst_element_class_add_static_pad_template (element_class,
       &gst_video_rate_sink_template);
   gst_element_class_add_static_pad_template (element_class,
@@ -1972,6 +1974,8 @@ gst_video_rate_get_property (GObject * object,
 static gboolean
 plugin_init (GstPlugin * plugin)
 {
+  gst_plugin_set_static_features_flag (plugin);
+
   GST_DEBUG_CATEGORY_INIT (video_rate_debug, "videorate", 0,
       "VideoRate stream fixer");
 

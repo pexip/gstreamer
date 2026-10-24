@@ -87,6 +87,7 @@
 #define GST_MATROSKA_ID_CODECNAME                  0x258688
 #define GST_MATROSKA_ID_TRACKNAME                  0x536E
 #define GST_MATROSKA_ID_TRACKLANGUAGE              0x22B59C
+#define GST_MATROSKA_ID_TRACKLANGUAGEBCP47         0x22B59D
 #define GST_MATROSKA_ID_TRACKFLAGENABLED           0xB9
 #define GST_MATROSKA_ID_TRACKFLAGDEFAULT           0x88
 #define GST_MATROSKA_ID_TRACKFLAGFORCED            0x55AA
@@ -518,6 +519,14 @@ typedef enum {
   GST_MATROSKA_ASPECT_RATIO_MODE_FIXED = 0x2,
 } GstMatroskaAspectRatioMode;
 
+typedef enum {
+  GST_MATROSKA_VIDEO_DISPLAY_UNIT_PIXELS      = 0,
+  GST_MATROSKA_VIDEO_DISPLAY_UNIT_CENTIMETERS = 1,
+  GST_MATROSKA_VIDEO_DISPLAY_UNIT_INCHES      = 2,
+  GST_MATROSKA_VIDEO_DISPLAY_UNIT_DAR         = 3,
+  GST_MATROSKA_VIDEO_DISPLAY_UNIT_UNKNOWN     = 4,
+} GstMatroskaVideoDisplayUnit;
+
 /*
  * These aren't in any way "matroska-form" things,
  * it's just something I use in the muxer/demuxer.
@@ -561,80 +570,91 @@ typedef enum {
 
 typedef struct _GstMatroskaTrackContext GstMatroskaTrackContext;
 
-/* TODO: check if all fields are used */
 struct _GstMatroskaTrackContext {
-  GstPad       *pad;
-  GstCaps      *caps;
-  guint         index;
-  /* reverse playback */
-  GstClockTime  from_time;
-  gint64                   from_offset;
-  gint64                   to_offset;
-
-  GArray       *index_table;
-
-  gint          index_writer_id;
-
-  /* some often-used info */
-  gchar        *codec_id, *codec_name, *name, *language;
-  gpointer      codec_priv;
-  gsize         codec_priv_size;
-  gpointer      codec_state;
-  gsize         codec_state_size;
+  //
+  // common fields
+  //
+  gchar         *codec_id, *codec_name, *name, *language;
+  gpointer       codec_priv;
+  gsize          codec_priv_size;
   GstMatroskaTrackType type;
-  guint64       uid, num;
+  guint64        uid, num;
   GstMatroskaTrackFlags flags;
-  guint64       default_duration;
-  guint64       pos;
-  gdouble       timecodescale;
-  guint64       seek_preroll;
-  guint64       codec_delay;
+  guint64        default_duration;
+  gdouble        timecodescale;
+  guint64        seek_preroll;
+  guint64        codec_delay;
 
-  gboolean      set_discont; /* TRUE = set DISCONT flag on next buffer */
+  /* for compatibility with VFW files, where timestamp represents DTS */
+  gboolean       dts_only;
+
+  //
+  // Used only by demuxer / parser
+  //
+
+  GstPad        *pad;
+  GstCaps       *caps;
+  guint          index;
+  guint64        pos;
+
+  /* reverse playback */
+  GstClockTime   from_time;
+  gint64         from_offset;
+  gint64         to_offset;
+
+  GArray        *index_table;
+
+  gint           index_writer_id;
+
+  gpointer       codec_state;
+  gsize          codec_state_size;
+
+  gboolean       set_discont; /* TRUE = set DISCONT flag on next buffer */
 
   /* Queue to save the GST_PROTECTION events which will be sent before the first source buffer */
   GQueue         protection_event_queue;
   /* Protection information structure which will be added in protection metadata for each encrypted buffer */
-  GstStructure * protection_info;
+  GstStructure  *protection_info;
 
   /* Stream header buffer, to put into caps and send before any other buffers */
-  GstBufferList * stream_headers;
-  gboolean        send_stream_headers;
+  GstBufferList *stream_headers;
+  gboolean       send_stream_headers;
+
+  /* List of tags for this stream */
+  GstTagList    *tags;
+  /* Tags changed and should be pushed again */
+  gboolean       tags_changed;
+
+  /* A GArray of GstMatroskaTrackEncoding structures which contain the
+   * encoding (compression/encryption) settings for this track, if any */
+  GArray        *encodings;
+
+  /* Whether the stream is EOS */
+  gboolean       eos;
+
+  /* indicate that the track is raw (jpeg,raw variants) and so pts=dts */
+  gboolean       intra_only;
+
+  /* any alignment we need our output buffers to have */
+  gint           alignment;
 
   /* Special flag for VobSub, for which we have to send colour table info
    * (if available) first before sending any data, and just testing
    * for time == 0 is not enough to detect that. Used by demuxer */
-  gboolean      send_dvd_event;
-
-  /* Special counter for muxer to skip the first N vorbis/theora headers -
-   * they are put into codec private data, not muxed into the stream */
-  guint         xiph_headers_to_skip;
+  gboolean       send_dvd_event;
 
   /* Used for postprocessing a frame before it is pushed from the demuxer */
   GstFlowReturn (*postprocess_frame) (GstElement *element,
                                       GstMatroskaTrackContext *context,
-				      GstBuffer **buffer);
+                                      GstBuffer **buffer);
 
-  /* List of tags for this stream */
-  GstTagList   *tags;
-  /* Tags changed and should be pushed again */
-  gboolean      tags_changed;
+  //
+  // Used only by muxer
+  //
 
-  /* A GArray of GstMatroskaTrackEncoding structures which contain the
-   * encoding (compression/encryption) settings for this track, if any */
-  GArray       *encodings;
-
-  /* Whether the stream is EOS */
-  gboolean      eos;
-
-  /* any alignment we need our output buffers to have */
-  gint          alignment;
-
-  /* for compatibility with VFW files, where timestamp represents DTS */
-  gboolean      dts_only;
-
-  /* indicate that the track is raw (jpeg,raw variants) and so pts=dts */
-  gboolean		intra_only;
+  /* Special counter for muxer to skip the first N vorbis/theora headers -
+   * they are put into codec private data, not muxed into the stream */
+  guint          xiph_headers_to_skip;
 };
 
 typedef struct _GstMatroskaTrackVideoContext {
@@ -642,6 +662,7 @@ typedef struct _GstMatroskaTrackVideoContext {
 
   guint         pixel_width, pixel_height;
   guint         display_width, display_height;
+  GstMatroskaVideoDisplayUnit display_unit;
   gdouble       default_fps;
   GstMatroskaAspectRatioMode asr_mode;
   guint32       fourcc;
@@ -654,9 +675,6 @@ typedef struct _GstMatroskaTrackVideoContext {
 
   gboolean alpha_mode;
 
-  /* QoS */
-  GstClockTime  earliest_time;
-
   GstBuffer     *dirac_unit;
   GstVideoColorimetry colorimetry;
   GstVideoChromaSite chroma_site;
@@ -665,6 +683,10 @@ typedef struct _GstMatroskaTrackVideoContext {
   gboolean mastering_display_info_present;
 
   GstVideoContentLightLevel content_light_level;
+
+  // Only used by demuxer / parser
+  /* QoS */
+  GstClockTime  earliest_time;
 } GstMatroskaTrackVideoContext;
 
 typedef struct _GstMatroskaTrackAudioContext {
@@ -672,16 +694,17 @@ typedef struct _GstMatroskaTrackAudioContext {
 
   guint         samplerate, channels, bitdepth;
 
+  // Only used by demuxer / parser
   guint32       wvpk_block_index;
 } GstMatroskaTrackAudioContext;
 
 typedef struct _GstMatroskaTrackSubtitleContext {
   GstMatroskaTrackContext parent;
 
-  gboolean    check_utf8;     /* buffers should be valid UTF-8 */
+  // Only used by demuxer
+  gboolean    invalid_utf8;   /* work around broken files      */
   gboolean    check_markup;   /* check if buffers contain markup
                                * or plaintext and escape characters */
-  gboolean    invalid_utf8;   /* work around broken files      */
   gboolean    seen_markup_tag;  /* markup found in text */
 } GstMatroskaTrackSubtitleContext;
 
@@ -767,6 +790,18 @@ typedef struct _GstMatroskaTrackEncoding {
   guint   enc_cipher_mode : 2;
 } GstMatroskaTrackEncoding;
 
+/* VP9 CodecPrivate feature IDs are defined by WebM:
+ * https://www.webmproject.org/docs/container/#vp9-codec-feature-metadata-codecprivate
+ * The IETF Matroska codec mapping draft points to the same definitions:
+ * https://datatracker.ietf.org/doc/html/draft-ietf-cellar-codec/
+ */
+typedef enum {
+  GST_MATROSKA_VP9_FEATURE_PROFILE_ID = 1,
+  GST_MATROSKA_VP9_FEATURE_LEVEL_ID = 2,
+  GST_MATROSKA_VP9_FEATURE_BIT_DEPTH_ID = 3,
+  GST_MATROSKA_VP9_FEATURE_CHROMA_SUBSAMPLING_ID = 4
+} GstMatroskaVP9CodecPrivateFeatureId;
+
 gboolean gst_matroska_track_init_video_context    (GstMatroskaTrackContext ** p_context);
 gboolean gst_matroska_track_init_audio_context    (GstMatroskaTrackContext ** p_context);
 gboolean gst_matroska_track_init_subtitle_context (GstMatroskaTrackContext ** p_context);
@@ -784,6 +819,13 @@ GstBufferList * gst_matroska_parse_opus_stream_headers  (gpointer codec_data,
 
 GstBufferList * gst_matroska_parse_flac_stream_headers  (gpointer codec_data,
                                                          gsize codec_data_size);
+
+gboolean gst_matroska_get_vpx_config_from_codec_private (const guint8 * data,
+                                                         gsize          size,
+                                                         guint8       * profile,
+                                                         guint8       * level,
+                                                         guint8       * bit_depth,
+                                                         guint8       * chroma_subsampling);
 void gst_matroska_track_free (GstMatroskaTrackContext * track);
 GstClockTime gst_matroska_track_get_buffer_timestamp (GstMatroskaTrackContext * track, GstBuffer *buf);
 

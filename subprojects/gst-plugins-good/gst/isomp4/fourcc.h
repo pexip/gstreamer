@@ -88,6 +88,8 @@ G_BEGIN_DECLS
 #define FOURCC__wrt     GST_MAKE_FOURCC(0xa9,'w','r','t')
 #define FOURCC_aART     GST_MAKE_FOURCC('a','A','R','T')
 #define FOURCC_ac_3     GST_MAKE_FOURCC('a','c','-','3')
+#define FOURCC_ac_4     GST_MAKE_FOURCC('a','c','-','4')
+#define FOURCC_ec_3     GST_MAKE_FOURCC('e','c','-','3')
 #define FOURCC_agsm     GST_MAKE_FOURCC('a','g','s','m')
 #define FOURCC_ai12     GST_MAKE_FOURCC('a','i','1','2')
 #define FOURCC_ai13     GST_MAKE_FOURCC('a','i','1','3')
@@ -113,12 +115,14 @@ G_BEGIN_DECLS
 #define FOURCC_c608     GST_MAKE_FOURCC('c','6','0','8')
 #define FOURCC_c708     GST_MAKE_FOURCC('c','7','0','8')
 #define FOURCC_ccdp     GST_MAKE_FOURCC('c','c','d','p')
+#define FOURCC_ccst     GST_MAKE_FOURCC('c','c','s','t')
 #define FOURCC_cdat     GST_MAKE_FOURCC('c','d','a','t')
 #define FOURCC_cdt2     GST_MAKE_FOURCC('c','d','t','2')
 #define FOURCC_clcp     GST_MAKE_FOURCC('c','l','c','p')
 #define FOURCC_clip     GST_MAKE_FOURCC('c','l','i','p')
 #define FOURCC_cmov     GST_MAKE_FOURCC('c','m','o','v')
 #define FOURCC_cmpd     GST_MAKE_FOURCC('c','m','p','d')
+#define FOURCC_cpat     GST_MAKE_FOURCC('c','p','a','t')
 #define FOURCC_cmvd     GST_MAKE_FOURCC('c','m','v','d')
 #define FOURCC_co64     GST_MAKE_FOURCC('c','o','6','4')
 #define FOURCC_covr     GST_MAKE_FOURCC('c','o','v','r')
@@ -131,6 +135,8 @@ G_BEGIN_DECLS
 #define FOURCC_cslg     GST_MAKE_FOURCC('c','s','l','g')
 #define FOURCC_d263     GST_MAKE_FOURCC('d','2','6','3')
 #define FOURCC_dac3     GST_MAKE_FOURCC('d','a','c','3')
+#define FOURCC_dac4     GST_MAKE_FOURCC('d','a','c','4')
+#define FOURCC_dec3     GST_MAKE_FOURCC('d','e','c','3')
 #define FOURCC_damr     GST_MAKE_FOURCC('d','a','m','r')
 #define FOURCC_data     GST_MAKE_FOURCC('d','a','t','a')
 #define FOURCC_dcom     GST_MAKE_FOURCC('d','c','o','m')
@@ -226,6 +232,7 @@ G_BEGIN_DECLS
 #define FOURCC_payl     GST_MAKE_FOURCC('p','a','y','l')
 #define FOURCC_pcst     GST_MAKE_FOURCC('p','c','s','t')
 #define FOURCC_pgap     GST_MAKE_FOURCC('p','g','a','p')
+#define FOURCC_pict     GST_MAKE_FOURCC('p','i','c','t')
 #define FOURCC_png      GST_MAKE_FOURCC('p','n','g',' ')
 #define FOURCC_pnot     GST_MAKE_FOURCC('p','n','o','t')
 #define FOURCC_qt__     GST_MAKE_FOURCC('q','t',' ',' ')
@@ -350,6 +357,7 @@ G_BEGIN_DECLS
 #define FOURCC_3gp6     GST_MAKE_FOURCC('3','g','p','6')
 #define FOURCC_3gr6     GST_MAKE_FOURCC('3','g','r','6')
 #define FOURCC_3g__     GST_MAKE_FOURCC('3','g',0,0)
+#define FOURCC_dby1     GST_MAKE_FOURCC('d','b','y','1')
 #define FOURCC_isml     GST_MAKE_FOURCC('i','s','m','l')
 #define FOURCC_iso2     GST_MAKE_FOURCC('i','s','o','2')
 #define FOURCC_isom     GST_MAKE_FOURCC('i','s','o','m')
@@ -473,6 +481,17 @@ G_BEGIN_DECLS
 #define FOURCC_HapA     GST_MAKE_FOURCC('H','a','p','A')
 #define FOURCC_Hap7     GST_MAKE_FOURCC('H','a','p','7')
 #define FOURCC_HapH     GST_MAKE_FOURCC('H','a','p','H')
+
+/* MPEG-H 3D audio */
+#define FOURCC_mhaC     GST_MAKE_FOURCC('m','h','a','C')
+#define FOURCC_mha1     GST_MAKE_FOURCC('m','h','a','1')
+#define FOURCC_mhm1     GST_MAKE_FOURCC('m','h','m','1')
+
+/* Generic compression for samples (ISO/IEC 23001-17:2024/Amd. 2) */
+#define FOURCC_resv     GST_MAKE_FOURCC('r','e','s','v')
+#define FOURCC_rinf     GST_MAKE_FOURCC('r','i','n','f')
+#define FOURCC_cmpC     GST_MAKE_FOURCC('c','m','p','C')
+#define FOURCC_gcmp     GST_MAKE_FOURCC('g','c','m','p')
 
 G_END_DECLS
 

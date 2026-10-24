@@ -62,7 +62,6 @@
 #include <gst/cuda/gstcuda.h>
 #include <gst/cuda/gstcuda-private.h>
 #include "gstnvdecoder.h"
-#include "gstcudaconverter.h"
 #include "gstnvcodecutils.h"
 #include <string.h>
 #include <string>
@@ -728,8 +727,8 @@ gst_nv_decoder_copy_frame_to_d3d11 (GstNvDecoder * self,
     return GST_FLOW_ERROR;
   }
 
-  convert_ret = gst_cuda_converter_convert_frame (self->converter, &src_frame,
-      &dst_frame, gst_cuda_stream_get_handle (self->stream), nullptr);
+  convert_ret = gst_cuda_converter_convert_frame (self->converter, self->stream,
+      &src_frame, &dst_frame);
   gst_video_frame_unmap (&dst_frame);
   gst_video_frame_unmap (&src_frame);
   gst_buffer_remove_all_memory (self->export_buf);
@@ -1257,7 +1256,8 @@ const GstNvdecoderCodecMap codec_map_list[] = {
 
 gboolean
 gst_nv_decoder_check_device_caps (GstCudaContext * context,
-    cudaVideoCodec codec, GstCaps ** sink_template, GstCaps ** src_template)
+    GList * cached_decoders, cudaVideoCodec codec, GstCaps ** sink_template,
+    GstCaps ** src_template)
 {
   CUresult cuda_ret;
   guint max_width = 0, min_width = G_MAXINT;
@@ -1285,6 +1285,21 @@ gst_nv_decoder_check_device_caps (GstCudaContext * context,
   std::set < std::string > formats;
   std::set < std::string > planar_formats;
   CUcontext cuda_ctx = gst_cuda_context_get_handle (context);
+
+  if (cached_decoders) {
+    for (GList * l = cached_decoders; l; l = l->next) {
+      GstNvDecoderClassData *info = (GstNvDecoderClassData *) l->data;
+
+      for (i = 0; i < G_N_ELEMENTS (codec_map_list); i++) {
+        if (codec_map_list[i].codec == codec &&
+            !g_strcmp0 (codec_map_list[i].codec_name, info->codec_name)) {
+          *sink_template = gst_caps_ref (info->sink_caps);
+          *src_template = gst_caps_ref (info->src_caps);
+          return TRUE;
+        }
+      }
+    }
+  }
 #ifdef G_OS_WIN32
   gboolean is_stateless = FALSE;
 
@@ -1615,6 +1630,20 @@ gst_cuda_video_codec_to_string (cudaVideoCodec codec)
   return "unknown";
 }
 
+cudaVideoCodec
+gst_cuda_video_codec_from_string (const gchar * codec_name)
+{
+  if (!codec_name)
+    return cudaVideoCodec_NumCodecs;
+
+  for (guint i = 0; i < G_N_ELEMENTS (codec_map_list); i++) {
+    if (g_strcmp0 (codec_map_list[i].codec_name, codec_name) == 0)
+      return codec_map_list[i].codec;
+  }
+
+  return cudaVideoCodec_NumCodecs;
+}
+
 void
 gst_nv_decoder_handle_set_context (GstNvDecoder * decoder,
     GstElement * element, GstContext * context)
@@ -1811,8 +1840,8 @@ gst_nv_decoder_ensure_d3d11_output (GstNvDecoder * self, GstElement * element)
       self->info.height);
 
   if (!self->converter) {
-    self->converter = gst_cuda_converter_new (&self->info, &self->output_info,
-        self->context, nullptr);
+    self->converter = gst_cuda_converter_new (self->context, &self->info,
+        &self->output_info, nullptr);
 
     if (!self->converter) {
       GST_WARNING_OBJECT (element, "Couldn't create converter");

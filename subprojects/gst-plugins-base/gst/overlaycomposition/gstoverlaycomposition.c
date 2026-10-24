@@ -110,6 +110,7 @@ gst_overlay_composition_class_init (GstOverlayCompositionClass * klass)
   gst_element_class_set_static_metadata (gstelement_class,
       "Overlay Composition", "Filter/Editor/Video",
       "Overlay Composition", "Sebastian Dröge <sebastian@centricular.com>");
+  gst_element_class_mark_as_untrusted_aware (gstelement_class);
 
   gst_element_class_add_pad_template (gstelement_class,
       gst_static_pad_template_get (&src_template));
@@ -526,7 +527,9 @@ gst_overlay_composition_sink_query_caps (GstOverlayComposition * self,
 
     if (gst_caps_is_any (peer_caps)) {
       /* if peer returns ANY caps, return filtered src pad template caps */
-      caps = gst_caps_copy (gst_pad_get_pad_template_caps (self->srcpad));
+      GstCaps *tcaps = gst_pad_get_pad_template_caps (self->srcpad);
+      caps = gst_caps_copy (tcaps);
+      gst_caps_unref (tcaps);
     } else {
 
       /* duplicate caps which contains the composition into one version with
@@ -586,7 +589,9 @@ gst_overlay_composition_src_query_caps (GstOverlayComposition * self,
     if (gst_caps_is_any (peer_caps)) {
 
       /* if peer returns ANY caps, return filtered sink pad template caps */
-      caps = gst_caps_copy (gst_pad_get_pad_template_caps (self->sinkpad));
+      GstCaps *tcaps = gst_pad_get_pad_template_caps (self->sinkpad);
+      caps = gst_caps_copy (tcaps);
+      gst_caps_unref (tcaps);
 
     } else {
 
@@ -754,6 +759,8 @@ map_failed:
 static gboolean
 plugin_init (GstPlugin * plugin)
 {
+  gst_plugin_set_static_features_flag (plugin);
+
   return GST_ELEMENT_REGISTER (overlaycomposition, plugin);
 }
 

@@ -1,8 +1,9 @@
-[wrap-git]
-directory=libffi
-url=https://gitlab.freedesktop.org/gstreamer/meson-ports/libffi.git
-push-url=git@gitlab.freedesktop.org:gstreamer/meson-ports/libffi.git
-revision=meson-3.2.9999.4
+[wrap-file]
+directory = libffi-meson-3.2.9999.5
+source_url = https://gitlab.freedesktop.org/gstreamer/meson-ports/libffi/-/archive/meson-3.2.9999.5/libffi-meson-3.2.9999.5.tar.bz2
+source_fallback_url = https://gstreamer.freedesktop.org/src/mirror/libffi/libffi-meson-3.2.9999.5.tar.bz2
+source_filename = libffi-meson-3.2.9999.5.tar.bz2
+source_hash = b4d403932a8860589e571300e807e40bb4f7d9d2630c8ec19c29fb9e7b0fd227
 
 [provide]
 libffi = ffi_dep

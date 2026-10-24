@@ -237,6 +237,14 @@ gst_amf_h265_enc_preset_get_type (void)
      * Speed oriented preset
      */
     {AMF_VIDEO_ENCODER_HEVC_QUALITY_PRESET_SPEED, "Speed", "speed"},
+
+    /**
+     * GstAmfH265EncRateControl::high-quality:
+     *
+     * High quality oriented preset
+     */
+    {AMF_VIDEO_ENCODER_HEVC_QUALITY_PRESET_HIGH_QUALITY, "High quality",
+        "high-quality"},
     {0, nullptr, nullptr}
   };
 
@@ -310,6 +318,7 @@ enum
     "width = (int) [ 128, 4096 ], height = (int) [ 128, 4096 ]"
 
 #define DOC_SINK_CAPS \
+    "video/x-raw(memory:D3D12Memory), " DOC_SINK_CAPS_COMM "; " \
     "video/x-raw(memory:D3D11Memory), " DOC_SINK_CAPS_COMM "; " \
     "video/x-raw, " DOC_SINK_CAPS_COMM
 
@@ -1138,18 +1147,22 @@ gst_amf_h265_enc_getcaps (GstVideoEncoder * encoder, GstCaps * filter)
 {
   GstAmfH265Enc *self = GST_AMF_H265_ENC (encoder);
   GstCaps *template_caps;
-  GstCaps *supported_caps;
+  GstCaps *caps;
   std::set < std::string > downstream_profiles;
   std::set < std::string > allowed_formats;
+  GValue formats = G_VALUE_INIT;
 
   gst_amf_h265_enc_get_downstream_profiles (self, downstream_profiles);
 
   GST_DEBUG_OBJECT (self, "Downstream specified %" G_GSIZE_FORMAT " profiles",
       downstream_profiles.size ());
 
-  if (downstream_profiles.size () == 0)
-    return gst_video_encoder_proxy_getcaps (encoder, NULL, filter);
+  if (downstream_profiles.size () == 0) {
+    caps = gst_video_encoder_proxy_getcaps (encoder, NULL, filter);
+    goto done;
+  }
 
+  g_value_init (&formats, GST_TYPE_LIST);
   /* *INDENT-OFF* */
   for (const auto &iter : downstream_profiles) {
     if (iter == "main") {
@@ -1158,15 +1171,6 @@ gst_amf_h265_enc_getcaps (GstVideoEncoder * encoder, GstCaps * filter)
       allowed_formats.insert("P010_10LE");
     }
   }
-  /* *INDENT-ON* */
-  template_caps = gst_pad_get_pad_template_caps (encoder->sinkpad);
-  template_caps = gst_caps_make_writable (template_caps);
-
-  GValue formats = G_VALUE_INIT;
-
-  g_value_init (&formats, GST_TYPE_LIST);
-
-  /* *INDENT-OFF* */
   for (const auto &iter: allowed_formats) {
     GValue val = G_VALUE_INIT;
     g_value_init (&val, G_TYPE_STRING);
@@ -1175,16 +1179,31 @@ gst_amf_h265_enc_getcaps (GstVideoEncoder * encoder, GstCaps * filter)
     gst_value_list_append_and_take_value (&formats, &val);
   }
   /* *INDENT-ON* */
+  template_caps = gst_pad_get_pad_template_caps (encoder->sinkpad);
+  template_caps = gst_caps_make_writable (template_caps);
 
   gst_caps_set_value (template_caps, "format", &formats);
   g_value_unset (&formats);
-  supported_caps = gst_video_encoder_proxy_getcaps (encoder,
-      template_caps, filter);
+
+  caps = gst_video_encoder_proxy_getcaps (encoder, template_caps, filter);
   gst_caps_unref (template_caps);
 
-  GST_DEBUG_OBJECT (self, "Returning %" GST_PTR_FORMAT, supported_caps);
+done:
+#if defined(G_OS_WIN32) && defined(HAVE_GST_D3D12)
+  {
+    /* Overrides (doesn't chain to) GstAmfEncoder's getcaps, so its
+     * api-based filtering has to be reapplied here too. */
+    GstCaps *filtered = gst_amf_filter_caps_by_api (caps,
+        gst_amf_encoder_get_configured_api (GST_AMF_ENCODER (encoder)));
 
-  return supported_caps;
+    gst_caps_unref (caps);
+    caps = filtered;
+  }
+#endif
+
+  GST_DEBUG_OBJECT (self, "Returning %" GST_PTR_FORMAT, caps);
+
+  return caps;
 }
 
 static gboolean
@@ -1227,6 +1246,16 @@ gst_amf_h265_enc_set_format (GstAmfEncoder * encoder,
   }
 
   if (self->preset > AMF_VIDEO_ENCODER_HEVC_QUALITY_PRESET_UNKNOWN) {
+    guint64 ver = gst_amf_get_version ();
+    if (self->preset == AMF_VIDEO_ENCODER_HEVC_QUALITY_PRESET_HIGH_QUALITY &&
+        ver < AMF_MAKE_FULL_VERSION (1, 4, 36, 0)) {
+      self->preset = AMF_VIDEO_ENCODER_HEVC_QUALITY_PRESET_QUALITY;
+      GST_WARNING_OBJECT (self, "'High quality' preset (h264/h265) is "
+          "available from AMF 1.4.36 only. Your version is "
+          "%lld.%lld.%lld. Falling back to 'Quality' preset",
+          AMF_GET_MAJOR_VERSION (ver), AMF_GET_MINOR_VERSION (ver),
+          AMF_GET_SUBMINOR_VERSION (ver));
+    }
     result = comp->SetProperty (AMF_VIDEO_ENCODER_HEVC_QUALITY_PRESET,
         (amf_int64) self->preset);
     if (result != AMF_OK) {
@@ -1672,8 +1701,7 @@ gst_amf_h265_enc_check_reconfigure (GstAmfEncoder * encoder)
 }
 
 static GstAmfH265EncClassData *
-gst_amf_h265_enc_create_class_data (GstD3D11Device * device,
-    AMFComponent * comp)
+gst_amf_h265_enc_create_class_data (GstObject * device, AMFComponent * comp)
 {
   AMF_RESULT result;
   GstAmfH265EncDeviceCaps dev_caps = { 0, };
@@ -1700,7 +1728,9 @@ gst_amf_h265_enc_create_class_data (GstD3D11Device * device,
   gboolean d3d11_supported = FALSE;
   gint min_width, max_width, min_height, max_height;
   GstCaps *sink_caps;
+#ifdef G_OS_WIN32
   GstCaps *system_caps;
+#endif
 
   result = comp->GetCaps (&amf_caps);
   if (result != AMF_OK) {
@@ -1766,11 +1796,14 @@ gst_amf_h265_enc_create_class_data (GstD3D11Device * device,
     if (type == AMF_MEMORY_DX11)
       d3d11_supported = TRUE;
   }
-
+#ifdef G_OS_WIN32
   if (!d3d11_supported) {
     GST_WARNING_OBJECT (device, "D3D11 is not supported");
     return nullptr;
   }
+#else
+  (void) d3d11_supported;
+#endif // G_OS_WIN32
 
   result = amf_caps->GetOutputCaps (&out_iocaps);
   if (result != AMF_OK) {
@@ -1952,18 +1985,33 @@ gst_amf_h265_enc_create_class_data (GstD3D11Device * device,
       ", " + profile_str +
       ", stream-format = (string) byte-stream, alignment = (string) au";
 
+#ifdef G_OS_WIN32
   system_caps = gst_caps_from_string (sink_caps_str.c_str ());
   sink_caps = gst_caps_copy (system_caps);
   gst_caps_set_features (sink_caps, 0,
       gst_caps_features_new_static_str (GST_CAPS_FEATURE_MEMORY_D3D11_MEMORY,
           nullptr));
+#ifdef HAVE_GST_D3D12
+  if (AMFContext2Ptr (comp->GetContext ())->GetDX12Device ()) {
+    GstCaps *d3d12_caps = gst_caps_copy (system_caps);
+    gst_caps_set_features (d3d12_caps, 0,
+        gst_caps_features_new_static_str (GST_CAPS_FEATURE_MEMORY_D3D12_MEMORY,
+            nullptr));
+    gst_caps_append (sink_caps, d3d12_caps);
+  }
+#endif
   gst_caps_append (sink_caps, system_caps);
+#else
+  sink_caps = gst_caps_from_string (sink_caps_str.c_str ());
+#endif // G_OS_WIN32
 
   cdata = g_new0 (GstAmfH265EncClassData, 1);
   cdata->sink_caps = sink_caps;
   cdata->src_caps = gst_caps_from_string (src_caps_str.c_str ());
   cdata->dev_caps = dev_caps;
+#ifdef G_OS_WIN32
   g_object_get (device, "adapter-luid", &cdata->adapter_luid, nullptr);
+#endif // G_OS_WIN32
 
   GST_MINI_OBJECT_FLAG_SET (cdata->sink_caps,
       GST_MINI_OBJECT_FLAG_MAY_BE_LEAKED);
@@ -1977,7 +2025,7 @@ gst_amf_h265_enc_create_class_data (GstD3D11Device * device,
 }
 
 void
-gst_amf_h265_enc_register_d3d11 (GstPlugin * plugin, GstD3D11Device * device,
+gst_amf_h265_enc_register (GstPlugin * plugin, GstObject * device,
     gpointer context, guint rank)
 {
   GstAmfH265EncClassData *cdata;

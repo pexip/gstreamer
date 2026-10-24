@@ -141,7 +141,7 @@ trigger:
   variables:
     FDO_USER: 'containeruser'
     CCACHE_DIR: '/cache/gstreamer/gstreamer/ccache_fedora_containeruser/'
-    FDO_DISTRIBUTION_VERSION: '40'
+    FDO_DISTRIBUTION_VERSION: '43'
     FDO_REPO_SUFFIX: "$FEDORA_AMD64_SUFFIX"
     FDO_DISTRIBUTION_TAG: "$FEDORA_TAG-$GST_UPSTREAM_BRANCH"
     FDO_DISTRIBUTION_EXEC: 'bash ci/docker/fedora/prepare.sh'
@@ -239,6 +239,11 @@ windows amd64 docker:
         "--build-arg", "CI_COMMIT_REF_NAME=$CI_COMMIT_REF_NAME" `
       )
     - ci/docker/windows/container.ps1 $CI_REGISTRY $CI_REGISTRY_USER $CI_REGISTRY_PASSWORD $WINDOWS_IMAGE $WINDOWS_UPSTREAM_IMAGE $DOCKERFILE
+  rules:
+   - if: '$CI_PROJECT_NAME != "gstreamer-security"'
+   # Never run for gstreamer-security repo
+   - if: '$CI_PROJECT_NAME == "gstreamer-security"'
+     when: never
 
 .macos image:
   image: "registry.freedesktop.org/gstreamer/gstreamer/macos-arm64/26-tahoe:2025-09-30.0"
@@ -256,6 +261,10 @@ windows amd64 docker:
     FDO_DISTRIBUTION_PACKAGES: 'libabigail'
     FDO_DISTRIBUTION_EXEC: 'bash ci/docker/abi-check/prepare.sh'
     ABI_CHECK_CACHE: '/abi-check-cache'
+    MESON_ARGS: >-
+      ${SIMPLE_BUILD}
+      -Dtests=disabled
+      -Dexamples=disabled
 
 abi-check docker:
   # kvm has very minimal CPU available and may overrun the job
@@ -289,6 +298,7 @@ pre-commit checks:
   script:
     - export PATH="/usr/local/cargo/bin:$PATH"
     - echo $CI_MERGE_REQUEST_DIFF_BASE_SHA
+    - ./ci/scripts/ban-wrap-git.sh
     - gitlint --commits $CI_MERGE_REQUEST_DIFF_BASE_SHA..HEAD
     - pre-commit run --show-diff-on-failure --from-ref $CI_MERGE_REQUEST_DIFF_BASE_SHA --to-ref HEAD
   rules:
@@ -304,13 +314,24 @@ pre-commit checks:
     # shared across everything really
     CCACHE_MAXSIZE: '10G'
 
+.base_toplevel_and_ci_changes: &toplevel_and_ci_changes
+  - .gitlab-ci.yml
+  - .gitlab-image-tags.yml
+  - gst-env.py
+  - meson.build
+  - ci/gitlab/*.py
+  - ci/scripts/**/*
+  - "scripts/*"
+  - subprojects/*.wrap
+
 .base_modules_changes: &modules_changes
   - .gitlab-ci.yml
   - .gitlab-image-tags.yml
   - gst-env.py
+  - meson.build
   - ci/gitlab/*.py
   - ci/scripts/**/*
-  - meson.build
+  - "scripts/*"
   - subprojects/*.wrap
   - subprojects/gst-devtools/**/*
   - subprojects/gst-editing-services/**/*
@@ -521,6 +542,9 @@ build debian x86_64 debug:
       -Dvpx:tools=disabled
 
   rules:
+    # Don't run Windows jobs for gstreamer-security repo
+    - if: '$CI_PROJECT_NAME == "gstreamer-security"'
+      when: never
     - !reference [.upstream-branch-rules, rules]
     - changes:
         paths:
@@ -528,6 +552,9 @@ build debian x86_64 debug:
     - changes:
         paths:
           - "subprojects/win-*/*"
+  before_script:
+    # Install newer meson (don't want to regen the whole image just for that right now)
+    - pip3 install -U meson==1.10.2
   script:
     # Make sure powershell exits on errors
     # https://docs.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_preference_variables?view=powershell-6
@@ -616,6 +643,9 @@ build vs2022 x86:
 build vs2022 arm64:
   extends: '.build windows cross'
   rules:
+    # Don't run Windows jobs for gstreamer-security repo
+    - if: '$CI_PROJECT_NAME == "gstreamer-security"'
+      when: never
     - when: 'manual'
       allow_failure: true
   variables:
@@ -655,8 +685,12 @@ build macos:
     # gst-libav/ffmpeg throws Wundef errors
     GST_WERROR: "false"
     MESON_ARGS: "${DEFAULT_MESON_ARGS}"
+    MESON_TEST_ARGS: "gst-plugins-bad:*avf* gst-plugins-bad:*vtdec* gst-plugins-bad:*_vk*"
     SUBPROJECTS_CACHE_DIR: "/Users/gst-ci/subprojects"
   rules:
+    # Don't run macOS jobs for gstreamer-security repo
+    - if: '$CI_PROJECT_NAME == "gstreamer-security"'
+      when: never
     - !reference [.upstream-branch-rules, rules]
     - changes:
         paths:
@@ -769,7 +803,7 @@ check fedora:
 
 integration testsuites fedora:
   extends: '.test fedora x86_64'
-  parallel: 8
+  parallel: 9
   variables:
     MESON_ARGS: >-
       ${SIMPLE_BUILD}
@@ -785,8 +819,21 @@ integration testsuites fedora:
       -Dgst-plugins-bad:avtp=disabled
       -Dgst-plugins-bad:opencv=disabled
       -Dgst-plugins-bad:webrtc=disabled
-    EXTRA_VALIDATE_ARGS: "--timeout-factor=2 --retry-on-failures --parts=${CI_NODE_TOTAL} --part-index=${CI_NODE_INDEX} --sync"
+      -Drs=enabled
+      -Dgst-plugins-rs:auto_plugin_features=disabled
+      -Dgst-plugins-rs:debugseimetainserter=enabled
+    EXTRA_VALIDATE_ARGS: "--timeout-factor=2 --retry-on-failures --parts=${CI_NODE_TOTAL} --part-index=${CI_NODE_INDEX} --sync --dedicated-part media_check"
+    GST_VALIDATE_CONFIG: "core,fail-on-missing-plugin=true"
     TEST_SUITE: "validate ges"
+  artifacts:
+    expire_in: '14 days'
+    when: always
+    paths:
+      - 'meson-logs/'
+      - "$CI_PROJECT_DIR/validate-logs"
+    reports:
+      junit:
+        - "$CI_PROJECT_DIR/validate-logs/*.xml"
 
 check video formats:
   stage: 'test'
@@ -906,7 +953,6 @@ fluster v4l2-stateless on visl:
       -Dgst-plugins-base:typefind=enabled
       -Dgst-plugins-base:playback=enabled
       -Dgst-plugins-good:matroska=enabled
-    GTK_ARGS: "-Dgtk=disabled"
   script:
   - $CI_PROJECT_DIR/ci/scripts/build.sh build/
   - meson test -C build -v --suite v4l2-stateless-decoders
@@ -914,6 +960,8 @@ fluster v4l2-stateless on visl:
     reports:
       junit: build/fluster-results-*.xml
   rules:
+    - if: $GTK_ARGS =~ /-Dgtk=enabled/
+      when: never
     - changes:
         paths:
           - ".gitlab-ci.yml"
@@ -945,9 +993,9 @@ valgrind core:
   rules:
     - changes:
         paths:
-          - "*"
-          - "scripts/*"
-          - "ci/**/*"
+          *toplevel_and_ci_changes
+    - changes:
+        paths:
           - "subprojects/gst-devtools/**/*"
           - "subprojects/gstreamer/**/*"
 
@@ -958,9 +1006,9 @@ valgrind base:
   rules:
     - changes:
         paths:
-          - "*"
-          - "scripts/*"
-          - "ci/**/*"
+          *toplevel_and_ci_changes
+    - changes:
+        paths:
           - "subprojects/gst-devtools/**/*"
           - "subprojects/gstreamer/**/*"
           - "subprojects/gst-plugins-base/**/*"
@@ -974,9 +1022,9 @@ valgrind good:
   rules:
     - changes:
         paths:
-          - "*"
-          - "scripts/*"
-          - "ci/**/*"
+          *toplevel_and_ci_changes
+    - changes:
+        paths:
           - "subprojects/gst-devtools/**/*"
           - "subprojects/gstreamer/**/*"
           - "subprojects/gst-plugins-base/**/*"
@@ -989,9 +1037,9 @@ valgrind ugly:
   rules:
     - changes:
         paths:
-          - "*"
-          - "scripts/*"
-          - "ci/**/*"
+          *toplevel_and_ci_changes
+    - changes:
+        paths:
           - "subprojects/gst-devtools/**/*"
           - "subprojects/gstreamer/**/*"
           - "subprojects/gst-plugins-base/**/*"
@@ -1005,9 +1053,9 @@ valgrind bad:
   rules:
     - changes:
         paths:
-          - "*"
-          - "scripts/*"
-          - "ci/**/*"
+          *toplevel_and_ci_changes
+    - changes:
+        paths:
           - "subprojects/gst-devtools/**/*"
           - "subprojects/gstreamer/**/*"
           - "subprojects/gst-plugins-base/**/*"
@@ -1018,12 +1066,19 @@ valgrind ges:
   extends: '.valgrind fedora x86_64'
   variables:
     TEST_SUITE: "check.gst-editing-services\\..*"
+    # FIXME: Py_Initialize() aborts under valgrind on the Fedora 43 CI
+    # image (python 3.14.4) inside _Py_CheckRecursiveCall, when GES
+    # loads the python plugin via load_python_formatters(). Looks like
+    # a false positive of Python 3.14's C-stack overflow detection.
+    # Build without the python plugin so it is not loaded. Try
+    # removing this override when bumping FEDORA_TAG.
+    MESON_ARGS: "${SIMPLE_BUILD} -Dpython=disabled"
   rules:
     - changes:
         paths:
-          - "*"
-          - "scripts/*"
-          - "ci/**/*"
+          *toplevel_and_ci_changes
+    - changes:
+        paths:
           - "subprojects/gst-devtools/**/*"
           - "subprojects/gstreamer/**/*"
           - "subprojects/gst-plugins-base/**/*"
@@ -1031,10 +1086,6 @@ valgrind ges:
           - "subprojects/gst-plugins-bad/**/*"
           - "subprojects/gst-editing-services/**/*"
           - "subprojects/gst-python/**/*"
-  # valgrind ges jobs are racy across the board and simply fail too often.
-  # Someone needs to go through job logs and figure out which jobs to mark
-  # as flaky. Until then, just ignore failures.
-  allow_failure: true
 
 valgrind rtsp-server:
   extends: '.valgrind fedora x86_64'
@@ -1043,9 +1094,9 @@ valgrind rtsp-server:
   rules:
     - changes:
         paths:
-          - "*"
-          - "scripts/*"
-          - "ci/**/*"
+          *toplevel_and_ci_changes
+    - changes:
+        paths:
           - "subprojects/gst-devtools/**/*"
           - "subprojects/gstreamer/**/*"
           - "subprojects/gst-plugins-base/**/*"
@@ -1173,6 +1224,9 @@ cerbero trigger:
     - if: '$MESON_COMMIT'
     # Never run post merge
     - if: '$CI_PROJECT_NAMESPACE == "gstreamer" && $CI_COMMIT_BRANCH == $GST_UPSTREAM_BRANCH'
+      when: never
+    # Never run for gstreamer-security repo
+    - if: '$CI_PROJECT_NAME == "gstreamer-security"'
       when: never
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
     # For merge reqest, we want to test user branch

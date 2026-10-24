@@ -55,6 +55,8 @@ plugin_init (GstPlugin * plugin)
 {
   gboolean ret = FALSE;
 
+  gst_plugin_set_static_features_flag (plugin);
+
   ret |= GST_ELEMENT_REGISTER (glimagesink, plugin);
   ret |= GST_ELEMENT_REGISTER (glimagesinkelement, plugin);
   ret |= GST_ELEMENT_REGISTER (glupload, plugin);
@@ -82,6 +84,7 @@ plugin_init (GstPlugin * plugin)
   ret |= GST_ELEMENT_REGISTER (gltestsrc, plugin);
   ret |= GST_ELEMENT_REGISTER (gldeinterlace, plugin);
   ret |= GST_ELEMENT_REGISTER (glalpha, plugin);
+  ret |= GST_ELEMENT_REGISTER (glalphacombine, plugin);
   ret |= GST_ELEMENT_REGISTER (gloverlaycompositor, plugin);
 #if defined(HAVE_JPEG) && defined(HAVE_PNG)
   ret |= GST_ELEMENT_REGISTER (gloverlay, plugin);

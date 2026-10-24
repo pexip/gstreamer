@@ -4,12 +4,14 @@ gi-index
 	ges-layer.h
 	ges-clip.h
 		ges-uri-clip.h
+		ges-source-track-map.h
 		ges-title-clip.h
 		ges-test-clip.h
 		ges-time-overlay-clip.h
 		ges-effect-clip.h
 		ges-transition-clip.h
 	ges-pipeline.h
+	hardware-acceleration.md
 	ges-project.h
 	base-classes.md
 		ges-timeline-element.h

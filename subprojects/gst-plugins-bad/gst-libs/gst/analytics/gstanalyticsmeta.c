@@ -44,8 +44,8 @@
  * Since: 1.24
  */
 
-GST_DEBUG_CATEGORY_STATIC (an_relation_meta_debug);
-#define GST_CAT_AN_RELATION an_relation_meta_debug
+G_GNUC_INTERNAL GST_DEBUG_CATEGORY (gst_analytics_relation_meta_debug);
+#define GST_CAT_DEFAULT gst_analytics_relation_meta_debug
 
 /*
  * GstAnalyticsRelatableMtdData:
@@ -62,6 +62,7 @@ typedef struct
   const GstAnalyticsMtdImpl *impl;
   guint id;
   gsize size;
+  GstIdStr semantic_tag;
   gpointer data[];
 } GstAnalyticsRelatableMtdData;
 
@@ -121,7 +122,7 @@ gst_analytics_relation_meta_get_mtd_data_internal (const
   GstAnalyticsRelatableMtdData *rv;
   g_return_val_if_fail (meta, NULL);
   if (an_meta_id >= meta->rel_order) {
-    GST_CAT_ERROR (GST_CAT_AN_RELATION, "Invalid parameter");
+    GST_ERROR ("Invalid parameter");
     return NULL;
   }
   rv = (GstAnalyticsRelatableMtdData *)
@@ -184,7 +185,7 @@ gst_analytics_mtd_get_size (const GstAnalyticsMtd * instance)
       instance->id);
 
   if (rlt == NULL) {
-    GST_CAT_ERROR (GST_CAT_AN_RELATION, "Invalid parameter");
+    GST_ERROR ("Invalid parameter");
     return 0;
   }
 
@@ -209,6 +210,121 @@ gst_analytics_mtd_type_get_name (GstAnalyticsMtdType type)
     return "ANY";
   else
     return impl->name;
+}
+
+/**
+ * gst_analytics_mtd_set_semantic_tag:
+ * @instance: Instance of #GstAnalyticsMtd
+ * @tag: (nullable): string representing a semantic type, or %NULL to clear
+ *   the tag
+ *
+ * Set semantic tag on any analytics metadata. This gives context to understand
+ * the metadata. Pass %NULL to clear the tag.
+ *
+ * Returns: %TRUE if the semantic tag was set successfully.
+ *
+ * Since: 1.30
+ */
+gboolean
+gst_analytics_mtd_set_semantic_tag (GstAnalyticsMtd * instance,
+    const gchar * tag)
+{
+  GstAnalyticsRelatableMtdData *rlt;
+
+  g_return_val_if_fail (instance, FALSE);
+
+  rlt = gst_analytics_relation_meta_get_mtd_data_internal (instance->meta,
+      instance->id);
+  g_return_val_if_fail (rlt != NULL, FALSE);
+
+  if (tag)
+    gst_id_str_set (&rlt->semantic_tag, tag);
+  else
+    gst_id_str_clear (&rlt->semantic_tag);
+
+  return TRUE;
+}
+
+/**
+ * gst_analytics_mtd_get_semantic_tag:
+ * @instance: Instance of #GstAnalyticsMtd
+ *
+ * Get the semantic tag of the analytics metadata.
+ *
+ * Returns: (transfer full): A copy of the semantic tag string. Returns an
+ *    empty string if no tag has been set. The caller must free the returned
+ *    string with g_free() when no longer needed.
+ *
+ * Since: 1.30
+ */
+gchar *
+gst_analytics_mtd_get_semantic_tag (const GstAnalyticsMtd * instance)
+{
+  GstAnalyticsRelatableMtdData *rlt;
+
+  g_return_val_if_fail (instance, NULL);
+
+  rlt = gst_analytics_relation_meta_get_mtd_data_internal (instance->meta,
+      instance->id);
+  g_return_val_if_fail (rlt != NULL, NULL);
+
+  return g_strdup (gst_id_str_as_str (&rlt->semantic_tag));
+}
+
+/**
+ * gst_analytics_mtd_has_semantic_tag:
+ * @instance: Instance of #GstAnalyticsMtd
+ * @tag: tag string to compare against
+ *
+ * Check if the metadata's semantic tag matches @tag. An empty or unset tag
+ * never matches.
+ *
+ * Returns: %TRUE if the metadata's semantic tag equals @tag.
+ *
+ * Since: 1.30
+ */
+gboolean
+gst_analytics_mtd_has_semantic_tag (const GstAnalyticsMtd * instance,
+    const gchar * tag)
+{
+  GstAnalyticsRelatableMtdData *rlt;
+
+  g_return_val_if_fail (instance, FALSE);
+  g_return_val_if_fail (tag, FALSE);
+
+  rlt = gst_analytics_relation_meta_get_mtd_data_internal (instance->meta,
+      instance->id);
+  g_return_val_if_fail (rlt != NULL, FALSE);
+
+  return gst_id_str_is_equal_to_str (&rlt->semantic_tag, tag);
+}
+
+/**
+ * gst_analytics_mtd_semantic_tag_has_prefix:
+ * @instance: Instance of #GstAnalyticsMtd
+ * @prefix: prefix string to test against
+ *
+ * Check if the metadata's semantic tag starts with @prefix. An empty or unset
+ * tag never matches.
+ *
+ * Returns: %TRUE if the metadata's semantic tag starts with @prefix.
+ *
+ * Since: 1.30
+ */
+gboolean
+gst_analytics_mtd_semantic_tag_has_prefix (const GstAnalyticsMtd * instance,
+    const gchar * prefix)
+{
+  GstAnalyticsRelatableMtdData *rlt;
+
+  g_return_val_if_fail (instance, FALSE);
+  g_return_val_if_fail (prefix, FALSE);
+
+  rlt = gst_analytics_relation_meta_get_mtd_data_internal (instance->meta,
+      instance->id);
+  g_return_val_if_fail (rlt != NULL, FALSE);
+
+  return g_str_has_prefix (gst_id_str_as_str (&rlt->semantic_tag), prefix);
 }
 
 /**
@@ -296,7 +412,7 @@ gst_analytics_relation_meta_api_get_type (void)
   if (g_once_init_enter (&type)) {
     GType newType =
         gst_meta_api_type_register ("GstAnalyticsRelationMetaAPI", tags);
-    GST_DEBUG_CATEGORY_INIT (an_relation_meta_debug, "anrelmeta",
+    GST_DEBUG_CATEGORY_INIT (gst_analytics_relation_meta_debug, "anrelmeta",
         GST_DEBUG_FG_BLACK, "Content analysis meta relations meta");
     g_once_init_leave (&type, newType);
   }
@@ -313,8 +429,7 @@ gst_analytics_relation_meta_init (GstMeta * meta, gpointer params,
 
   g_return_val_if_fail (params != NULL, FALSE);
 
-  GST_CAT_TRACE (GST_CAT_AN_RELATION, "Relation order:%" G_GSIZE_FORMAT,
-      *((gsize *) params));
+  GST_TRACE ("Relation order:%" G_GSIZE_FORMAT, *((gsize *) params));
 
   rmeta->rel_order_increment = rel_params->initial_relation_order;
   rmeta->rel_order = rmeta->rel_order_increment;
@@ -330,8 +445,7 @@ gst_analytics_relation_meta_init (GstMeta * meta, gpointer params,
   if (buffer->pool)
     GST_META_FLAG_SET (meta, GST_META_FLAG_POOLED);
 
-  GST_CAT_DEBUG (GST_CAT_AN_RELATION,
-      "Content analysis meta-relation meta(%p, order=%" G_GSIZE_FORMAT
+  GST_DEBUG ("Content analysis meta-relation meta(%p, order=%" G_GSIZE_FORMAT
       ") created for buffer(%p)", (gpointer) rmeta, *(gsize *) params,
       (gpointer) buffer);
   return TRUE;
@@ -342,8 +456,7 @@ gst_analytics_relation_meta_free (GstMeta * meta, GstBuffer * buffer)
 {
   GstAnalyticsRelationMeta *rmeta = (GstAnalyticsRelationMeta *) meta;
 
-  GST_CAT_TRACE (GST_CAT_AN_RELATION,
-      "Content analysis meta-data(%p) freed for buffer(%p)",
+  GST_TRACE ("Content analysis meta-data(%p) freed for buffer(%p)",
       (gpointer) rmeta, (gpointer) buffer);
 
   gst_analytics_relation_meta_clear (buffer, meta);
@@ -355,89 +468,104 @@ gst_analytics_relation_meta_free (GstMeta * meta, GstBuffer * buffer)
 
 static gboolean
 gst_analytics_relation_meta_transform (GstBuffer * transbuf,
-    GstMeta * meta, GstBuffer * buffer, GQuark type, gpointer data)
+    GstMeta * src_meta, GstBuffer * buffer, GQuark type, gpointer data)
 {
+  GstAnalyticsRelationMeta *src_rmeta = (GstAnalyticsRelationMeta *) src_meta;
+  GstAnalyticsRelationMeta *dst_rmeta = (GstAnalyticsRelationMeta *)
+      gst_buffer_get_meta (transbuf, GST_ANALYTICS_RELATION_META_API_TYPE);
+  guint i;
+  guint *free_match = NULL;
+  guint *match = NULL;
 
-  GST_CAT_TRACE (GST_CAT_AN_RELATION, "meta transform %s",
-      g_quark_to_string (type));
+  if (dst_rmeta == NULL) {
+    GstAnalyticsRelationMetaInitParams init_params = {
+      src_rmeta->rel_order, src_rmeta->max_size
+    };
 
-  if (GST_META_TRANSFORM_IS_COPY (type) ||
-      GST_VIDEO_META_TRANSFORM_IS_SCALE (type)) {
-    GstAnalyticsRelationMeta *rmeta = (GstAnalyticsRelationMeta *) meta;
-    GstAnalyticsRelationMeta *new = (GstAnalyticsRelationMeta *)
-        gst_buffer_get_meta (transbuf, GST_ANALYTICS_RELATION_META_API_TYPE);
+    GST_TRACE ("meta transform creating new meta rel_order:%" G_GSIZE_FORMAT
+        " max_size:%" G_GSIZE_FORMAT,
+        init_params.initial_relation_order, init_params.initial_buf_size);
 
-    if (new == NULL) {
-      GstAnalyticsRelationMetaInitParams init_params = {
-        rmeta->rel_order, rmeta->max_size
-      };
+    dst_rmeta =
+        gst_buffer_add_analytics_relation_meta_full (transbuf, &init_params);
+  }
 
-      GST_CAT_TRACE (GST_CAT_AN_RELATION,
-          "meta transform creating new meta rel_order:%" G_GSIZE_FORMAT
-          " max_size:%" G_GSIZE_FORMAT,
-          init_params.initial_relation_order, init_params.initial_buf_size);
 
-      new =
-          gst_buffer_add_analytics_relation_meta_full (transbuf, &init_params);
+  /* If it's under 2K, do it on the stack, otherwise, use the heap */
+  /* Our default is 5 */
+  if (src_rmeta->length < 2048 / sizeof (guint))
+    match = g_alloca (src_rmeta->length * sizeof (guint));
+  else
+    free_match = match = g_malloc (src_rmeta->length * sizeof (guint));
+
+  for (i = 0; i < src_rmeta->length; i++) {
+    GstAnalyticsRelatableMtdData *src_mtd_data =
+        (GstAnalyticsRelatableMtdData *)
+        (src_rmeta->mtd_data_lookup[i] + src_rmeta->analysis_results);
+    GstAnalyticsMtd dst_mtd;
+
+    if (src_mtd_data->impl == NULL) {
+      match[i] = G_MAXUINT;
+      continue;
     }
 
-    if (new->offset == 0) {
-      guint i;
+    gpointer dst_data = gst_analytics_relation_meta_add_mtd (dst_rmeta,
+        src_mtd_data->impl, src_mtd_data->size, &dst_mtd);
 
-      if (new->rel_order < rmeta->rel_order) {
-        g_free (new->adj_mat);
-        g_free (new->mtd_data_lookup);
-        new->adj_mat = gst_analytics_relation_adj_mat_create (rmeta->rel_order);
-        new->mtd_data_lookup = g_malloc0 (sizeof (gpointer) * rmeta->rel_order);
-        new->rel_order = rmeta->rel_order;
-      }
+    memcpy (dst_data, src_mtd_data->data, src_mtd_data->size);
 
-      if (new->max_size < rmeta->max_size) {
-        g_free (new->analysis_results);
-        new->analysis_results = g_malloc (rmeta->max_size);
-        new->max_size = rmeta->max_size;
-      }
+    /* Copy semantic tag from source to destination */
+    {
+      GstAnalyticsRelatableMtdData *dst_mtd_data =
+          gst_analytics_relation_meta_get_mtd_data_internal (dst_rmeta,
+          dst_mtd.id);
+      gst_id_str_set (&dst_mtd_data->semantic_tag,
+          gst_id_str_as_str (&src_mtd_data->semantic_tag));
+    }
 
-      if (rmeta->rel_order == new->rel_order) {
-        memcpy (new->adj_mat + new->rel_order, rmeta->adj_mat +
-            rmeta->rel_order, rmeta->rel_order * rmeta->rel_order);
+    if (src_mtd_data->impl->mtd_meta_transform) {
+      if (src_mtd_data->impl->mtd_meta_transform (transbuf, &dst_mtd, buffer,
+              type, data)) {
+        match[i] = dst_mtd.id;
       } else {
-        /* When destination adj_mat has a higher order than source we need
-         * to copy by row to have the correct alignment */
-        for (gsize r = 0; r < rmeta->rel_order; r++) {
-          memcpy (new->adj_mat[r], rmeta->adj_mat[r], rmeta->rel_order);
-        }
-      }
-      memcpy (new->mtd_data_lookup, rmeta->mtd_data_lookup,
-          sizeof (gpointer) * rmeta->rel_order);
-      memcpy (new->analysis_results, rmeta->analysis_results, rmeta->offset);
+        GstAnalyticsRelatableMtdData *dst_mtd_data =
+            (GstAnalyticsRelatableMtdData *)
+            (dst_rmeta->mtd_data_lookup[dst_mtd.id] +
+            dst_rmeta->analysis_results);
 
-      new->length = rmeta->length;
-      new->next_id = rmeta->next_id;
-      new->offset = rmeta->offset;
-
-      for (i = 0; i < new->length; i++) {
-        GstAnalyticsRelatableMtdData *rlt_mtd_data =
-            (GstAnalyticsRelatableMtdData *) (new->mtd_data_lookup[i] +
-            new->analysis_results);
-        if (rlt_mtd_data->impl && rlt_mtd_data->impl->mtd_meta_transform) {
-          GstAnalyticsMtd transmtd;
-          transmtd.id = rlt_mtd_data->id;
-          transmtd.meta = new;
-          rlt_mtd_data->impl->mtd_meta_transform (transbuf, &transmtd, buffer,
-              type, data);
-        }
+        dst_mtd_data->impl = NULL;
+        match[i] = G_MAXUINT;
       }
-      return TRUE;
     } else {
-      g_warning ("Trying to copy GstAnalyticsRelationMeta into non-empty meta");
-      g_debug ("ofs:%" G_GSIZE_FORMAT, new->offset);
-
-      return FALSE;
+      match[i] = dst_mtd.id;
     }
   }
 
-  return FALSE;
+  for (i = 0; i < src_rmeta->length; i++) {
+    GstAnalyticsRelatableMtdData *src_mtd_data_i =
+        (GstAnalyticsRelatableMtdData *)
+        (src_rmeta->mtd_data_lookup[i] + src_rmeta->analysis_results);
+    guint j;
+
+    if (match[i] == G_MAXUINT)
+      continue;
+
+    for (j = 0; j < src_rmeta->length; j++) {
+      GstAnalyticsRelatableMtdData *src_mtd_data_j =
+          (GstAnalyticsRelatableMtdData *)
+          (src_rmeta->mtd_data_lookup[j] + src_rmeta->analysis_results);
+
+      if (match[j] == G_MAXUINT)
+        continue;
+
+      dst_rmeta->adj_mat[match[i]][match[j]] |=
+          src_rmeta->adj_mat[src_mtd_data_i->id][src_mtd_data_j->id];
+    }
+  }
+
+  g_free (free_match);
+
+  return TRUE;
 }
 
 static void
@@ -455,6 +583,7 @@ gst_analytics_relation_meta_clear (GstBuffer * buffer, GstMeta * meta)
       mtd.meta = rmeta;
       rlt_mtd_data->impl->mtd_meta_clear (buffer, &mtd);
     }
+    gst_id_str_clear (&rlt_mtd_data->semantic_tag);
   }
 
   gsize adj_mat_data_size =
@@ -534,9 +663,8 @@ gst_analytics_relation_meta_bfs (guint start, const guint8 ** adj_mat,
   memset (level, -1, sizeof (gint) * adj_mat_order);
   memset (parent, -1, sizeof (gint) * adj_mat_order);
 
-  GST_CAT_TRACE (GST_CAT_AN_RELATION,
-      "Performing bfs to find relation(%x) starting from %d with less than %"
-      G_GSIZE_FORMAT " edges from start", edge_mask, start, max_span);
+  GST_TRACE ("Performing bfs to find relation(%x) starting from %d with less"
+      " than %" G_GSIZE_FORMAT " edges from start", edge_mask, start, max_span);
 
   // vertex that has a relation with itself
   if (adj_mat[start][start] & edge_mask) {
@@ -553,8 +681,7 @@ gst_analytics_relation_meta_bfs (guint start, const guint8 ** adj_mat,
           if (level[j] == -1) {
             level[j] = i;
             parent[j] = GPOINTER_TO_INT (iter->data);
-            GST_CAT_TRACE (GST_CAT_AN_RELATION, "Parent of %" G_GSIZE_FORMAT
-                " is %d", j, parent[j]);
+            GST_TRACE ("Parent of %" G_GSIZE_FORMAT " is %d", j, parent[j]);
             next_frontier =
                 g_slist_prepend (next_frontier, GINT_TO_POINTER ((gint) j));
           }
@@ -608,19 +735,16 @@ gst_analytics_relation_meta_get_relation (const GstAnalyticsRelationMeta * meta,
   if (meta->rel_order > an_meta_first_id && meta->rel_order > an_meta_second_id) {
     types = meta->adj_mat[an_meta_first_id][an_meta_second_id];
   } else {
-    GST_CAT_DEBUG (GST_CAT_AN_RELATION,
-        "an_meta_first(%u) and an_meta_second(%u) must be inferior to %"
+    GST_DEBUG ("an_meta_first(%u) and an_meta_second(%u) must be inferior to %"
         G_GSIZE_FORMAT, an_meta_first_id, an_meta_second_id, meta->rel_order);
 
     if (an_meta_first_id >= meta->rel_order) {
-      GST_CAT_ERROR (GST_CAT_AN_RELATION,
-          "an_meta_first(%u) must be from a call to "
+      GST_ERROR ("an_meta_first(%u) must be from a call to "
           "gst_analytics_mtd_get_id(...)", an_meta_first_id);
     }
 
     if (an_meta_second_id >= meta->rel_order) {
-      GST_CAT_ERROR (GST_CAT_AN_RELATION,
-          "an_meta_second(%u) must be from a call to "
+      GST_ERROR ("an_meta_second(%u) must be from a call to "
           "gst_analytics_mtd_get_id(...)", an_meta_second_id);
     }
   }
@@ -651,13 +775,12 @@ gst_analytics_relation_meta_set_relation (GstAnalyticsRelationMeta * meta,
   g_return_val_if_fail (meta, FALSE);
   if (an_meta_first_id >= meta->rel_order
       || an_meta_second_id >= meta->rel_order) {
-    GST_CAT_ERROR (GST_CAT_AN_RELATION, "Invalid parameter");
+    GST_ERROR ("Invalid parameter");
     return FALSE;
   }
   meta->adj_mat[an_meta_first_id][an_meta_second_id] = type;
-  GST_CAT_TRACE (GST_CAT_AN_RELATION,
-      "Relation %x set between %u and %u",
-      type, an_meta_first_id, an_meta_second_id);
+  GST_TRACE ("Relation %x set between %u and %u", type, an_meta_first_id,
+      an_meta_second_id);
   return TRUE;
 }
 
@@ -671,7 +794,7 @@ gst_analytics_relation_meta_set_relation (GstAnalyticsRelationMeta * meta,
  *    @an_meta_second_id.
  *    A value of 1 mean only only consider direct relation.
  * @cond_types: condition on relation types.
- * @relations_path: (transfer full)(nullable)(out caller-allocates)(array)
+ * @relations_path: (transfer full)(nullable)(inout)(array)
  *    (element-type gint):
  *    If not NULL this list will be filled with relation path between
  *    @an_meta_first_id and
@@ -705,24 +828,23 @@ gst_analytics_relation_meta_exist (const GstAnalyticsRelationMeta * rmeta,
   g_return_val_if_fail (rmeta, FALSE);
 
   if (!rmeta) {
-    GST_CAT_ERROR (GST_CAT_AN_RELATION, "Invalid parameter");
+    GST_ERROR ("Invalid parameter");
     return EINVAL;
   }
   adj_mat_order = rmeta->rel_order;
 
   if (adj_mat_order < (an_meta_first_id + 1)
       || adj_mat_order < (an_meta_second_id + 1)) {
-
-    GST_CAT_DEBUG (GST_CAT_AN_RELATION,
-        "Testing relation existence for analysis-meta that have no index in "
-        "adj-mat.");
-
+    GST_DEBUG ("Testing relation existence for analysis-meta that have no"
+        " index in adj-mat.");
     return FALSE;
   }
 
   adj_mat = rmeta->adj_mat;
   if (max_relation_span < 0) {
     span = G_MAXSIZE;
+  } else {
+    span = max_relation_span;
   }
   // If we're only considering the direct relation (@max_relation_span <= 1) we can directly read the
   // adjacency-matrix,
@@ -754,8 +876,7 @@ gst_analytics_relation_meta_exist (const GstAnalyticsRelationMeta * rmeta,
         (const guint8 **) adj_mat, adj_mat_order, cond_types, span, level,
         parent);
 
-    GST_CAT_TRACE (GST_CAT_AN_RELATION, "Adj order:%" G_GSIZE_FORMAT,
-        adj_mat_order);
+    GST_TRACE ("Adj order:%" G_GSIZE_FORMAT, adj_mat_order);
 
     rv = level[an_meta_second_id] != -1;
     if (rv && relations_path) {
@@ -779,7 +900,7 @@ gst_analytics_relation_meta_exist (const GstAnalyticsRelationMeta * rmeta,
         g_array_index (path, gint, --path_left) = an_meta_second_id;
         //path = g_slist_prepend (path, GINT_TO_POINTER (an_meta_second_id));
         while (i != -1 && i != an_meta_second_id) {
-          GST_CAT_TRACE (GST_CAT_AN_RELATION, "Relation parent of %d", i);
+          GST_TRACE ("Relation parent of %d", i);
           g_array_index (path, gint, --path_left) = i;
           //path = g_slist_prepend (path, GINT_TO_POINTER (i));
           i = parent[i];
@@ -796,10 +917,8 @@ gst_analytics_relation_meta_exist (const GstAnalyticsRelationMeta * rmeta,
     g_free (parent);
   }
 
-  GST_CAT_TRACE (GST_CAT_AN_RELATION,
-      "Relation %x between %d and %d %s",
-      cond_types, an_meta_first_id, an_meta_second_id,
-      rv ? "exist" : "does not exist");
+  GST_TRACE ("Relation %x between %d and %d %s", cond_types, an_meta_first_id,
+      an_meta_second_id, rv ? "exist" : "does not exist");
   return rv;
 }
 
@@ -898,8 +1017,7 @@ gst_analytics_relation_meta_add_mtd (GstAnalyticsRelationMeta * meta,
   gpointer mem;
   guint8 **new_adj_mat;
   gsize new_mem_cap, new_rel_order;
-  GST_CAT_TRACE (GST_CAT_AN_RELATION, "Adding relatable metadata to rmeta %p",
-      meta);
+  GST_TRACE ("Adding relatable metadata to rmeta %p", meta);
 
   object_size = sizeof (GstAnalyticsRelatableMtdData);
   object_size += sizeof (gpointer) * (size / sizeof (gpointer));
@@ -939,6 +1057,7 @@ gst_analytics_relation_meta_add_mtd (GstAnalyticsRelationMeta * meta,
     dest->impl = impl;
     dest->id = gst_analytics_relation_meta_get_next_id (meta);
     dest->size = size;
+    gst_id_str_init (&dest->semantic_tag);
     meta->mtd_data_lookup[dest->id] = meta->offset;
     meta->offset += object_size;
     meta->length++;
@@ -946,12 +1065,10 @@ gst_analytics_relation_meta_add_mtd (GstAnalyticsRelationMeta * meta,
       rlt_mtd->id = dest->id;
       rlt_mtd->meta = meta;
     }
-    GST_CAT_TRACE (GST_CAT_AN_RELATION, "Add %p relatable type=%s (%"
-        G_GSIZE_FORMAT " / %" G_GSIZE_FORMAT ").", dest,
-        impl->name, new_size, meta->max_size);
+    GST_TRACE ("Add %p relatable type=%s (%" G_GSIZE_FORMAT " / %"
+        G_GSIZE_FORMAT ").", dest, impl->name, new_size, meta->max_size);
   } else {
-    GST_CAT_ERROR (GST_CAT_AN_RELATION,
-        "Failed to add relatable, out-of-space (%" G_GSIZE_FORMAT " / %"
+    GST_ERROR ("Failed to add relatable, out-of-space (%" G_GSIZE_FORMAT " / %"
         G_GSIZE_FORMAT ").", new_size, meta->max_size);
   }
   return &dest->data[0];
@@ -984,7 +1101,7 @@ gst_analytics_relation_meta_get_mtd (GstAnalyticsRelationMeta * meta,
   rlt->meta = NULL;
 
   if (an_meta_id >= meta->length) {
-    GST_CAT_ERROR (GST_CAT_AN_RELATION, "Invalid parameter");
+    GST_ERROR ("Invalid parameter");
     return FALSE;
   }
 
@@ -1051,8 +1168,7 @@ gst_analytics_relation_meta_get_direct_related (GstAnalyticsRelationMeta * meta,
   GstAnalyticsRelatableMtdData *rlt_mtd_data = NULL;
   gsize i;
 
-  GST_CAT_TRACE (GST_CAT_AN_RELATION,
-      "Looking for %s related to %u by %d",
+  GST_TRACE ("Looking for %s related to %u by %d",
       gst_analytics_mtd_type_get_name (type), an_meta_id, relation_type);
 
   g_return_val_if_fail (rmeta != NULL, FALSE);
@@ -1071,9 +1187,8 @@ gst_analytics_relation_meta_get_direct_related (GstAnalyticsRelationMeta * meta,
   adj_mat_order = meta->rel_order;
 
   if (adj_mat_order < (an_meta_id + 1)) {
-    GST_CAT_DEBUG (GST_CAT_AN_RELATION,
-        "Testing relation existence for analysis-meta that have no index in "
-        "adj-mat.");
+    GST_DEBUG ("Testing relation existence for analysis-meta that have no"
+        " index in adj-mat.");
     return FALSE;
   }
 
@@ -1089,8 +1204,7 @@ gst_analytics_relation_meta_get_direct_related (GstAnalyticsRelationMeta * meta,
         if (state) {
           *state = GSIZE_TO_POINTER (G_MINSSIZE | i);
         }
-        GST_CAT_TRACE (GST_CAT_AN_RELATION, "Found match at %" G_GSIZE_FORMAT,
-            i);
+        GST_TRACE ("Found match at %" G_GSIZE_FORMAT, i);
         break;
       }
       rlt_mtd_data = NULL;

@@ -108,6 +108,7 @@ enum
   ASSET_ADDED_SIGNAL,
   ASSET_REMOVED_SIGNAL,
   MISSING_URI_SIGNAL,
+  UNTRUSTED_CONTENT_SIGNAL,
   ASSET_LOADING_SIGNAL,
   LAST_SIGNAL
 };
@@ -652,6 +653,39 @@ ges_project_class_init (GESProjectClass * klass)
       G_TYPE_NONE, 3, G_TYPE_ERROR, G_TYPE_STRING, G_TYPE_GTYPE);
 
   /**
+   * GESProject::untrusted-content:
+   * @project: the #GESProject loading untrusted content
+   * @id: the id of the asset that was refused
+   * @extractable_type: the #GType of the extractable the refusal is about
+   * @report: (nullable): a #GstStructure named `untrusted-content` describing
+   * what was refused, see gst_parse_context_get_untrusted_report()
+   * @error: the error explaining the refusal
+   *
+   * Emitted each time the untrusted-input rules refuse something while
+   * loading a project: an effect or effect clip whose bin description uses an
+   * element that is not marked untrusted-aware or sets a property marked
+   * %GST_PARAM_UNTRUSTED_SENSITIVE, or such a property applied to an effect
+   * from the serialized project. Handle it to show @report to the user and
+   * answer whether that one thing is acceptable after all; when nothing
+   * accepts it, the load fails with @error.
+   *
+   * Accepting is remembered process-wide: an effect by its exact bin
+   * description, a property by the element type, the property and the value.
+   * What was accepted once is not asked about again, so the same value on
+   * another element of the same type goes through silently, while the same
+   * property with another value is a new decision.
+   *
+   * Returns: %TRUE to accept the refused content anyway.
+   *
+   * Since: 1.30
+   */
+  _signals[UNTRUSTED_CONTENT_SIGNAL] =
+      g_signal_new ("untrusted-content", G_TYPE_FROM_CLASS (klass),
+      G_SIGNAL_RUN_LAST, 0, g_signal_accumulator_true_handled, NULL, NULL,
+      G_TYPE_BOOLEAN, 4, G_TYPE_STRING, G_TYPE_GTYPE, GST_TYPE_STRUCTURE,
+      G_TYPE_ERROR);
+
+  /**
    * GESProject::error-loading:
    * @project: the #GESProject on which a problem happend when creted a #GESAsset
    * @timeline: The timeline that failed loading
@@ -746,9 +780,19 @@ ges_project_try_updating_id (GESProject * project, GESAsset * asset,
   }
 
   /* Always send the MISSING_URI signal if requesting new ID is possible
-   * so that subclasses of GESProject are aware of the missing-uri */
-  g_signal_emit (project, _signals[MISSING_URI_SIGNAL], 0, error, asset,
-      &new_id);
+   * so that subclasses of GESProject are aware of the missing-uri.
+   * Save the proposed id beforehand since g_signal_emit overwrites the
+   * return value pointer without freeing the old value. */
+  {
+    gchar *proposed_id = new_id;
+    new_id = NULL;
+    g_signal_emit (project, _signals[MISSING_URI_SIGNAL], 0, error, asset,
+        &new_id);
+    if (!new_id)
+      new_id = proposed_id;
+    else
+      g_free (proposed_id);
+  }
 
   if (new_id) {
     GST_DEBUG_OBJECT (project, "new id found: %s", new_id);
@@ -811,6 +855,26 @@ new_asset_cb (GESAsset * source, GAsyncResult * res, GESProject * project)
  *
  * Returns: %TRUE if the signale could be emitted %FALSE otherwise
  */
+/* Ask the application whether @id may be created despite the untrusted-input
+ * rules refusing it. Returns TRUE if it accepted. */
+gboolean
+ges_project_ask_untrusted_content (GESProject * project, const gchar * id,
+    GType extractable_type, GstStructure * report, GError * error)
+{
+  gboolean accepted = FALSE;
+
+  g_return_val_if_fail (GES_IS_PROJECT (project), FALSE);
+
+  GST_INFO_OBJECT (project, "Asking about refused untrusted content %s: %s",
+      id, error ? error->message : "(no error)");
+  g_signal_emit (project, _signals[UNTRUSTED_CONTENT_SIGNAL], 0, id,
+      extractable_type, report, error, &accepted);
+  GST_INFO_OBJECT (project, "Application %s it",
+      accepted ? "accepted" : "refused");
+
+  return accepted;
+}
+
 gboolean
 ges_project_set_loaded (GESProject * project, GESFormatter * formatter,
     GError * error)
@@ -825,10 +889,7 @@ ges_project_set_loaded (GESProject * project, GESFormatter * formatter,
         error);
   }
 
-  if (!ges_timeline_in_current_thread (formatter->timeline)) {
-    GST_INFO_OBJECT (project, "Loaded in a different thread, "
-        "not committing timeline");
-  } else if (GST_STATE (formatter->timeline) < GST_STATE_PAUSED) {
+  if (GST_STATE (formatter->timeline) < GST_STATE_PAUSED) {
     timeline_fill_gaps (formatter->timeline);
   } else {
     ges_timeline_commit (formatter->timeline);
@@ -1400,6 +1461,8 @@ ges_project_add_encoding_profile (GESProject * project,
  *
  * Returns: (transfer none) (element-type GstPbutils.EncodingProfile) (allow-none): The
  * list of #GstEncodingProfile used in @project
+ *
+ * Deprecated: 1.30: Use ges_project_list_encoding_profiles_full() instead for MT-safety.
  */
 const GList *
 ges_project_list_encoding_profiles (GESProject * project)
@@ -1407,6 +1470,37 @@ ges_project_list_encoding_profiles (GESProject * project)
   g_return_val_if_fail (GES_IS_PROJECT (project), FALSE);
 
   return project->priv->encoding_profiles;
+}
+
+/**
+ * ges_project_list_encoding_profiles_full:
+ * @project: A #GESProject
+ *
+ * Lists the encoding profiles that have been set to @project. The first one
+ * is the latest added. Each profile in the returned list has its reference
+ * count incremented.
+ *
+ * Returns: (transfer full) (element-type GstPbutils.EncodingProfile) (nullable): A
+ * newly-allocated list of #GstEncodingProfile used in @project, with references
+ * added to each profile. Free the list with g_list_free_full() using
+ * gst_object_unref() as the free function.
+ *
+ * Since: 1.30
+ */
+GList *
+ges_project_list_encoding_profiles_full (GESProject * project)
+{
+  GList *tmp, *res = NULL;
+
+  g_return_val_if_fail (GES_IS_PROJECT (project), NULL);
+
+  GES_PROJECT_LOCK (project);
+  for (tmp = project->priv->encoding_profiles; tmp; tmp = tmp->next) {
+    res = g_list_prepend (res, gst_object_ref (tmp->data));
+  }
+  GES_PROJECT_UNLOCK (project);
+
+  return g_list_reverse (res);
 }
 
 /**

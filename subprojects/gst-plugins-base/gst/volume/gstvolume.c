@@ -401,6 +401,7 @@ gst_volume_class_init (GstVolumeClass * klass)
   gst_element_class_set_static_metadata (element_class, "Volume",
       "Filter/Effect/Audio",
       "Set volume on audio/raw streams", "Andy Wingo <wingo@pobox.com>");
+  gst_element_class_mark_as_untrusted_aware (element_class);
 
   caps = gst_caps_from_string (ALLOWED_CAPS);
   gst_audio_filter_class_add_pad_templates (filter_class, caps);
@@ -1040,6 +1041,8 @@ volume_get_property (GObject * object, guint prop_id, GValue * value,
 static gboolean
 plugin_init (GstPlugin * plugin)
 {
+  gst_plugin_set_static_features_flag (plugin);
+
   return GST_ELEMENT_REGISTER (volume, plugin);
 }
 

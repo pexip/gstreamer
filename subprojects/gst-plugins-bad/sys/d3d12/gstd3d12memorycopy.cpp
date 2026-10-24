@@ -45,9 +45,6 @@ using namespace Microsoft::WRL;
 GST_DEBUG_CATEGORY_STATIC (gst_d3d12_memory_copy_debug);
 #define GST_CAT_DEFAULT gst_d3d12_memory_copy_debug
 
-#define META_TAG_VIDEO meta_tag_video_quark
-static GQuark meta_tag_video_quark;
-
 #ifdef HAVE_GST_D3D11
 #define SINK_STATIC_CAPS \
   GST_VIDEO_CAPS_MAKE_WITH_FEATURES \
@@ -151,6 +148,11 @@ enum GstD3D12MemcpyCmdQueueType
   GST_D3D12_MEMCPY_CMD_QUEUE_COPY,
 };
 
+/**
+ * GstD3D12MemcpyCmdQueueType:
+ *
+ * Since: 1.28
+ */
 #define GST_TYPE_D3D12_MEMCPY_CMD_QUEUE_TYPE (gst_d3d12_memcpy_cmd_queue_type_get_type())
 static GType
 gst_d3d12_memcpy_cmd_queue_type_get_type (void)
@@ -484,8 +486,6 @@ gst_d3d12_memory_copy_class_init (GstD3D12MemoryCopyClass * klass)
   trans_class->before_transform =
       GST_DEBUG_FUNCPTR (gst_d3d12_memory_copy_before_transform);
   trans_class->transform = GST_DEBUG_FUNCPTR (gst_d3d12_memory_copy_transform);
-
-  meta_tag_video_quark = g_quark_from_static_string (GST_META_TAG_VIDEO_STR);
 
   gst_type_mark_as_plugin_api (GST_TYPE_D3D12_MEMORY_COPY,
       (GstPluginAPIFlags) 0);
@@ -958,8 +958,19 @@ _set_caps_features (const GstCaps * caps, const gchar * feature_name)
   guint i = 0;
 
   for (i = 0; i < n; i++) {
-    gst_caps_set_features (tmp, i,
-        gst_caps_features_new_single_static_str (feature_name));
+    auto orig_features = gst_caps_get_features (tmp, i);
+
+    if (gst_caps_features_is_any (orig_features))
+      continue;
+
+    auto features = gst_caps_features_new_static_str (feature_name, nullptr);
+    if (gst_caps_features_contains (orig_features,
+            GST_CAPS_FEATURE_META_GST_VIDEO_OVERLAY_COMPOSITION)) {
+      gst_caps_features_add (features,
+          GST_CAPS_FEATURE_META_GST_VIDEO_OVERLAY_COMPOSITION);
+    }
+
+    gst_caps_set_features (tmp, i, features);
   }
 
   return tmp;
@@ -1357,14 +1368,16 @@ gst_d3d12_memory_copy_transform_meta (GstBaseTransform * trans,
     GstBuffer * outbuf, GstMeta * meta, GstBuffer * inbuf)
 {
   const GstMetaInfo *info = meta->info;
-  const gchar *const *tags;
+  const gchar *valid_tags[] = {
+    GST_META_TAG_VIDEO_STR,
+    GST_META_TAG_VIDEO_ORIENTATION_STR,
+    GST_META_TAG_VIDEO_SIZE_STR,
+    GST_META_TAG_VIDEO_COLORSPACE_STR,
+    nullptr
+  };
 
-  tags = gst_meta_api_type_get_tags (info->api);
-
-  if (!tags || (g_strv_length ((gchar **) tags) == 1
-          && gst_meta_api_type_has_tag (info->api, META_TAG_VIDEO))) {
+  if (gst_meta_api_type_tags_contain_only (info->api, valid_tags))
     return TRUE;
-  }
 
   return GST_BASE_TRANSFORM_CLASS (parent_class)->transform_meta (trans, outbuf,
       meta, inbuf);
@@ -1843,9 +1856,10 @@ gst_d3d12_upload_class_init (GstD3D12UploadClass * klass)
   auto element_class = GST_ELEMENT_CLASS (klass);
 
   gst_element_class_set_static_metadata (element_class,
-      "Direct3D12 Uploader", "Filter/Video",
+      "Direct3D12 Uploader", "Filter/Video/Uploader",
       "Uploads system memory into Direct3D12 texture memory",
       "Seungha Yang <seungha@centricular.com>");
+  gst_element_class_mark_as_untrusted_aware (element_class);
 }
 
 static void
@@ -1869,9 +1883,10 @@ gst_d3d12_download_class_init (GstD3D12DownloadClass * klass)
   auto element_class = GST_ELEMENT_CLASS (klass);
 
   gst_element_class_set_static_metadata (element_class,
-      "Direct3D12 Downloader", "Filter/Video",
+      "Direct3D12 Downloader", "Filter/Video/Downloader",
       "Downloads Direct3D12 texture memory into system memory",
       "Seungha Yang <seungha@centricular.com>");
+  gst_element_class_mark_as_untrusted_aware (element_class);
 }
 
 static void

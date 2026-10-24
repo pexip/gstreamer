@@ -141,15 +141,68 @@ GST_START_TEST (test_image_view_get)
 
 GST_END_TEST;
 
-#define N_THREADS 2
+struct wrapped_image_data
+{
+  VkImage image;
+  gboolean notified;
+};
+
+static void
+wrapped_image_notify (struct wrapped_image_data *data)
+{
+  vkDestroyImage (device->device, data->image, NULL);
+  data->notified = TRUE;
+}
+
+GST_START_TEST (test_image_wrapped_with_image_info)
+{
+  VkImageCreateInfo image_info = {
+    .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+    .imageType = VK_IMAGE_TYPE_2D,
+    .format = VK_FORMAT_R8G8B8A8_UNORM,
+    .extent = {16, 16, 1},
+    .mipLevels = 1,
+    .arrayLayers = 1,
+    .samples = VK_SAMPLE_COUNT_1_BIT,
+    .tiling = VK_IMAGE_TILING_OPTIMAL,
+    .usage = VK_IMAGE_USAGE_SAMPLED_BIT,
+    .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+    .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+  };
+  struct wrapped_image_data data = { 0, };
+  GstVulkanImageMemory *vk_mem;
+  GstMemory *mem;
+
+  fail_unless (vkCreateImage (device->device, &image_info, NULL,
+          &data.image) == VK_SUCCESS);
+
+  mem = gst_vulkan_image_memory_wrapped_with_image_info (device, data.image,
+      &image_info, &data, (GDestroyNotify) wrapped_image_notify);
+  fail_unless (gst_is_vulkan_image_memory (mem));
+
+  vk_mem = (GstVulkanImageMemory *) mem;
+  fail_unless (vk_mem->image == data.image);
+  fail_unless (vk_mem->create_info.format == image_info.format);
+  fail_unless (vk_mem->create_info.extent.width == image_info.extent.width);
+  fail_unless (vk_mem->create_info.extent.height == image_info.extent.height);
+  fail_unless (vk_mem->create_info.usage == image_info.usage);
+  fail_if (data.notified);
+
+  gst_memory_unref (mem);
+  fail_unless (data.notified);
+}
+
+GST_END_TEST;
+
+#define N_THREADS 4
 #define N_MEMORY 4
-#define N_OPS 512
+#define N_OPS 1024
 
 struct view_stress
 {
   GMutex lock;
   GCond cond;
-  gboolean ready;
+  gint ready;
   int n_ops;
   GQueue *memories;
   GstHarnessThread *threads[N_THREADS];
@@ -222,6 +275,154 @@ GST_START_TEST (test_image_view_stress)
 
 GST_END_TEST;
 
+#define MEMORY_READY 1
+#define VIEW_READY 2
+
+struct simultaneous_destruction
+{
+  GMutex lock;
+  GCond cond;
+  gint state;
+  GstVulkanImageMemory *image;
+  GstVulkanImageView *view;
+};
+
+static void
+get_memory_and_unref (struct simultaneous_destruction *d)
+{
+  g_mutex_lock (&d->lock);
+  d->state |= MEMORY_READY;
+  g_cond_broadcast (&d->cond);
+  while (!(d->state & VIEW_READY))
+    g_cond_wait (&d->cond, &d->lock);
+  GstVulkanImageView *view = gst_vulkan_get_or_create_image_view (d->image);
+  GST_INFO ("unref mem %p", d->image);
+  g_mutex_unlock (&d->lock);
+
+  gst_memory_unref ((GstMemory *) d->image);
+  g_thread_yield ();
+  gst_vulkan_image_view_unref (view);
+}
+
+static void
+get_view_and_unref (struct simultaneous_destruction *d)
+{
+  g_mutex_lock (&d->lock);
+
+  d->state |= VIEW_READY;
+  g_cond_broadcast (&d->cond);
+  while (!(d->state & MEMORY_READY))
+    g_cond_wait (&d->cond, &d->lock);
+  GST_INFO ("unref view %p", d->view);
+  g_mutex_unlock (&d->lock);
+
+  g_thread_yield ();
+  gst_vulkan_image_view_unref (d->view);
+}
+
+static void
+simultaneous_destruction_task (GstHarnessThread * t, gint * count)
+{
+  GstVideoInfo v_info;
+  struct simultaneous_destruction d = { 0, };
+
+  g_mutex_init (&d.lock);
+  g_cond_init (&d.cond);
+
+  gst_video_info_set_format (&v_info, GST_VIDEO_FORMAT_RGBA, 16, 16);
+  d.image = create_image_mem (&v_info);
+  d.view = gst_vulkan_get_or_create_image_view (d.image);
+
+  GThread *mem_unref =
+      g_thread_new (NULL, (GThreadFunc) get_memory_and_unref, &d);
+  GThread *view_unref =
+      g_thread_new (NULL, (GThreadFunc) get_view_and_unref, &d);
+
+  g_thread_join (mem_unref);
+  g_thread_join (view_unref);
+  g_mutex_clear (&d.lock);
+  g_cond_clear (&d.cond);
+
+  int progress = g_atomic_int_add (count, 1);
+  if (progress % 5000 == 0)
+    g_print ("progress: %d\n", progress);
+}
+
+#define N_DESTROY_THREADS 8
+
+GST_START_TEST (test_image_view_mem_simultaneous_destruction)
+{
+  GstHarness *h = gst_harness_new_empty ();
+  GstHarnessThread *t[N_DESTROY_THREADS];
+  int count = 0;
+
+  for (int i = 0; i < N_DESTROY_THREADS; i++) {
+    t[i] = gst_harness_stress_custom_start (h,
+        NULL, (GFunc) simultaneous_destruction_task, &count, 0);
+  }
+
+  while (g_atomic_int_get (&count) < 10240)
+    g_usleep (1000);
+
+  for (int i = 0; i < N_DESTROY_THREADS; i++) {
+    gst_harness_stress_thread_stop (t[i]);
+  }
+
+  GST_INFO ("performed %d", g_atomic_int_get (&count));
+  gst_harness_teardown (h);
+}
+
+GST_END_TEST;
+
+GST_START_TEST (test_image_barrier_new)
+{
+  GstVulkanImageMemory *vk_mem;
+  GstVulkanBarrierImageInfo barrier = { 0, }, new_barrier =
+      { 0, }, set_barrier = { 0, };
+  GstVideoInfo v_info;
+  GstVulkanQueue *queue = NULL;
+
+  gst_video_info_set_format (&v_info, GST_VIDEO_FORMAT_RGBA, 16, 16);
+  vk_mem = create_image_mem (&v_info);
+
+  queue = gst_vulkan_device_select_queue (device, VK_QUEUE_GRAPHICS_BIT);
+  fail_unless (queue);
+  vk_mem->barrier.parent.queue = queue;
+
+  gst_vulkan_image_memory_lock (vk_mem);
+  gst_vulkan_image_memory_peek_barrier_unlocked (vk_mem, &barrier);
+
+  // update the barrier with new information
+  gst_vulkan_barrier_image_info_copy_into (&barrier, &new_barrier);
+  new_barrier.image_layout = VK_IMAGE_LAYOUT_GENERAL;
+  fail_unless (!gst_vulkan_barrier_image_info_is_equal (&barrier,
+          &new_barrier));
+  gst_vulkan_barrier_image_info_copy_into (&new_barrier, &set_barrier);
+
+  // update the memory with the set barrier
+  fail_unless (gst_vulkan_image_memory_compare_exchange_barrier_unlocked
+      (vk_mem, &barrier, &new_barrier));
+
+  // the memory barrier is different from the old barrier so this will fail.
+  fail_if (gst_vulkan_image_memory_compare_exchange_barrier_unlocked (vk_mem,
+          &barrier, &new_barrier));
+
+  gst_vulkan_barrier_image_info_clear (&barrier);
+  gst_vulkan_barrier_image_info_clear (&new_barrier);
+
+  // check the set barrier is the same
+  gst_vulkan_image_memory_peek_barrier_unlocked (vk_mem, &barrier);
+  fail_unless (gst_vulkan_barrier_image_info_is_equal (&barrier, &set_barrier));
+  gst_vulkan_image_memory_unlock (vk_mem);
+
+  gst_vulkan_barrier_image_info_clear (&barrier);
+  gst_vulkan_barrier_image_info_clear (&set_barrier);
+
+  gst_memory_unref ((GstMemory *) vk_mem);
+}
+
+GST_END_TEST;
+
 static Suite *
 vkimage_suite (void)
 {
@@ -237,13 +438,20 @@ vkimage_suite (void)
   gst_object_unref (instance);
   if (have_instance) {
     tcase_add_test (tc_basic, test_image_new);
+    tcase_add_test (tc_basic, test_image_wrapped_with_image_info);
+    tcase_add_test (tc_basic, test_image_barrier_new);
     tcase_add_test (tc_basic, test_image_view_new);
     tcase_add_test (tc_basic, test_image_view_get);
     tcase_add_test (tc_basic, test_image_view_stress);
+    tcase_add_test (tc_basic, test_image_view_mem_simultaneous_destruction);
   }
 
   return s;
 }
 
 
+#ifdef __APPLE__
+GST_CHECK_MAIN_NOFORK (vkimage);
+#else
 GST_CHECK_MAIN (vkimage);
+#endif

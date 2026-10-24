@@ -68,6 +68,17 @@ G_BEGIN_DECLS
 /* used by gstparse.c and grammar.y */
 struct _GstParseContext {
   GList * missing_elements;
+  /* Assignments blocked by GST_PARSE_FLAG_NO_UNTRUSTED: a GstStructure named
+   * "untrusted-sensitive-properties" with one "element-name:property" field
+   * per blocked assignment, or NULL. */
+  GstStructure * blocked_sensitive_properties;
+  /* Blocked assignments to a child that never materialized during the parse
+   * (demuxer pads and other runtime-only children): same field shape, but the
+   * value is always the string as written since the property type is unknown.
+   * A GstStructure named "untrusted-unresolved-properties", or NULL. */
+  GstStructure * unresolved_properties;
+  /* Factory names refused by GST_PARSE_FLAG_NO_UNTRUSTED (GList of gchar*). */
+  GList * untrusted_elements;
 };
 
 /* used by gstplugin.c and gstregistrybinary.c */
@@ -87,11 +98,17 @@ struct _GstPluginPrivate {
   GList *deps;                 /* list of GstPluginDep structures */
   GstStructure *status_info;
   GstStructure *cache_data;
+
+  GstRegistry *registry;       /* Registry that this plugin belongs to */
 };
 
+/* Symbols with leading __ are reserved/UB in C, so we use _priv_gst */
+
 /* Private function for getting plugin features directly */
-GList *
-_priv_plugin_get_features(GstRegistry *registry, GstPlugin *plugin);
+G_GNUC_INTERNAL GList *
+_priv_gst_registry_get_features_for_plugin (GstRegistry * registry,
+                                            GstPlugin * plugin,
+                                            gboolean steal_features);
 
 /* Needed by GstMeta (to access meta seq) and GstBuffer (create/free/iterate) */
 typedef struct _GstMetaItem GstMetaItem;
@@ -101,7 +118,6 @@ struct _GstMetaItem {
   GstMeta meta;
 };
 
-/* FIXME: could rename all priv_gst_* functions to __gst_* now */
 G_GNUC_INTERNAL  gboolean priv_gst_plugin_loading_have_whitelist (void);
 
 G_GNUC_INTERNAL  guint32  priv_gst_plugin_loading_get_whitelist_hash (void);
@@ -157,8 +173,14 @@ gboolean _priv_gst_registry_remove_cache_plugins (GstRegistry *registry);
 
 G_GNUC_INTERNAL  void _priv_gst_registry_cleanup (void);
 
+G_GNUC_INTERNAL  void _priv_gst_registry_bump_feature_list_cookie (GstRegistry *registry);
+
 GST_API
 gboolean _gst_plugin_loader_client_run (const gchar * pipe_name);
+
+/* Used by gst-preregistry-generate to create build-time caches of static plugins */
+GST_API
+void _priv_gst_registry_create_static_caches(const gchar **paths, GError **err);
 
 G_GNUC_INTERNAL  GstPlugin * _priv_gst_plugin_load_file_for_registry (const gchar *filename,
                                                                       GstRegistry * registry,
@@ -169,7 +191,7 @@ G_GNUC_INTERNAL  GstPlugin * _priv_gst_plugin_load_file_for_registry (const gcha
 G_GNUC_INTERNAL const char * _priv_gst_value_gtype_to_abbr (GType type);
 
 G_GNUC_INTERNAL gboolean _priv_gst_value_parse_string (gchar * s, gchar ** end, gchar ** next, gboolean unescape);
-G_GNUC_INTERNAL gboolean _priv_gst_value_parse_simple_string (gchar * str, gchar ** end);
+G_GNUC_INTERNAL gboolean _priv_gst_value_parse_simple_string (gchar * str, gchar ** end, char delim);
 G_GNUC_INTERNAL gboolean _priv_gst_value_parse_value (gchar * str, gchar ** after, GValue * value, GType default_type, GParamSpec *pspec);
 G_GNUC_INTERNAL gchar * _priv_gst_value_serialize_any_list (const GValue * value, const gchar * begin, const gchar * end, gboolean print_type, GstSerializeFlags flags);
 
@@ -224,7 +246,7 @@ void      __gst_element_factory_add_interface           (GstElementFactory    * 
 /* used in gstvalue.c and gststructure.c */
 #define GST_ASCII_IS_STRING(c) (g_ascii_isalnum((c)) || ((c) == '_') || \
     ((c) == '-') || ((c) == '+') || ((c) == '/') || ((c) == ':') || \
-    ((c) == '.'))
+    ((c) == '.') || ((c) == '*'))
 
 /* This is only meant for internal uses */
 G_GNUC_INTERNAL
@@ -300,6 +322,7 @@ GST_API GstDebugCategory *GST_CAT_EVENT;
 GST_API GstDebugCategory *GST_CAT_MESSAGE;
 GST_API GstDebugCategory *GST_CAT_PARAMS;
 GST_API GstDebugCategory *GST_CAT_CALL_TRACE;
+GST_API GstDebugCategory *GST_CAT_SEGMENT;
 GST_API GstDebugCategory *GST_CAT_SIGNAL;
 GST_API GstDebugCategory *GST_CAT_PROBE;
 GST_API GstDebugCategory *GST_CAT_REGISTRY;
@@ -346,6 +369,7 @@ extern GstClockTime _priv_gst_start_time;
 #define GST_CAT_MESSAGE          NULL
 #define GST_CAT_PARAMS           NULL
 #define GST_CAT_CALL_TRACE       NULL
+#define GST_CAT_SEGMENT          NULL
 #define GST_CAT_SIGNAL           NULL
 #define GST_CAT_PROBE            NULL
 #define GST_CAT_REGISTRY         NULL

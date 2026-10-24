@@ -161,7 +161,6 @@ GST_DEBUG_CATEGORY_STATIC (aggregator_debug);
  * standard sink pad object lock -> GST_OBJECT_LOCK(aggpad)
  */
 
-/* GstAggregatorPad definitions */
 #define PAD_LOCK(pad)   G_STMT_START {                                  \
   GST_TRACE_OBJECT (pad, "Taking PAD lock from thread %p",              \
         g_thread_self());                                               \
@@ -178,7 +177,6 @@ GST_DEBUG_CATEGORY_STATIC (aggregator_debug);
         g_thread_self());                                               \
   } G_STMT_END
 
-
 #define PAD_WAIT_EVENT(pad)   G_STMT_START {                            \
   GST_LOG_OBJECT (pad, "Waiting for buffer to be consumed thread %p",   \
         g_thread_self());                                               \
@@ -194,20 +192,19 @@ GST_DEBUG_CATEGORY_STATIC (aggregator_debug);
   g_cond_broadcast(&(((GstAggregatorPad* )pad)->priv->event_cond));    \
   } G_STMT_END
 
-
 #define PAD_FLUSH_LOCK(pad)     G_STMT_START {                          \
-  GST_TRACE_OBJECT (pad, "Taking lock from thread %p",                  \
+  GST_TRACE_OBJECT (pad, "Taking flush lock from thread %p",            \
         g_thread_self());                                               \
   g_mutex_lock(&pad->priv->flush_lock);                                 \
-  GST_TRACE_OBJECT (pad, "Took lock from thread %p",                    \
+  GST_TRACE_OBJECT (pad, "Took flush lock from thread %p",              \
         g_thread_self());                                               \
   } G_STMT_END
 
 #define PAD_FLUSH_UNLOCK(pad)   G_STMT_START {                          \
-  GST_TRACE_OBJECT (pad, "Releasing lock from thread %p",               \
+  GST_TRACE_OBJECT (pad, "Releasing flush lock from thread %p",         \
         g_thread_self());                                               \
   g_mutex_unlock(&pad->priv->flush_lock);                               \
-  GST_TRACE_OBJECT (pad, "Release lock from thread %p",                 \
+  GST_TRACE_OBJECT (pad, "Release flush lock from thread %p",           \
         g_thread_self());                                               \
   } G_STMT_END
 
@@ -249,6 +246,7 @@ struct _GstAggregatorPadPrivate
   GstFlowReturn flow_return;
 
   guint32 last_flush_start_seqnum;
+  /* Next one protected by object lock */
   guint32 last_flush_stop_seqnum;
 
   /* Whether the pad hasn't received a first buffer yet */
@@ -379,9 +377,9 @@ struct _GstAggregatorPrivate
   guint32 seqnum;
   gboolean send_stream_start;   /* protected by srcpad stream lock */
   gboolean send_segment;
-  gboolean flushing;
-  gboolean send_eos;            /* protected by srcpad stream lock */
-  gboolean got_eos_event;       /* protected by srcpad stream lock */
+  gboolean flushing;            /* protected by object lock */
+  gboolean send_eos;            /* protected by src_lock */
+  gboolean got_eos_event;       /* protected by src_lock */
 
   GstCaps *srccaps;             /* protected by the srcpad stream lock */
 
@@ -403,11 +401,12 @@ struct _GstAggregatorPrivate
   GMutex src_lock;
   GCond src_cond;
 
-  gboolean first_buffer;        /* protected by object lock */
+  /* start time handling protected by object lock */
+  gboolean first_buffer;
   GstAggregatorStartTimeSelection start_time_selection;
   GstClockTime start_time;
 
-  /* protected by the object lock */
+  /* allocation handling protected by object lock */
   GstQuery *allocation_query;
   GstAllocator *allocator;
   GstBufferPool *pool;
@@ -415,8 +414,8 @@ struct _GstAggregatorPrivate
 
   /* properties */
   gint64 latency;               /* protected by both src_lock and all pad locks */
-  gboolean emit_signals;
-  gboolean ignore_inactive_pads;
+  gboolean emit_signals;        /* protected by src_lock */
+  gboolean ignore_inactive_pads;        /* protected by object lock */
   gboolean force_live;          /* Construct only, doesn't need any locking */
 };
 
@@ -476,7 +475,9 @@ gst_aggregator_pad_queue_is_empty (GstAggregatorPad * pad)
       pad->priv->clipped_buffer == NULL);
 }
 
-/* Will return FALSE if there's no buffer available on every non-EOS pad, or
+/* Called with SRC_LOCK held.
+ *
+ * Will return FALSE if there's no buffer available on every non-EOS pad, or
  * if at least one of the pads has an event or query at the top of its queue.
  *
  * Only returns TRUE if all non-EOS pads have a buffer available at the top of
@@ -832,11 +833,13 @@ gst_aggregator_push_eos (GstAggregator * self)
 
   event = gst_event_new_eos ();
 
+  SRC_LOCK (self);
   GST_OBJECT_LOCK (self);
   self->priv->send_eos = FALSE;
   if (self->priv->seqnum != GST_SEQNUM_INVALID)
     gst_event_set_seqnum (event, self->priv->seqnum);
   GST_OBJECT_UNLOCK (self);
+  SRC_UNLOCK (self);
 
   gst_pad_push_event (self->srcpad, event);
 }
@@ -889,6 +892,7 @@ gst_aggregator_wait_and_check (GstAggregator * self, gboolean * timeout)
   }
 
   /* Try to select start time if we're PLAYING */
+  GST_OBJECT_LOCK (self);
   if (!self->priv->blocked && (
           (self->priv->force_live && self->priv->first_buffer
               && self->priv->start_time_selection ==
@@ -898,7 +902,10 @@ gst_aggregator_wait_and_check (GstAggregator * self, gboolean * timeout)
               && self->priv->first_buffer))) {
     GstClockTime start_time;
     GstAggregatorPad *srcpad = GST_AGGREGATOR_PAD (self->srcpad);
+
+    GST_OBJECT_UNLOCK (self);
     start_time = gst_element_get_current_running_time (GST_ELEMENT (self));
+    GST_OBJECT_LOCK (self);
 
     if (GST_CLOCK_TIME_IS_VALID (start_time)) {
       if (srcpad->segment.position == -1)
@@ -911,6 +918,7 @@ gst_aggregator_wait_and_check (GstAggregator * self, gboolean * timeout)
       self->priv->first_buffer = FALSE;
     }
   }
+  GST_OBJECT_UNLOCK (self);
 
 
   start = gst_aggregator_get_next_time (self);
@@ -1207,13 +1215,27 @@ gst_aggregator_default_negotiated_src_caps (GstAggregator * agg, GstCaps * caps)
   return TRUE;
 }
 
-
-/* takes ownership of the pool, allocator and query */
-static gboolean
-gst_aggregator_set_allocation (GstAggregator * self,
+/**
+ * gst_aggregator_set_allocator:
+ * @self: a #GstAggregator
+ * @pool: (transfer full) (nullable): the #GstBufferPool
+ * @allocator: (transfer full) (nullable): the #GstAllocator
+ * @params: (transfer none) (nullable): the #GstAllocationParams of @allocator
+ * @query: (transfer full) (nullable): the Allocation #GstQuery if any
+ *
+ * Allows #GstAggregator sub-classes to set the buffer @pool, memory @allocator,
+ * its @params and the @query if they originate from an Allocation #GstQuery.
+ *
+ * Returns: TRUE on success or FALSE if buffer @pool activation failed
+ *
+ * Since: 1.30
+ */
+gboolean
+gst_aggregator_set_allocator (GstAggregator * self,
     GstBufferPool * pool, GstAllocator * allocator,
     const GstAllocationParams * params, GstQuery * query)
 {
+  gboolean ret = TRUE;
   GstAllocator *oldalloc;
   GstBufferPool *oldpool;
   GstQuery *oldquery;
@@ -1238,7 +1260,7 @@ gst_aggregator_set_allocation (GstAggregator * self,
 
   if (oldpool) {
     GST_DEBUG_OBJECT (self, "deactivating old pool %p", oldpool);
-    gst_buffer_pool_set_active (oldpool, FALSE);
+    ret = gst_buffer_pool_set_active (oldpool, FALSE);
     gst_object_unref (oldpool);
   }
   if (oldalloc) {
@@ -1247,7 +1269,7 @@ gst_aggregator_set_allocation (GstAggregator * self,
   if (oldquery) {
     gst_query_unref (oldquery);
   }
-  return TRUE;
+  return ret;
 }
 
 
@@ -1264,7 +1286,7 @@ gst_aggregator_decide_allocation (GstAggregator * self, GstQuery * query)
 }
 
 static gboolean
-gst_aggregator_do_allocation (GstAggregator * self, GstCaps * caps)
+gst_aggregator_default_prepare_allocator (GstAggregator * self, GstCaps * caps)
 {
   GstQuery *query;
   gboolean result = TRUE;
@@ -1302,8 +1324,7 @@ gst_aggregator_do_allocation (GstAggregator * self, GstCaps * caps)
     gst_query_parse_nth_allocation_pool (query, 0, &pool, NULL, NULL, NULL);
 
   /* now store */
-  result =
-      gst_aggregator_set_allocation (self, pool, allocator, &params, query);
+  result = gst_aggregator_set_allocator (self, pool, allocator, &params, query);
 
   return result;
 
@@ -1397,9 +1418,11 @@ gst_aggregator_default_negotiate (GstAggregator * self)
 
   gst_aggregator_set_src_caps (self, caps);
 
-  if (!gst_aggregator_do_allocation (self, caps)) {
-    GST_WARNING_OBJECT (self, "Allocation negotiation failed");
-    ret = GST_FLOW_NOT_NEGOTIATED;
+  if (agg_klass->prepare_allocator) {
+    if (!agg_klass->prepare_allocator (self, caps)) {
+      GST_WARNING_OBJECT (self, "Allocation negotiation failed");
+      ret = GST_FLOW_NOT_NEGOTIATED;
+    }
   }
 
 done:
@@ -1412,7 +1435,7 @@ done:
   return ret >= GST_FLOW_OK || ret == GST_AGGREGATOR_FLOW_NEED_DATA;
 }
 
-/* WITH SRC_LOCK held */
+/* with STREAM_LOCK held */
 static gboolean
 gst_aggregator_negotiate_unlocked (GstAggregator * self)
 {
@@ -1487,7 +1510,9 @@ gst_aggregator_loop (GstAggregator * self)
   }
 
   GST_LOG_OBJECT (self, "Checking aggregate");
+  SRC_LOCK (self);
   while (priv->send_eos && priv->running) {
+    SRC_UNLOCK (self);
     flow_return = GST_FLOW_OK;
     DoHandleEventsAndQueriesData events_query_data = { FALSE, GST_FLOW_OK };
 
@@ -1497,15 +1522,19 @@ gst_aggregator_loop (GstAggregator * self)
     if ((flow_return = events_query_data.flow_ret) != GST_FLOW_OK)
       goto handle_error;
 
-    if (is_live_unlocked (self))
+    SRC_LOCK (self);
+    if (is_live_unlocked (self)) {
+      SRC_UNLOCK (self);
       gst_element_foreach_sink_pad (GST_ELEMENT_CAST (self),
           gst_aggregator_pad_skip_buffers, NULL);
+      SRC_LOCK (self);
+    }
 
-    SRC_LOCK (self);
     if (self->priv->got_eos_event) {
       self->priv->got_eos_event = FALSE;
       SRC_UNLOCK (self);
       gst_aggregator_push_eos (self);
+      SRC_LOCK (self);
       continue;
     }
     SRC_UNLOCK (self);
@@ -1515,6 +1544,7 @@ gst_aggregator_loop (GstAggregator * self)
     if (!gst_aggregator_wait_and_check (self, &timeout)) {
       gst_element_foreach_sink_pad (GST_ELEMENT_CAST (self),
           gst_aggregator_pad_reset_peeked_buffer, NULL);
+      SRC_LOCK (self);
       continue;
     }
 
@@ -1537,15 +1567,19 @@ gst_aggregator_loop (GstAggregator * self)
     gst_element_foreach_sink_pad (GST_ELEMENT_CAST (self),
         gst_aggregator_pad_reset_peeked_buffer, NULL);
 
+    SRC_LOCK (self);
     if (!priv->selected_samples_called_or_warned) {
       GST_FIXME_OBJECT (self,
           "Subclass should call gst_aggregator_selected_samples() from its "
           "aggregate implementation.");
       priv->selected_samples_called_or_warned = TRUE;
     }
+    SRC_UNLOCK (self);
 
-    if (flow_return == GST_AGGREGATOR_FLOW_NEED_DATA)
+    if (flow_return == GST_AGGREGATOR_FLOW_NEED_DATA) {
+      SRC_LOCK (self);
       continue;
+    }
 
     GST_OBJECT_LOCK (self);
     if (flow_return == GST_FLOW_FLUSHING && priv->flushing) {
@@ -1578,9 +1612,12 @@ gst_aggregator_loop (GstAggregator * self)
         gst_aggregator_pad_set_flushing (aggpad, flow_return, TRUE);
       }
       GST_OBJECT_UNLOCK (self);
+      SRC_LOCK (self);
       break;
     }
+    SRC_LOCK (self);
   }
+  SRC_UNLOCK (self);
 
   return flow_return;
 }
@@ -1642,7 +1679,7 @@ gst_aggregator_start (GstAggregator * self)
 
   self->priv->blocked = TRUE;
 
-  gst_aggregator_set_allocation (self, NULL, NULL, NULL, NULL);
+  gst_aggregator_set_allocator (self, NULL, NULL, NULL, NULL);
 
   klass = GST_AGGREGATOR_GET_CLASS (self);
 
@@ -1676,6 +1713,7 @@ gst_aggregator_stop_srcpad_task (GstAggregator * self, GstEvent * flush_start)
   return res;
 }
 
+/* Protected by src lock */
 static void
 gst_aggregator_start_srcpad_task (GstAggregator * self)
 {
@@ -1683,7 +1721,8 @@ gst_aggregator_start_srcpad_task (GstAggregator * self)
 
   self->priv->running = TRUE;
   gst_pad_start_task (GST_PAD (self->srcpad),
-      (GstTaskFunction) gst_aggregator_aggregate_func, self, NULL);
+      (GstTaskFunction) gst_aggregator_aggregate_func, gst_object_ref (self),
+      gst_object_unref);
 }
 
 static GstFlowReturn
@@ -1716,8 +1755,12 @@ gst_aggregator_all_flush_stop_received (GstAggregator * self, guint32 seqnum)
   for (tmp = GST_ELEMENT (self)->sinkpads; tmp; tmp = tmp->next) {
     tmppad = (GstAggregatorPad *) tmp->data;
 
-    if (tmppad->priv->last_flush_stop_seqnum != seqnum)
+    GST_OBJECT_LOCK (tmppad);
+    if (tmppad->priv->last_flush_stop_seqnum != seqnum) {
+      GST_OBJECT_UNLOCK (tmppad);
       return FALSE;
+    }
+    GST_OBJECT_UNLOCK (tmppad);
   }
 
   return TRUE;
@@ -1822,7 +1865,6 @@ gst_aggregator_default_sink_event (GstAggregator * self,
 {
   gboolean res = TRUE;
   GstPad *pad = GST_PAD (aggpad);
-  GstAggregatorPrivate *priv = self->priv;
 
   GST_DEBUG_OBJECT (aggpad, "Got event: %" GST_PTR_FORMAT, event);
 
@@ -1836,38 +1878,13 @@ gst_aggregator_default_sink_event (GstAggregator * self,
     }
     case GST_EVENT_FLUSH_STOP:
     {
-      guint32 seqnum = gst_event_get_seqnum (event);
+      /* No need to check if all pads have stream start. If we are here, it
+       * means the task got activated from pre_queue. Forwarding event */
+      gst_aggregator_flush (self);
+      gst_pad_push_event (self->srcpad, event);
+      event = NULL;
 
-      PAD_FLUSH_LOCK (aggpad);
-      PAD_LOCK (aggpad);
-      aggpad->priv->last_flush_stop_seqnum = seqnum;
-      PAD_UNLOCK (aggpad);
-
-      gst_aggregator_pad_flush (aggpad, self);
-
-      GST_OBJECT_LOCK (self);
-      if (priv->flushing
-          && gst_aggregator_all_flush_stop_received (self, seqnum)) {
-        GST_OBJECT_UNLOCK (self);
-        /* That means we received FLUSH_STOP/FLUSH_STOP on
-         * all sinkpads -- Seeking is Done... sending FLUSH_STOP */
-        gst_aggregator_flush (self);
-        gst_pad_push_event (self->srcpad, event);
-        event = NULL;
-        SRC_LOCK (self);
-        priv->send_eos = TRUE;
-        priv->got_eos_event = FALSE;
-        SRC_BROADCAST (self);
-        SRC_UNLOCK (self);
-
-        GST_INFO_OBJECT (self, "Flush stopped");
-
-        gst_aggregator_start_srcpad_task (self);
-      } else {
-        GST_OBJECT_UNLOCK (self);
-      }
-
-      PAD_FLUSH_UNLOCK (aggpad);
+      GST_INFO_OBJECT (self, "Flush stopped");
 
       /* We never forward the event */
       goto eat;
@@ -1927,6 +1944,13 @@ gst_aggregator_default_sink_event (GstAggregator * self,
         endpts = GST_CLOCK_TIME_NONE;
 
       GST_OBJECT_LOCK (aggpad);
+      if (aggpad->segment.format != GST_FORMAT_TIME) {
+        GST_WARNING_OBJECT (self, "GAP event before segment, dropping");
+        res = FALSE;
+        GST_OBJECT_UNLOCK (aggpad);
+        goto eat;
+      }
+
       res = gst_segment_clip (&aggpad->segment, GST_FORMAT_TIME, pts, endpts,
           &pts, &endpts);
       GST_OBJECT_UNLOCK (aggpad);
@@ -1966,6 +1990,14 @@ gst_aggregator_default_sink_event (GstAggregator * self,
 
       goto eat;
     }
+    case GST_EVENT_RECONFIGURE:
+    {
+      SRC_LOCK (self);
+      self->priv->has_peer_latency = FALSE;
+      SRC_BROADCAST (self);
+      SRC_UNLOCK (self);
+      break;
+    }
     case GST_EVENT_TAG:
       goto eat;
     default:
@@ -1978,9 +2010,10 @@ gst_aggregator_default_sink_event (GstAggregator * self,
   return gst_pad_event_default (pad, GST_OBJECT (self), event);
 
 eat:
-  GST_DEBUG_OBJECT (pad, "Eating event: %" GST_PTR_FORMAT, event);
-  if (event)
+  if (event) {
+    GST_DEBUG_OBJECT (pad, "Eating event: %" GST_PTR_FORMAT, event);
     gst_event_unref (event);
+  }
 
   return res;
 }
@@ -2034,6 +2067,52 @@ gst_aggregator_default_sink_event_pre_queue (GstAggregator * self,
     SRC_BROADCAST (self);
     PAD_UNLOCK (aggpad);
     SRC_UNLOCK (self);
+  } else if (event_type == GST_EVENT_FLUSH_STOP) {
+    guint32 seqnum = gst_event_get_seqnum (event);
+
+    PAD_FLUSH_LOCK (aggpad);
+
+    GST_OBJECT_LOCK (aggpad);
+    aggpad->priv->last_flush_stop_seqnum = seqnum;
+    GST_OBJECT_UNLOCK (aggpad);
+
+    /* Takes pad lock and potentially object lock */
+    gst_aggregator_pad_flush (aggpad, self);
+
+    GST_OBJECT_LOCK (self);
+
+    /* priv->flushing protected by object lock */
+    /* gst_aggregator_all_flush_stop_received called with object lock held */
+    if (priv->flushing && gst_aggregator_all_flush_stop_received (self, seqnum)) {
+      /* That means we received FLUSH_STOP/FLUSH_STOP on
+       * all sinkpads -- Seeking is Done... sending FLUSH_STOP */
+      priv->flushing = FALSE;
+      GST_OBJECT_UNLOCK (self);
+
+      GST_INFO_OBJECT (self, "Have flush stop on all pads");
+
+      GST_PAD_STREAM_LOCK (self->srcpad);
+      SRC_LOCK (self);
+      PAD_LOCK (aggpad);
+      GST_DEBUG_OBJECT (aggpad, "Store event in queue: %" GST_PTR_FORMAT,
+          event);
+      /* protected by pad_lock */
+      g_queue_push_head (&aggpad->priv->data, event);
+      PAD_UNLOCK (aggpad);
+      /* protected by src_lock, takes object lock */
+      gst_aggregator_start_srcpad_task (self);
+      priv->send_eos = TRUE;    /* protected by src_lock */
+      priv->got_eos_event = FALSE;      /* protected by src_lock */
+      SRC_BROADCAST (self);
+      SRC_UNLOCK (self);
+      GST_PAD_STREAM_UNLOCK (self->srcpad);
+    } else {
+      /* Eat up this event while waiting for other pads */
+      gst_event_unref (event);
+      GST_OBJECT_UNLOCK (self);
+    }
+    PAD_FLUSH_UNLOCK (aggpad);
+
   } else {
     GstAggregatorClass *klass = GST_AGGREGATOR_GET_CLASS (self);
 
@@ -2100,7 +2179,7 @@ gst_aggregator_stop (GstAggregator * agg)
   agg->priv->posted_latency_msg = FALSE;
   agg->priv->blocked = FALSE;
 
-  gst_aggregator_set_allocation (agg, NULL, NULL, NULL, NULL);
+  gst_aggregator_set_allocator (agg, NULL, NULL, NULL, NULL);
 
   if (agg->priv->running) {
     /* As sinkpads get deactivated after the src pad, we
@@ -2756,7 +2835,9 @@ gst_aggregator_src_pad_activate_mode_func (GstPad * pad,
       case GST_PAD_MODE_PUSH:
       {
         GST_INFO_OBJECT (pad, "Activating pad!");
+        SRC_LOCK (self);
         gst_aggregator_start_srcpad_task (self);
+        SRC_UNLOCK (self);
         return TRUE;
       }
       default:
@@ -2994,13 +3075,19 @@ gst_aggregator_set_property (GObject * object, guint prop_id,
       SRC_UNLOCK (agg);
       break;
     case PROP_START_TIME_SELECTION:
+      GST_OBJECT_LOCK (agg);
       agg->priv->start_time_selection = g_value_get_enum (value);
+      GST_OBJECT_UNLOCK (agg);
       break;
     case PROP_START_TIME:
+      GST_OBJECT_LOCK (agg);
       agg->priv->start_time = g_value_get_uint64 (value);
+      GST_OBJECT_UNLOCK (agg);
       break;
     case PROP_EMIT_SIGNALS:
+      SRC_LOCK (agg);
       agg->priv->emit_signals = g_value_get_boolean (value);
+      SRC_UNLOCK (agg);
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
@@ -3024,13 +3111,19 @@ gst_aggregator_get_property (GObject * object, guint prop_id,
       SRC_UNLOCK (agg);
       break;
     case PROP_START_TIME_SELECTION:
+      GST_OBJECT_LOCK (agg);
       g_value_set_enum (value, agg->priv->start_time_selection);
+      GST_OBJECT_UNLOCK (agg);
       break;
     case PROP_START_TIME:
+      GST_OBJECT_LOCK (agg);
       g_value_set_uint64 (value, agg->priv->start_time);
+      GST_OBJECT_UNLOCK (agg);
       break;
     case PROP_EMIT_SIGNALS:
+      SRC_LOCK (agg);
       g_value_set_boolean (value, agg->priv->emit_signals);
+      SRC_UNLOCK (agg);
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
@@ -3066,6 +3159,8 @@ gst_aggregator_class_init (GstAggregatorClass * klass)
   klass->update_src_caps = gst_aggregator_default_update_src_caps;
   klass->fixate_src_caps = gst_aggregator_default_fixate_src_caps;
   klass->negotiated_src_caps = gst_aggregator_default_negotiated_src_caps;
+  klass->prepare_allocator =
+      GST_DEBUG_FUNCPTR (gst_aggregator_default_prepare_allocator);
 
   klass->negotiate = gst_aggregator_default_negotiate;
 
@@ -3394,6 +3489,8 @@ gst_aggregator_pad_chain_internal (GstAggregator * self,
 
     PAD_UNLOCK (aggpad);
   }
+
+  /* SRC_LOCK, GST_OBJECT_LOCK (self) and PAD_LOCK still held */
 
   if (self->priv->first_buffer) {
     GstClockTime start_time;
@@ -4007,6 +4104,10 @@ gst_aggregator_pad_is_inactive (GstAggregatorPad * pad)
   if (!self)
     return FALSE;
 
+  /* FIXME: Subclasses may call this while iterating over sinkpads with the
+   * aggregator object lock held, or not, so we cannot take the object lock to
+   * read ignore_inactive_pads here or we cause a deadlock. */
+
   PAD_LOCK (pad);
   inactive = self->priv->ignore_inactive_pads && is_live_unlocked (self)
       && pad->priv->first_buffer;
@@ -4155,6 +4256,8 @@ gst_aggregator_simple_get_next_time (GstAggregator * self)
 
 /**
  * gst_aggregator_update_segment:
+ * @self: A #GstAggregator
+ * @segment: The new #GstSegment
  *
  * Subclasses should use this to update the segment on their
  * source pad, instead of directly pushing new segment events
@@ -4185,6 +4288,7 @@ gst_aggregator_update_segment (GstAggregator * self, const GstSegment * segment)
 
 /**
  * gst_aggregator_selected_samples:
+ * @self: A #GstAggregator
  * @pts: The presentation timestamp of the next output buffer
  * @dts: The decoding timestamp of the next output buffer
  * @duration: The duration of the next output buffer
@@ -4216,11 +4320,14 @@ gst_aggregator_selected_samples (GstAggregator * self,
         &GST_AGGREGATOR_PAD (self->srcpad)->segment, pts, dts, duration, info);
   }
 
+  SRC_LOCK (self);
   self->priv->selected_samples_called_or_warned = TRUE;
+  SRC_UNLOCK (self);
 }
 
 /**
  * gst_aggregator_set_ignore_inactive_pads:
+ * @self: A #GstAggregator
  * @ignore: whether inactive pads should not be waited on
  *
  * Subclasses should call this when they don't want to time out
@@ -4244,6 +4351,7 @@ gst_aggregator_set_ignore_inactive_pads (GstAggregator * self, gboolean ignore)
 
 /**
  * gst_aggregator_get_ignore_inactive_pads:
+ * @self: A #GstAggregator
  *
  * Returns: whether inactive pads will not be waited on
  * Since: 1.20
@@ -4264,6 +4372,7 @@ gst_aggregator_get_ignore_inactive_pads (GstAggregator * self)
 
 /**
  * gst_aggregator_get_force_live:
+ * @self: A #GstAggregator
  *
  * Subclasses may use the return value to inform whether they should return
  * %GST_FLOW_EOS from their aggregate implementation.
@@ -4280,6 +4389,8 @@ gst_aggregator_get_force_live (GstAggregator * self)
 
 /**
  * gst_aggregator_set_force_live:
+ * @self: A #GstAggregator
+ * @force_live: The new value
  *
  * Subclasses should call this at construction time in order for @self to
  * aggregate on a timeout even when no live source is connected.

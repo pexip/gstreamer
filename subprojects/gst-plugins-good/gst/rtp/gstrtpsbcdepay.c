@@ -303,6 +303,8 @@ gst_rtp_sbc_depay_process (GstRTPBaseDepayload * base, GstRTPBuffer * rtp)
 
   payload = gst_rtp_buffer_get_payload (rtp);
   payload_len = gst_rtp_buffer_get_payload_len (rtp);
+  if (payload_len < 1)
+    goto bad_packet;
 
   fragment = payload[0] & 0x80;
   start = payload[0] & 0x40;
@@ -331,19 +333,26 @@ gst_rtp_sbc_depay_process (GstRTPBaseDepayload * base, GstRTPBuffer * rtp)
     }
 
     gst_adapter_push (depay->adapter, data);
+    data = NULL;
 
     if (last) {
-      gint framelen, samples;
-      guint8 header[4];
+      if (gst_adapter_available (depay->adapter)) {
+        gint framelen;
+        guint8 header[4];
 
-      data = gst_adapter_take_buffer (depay->adapter,
-          gst_adapter_available (depay->adapter));
-      gst_rtp_drop_non_audio_meta (depay, data);
+        data = gst_adapter_take_buffer (depay->adapter,
+            gst_adapter_available (depay->adapter));
+        gst_rtp_drop_non_audio_meta (depay, data);
 
-      if (gst_buffer_extract (data, 0, &header, 4) != 4 ||
-          gst_rtp_sbc_depay_get_params (depay, header,
-              payload_len, &framelen, &samples) < 0) {
-        gst_buffer_unref (data);
+        if (gst_buffer_extract (data, 0, &header, 4) != 4 ||
+            gst_rtp_sbc_depay_get_params (depay, header,
+                payload_len, &framelen, &samples) < 0) {
+          gst_buffer_unref (data);
+          data = NULL;
+          goto bad_packet;
+        }
+      } else {
+        data = NULL;
         goto bad_packet;
       }
     } else {

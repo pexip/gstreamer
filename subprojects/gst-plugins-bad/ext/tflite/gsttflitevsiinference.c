@@ -32,11 +32,12 @@
  * README.md in with this plugin.
  *
  * ## Example launch command:
- *
- * GST_DEBUG=ssdobjectdetector:5 \
+ * |[
+ * GST_DEBUG=ssdtensordec:5 \
  * gst-launch-1.0 filesrc location=tflite-models/images/bus.jpg ! \
- * jpegdec ! videoconvert ! tflitevsiinference model-file=tflite-models/models/ssd_mobilenet_v1_coco.tflite !  \
- * ssdobjectdetector label-file=tflite-models/labels/COCO_classes.txt  ! videoconvert ! imagefreeze ! autovideosink
+ *   jpegdec ! videoconvert ! tflitevsiinference model-file=tflite-models/models/ssd_mobilenet_v1_coco.tflite !  \
+ *   ssdtensordec label-file=tflite-models/labels/COCO_classes.txt  ! videoconvert ! imagefreeze ! autovideosink
+ * ]|
  *
  * Since: 1.28
  */
@@ -54,7 +55,7 @@ typedef struct _GstTFliteVsiInference
 {
   GstTFliteInference parent;
 
-  gchar *delegate_path;
+  gchar *delegate_library;
 
   TfLiteDelegate *tflite_delegate;
 } GstTFliteVsiInference;
@@ -68,10 +69,10 @@ GST_ELEMENT_REGISTER_DEFINE (tflite_vsi_inference,
 enum
 {
   PROP_0,
-  PROP_DELEGATE,
+  PROP_DELEGATE_LIBRARY,
 };
 
-#define DEFAULT_DELEGATE_PATH "libvx_delegate.so.2"
+#define DEFAULT_DELEGATE_LIBRARY "libvx_delegate.so.2"
 
 static void gst_tflite_vsi_inference_set_property (GObject * object,
     guint prop_id, const GValue * value, GParamSpec * pspec);
@@ -111,16 +112,17 @@ gst_tflite_vsi_inference_class_init (GstTFliteVsiInferenceClass * klass)
   tflite_class->update_options = gst_tflite_vsi_update_options;
 
   g_object_class_install_property (G_OBJECT_CLASS (klass),
-      PROP_DELEGATE,
-      g_param_spec_string ("delegate",
-          "TfLite Delegate", "Path to the VSI TfLite delegate library",
-          DEFAULT_DELEGATE_PATH, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+      PROP_DELEGATE_LIBRARY,
+      g_param_spec_string ("delegate-library",
+          "TfLite Delegate Library", "Path to the VSI TfLite delegate library",
+          DEFAULT_DELEGATE_LIBRARY,
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 }
 
 static void
 gst_tflite_vsi_inference_init (GstTFliteVsiInference * self)
 {
-  self->delegate_path = g_strdup (DEFAULT_DELEGATE_PATH);
+  self->delegate_library = g_strdup (DEFAULT_DELEGATE_LIBRARY);
 }
 
 static void
@@ -130,9 +132,9 @@ gst_tflite_vsi_inference_set_property (GObject * object, guint prop_id,
   GstTFliteVsiInference *self = GST_TFLITE_VSI_INFERENCE (object);
 
   switch (prop_id) {
-    case PROP_DELEGATE:
-      g_free (self->delegate_path);
-      self->delegate_path = g_value_dup_string (value);
+    case PROP_DELEGATE_LIBRARY:
+      g_free (self->delegate_library);
+      self->delegate_library = g_value_dup_string (value);
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
@@ -147,8 +149,8 @@ gst_tflite_vsi_inference_get_property (GObject * object, guint prop_id,
   GstTFliteVsiInference *self = GST_TFLITE_VSI_INFERENCE (object);
 
   switch (prop_id) {
-    case PROP_DELEGATE:
-      g_value_set_string (value, self->delegate_path);
+    case PROP_DELEGATE_LIBRARY:
+      g_value_set_string (value, self->delegate_library);
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
@@ -161,7 +163,7 @@ gst_tflite_vsi_inference_finalize (GObject * object)
 {
   GstTFliteVsiInference *self = GST_TFLITE_VSI_INFERENCE (object);
 
-  g_free (self->delegate_path);
+  g_free (self->delegate_library);
 
   G_OBJECT_CLASS (gst_tflite_vsi_inference_parent_class)->finalize (object);
 }
@@ -174,7 +176,7 @@ gst_tflite_vsi_update_options (GstTFliteInference * inf,
   TfLiteExternalDelegateOptions external_delegate_options;
 
   external_delegate_options =
-      TfLiteExternalDelegateOptionsDefault (self->delegate_path);
+      TfLiteExternalDelegateOptionsDefault (self->delegate_library);
 
   self->tflite_delegate =
       TfLiteExternalDelegateCreate (&external_delegate_options);

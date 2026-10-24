@@ -870,7 +870,8 @@ tsmux_get_buffer (TsMux * mux, GstBuffer ** buf)
 }
 
 static gboolean
-tsmux_packet_out (TsMux * mux, GstBuffer * buf, gint64 pcr)
+tsmux_packet_out (TsMux * mux, GstBuffer * buf, gint64 pcr,
+    gboolean do_pcr_checks)
 {
   g_return_val_if_fail (buf, FALSE);
 
@@ -886,7 +887,7 @@ tsmux_packet_out (TsMux * mux, GstBuffer * buf, gint64 pcr)
     /* Check and insert a PCR observation for each program if needed,
      * but only for programs that have written their SI at least once,
      * so the stream starts with PAT/PMT */
-    if (mux->first_pcr_ts != G_MININT64) {
+    if (do_pcr_checks && mux->first_pcr_ts != G_MININT64) {
       GList *cur;
 
       for (cur = mux->programs; cur; cur = cur->next) {
@@ -914,7 +915,7 @@ tsmux_packet_out (TsMux * mux, GstBuffer * buf, gint64 pcr)
           gst_buffer_unmap (pcr_buf, &map);
 
           stream->pi.flags &= TSMUX_PACKET_FLAG_PES_FULL_HEADER;
-          if (!tsmux_packet_out (mux, pcr_buf, new_pcr))
+          if (!tsmux_packet_out (mux, pcr_buf, new_pcr, FALSE))
             goto error;
         }
       }
@@ -1022,8 +1023,7 @@ tsmux_write_adaptation_field (guint8 * buf,
       pcr_ext = (pi->pcr % 300);
 
       flags |= 0x10;
-      TS_DEBUG ("Writing PCR %" G_GUINT64_FORMAT " + ext %u", pcr_base,
-          pcr_ext);
+      TS_LOG ("Writing PCR %" G_GUINT64_FORMAT " + ext %u", pcr_base, pcr_ext);
       buf[pos++] = (pcr_base >> 25) & 0xff;
       buf[pos++] = (pcr_base >> 17) & 0xff;
       buf[pos++] = (pcr_base >> 9) & 0xff;
@@ -1039,7 +1039,7 @@ tsmux_write_adaptation_field (guint8 * buf,
       opcr_ext = (pi->opcr % 300);
 
       flags |= 0x08;
-      TS_DEBUG ("Writing OPCR");
+      TS_LOG ("Writing OPCR");
       buf[pos++] = (opcr_base >> 25) & 0xff;
       buf[pos++] = (opcr_base >> 17) & 0xff;
       buf[pos++] = (opcr_base >> 9) & 0xff;
@@ -1059,11 +1059,11 @@ tsmux_write_adaptation_field (guint8 * buf,
       buf[pos++] = pi->private_data_len;
       memcpy (&(buf[pos]), pi->private_data, pi->private_data_len);
       pos += pi->private_data_len;
-      TS_DEBUG ("%u bytes of private data", pi->private_data_len);
+      TS_LOG ("%u bytes of private data", pi->private_data_len);
     }
     if (pi->flags & TSMUX_PACKET_FLAG_WRITE_ADAPT_EXT) {
       flags |= 0x01;
-      TS_DEBUG ("FIXME: write Adaptation extension");
+      TS_LOG ("FIXME: write Adaptation extension");
       /* Write an empty extension for now */
       buf[pos++] = 1;
       buf[pos++] = 0x1f;        /* lower 5 bits are reserved, and should be all 1 */
@@ -1099,7 +1099,7 @@ tsmux_write_ts_header (TsMux * mux, guint8 * buf, TsMuxPacketInfo * pi,
   /* Sync byte */
   buf[0] = TSMUX_SYNC_BYTE;
 
-  TS_DEBUG ("PID 0x%04x, counter = 0x%01x, %u bytes avail", pi->pid,
+  TS_LOG ("PID 0x%04x, counter = 0x%01x, %u bytes avail", pi->pid,
       mux->pid_packet_counts[pi->pid] & 0x0f, stream_avail);
 
   /* 3 bits:
@@ -1176,10 +1176,10 @@ tsmux_write_ts_header (TsMux * mux, guint8 * buf, TsMuxPacketInfo * pi,
 
 
   if (write_adapt) {
-    TS_DEBUG ("Adaptation field of size >= %d + %d bytes payload",
+    TS_LOG ("Adaptation field of size >= %d + %d bytes payload",
         adapt_len, payload_len);
   } else {
-    TS_DEBUG ("Payload of %d bytes only", payload_len);
+    TS_LOG ("Payload of %d bytes only", payload_len);
   }
 
   return TRUE;
@@ -1247,7 +1247,7 @@ tsmux_section_write_packet (TsMux * mux, TsMuxSection * section)
     gst_buffer_unmap (buf, &map);
 
     /* Push the packet without PCR */
-    if (G_UNLIKELY (!tsmux_packet_out (mux, buf, -1)))
+    if (G_UNLIKELY (!tsmux_packet_out (mux, buf, -1, TRUE)))
       goto done;
 
     section->pi.stream_avail -= len;
@@ -1403,16 +1403,33 @@ rewrite_si (TsMux * mux, gint64 cur_ts)
   /* check if we need to rewrite pat */
   if (mux->next_pat_pcr == -1 || mux->pat_changed)
     write_pat = TRUE;
-  else if (next_pcr > mux->next_pat_pcr)
+  else if (next_pcr > mux->next_pat_pcr) {
+    TS_DEBUG ("PCR %" G_GINT64_FORMAT " > next PAT PCR %" G_GINT64_FORMAT,
+        next_pcr, mux->next_pat_pcr);
     write_pat = TRUE;
-  else
+  } else {
     write_pat = FALSE;
+  }
 
   if (write_pat) {
+    TS_DEBUG ("Writing PAT at PCR %" G_GINT64_FORMAT, next_pcr);
+
     if (mux->next_pat_pcr == -1)
       mux->next_pat_pcr = next_pcr + mux->pat_interval * 300;
     else
       mux->next_pat_pcr += mux->pat_interval * 300;
+
+    if (mux->next_pat_pcr < next_pcr) {
+      gint64 pat_interval_pcr = 300 * mux->pat_interval;
+      gint64 pat_pcr_delay =
+          ((next_pcr - mux->next_pat_pcr + pat_interval_pcr -
+              1) / pat_interval_pcr) * pat_interval_pcr;
+
+      mux->next_pat_pcr += pat_pcr_delay;
+      TS_WARN
+          ("PAT was scheduled late. Improve the mpegtsmux packet scheduler. Delaying the next to %"
+          G_GINT64_FORMAT, mux->next_pat_pcr);
+    }
 
     if (!tsmux_write_pat (mux))
       return FALSE;
@@ -1434,6 +1451,18 @@ rewrite_si (TsMux * mux, gint64 cur_ts)
     else
       mux->next_si_pcr += mux->si_interval * 300;
 
+    if (mux->next_si_pcr < next_pcr) {
+      gint64 si_interval_pcr = 300 * mux->si_interval;
+      gint64 si_pcr_delay =
+          ((next_pcr - mux->next_si_pcr + si_interval_pcr -
+              1) / si_interval_pcr) * si_interval_pcr;
+
+      mux->next_si_pcr += si_pcr_delay;
+      TS_WARN
+          ("SI sections were scheduled late. Improve the mpegtsmux packet scheduler. Delaying the next to %"
+          G_GINT64_FORMAT, mux->next_si_pcr);
+    }
+
     if (!tsmux_write_si (mux))
       return FALSE;
 
@@ -1453,10 +1482,26 @@ rewrite_si (TsMux * mux, gint64 cur_ts)
       write_pmt = FALSE;
 
     if (write_pmt) {
+      TS_DEBUG ("Writing PMT for program %d at PCR %" G_GINT64_FORMAT,
+          program->pgm_number, next_pcr);
+
       if (program->next_pmt_pcr == -1)
         program->next_pmt_pcr = next_pcr + program->pmt_interval * 300;
       else
         program->next_pmt_pcr += program->pmt_interval * 300;
+
+      if (program->next_pmt_pcr < next_pcr) {
+        gint64 pmt_interval_pcr = 300 * program->pmt_interval;
+        gint64 pmt_pcr_delay =
+            ((next_pcr - program->next_pmt_pcr + pmt_interval_pcr -
+                1) / pmt_interval_pcr) * pmt_interval_pcr;
+
+        program->next_pmt_pcr += pmt_pcr_delay;
+        TS_WARN
+            ("PMT for program %d was scheduled late. Improve the mpegtsmux packet scheduler. "
+            "Delaying the next to %" G_GINT64_FORMAT, program->pgm_number,
+            program->next_pmt_pcr);
+      }
 
       if (!tsmux_write_pmt (mux, program))
         return FALSE;
@@ -1476,9 +1521,16 @@ rewrite_si (TsMux * mux, gint64 cur_ts)
             program->next_scte35_pcr);
         if (program->next_scte35_pcr == -1)
           program->next_scte35_pcr =
-              next_pcr + program->scte35_null_interval * 300;
+              next_pcr + program->scte35_null_interval * 300ULL;
         else
-          program->next_scte35_pcr += program->scte35_null_interval * 300;
+          program->next_scte35_pcr += program->scte35_null_interval * 300ULL;
+
+        if (program->next_scte35_pcr < next_pcr) {
+          TS_WARN
+              ("scte35 for program %d was scheduled late. Improve the mpegtsmux packet scheduler.",
+              program->pgm_number);
+        }
+
         GST_DEBUG ("next scte35 NOW pcr %" G_GINT64_FORMAT,
             program->next_scte35_pcr);
 
@@ -1544,9 +1596,12 @@ pad_stream (TsMux * mux, TsMuxStream * stream, gint64 cur_ts)
 
       new_pcr = write_new_pcr (mux, stream, get_current_pcr (mux, cur_ts),
           get_next_pcr (mux, cur_ts));
+
+      gboolean pcr_checks = TRUE;
       if (new_pcr != -1) {
         GST_LOG ("Writing PCR-only packet on PID 0x%04x", stream->pi.pid);
         tsmux_write_ts_header (mux, map.data, &stream->pi, 0, NULL, NULL);
+        pcr_checks = FALSE;
       } else {
         GST_LOG ("Writing null stuffing packet");
         if (!rewrite_si (mux, cur_ts)) {
@@ -1561,7 +1616,7 @@ pad_stream (TsMux * mux, TsMuxStream * stream, gint64 cur_ts)
       gst_buffer_unmap (buf, &map);
 
       stream->pi.flags &= TSMUX_PACKET_FLAG_PES_FULL_HEADER;
-      if (!tsmux_packet_out (mux, buf, new_pcr))
+      if (!tsmux_packet_out (mux, buf, new_pcr, pcr_checks))
         goto done;
     }
   } while (bitrate < mux->bitrate);
@@ -1652,7 +1707,7 @@ tsmux_write_stream_packet (TsMux * mux, TsMuxStream * stream)
         gst_buffer_unmap (buf, &map);
         stream->program->pi.pid = stream->program->pcr_pid;
         stream->program->pi.flags &= TSMUX_PACKET_FLAG_PES_FULL_HEADER;
-        if (!tsmux_packet_out (mux, buf, new_pcr))
+        if (!tsmux_packet_out (mux, buf, new_pcr, FALSE))
           return FALSE;
       }
     }
@@ -1684,8 +1739,8 @@ tsmux_write_stream_packet (TsMux * mux, TsMuxStream * stream)
 
   gst_buffer_unmap (buf, &map);
 
-  GST_DEBUG ("Writing PES of size %d", (int) gst_buffer_get_size (buf));
-  res = tsmux_packet_out (mux, buf, new_pcr);
+  GST_LOG ("Writing PES of size %d", (int) gst_buffer_get_size (buf));
+  res = tsmux_packet_out (mux, buf, new_pcr, TRUE);
 
   /* Reset all dynamic flags */
   stream->pi.flags &= TSMUX_PACKET_FLAG_PES_FULL_HEADER;

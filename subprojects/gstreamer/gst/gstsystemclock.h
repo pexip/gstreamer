@@ -88,7 +88,13 @@ GST_API
 GstClock*               gst_system_clock_obtain         (void);
 
 GST_API
+GstClock*               gst_system_clock_new            (const gchar *name, GstClockType clock_type);
+
+GST_API
 void                    gst_system_clock_set_default    (GstClock *new_clock);
+
+GST_API
+gboolean gst_clock_is_system_monotonic (GstClock *clock);
 
 G_DEFINE_AUTOPTR_CLEANUP_FUNC(GstSystemClock, gst_object_unref)
 

@@ -38,11 +38,9 @@
 #endif
 
 #include "gstwin32ipcvideosink.h"
-#include "gstwin32ipcutils.h"
 #include "gstwin32ipcbufferpool.h"
 #include "gstwin32ipcmemory.h"
-#include "protocol/win32ipcpipeserver.h"
-#include <string>
+#include "gstwin32ipc.h"
 #include <string.h>
 
 GST_DEBUG_CATEGORY_STATIC (gst_win32_ipc_video_sink_debug);
@@ -53,73 +51,38 @@ static GstStaticPadTemplate sink_template = GST_STATIC_PAD_TEMPLATE ("sink",
     GST_PAD_ALWAYS,
     GST_STATIC_CAPS (GST_VIDEO_CAPS_MAKE (GST_VIDEO_FORMATS_ALL)));
 
-enum
-{
-  PROP_0,
-  PROP_PIPE_NAME,
-};
-
 #define DEFAULT_PIPE_NAME "\\\\.\\pipe\\gst.win32.ipc.video"
+#define DEFAULT_LEAKY_TYPE GST_WIN32_IPC_LEAKY_DOWNSTREAM
 
 struct _GstWin32IpcVideoSink
 {
-  GstBaseSink parent;
+  GstWin32IpcBaseSink parent;
 
   GstVideoInfo info;
-  Win32IpcPipeServer *pipe;
-
-  Win32IpcVideoInfo minfo;
-
   GstBufferPool *fallback_pool;
-  GstBuffer *prepared_buffer;
-
-  /* properties */
-  gchar *pipe_name;
 };
 
-static void gst_win32_ipc_video_sink_finalize (GObject * object);
-static void gst_win32_ipc_video_sink_set_property (GObject * object,
-    guint prop_id, const GValue * value, GParamSpec * pspec);
-static void gst_win32_video_sink_get_property (GObject * object, guint prop_id,
-    GValue * value, GParamSpec * pspec);
-
-static GstClock *gst_win32_ipc_video_sink_provide_clock (GstElement * elem);
-
-static gboolean gst_win32_ipc_video_sink_start (GstBaseSink * sink);
-static gboolean gst_win32_ipc_video_sink_stop (GstBaseSink * sink);
-static gboolean gst_win32_ipc_video_sink_unlock_stop (GstBaseSink * sink);
 static gboolean gst_win32_ipc_video_sink_set_caps (GstBaseSink * sink,
     GstCaps * caps);
-static void gst_win32_ipc_video_sink_get_time (GstBaseSink * sink,
+static gboolean gst_win32_ipc_video_sink_stop (GstBaseSink * sink);
+static void gst_win32_ipc_video_sink_get_times (GstBaseSink * sink,
     GstBuffer * buf, GstClockTime * start, GstClockTime * end);
 static gboolean gst_win32_ipc_video_sink_propose_allocation (GstBaseSink * sink,
     GstQuery * query);
-static GstFlowReturn gst_win32_ipc_video_sink_prepare (GstBaseSink * sink,
-    GstBuffer * buf);
-static GstFlowReturn gst_win32_ipc_video_sink_render (GstBaseSink * sink,
-    GstBuffer * buf);
+static GstFlowReturn
+gst_win32_ipc_video_sink_upload (GstWin32IpcBaseSink * sink, GstBuffer * buffer,
+    GstBuffer ** uploaded, gsize * size);
 
 #define gst_win32_ipc_video_sink_parent_class parent_class
 G_DEFINE_TYPE (GstWin32IpcVideoSink, gst_win32_ipc_video_sink,
-    GST_TYPE_BASE_SINK);
+    GST_TYPE_WIN32_IPC_BASE_SINK);
 
 static void
 gst_win32_ipc_video_sink_class_init (GstWin32IpcVideoSinkClass * klass)
 {
-  GObjectClass *object_class = G_OBJECT_CLASS (klass);
-  GstElementClass *element_class = GST_ELEMENT_CLASS (klass);
-  GstBaseSinkClass *sink_class = GST_BASE_SINK_CLASS (klass);
-
-  object_class->finalize = gst_win32_ipc_video_sink_finalize;
-  object_class->set_property = gst_win32_ipc_video_sink_set_property;
-  object_class->get_property = gst_win32_video_sink_get_property;
-
-  g_object_class_install_property (object_class, PROP_PIPE_NAME,
-      g_param_spec_string ("pipe-name", "Pipe Name",
-          "The name of Win32 named pipe to communicate with clients. "
-          "Validation of the pipe name is caller's responsibility",
-          DEFAULT_PIPE_NAME, (GParamFlags) (G_PARAM_READWRITE |
-              G_PARAM_STATIC_STRINGS | GST_PARAM_MUTABLE_READY)));
+  auto element_class = GST_ELEMENT_CLASS (klass);
+  auto sink_class = GST_BASE_SINK_CLASS (klass);
+  auto win32_class = GST_WIN32_IPC_BASE_SINK_CLASS (klass);
 
   gst_element_class_set_static_metadata (element_class,
       "Win32 IPC Video Sink", "Sink/Video",
@@ -127,19 +90,13 @@ gst_win32_ipc_video_sink_class_init (GstWin32IpcVideoSinkClass * klass)
       "Seungha Yang <seungha@centricular.com>");
   gst_element_class_add_static_pad_template (element_class, &sink_template);
 
-  element_class->provide_clock =
-      GST_DEBUG_FUNCPTR (gst_win32_ipc_video_sink_provide_clock);
-
-  sink_class->start = GST_DEBUG_FUNCPTR (gst_win32_ipc_video_sink_start);
   sink_class->stop = GST_DEBUG_FUNCPTR (gst_win32_ipc_video_sink_stop);
-  sink_class->unlock_stop =
-      GST_DEBUG_FUNCPTR (gst_win32_ipc_video_sink_unlock_stop);
+  sink_class->get_times =
+      GST_DEBUG_FUNCPTR (gst_win32_ipc_video_sink_get_times);
   sink_class->set_caps = GST_DEBUG_FUNCPTR (gst_win32_ipc_video_sink_set_caps);
   sink_class->propose_allocation =
       GST_DEBUG_FUNCPTR (gst_win32_ipc_video_sink_propose_allocation);
-  sink_class->get_times = GST_DEBUG_FUNCPTR (gst_win32_ipc_video_sink_get_time);
-  sink_class->prepare = GST_DEBUG_FUNCPTR (gst_win32_ipc_video_sink_prepare);
-  sink_class->render = GST_DEBUG_FUNCPTR (gst_win32_ipc_video_sink_render);
+  win32_class->upload = GST_DEBUG_FUNCPTR (gst_win32_ipc_video_sink_upload);
 
   GST_DEBUG_CATEGORY_INIT (gst_win32_ipc_video_sink_debug, "win32ipcvideosink",
       0, "win32ipcvideosink");
@@ -148,119 +105,31 @@ gst_win32_ipc_video_sink_class_init (GstWin32IpcVideoSinkClass * klass)
 static void
 gst_win32_ipc_video_sink_init (GstWin32IpcVideoSink * self)
 {
-  self->pipe_name = g_strdup (DEFAULT_PIPE_NAME);
-
-  GST_OBJECT_FLAG_SET (self, GST_ELEMENT_FLAG_PROVIDE_CLOCK);
-  GST_OBJECT_FLAG_SET (self, GST_ELEMENT_FLAG_REQUIRE_CLOCK);
-}
-
-static void
-gst_win32_ipc_video_sink_finalize (GObject * object)
-{
-  GstWin32IpcVideoSink *self = GST_WIN32_IPC_VIDEO_SINK (object);
-
-  g_free (self->pipe_name);
-
-  G_OBJECT_CLASS (parent_class)->finalize (object);
-}
-
-static void
-gst_win32_ipc_video_sink_set_property (GObject * object, guint prop_id,
-    const GValue * value, GParamSpec * pspec)
-{
-  GstWin32IpcVideoSink *self = GST_WIN32_IPC_VIDEO_SINK (object);
-
-  switch (prop_id) {
-    case PROP_PIPE_NAME:
-      GST_OBJECT_LOCK (self);
-      g_free (self->pipe_name);
-      self->pipe_name = g_value_dup_string (value);
-      if (!self->pipe_name)
-        self->pipe_name = g_strdup (DEFAULT_PIPE_NAME);
-      GST_OBJECT_UNLOCK (self);
-      break;
-    default:
-      G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
-      break;
-  }
-}
-
-static void
-gst_win32_video_sink_get_property (GObject * object, guint prop_id,
-    GValue * value, GParamSpec * pspec)
-{
-  GstWin32IpcVideoSink *self = GST_WIN32_IPC_VIDEO_SINK (object);
-
-  switch (prop_id) {
-    case PROP_PIPE_NAME:
-      GST_OBJECT_LOCK (self);
-      g_value_set_string (value, self->pipe_name);
-      GST_OBJECT_UNLOCK (self);
-      break;
-    default:
-      G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
-      break;
-  }
-}
-
-static GstClock *
-gst_win32_ipc_video_sink_provide_clock (GstElement * elem)
-{
-  return gst_system_clock_obtain ();
-}
-
-static gboolean
-gst_win32_ipc_video_sink_start (GstBaseSink * sink)
-{
-  GstWin32IpcVideoSink *self = GST_WIN32_IPC_VIDEO_SINK (sink);
-
-  GST_DEBUG_OBJECT (self, "Start");
-
-  self->pipe = win32_ipc_pipe_server_new (self->pipe_name);
-  if (!self->pipe) {
-    GST_ERROR_OBJECT (self, "Couldn't create pipe server");
-    return FALSE;
-  }
-
-  return TRUE;
+  g_object_set (self, "pipe-name", DEFAULT_PIPE_NAME, "leaky-type",
+      DEFAULT_LEAKY_TYPE, nullptr);
 }
 
 static gboolean
 gst_win32_ipc_video_sink_stop (GstBaseSink * sink)
 {
-  GstWin32IpcVideoSink *self = GST_WIN32_IPC_VIDEO_SINK (sink);
+  auto self = GST_WIN32_IPC_VIDEO_SINK (sink);
 
   GST_DEBUG_OBJECT (self, "Stop");
-
-  g_clear_pointer (&self->pipe, win32_ipc_pipe_server_unref);
-  gst_clear_buffer (&self->prepared_buffer);
-
   if (self->fallback_pool) {
     gst_buffer_pool_set_active (self->fallback_pool, FALSE);
     gst_clear_object (&self->fallback_pool);
   }
 
-  return TRUE;
-}
-
-static gboolean
-gst_win32_ipc_video_sink_unlock_stop (GstBaseSink * sink)
-{
-  GstWin32IpcVideoSink *self = GST_WIN32_IPC_VIDEO_SINK (sink);
-
-  gst_clear_buffer (&self->prepared_buffer);
-
-  return TRUE;
+  return GST_BASE_SINK_CLASS (parent_class)->stop (sink);
 }
 
 static void
-gst_win32_ipc_video_sink_get_time (GstBaseSink * sink, GstBuffer * buf,
+gst_win32_ipc_video_sink_get_times (GstBaseSink * sink, GstBuffer * buf,
     GstClockTime * start, GstClockTime * end)
 {
-  GstWin32IpcVideoSink *self = GST_WIN32_IPC_VIDEO_SINK (sink);
-  GstClockTime timestamp;
+  auto self = GST_WIN32_IPC_VIDEO_SINK (sink);
 
-  timestamp = GST_BUFFER_PTS (buf);
+  auto timestamp = GST_BUFFER_PTS (buf);
   if (!GST_CLOCK_TIME_IS_VALID (timestamp))
     timestamp = GST_BUFFER_DTS (buf);
 
@@ -281,23 +150,12 @@ gst_win32_ipc_video_sink_get_time (GstBaseSink * sink, GstBuffer * buf,
 static gboolean
 gst_win32_ipc_video_sink_set_caps (GstBaseSink * sink, GstCaps * caps)
 {
-  GstWin32IpcVideoSink *self = GST_WIN32_IPC_VIDEO_SINK (sink);
-  GstStructure *config;
+  auto self = GST_WIN32_IPC_VIDEO_SINK (sink);
 
   if (!gst_video_info_from_caps (&self->info, caps)) {
-    GST_WARNING_OBJECT (self, "Invalid caps");
+    GST_WARNING_OBJECT (self, "Invalid caps %" GST_PTR_FORMAT, caps);
     return FALSE;
   }
-
-  memset (&self->minfo, 0, sizeof (Win32IpcVideoInfo));
-  self->minfo.format =
-      (Win32IpcVideoFormat) GST_VIDEO_INFO_FORMAT (&self->info);
-  self->minfo.width = GST_VIDEO_INFO_WIDTH (&self->info);
-  self->minfo.height = GST_VIDEO_INFO_HEIGHT (&self->info);
-  self->minfo.fps_n = self->info.fps_n;
-  self->minfo.fps_d = self->info.fps_d;
-  self->minfo.par_n = self->info.par_n;
-  self->minfo.par_d = self->info.par_d;
 
   if (self->fallback_pool) {
     gst_buffer_pool_set_active (self->fallback_pool, FALSE);
@@ -305,14 +163,14 @@ gst_win32_ipc_video_sink_set_caps (GstBaseSink * sink, GstCaps * caps)
   }
 
   self->fallback_pool = gst_win32_ipc_buffer_pool_new ();
-  config = gst_buffer_pool_get_config (self->fallback_pool);
+  auto config = gst_buffer_pool_get_config (self->fallback_pool);
   gst_buffer_pool_config_add_option (config, GST_BUFFER_POOL_OPTION_VIDEO_META);
   gst_buffer_pool_config_set_params (config, caps, (guint) self->info.size,
       0, 0);
   gst_buffer_pool_set_config (self->fallback_pool, config);
   gst_buffer_pool_set_active (self->fallback_pool, TRUE);
 
-  return TRUE;
+  return GST_BASE_SINK_CLASS (parent_class)->set_caps (sink, caps);
 }
 
 static gboolean
@@ -367,165 +225,53 @@ gst_win32_ipc_video_sink_propose_allocation (GstBaseSink * sink,
 }
 
 static GstFlowReturn
-gst_win32_ipc_video_sink_prepare (GstBaseSink * sink, GstBuffer * buf)
+gst_win32_ipc_video_sink_upload (GstWin32IpcBaseSink * sink, GstBuffer * buf,
+    GstBuffer ** uploaded, gsize * size)
 {
-  GstWin32IpcVideoSink *self = GST_WIN32_IPC_VIDEO_SINK (sink);
-  GstVideoFrame frame, mmf_frame;
-  GstMemory *mem;
-  GstFlowReturn ret;
+  auto self = GST_WIN32_IPC_VIDEO_SINK (sink);
 
-  gst_clear_buffer (&self->prepared_buffer);
-
-  if (!gst_video_frame_map (&frame, &self->info, buf, GST_MAP_READ)) {
-    GST_ERROR_OBJECT (self, "Couldn't map frame");
-    return GST_FLOW_ERROR;
-  }
-
-  mem = gst_buffer_peek_memory (buf, 0);
+  auto mem = gst_buffer_peek_memory (buf, 0);
   if (gst_is_win32_ipc_memory (mem) && gst_buffer_n_memory (buf) == 1) {
-    GST_LOG_OBJECT (self, "Upstream memory is mmf");
-
-    self->prepared_buffer = gst_buffer_ref (buf);
-
-    self->minfo.size = GST_VIDEO_FRAME_SIZE (&frame);
-    for (guint i = 0; i < GST_VIDEO_FRAME_N_PLANES (&frame); i++) {
-      self->minfo.offset[i] = GST_VIDEO_FRAME_PLANE_OFFSET (&frame, i);
-      self->minfo.stride[i] = GST_VIDEO_FRAME_PLANE_STRIDE (&frame, i);
-    }
-
-    gst_video_frame_unmap (&frame);
-
+    GST_TRACE_OBJECT (self, "Upstream win32 memory");
+    *uploaded = gst_buffer_ref (buf);
+    *size = gst_buffer_get_size (buf);
     return GST_FLOW_OK;
   }
 
-  GST_LOG_OBJECT (self, "Copying into mmf buffer");
-
-  ret = gst_buffer_pool_acquire_buffer (self->fallback_pool,
-      &self->prepared_buffer, nullptr);
-  if (ret != GST_FLOW_OK) {
-    GST_ERROR_OBJECT (self, "Couldn't acquire buffer");
-    gst_video_frame_unmap (&frame);
+  GstBuffer *prepared = nullptr;
+  gst_buffer_pool_acquire_buffer (self->fallback_pool, &prepared, nullptr);
+  if (!prepared) {
+    GST_ERROR_OBJECT (self, "Couldn't acquire fallback buffer");
     return GST_FLOW_ERROR;
   }
 
-  if (!gst_video_frame_map (&mmf_frame, &self->info, self->prepared_buffer,
-          GST_MAP_WRITE)) {
-    GST_ERROR_OBJECT (self, "Couldn't map mmf frame");
-    gst_video_frame_unmap (&frame);
-    gst_clear_buffer (&self->prepared_buffer);
+  GstVideoFrame src_frame, dst_frame;
+  if (!gst_video_frame_map (&src_frame, &self->info, buf, GST_MAP_READ)) {
+    GST_ERROR_OBJECT (self, "Couldn't map input buffer");
+    gst_buffer_unref (prepared);
     return GST_FLOW_ERROR;
   }
 
-  if (!gst_video_frame_copy (&mmf_frame, &frame)) {
-    GST_ERROR_OBJECT (self, "Couldn't copy buffer");
-    gst_video_frame_unmap (&frame);
-    gst_video_frame_unmap (&mmf_frame);
-    gst_clear_buffer (&self->prepared_buffer);
+  if (!gst_video_frame_map (&dst_frame, &self->info, prepared, GST_MAP_WRITE)) {
+    GST_ERROR_OBJECT (self, "Couldn't map fallback buffer");
+    gst_video_frame_unmap (&src_frame);
+    gst_buffer_unref (prepared);
     return GST_FLOW_ERROR;
   }
 
-  gst_video_frame_unmap (&frame);
+  auto copy_ret = gst_video_frame_copy (&dst_frame, &src_frame);
+  gst_video_frame_unmap (&dst_frame);
+  gst_video_frame_unmap (&src_frame);
 
-  self->minfo.size = GST_VIDEO_FRAME_SIZE (&mmf_frame);
-  for (guint i = 0; i < GST_VIDEO_FRAME_N_PLANES (&mmf_frame); i++) {
-    self->minfo.offset[i] = GST_VIDEO_FRAME_PLANE_OFFSET (&mmf_frame, i);
-    self->minfo.stride[i] = GST_VIDEO_FRAME_PLANE_STRIDE (&mmf_frame, i);
-  }
-
-  gst_video_frame_unmap (&mmf_frame);
-
-  return GST_FLOW_OK;
-}
-
-static void
-gst_win32_ipc_video_sink_mmf_free (void *user_data)
-{
-  GstBuffer *buffer = GST_BUFFER_CAST (user_data);
-
-  GST_LOG ("Relese %" GST_PTR_FORMAT, buffer);
-
-  gst_buffer_unref (buffer);
-}
-
-static GstFlowReturn
-gst_win32_ipc_video_sink_render (GstBaseSink * sink, GstBuffer * buf)
-{
-  GstWin32IpcVideoSink *self = GST_WIN32_IPC_VIDEO_SINK (sink);
-  GstClockTime pts;
-  GstClockTime now_qpc;
-  GstClockTime buf_pts;
-  GstClockTime buffer_clock = GST_CLOCK_TIME_NONE;
-  Win32IpcMmf *mmf;
-  GstWin32IpcMemory *mem;
-
-  if (!self->prepared_buffer) {
-    GST_ERROR_OBJECT (self, "No prepared buffer");
+  if (!copy_ret) {
+    GST_ERROR_OBJECT (self, "Couldn't copy frame");
+    gst_buffer_unref (prepared);
     return GST_FLOW_ERROR;
   }
 
-  mem = (GstWin32IpcMemory *) gst_buffer_peek_memory (self->prepared_buffer, 0);
-
-  g_assert (mem != nullptr);
-  g_assert (gst_is_win32_ipc_memory (GST_MEMORY_CAST (mem)));
-
-  mmf = mem->mmf;
-
-  pts = now_qpc = gst_util_get_timestamp ();
-
-  buf_pts = GST_BUFFER_PTS (buf);
-  if (!GST_CLOCK_TIME_IS_VALID (buf_pts))
-    buf_pts = GST_BUFFER_DTS (buf);
-
-  if (GST_CLOCK_TIME_IS_VALID (buf_pts)) {
-    buffer_clock = gst_segment_to_running_time (&sink->segment,
-        GST_FORMAT_TIME, buf_pts) +
-        GST_ELEMENT_CAST (sink)->base_time + gst_base_sink_get_latency (sink);
-  }
-
-  if (GST_CLOCK_TIME_IS_VALID (buffer_clock)) {
-    GstClock *clock = gst_element_get_clock (GST_ELEMENT_CAST (sink));
-    gboolean is_qpc = TRUE;
-
-    is_qpc = gst_win32_ipc_clock_is_qpc (clock);
-    if (!is_qpc) {
-      GstClockTime now_gst = gst_clock_get_time (clock);
-      GstClockTimeDiff converted = buffer_clock;
-
-      GST_LOG_OBJECT (self, "Clock is not QPC");
-
-      converted -= now_gst;
-      converted += now_qpc;
-
-      if (converted < 0) {
-        /* Shouldn't happen */
-        GST_WARNING_OBJECT (self, "Negative buffer clock");
-        pts = 0;
-      } else {
-        pts = converted;
-      }
-    } else {
-      GST_LOG_OBJECT (self, "Clock is QPC already");
-      /* buffer clock is already QPC time */
-      pts = buffer_clock;
-    }
-    gst_object_unref (clock);
-  }
-
-  self->minfo.qpc = pts;
-
-  if (!self->pipe) {
-    GST_ERROR_OBJECT (self, "Pipe server was not configured");
-    return GST_FLOW_ERROR;
-  }
-
-  /* win32_ipc_pipe_server_send_mmf() takes ownership of mmf */
-  if (!win32_ipc_pipe_server_send_mmf (self->pipe,
-          win32_ipc_mmf_ref (mmf), &self->minfo,
-          g_steal_pointer (&self->prepared_buffer),
-          gst_win32_ipc_video_sink_mmf_free)) {
-    GST_ERROR_OBJECT (self, "Couldn't send buffer");
-    return GST_FLOW_ERROR;
-  }
+  gst_buffer_copy_into (prepared, buf, GST_BUFFER_COPY_METADATA, 0, -1);
+  *uploaded = prepared;
+  *size = gst_buffer_get_size (prepared);
 
   return GST_FLOW_OK;
 }

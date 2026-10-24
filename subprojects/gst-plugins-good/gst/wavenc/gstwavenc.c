@@ -616,12 +616,18 @@ gst_wavenc_write_tags (GstWavEnc * wavenc)
   /* add tags */
   gst_tag_list_foreach (tags, gst_wavparse_tags_foreach, &bw);
 
-  /* sets real size of LIST INFO chunk */
+  gst_tag_list_unref (tags);
+
+  /* check whether buffer contains "LIST" + <size> + "INFO" only */
   size = gst_byte_writer_get_pos (&bw);
+  if (size <= 12) {
+    GST_DEBUG_OBJECT (wavenc, "skipped all tags");
+    gst_byte_writer_reset (&bw);
+    return GST_FLOW_OK;
+  }
+  /* sets real size of LIST INFO chunk */
   gst_byte_writer_set_pos (&bw, 4);
   gst_byte_writer_put_uint32_le (&bw, size - 8);
-
-  gst_tag_list_unref (tags);
 
   buf = gst_byte_writer_reset_and_get_buffer (&bw);
   wavenc->meta_length += gst_buffer_get_size (buf);
@@ -1034,13 +1040,21 @@ gst_wavenc_chain (GstPad * pad, GstObject * parent, GstBuffer * buf)
     GstStructure *s;
     GstCaps *caps = gst_pad_get_allowed_caps (wavenc->srcpad);
 
+    wavenc->use_rf64 = FALSE;
     GST_DEBUG_OBJECT (wavenc, "allowed src caps: %" GST_PTR_FORMAT, caps);
-    if (!gst_caps_is_fixed (caps)) {
-      caps = gst_caps_truncate (caps);
+    if (caps) {
+      if (!gst_caps_is_empty (caps)) {
+        s = gst_caps_get_structure (caps, 0);
+        wavenc->use_rf64 = gst_structure_has_name (s, "audio/x-rf64");
+      }
+      gst_caps_unref (caps);
     }
-    s = gst_caps_get_structure (caps, 0);
-    wavenc->use_rf64 = gst_structure_has_name (s, "audio/x-rf64");
 
+    if (wavenc->use_rf64) {
+      caps = gst_caps_new_empty_simple ("audio/x-rf64");
+    } else {
+      caps = gst_caps_new_empty_simple ("audio/x-wav");
+    }
     gst_pad_set_caps (wavenc->srcpad, caps);
     gst_caps_unref (caps);
 
@@ -1142,6 +1156,8 @@ gst_wavenc_change_state (GstElement * element, GstStateChange transition)
 static gboolean
 plugin_init (GstPlugin * plugin)
 {
+  gst_plugin_set_static_features_flag (plugin);
+
   return GST_ELEMENT_REGISTER (wavenc, plugin);
 }
 

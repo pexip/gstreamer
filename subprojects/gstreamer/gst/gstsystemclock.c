@@ -40,6 +40,7 @@
 #include "gst_private.h"
 #include "gstinfo.h"
 #include "gstsystemclock.h"
+#include "gstsystemclock-private.h"
 #include "gstenumtypes.h"
 #include "gstpoll.h"
 #include "gstutils.h"
@@ -622,7 +623,7 @@ static GstClockReturn gst_system_clock_id_wait_async (GstClock * clock,
     GstClockEntry * entry);
 static void gst_system_clock_id_unschedule (GstClock * clock,
     GstClockEntry * entry);
-static void gst_system_clock_async_thread (GstClock * clock);
+static gpointer gst_system_clock_async_thread (GstClock * clock);
 static gboolean gst_system_clock_start_async (GstSystemClock * clock);
 
 static GMutex _gst_sysclock_mutex;
@@ -810,6 +811,20 @@ gst_system_clock_set_default (GstClock * new_clock)
   } else {
     GST_CAT_DEBUG (GST_CAT_CLOCK, "setting new default system clock to %p",
         new_clock);
+    GstClock *master = gst_clock_get_master (new_clock);
+    if (master != NULL) {
+      GST_CAT_WARNING (GST_CAT_CLOCK,
+          "Setting a slaved clock as default system clock is not supported");
+      gst_object_unref (master);
+    } else {
+      GstClockTime internal, external, rate_num, rate_denom;
+      gst_clock_get_calibration (new_clock, &internal, &external, &rate_num,
+          &rate_denom);
+      if (internal != 0 || external != 0 || rate_num != 1 || rate_denom != 1) {
+        GST_CAT_WARNING (GST_CAT_CLOCK,
+            "Setting a calibrated clock as default system clock is not supported");
+      }
+    }
     _external_default_clock = TRUE;
     g_object_ref (new_clock);
   }
@@ -823,6 +838,10 @@ gst_system_clock_set_default (GstClock * new_clock)
  * Get a handle to the default system clock. The refcount of the
  * clock will be increased so you need to unref the clock after
  * usage.
+ *
+ * Changing the calibration via gst_clock_set_calibration(), setting a master
+ * clock via gst_clock_set_master() or changing the `clock-type` property on the
+ * returned clock will change the behaviour for the whole process.
  *
  * Returns: (transfer full): the default clock.
  *
@@ -869,7 +888,7 @@ gst_system_clock_obtain (void)
  *
  * MT safe.
  */
-static void
+static gpointer
 gst_system_clock_async_thread (GstClock * clock)
 {
   GstSystemClock *sysclock = GST_SYSTEM_CLOCK_CAST (clock);
@@ -1014,6 +1033,8 @@ exit:
   GST_SYSTEM_CLOCK_BROADCAST (clock);
   GST_SYSTEM_CLOCK_UNLOCK (clock);
   GST_CAT_DEBUG_OBJECT (GST_CAT_CLOCK, clock, "exit system clock thread");
+
+  return NULL;
 }
 
 #ifdef HAVE_POSIX_TIMERS
@@ -1486,4 +1507,72 @@ gst_system_clock_id_unschedule (GstClock * clock, GstClockEntry * entry)
   }
   GST_SYSTEM_CLOCK_ENTRY_UNLOCK ((GstClockEntryImpl *) entry);
   GST_SYSTEM_CLOCK_UNLOCK (clock);
+}
+
+gboolean
+_gst_system_clock_is_default (GstClock * clock)
+{
+  g_mutex_lock (&_gst_sysclock_mutex);
+  gboolean is_default = (clock == _the_system_clock);
+  g_mutex_unlock (&_gst_sysclock_mutex);
+
+  return is_default;
+}
+
+/**
+ * gst_clock_is_system_monotonic:
+ * @clock: a #GstClock
+ *
+ * Checks that @clock is the default system clock, as returned by
+ * gst_system_clock_obtain(), and is of type %GST_CLOCK_TYPE_MONOTONIC.
+ *
+ * Returns: %TRUE if @clock is the default system monotonic clock,
+ *   %FALSE otherwise.
+ * Since: 1.28
+ */
+gboolean
+gst_clock_is_system_monotonic (GstClock * clock)
+{
+  g_return_val_if_fail (GST_IS_CLOCK (clock), FALSE);
+
+  if (G_OBJECT_TYPE (clock) != GST_TYPE_SYSTEM_CLOCK)
+    return FALSE;
+
+  GstSystemClock *system_clock = GST_SYSTEM_CLOCK_CAST (clock);
+  if (system_clock->priv->clock_type != GST_CLOCK_TYPE_MONOTONIC)
+    return FALSE;
+
+  if (!_gst_system_clock_is_default (clock))
+    return FALSE;
+
+  return TRUE;
+}
+
+/**
+ * gst_system_clock_new:
+ * @name: (nullable): name of the new clock
+ * @clock_type: #GstClockType for the new clock
+ *
+ * Creates a new instance of the system clock. Unlike gst_system_clock_obtain()
+ * this allows to apply custom calibration to it via
+ * gst_clock_set_calibration(), set a master clock via gst_clock_set_master() or
+ * change the `clock-type` property without changing the behaviour of the
+ * default system clock for the whole process.
+ *
+ * Returns: (transfer full): the new system clock instance.
+ *
+ * Since: 1.30
+ */
+GstClock *
+gst_system_clock_new (const gchar * name, GstClockType clock_type)
+{
+  GstClock *clock;
+
+  clock = g_object_new (GST_TYPE_SYSTEM_CLOCK,
+      "name", name, "clock-type", clock_type, NULL);
+
+  /* Clear floating flag */
+  gst_object_ref_sink (clock);
+
+  return clock;
 }

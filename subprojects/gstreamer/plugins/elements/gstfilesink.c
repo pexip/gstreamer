@@ -52,6 +52,11 @@
 #include <sys/types.h>
 #include <fcntl.h>
 
+#include <sys/stat.h>
+#ifdef HAVE_UNISTD_H
+#include <unistd.h>
+#endif
+
 #ifdef G_OS_WIN32
 #include <io.h>                 /* lseek, open, close, read */
 #undef lseek
@@ -65,11 +70,6 @@
 #ifdef _MSC_VER                 /* Check if we are using MSVC, fileno is deprecated in favour */
 #define fileno _fileno          /* of _fileno */
 #endif
-#endif
-
-#include <sys/stat.h>
-#ifdef HAVE_UNISTD_H
-#include <unistd.h>
 #endif
 
 #include "gstelements_private.h"
@@ -125,6 +125,31 @@ gst_file_sink_buffer_mode_get_type (void)
   return buffer_mode_type;
 }
 
+#define GST_TYPE_FILE_SINK_SHARE_DENY_MODE (gst_file_sink_share_deny_mode_get_type ())
+static GType
+gst_file_sink_share_deny_mode_get_type (void)
+{
+  static GType deny_mode_type = 0;
+  static const GEnumValue deny_mode[] = {
+    {GST_FILE_SINK_SHARE_DENYRW,
+        "Deny read/write access (SH_DENYRW)", "deny-rw"},
+    {GST_FILE_SINK_SHARE_DENYWR, "Deny write access (SH_DENYWR)", "deny-w"},
+    {GST_FILE_SINK_SHARE_DENYRD, "Deny read access (SH_DENYRD)", "deny-r"},
+    {GST_FILE_SINK_SHARE_DENYNO, "Allow read/write access (SH_DENYNO)",
+        "deny-no"},
+    {0, NULL, NULL},
+  };
+
+  if (g_once_init_enter (&deny_mode_type)) {
+    GType type = g_enum_register_static ("GstFileSinkShareDenyMode",
+        deny_mode);
+
+    g_once_init_leave (&deny_mode_type, type);
+  }
+
+  return deny_mode_type;
+}
+
 GST_DEBUG_CATEGORY_STATIC (gst_file_sink_debug);
 #define GST_CAT_DEFAULT gst_file_sink_debug
 
@@ -135,6 +160,7 @@ GST_DEBUG_CATEGORY_STATIC (gst_file_sink_debug);
 #define DEFAULT_O_SYNC		FALSE
 #define DEFAULT_MAX_TRANSIENT_ERROR_TIMEOUT	0
 #define DEFAULT_FILE_MODE      GST_FILE_SINK_FILE_MODE_TRUNC
+#define DEFAULT_DENY_MODE      GST_FILE_SINK_SHARE_DENYNO
 
 enum
 {
@@ -146,12 +172,11 @@ enum
   PROP_O_SYNC,
   PROP_MAX_TRANSIENT_ERROR_TIMEOUT,
   PROP_FILE_MODE,
+  PROP_SHARE_DENY_MODE,
   PROP_LAST
 };
 
-/* Copy of glib's g_fopen due to win32 libc/cross-DLL brokenness: we can't
- * use the 'file pointer' opened in glib (and returned from this function)
- * in this library, as they may have unrelated C runtimes. */
+#ifndef HAVE__WFSOPEN
 static FILE *
 gst_fopen (const gchar * filename, const gchar * mode, gboolean o_sync)
 {
@@ -161,17 +186,18 @@ gst_fopen (const gchar * filename, const gchar * mode, gboolean o_sync)
   return retval;
 #else
   int fd;
-  int flags = O_CREAT | O_WRONLY;
+  int flags;
 
   /* NOTE: below code is for handing spurious EACCES return on write
    * See https://gitlab.freedesktop.org/gstreamer/gstreamer/-/merge_requests/143
    */
   if (strcmp (mode, "wb") == 0)
-    flags |= O_TRUNC;
+    flags = O_WRONLY | O_CREAT | O_TRUNC;
   else if (strcmp (mode, "ab") == 0)
-    flags |= O_APPEND;
+    flags = O_WRONLY | O_CREAT | O_APPEND;
   else if (strcmp (mode, "rb+") == 0)
-    flags |= O_RDWR;
+    /* Special mode: will replace file without truncation (in-place) */
+    flags = O_RDWR | O_CREAT;
   else
     g_assert_not_reached ();
 
@@ -187,6 +213,7 @@ gst_fopen (const gchar * filename, const gchar * mode, gboolean o_sync)
   return retval;
 #endif
 }
+#endif /* HAVE__WFSOPEN */
 
 static void gst_file_sink_dispose (GObject * object);
 
@@ -244,7 +271,8 @@ gst_file_sink_class_init (GstFileSinkClass * klass)
   g_object_class_install_property (gobject_class, PROP_LOCATION,
       g_param_spec_string ("location", "File Location",
           "Location of the file to write", NULL,
-          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
+          GST_PARAM_UNTRUSTED_SENSITIVE));
 
   g_object_class_install_property (gobject_class, PROP_BUFFER_MODE,
       g_param_spec_enum ("buffer-mode", "Buffering mode",
@@ -292,10 +320,25 @@ gst_file_sink_class_init (GstFileSinkClass * klass)
           G_MAXINT, DEFAULT_MAX_TRANSIENT_ERROR_TIMEOUT,
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 
+  /**
+   * GstFileSink:share-deny-mode:
+   *
+   * File sharing mode to use while writing, Windows only
+   *
+   * Since: 1.30
+   */
+  g_object_class_install_property (gobject_class, PROP_SHARE_DENY_MODE,
+      g_param_spec_enum ("share-deny-mode", "Share Deny Mode",
+          "File sharing mode to use while writing, Windows only",
+          GST_TYPE_FILE_SINK_SHARE_DENY_MODE,
+          DEFAULT_DENY_MODE, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+
   gst_element_class_set_static_metadata (gstelement_class,
       "File Sink",
       "Sink/File", "Write stream to a file",
       "Thomas Vander Stichele <thomas at apestaart dot org>");
+
+  gst_element_class_mark_as_untrusted_aware (gstelement_class);
   gst_element_class_add_static_pad_template (gstelement_class, &sinktemplate);
 
   gstbasesink_class->start = GST_DEBUG_FUNCPTR (gst_file_sink_start);
@@ -316,6 +359,7 @@ gst_file_sink_class_init (GstFileSinkClass * klass)
 
   gst_type_mark_as_plugin_api (GST_TYPE_FILE_SINK_BUFFER_MODE, 0);
   gst_type_mark_as_plugin_api (GST_TYPE_FILE_SINK_FILE_MODE, 0);
+  gst_type_mark_as_plugin_api (GST_TYPE_FILE_SINK_SHARE_DENY_MODE, 0);
 }
 
 static void
@@ -328,6 +372,7 @@ gst_file_sink_init (GstFileSink * filesink)
   filesink->buffer_size = DEFAULT_BUFFER_SIZE;
   filesink->append = FALSE;
   filesink->file_mode = DEFAULT_FILE_MODE;
+  filesink->deny_mode = DEFAULT_DENY_MODE;
 
   gst_base_sink_set_sync (GST_BASE_SINK (filesink), FALSE);
 }
@@ -408,6 +453,9 @@ gst_file_sink_set_property (GObject * object, guint prop_id,
     case PROP_MAX_TRANSIENT_ERROR_TIMEOUT:
       sink->max_transient_error_timeout = g_value_get_int (value);
       break;
+    case PROP_SHARE_DENY_MODE:
+      sink->deny_mode = g_value_get_enum (value);
+      break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
       break;
@@ -442,6 +490,9 @@ gst_file_sink_get_property (GObject * object, guint prop_id, GValue * value,
     case PROP_MAX_TRANSIENT_ERROR_TIMEOUT:
       g_value_set_int (value, sink->max_transient_error_timeout);
       break;
+    case PROP_SHARE_DENY_MODE:
+      g_value_set_enum (value, sink->deny_mode);
+      break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
       break;
@@ -455,12 +506,23 @@ gst_file_sink_open_file (GstFileSink * sink)
   if (sink->filename == NULL || sink->filename[0] == '\0')
     goto no_filename;
 
+#ifdef HAVE__WFSOPEN
+  wchar_t *wname = g_utf8_to_utf16 (sink->filename, -1, NULL, NULL, NULL);
+  if (sink->append || sink->file_mode == GST_FILE_SINK_FILE_MODE_APPEND)
+    sink->file = _wfsopen (wname, L"ab", sink->deny_mode);
+  else if (sink->file_mode == GST_FILE_SINK_FILE_MODE_OVERWRITE)
+    sink->file = _wfsopen (wname, L"rb+", sink->deny_mode);
+  else
+    sink->file = _wfsopen (wname, L"wb", sink->deny_mode);
+  g_free (wname);
+#else
   if (sink->append || sink->file_mode == GST_FILE_SINK_FILE_MODE_APPEND)
     sink->file = gst_fopen (sink->filename, "ab", sink->o_sync);
   else if (sink->file_mode == GST_FILE_SINK_FILE_MODE_OVERWRITE)
     sink->file = gst_fopen (sink->filename, "rb+", sink->o_sync);
   else
     sink->file = gst_fopen (sink->filename, "wb", sink->o_sync);
+#endif
   if (sink->file == NULL)
     goto open_failed;
 

@@ -54,6 +54,8 @@ core_tests = [
   [ 'gst/gsttask.c' ],
   [ 'gst/gsttoc.c' ],
   [ 'gst/gsttocsetter.c' ],
+  [ 'gst/gsttracer.c', not tracer_hooks ],
+  [ 'gst/gsttracerdeinit.c', not tracer_hooks or not gst_debug or not gst_registry ],
   [ 'gst/gsttracerrecord.c', not tracer_hooks or not gst_debug],
   [ 'gst/gsturi.c' ],
   [ 'gst/gstutils.c', not gst_registry ],
@@ -98,7 +100,7 @@ core_tests = [
   [ 'elements/filesrc.c', not gst_registry ],
   [ 'elements/funnel.c', not gst_registry ],
   [ 'elements/identity.c', not gst_registry or not gst_parse ],
-  [ 'elements/leaks.c', not tracer_hooks or not gst_debug ],
+  [ 'elements/leaks.c', not tracer_hooks or not gst_debug or get_option('coretracers').disabled() ],
   [ 'elements/multiqueue.c', not gst_registry ],
   [ 'elements/selector.c', not gst_registry ],
   [ 'elements/streamiddemux.c', not gst_registry ],
@@ -175,3 +177,10 @@ foreach t : core_tests
     test(test_name, exe, env: env, timeout : 3 * 60)
   endif
 endforeach
+
+# Source-scan test to ensure every core GstPluginFeature subtype is registered
+# by gst_init and released by gst_deinit.
+test('check-feature-types-registered',
+  find_program('gst/check-feature-types-registered.py'),
+  args: [meson.project_source_root() / 'gst'],
+)

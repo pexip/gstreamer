@@ -22,13 +22,17 @@
 #endif
 #include "corevideobuffer.h"
 #include "corevideomemory.h"
-#ifndef HAVE_IOS
+
+#include <TargetConditionals.h>
+#if TARGET_OS_OSX
 #include "iosurfaceglmemory.h"
 #endif
+
 #include "videotexturecache-gl.h"
-#if defined(APPLEMEDIA_MOLTENVK)
+
+#ifdef APPLEMEDIA_MOLTENVK
 #include "videotexturecache-vulkan.h"
-#ifndef HAVE_IOS
+#if TARGET_OS_OSX
 #include "iosurfacevulkanmemory.h"
 #endif
 #endif
@@ -110,9 +114,7 @@ static GstMemory *
 _create_glmem (GstAppleCoreVideoPixelBuffer * gpixbuf,
     GstVideoInfo * info, guint plane, gsize size, GstVideoTextureCache * cache)
 {
-#ifdef HAVE_IOS
-  return gst_video_texture_cache_create_memory (cache, gpixbuf, plane, size);
-#else
+#if TARGET_OS_OSX
   GstIOSurfaceGLMemory *mem;
   CVPixelBufferRef pixel_buf = gpixbuf->buf;
   IOSurfaceRef surface = CVPixelBufferGetIOSurface (pixel_buf);
@@ -126,10 +128,12 @@ _create_glmem (GstAppleCoreVideoPixelBuffer * gpixbuf,
       surface, GST_GL_TEXTURE_TARGET_RECTANGLE, tex_format,
       info, plane, NULL, pixel_buf, (GDestroyNotify) CFRelease);
   return GST_MEMORY_CAST (mem);
+#else
+  return gst_video_texture_cache_create_memory (cache, gpixbuf, plane, size);
 #endif
 }
 
-#if defined(APPLEMEDIA_MOLTENVK)
+#ifdef APPLEMEDIA_MOLTENVK
 /* in videotexturecache-vulkan.m to avoid objc-ism from Metal being included
   * in a non-objc file */
 extern GstMemory *_create_vulkan_memory (GstAppleCoreVideoPixelBuffer * gpixbuf,
@@ -149,7 +153,7 @@ gst_core_video_wrap_pixel_buffer (GstBuffer * buf,
   GstAppleCoreVideoPixelBuffer *gpixbuf;
   GstMemory *mem = NULL;
   gboolean do_gl = GST_IS_VIDEO_TEXTURE_CACHE_GL (cache);
-#if defined(APPLEMEDIA_MOLTENVK)
+#ifdef APPLEMEDIA_MOLTENVK
   gboolean do_vulkan = GST_IS_VIDEO_TEXTURE_CACHE_VULKAN (cache);
 #endif
 
@@ -159,22 +163,20 @@ gst_core_video_wrap_pixel_buffer (GstBuffer * buf,
     *has_padding = FALSE;
 
   if (CVPixelBufferIsPlanar (pixel_buf)) {
-    gint i, size = 0, plane_offset = 0;
+    gint size = 0;
 
     n_planes = CVPixelBufferGetPlaneCount (pixel_buf);
-    for (i = 0; i < n_planes; i++) {
+    for (gint i = 0; i < n_planes; i++) {
       stride[i] = CVPixelBufferGetBytesPerRowOfPlane (pixel_buf, i);
 
       if (stride[i] != GST_VIDEO_INFO_PLANE_STRIDE (info, i) && has_padding)
         *has_padding = TRUE;
 
       size = stride[i] * CVPixelBufferGetHeightOfPlane (pixel_buf, i);
-      offset[i] = plane_offset;
-      plane_offset += size;
 
       if (do_gl)
         mem = _create_glmem (gpixbuf, info, i, size, cache);
-#if defined(APPLEMEDIA_MOLTENVK)
+#ifdef APPLEMEDIA_MOLTENVK
       else if (do_vulkan)
         mem = _create_vulkan_memory (gpixbuf, info, i, size, cache);
 #endif
@@ -182,17 +184,20 @@ gst_core_video_wrap_pixel_buffer (GstBuffer * buf,
         mem =
             GST_MEMORY_CAST (gst_apple_core_video_memory_new_wrapped (gpixbuf,
                 i, size));
+      offset[i] = gst_buffer_get_size (buf);
       gst_buffer_append_memory (buf, mem);
     }
   } else {
     n_planes = 1;
     stride[0] = CVPixelBufferGetBytesPerRow (pixel_buf);
+    if (stride[0] != GST_VIDEO_INFO_PLANE_STRIDE (info, 0) && has_padding)
+      *has_padding = TRUE;
     offset[0] = 0;
     size = stride[0] * CVPixelBufferGetHeight (pixel_buf);
 
     if (do_gl)
       mem = _create_glmem (gpixbuf, info, 0, size, cache);
-#if defined(APPLEMEDIA_MOLTENVK)
+#ifdef APPLEMEDIA_MOLTENVK
     else if (do_vulkan)
       mem = _create_vulkan_memory (gpixbuf, info, 0, size, cache);
 #endif
@@ -220,6 +225,8 @@ gst_core_video_get_video_format (OSType format)
       return GST_VIDEO_FORMAT_I420;
     case kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange:
       return GST_VIDEO_FORMAT_NV12;
+    case kCVPixelFormatType_420YpCbCr8VideoRange_8A_TriPlanar:
+      return GST_VIDEO_FORMAT_AV12;
     case kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange:
       return GST_VIDEO_FORMAT_P010_10LE;
     case kCVPixelFormatType_422YpCbCr8_yuvs:

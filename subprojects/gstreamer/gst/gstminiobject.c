@@ -373,6 +373,15 @@ gst_mini_object_is_writable (const GstMiniObject * mini_object)
   if (!result)
     return result;
 
+  /* No parents and no qdata means we are writable. The spinlock is only
+   * needed to dereference the pointer, which we don't do here. When the
+   * early return is not taken this costs one extra atomic read, which
+   * is noise next to the CAS the locked path below performs */
+  priv_state = g_atomic_int_get ((gint *) & mini_object->priv_uint);
+  if (priv_state == PRIV_DATA_STATE_NO_PARENT) {
+    return TRUE;
+  }
+
   /* We are writable ourselves, but are there parents and are they all
    * writable too? */
   priv_state = lock_priv_pointer (GST_MINI_OBJECT_CAST (mini_object));
@@ -651,7 +660,12 @@ gst_mini_object_unref (GstMiniObject * mini_object)
 {
   gint old_refcount, new_refcount;
 
-  g_return_if_fail (mini_object != NULL);
+  /* FIXME: The GstBufferMapInfo clear function before 1.28 could call
+   * gst_memory_unref() with NULL, and because we use macros/inline functions
+   * all along the way to here this needs to be checked here. */
+  if (!mini_object)
+    return;
+
   g_return_if_fail (GST_MINI_OBJECT_REFCOUNT_VALUE (mini_object) > 0);
 
   old_refcount = g_atomic_int_add (&mini_object->refcount, -1);

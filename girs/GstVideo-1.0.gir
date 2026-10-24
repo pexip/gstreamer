@@ -1,11 +1,12 @@
 <!-- This file was automatically generated from C sources - DO NOT EDIT!
 To affect the contents of this file, edit the original C definitions,
 and/or use gtk-doc annotations.  -->
-<repository xmlns="http://www.gtk.org/introspection/core/1.0" xmlns:c="http://www.gtk.org/introspection/c/1.0" xmlns:glib="http://www.gtk.org/introspection/glib/1.0" version="1.2">
+<repository xmlns="http://www.gtk.org/introspection/core/1.0" xmlns:c="http://www.gtk.org/introspection/c/1.0" xmlns:doc="http://www.gtk.org/introspection/doc/1.0" xmlns:glib="http://www.gtk.org/introspection/glib/1.0" version="1.2">
   <include name="Gst" version="1.0"/>
   <include name="GstBase" version="1.0"/>
   <package name="gstreamer-video-1.0"/>
   <c:include name="gst/video/video.h"/>
+  <doc:format name="unknown"/>
   <namespace name="GstVideo" version="1.0" shared-library="libgstvideo-1.0.so.0" c:identifier-prefixes="Gst" c:symbol-prefixes="gst">
     <record name="AncillaryMeta" c:type="GstAncillaryMeta" version="1.24">
       <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-anc.h">#GstMeta for carrying SMPTE-291M Ancillary data. Note that all the ADF fields
@@ -620,6 +621,183 @@ preferred.</doc>
         processing.</doc>
       </member>
     </enumeration>
+    <record name="H274DigitallySignedContentInitialization" c:type="GstH274DigitallySignedContentInitialization" version="1.30" glib:type-name="GstH274DigitallySignedContentInitialization" glib:get-type="gst_h274_digitally_signed_content_initialization_get_type" c:symbol-prefix="h274_digitally_signed_content_initialization">
+      <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gsth274.h">Structure defining the H274 digitally signed content initialization.</doc>
+      <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gsth274.h"/>
+      <field name="id" writable="1">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gsth274.h">Initialization ID (dsci_id)</doc>
+        <type name="guint8" c:type="guint8"/>
+      </field>
+      <field name="hash_method_type" writable="1">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gsth274.h">Hash method type (dsci_hash_method_type)</doc>
+        <type name="guint8" c:type="guint8"/>
+      </field>
+      <field name="key_retrieval_mode_idc" writable="1">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gsth274.h">Key retrieval mode (dsci_key_retrieval_mode_idc)</doc>
+        <type name="guint32" c:type="guint32"/>
+      </field>
+      <field name="use_key_register_idx_flag" writable="1">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gsth274.h">Whether key register index is used (dsci_use_key_register_idx_flag)</doc>
+        <type name="guint8" c:type="guint8"/>
+      </field>
+      <field name="key_register_idx" writable="1">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gsth274.h">Key register index (dsci_key_register_idx)</doc>
+        <type name="guint32" c:type="guint32"/>
+      </field>
+      <field name="content_uuid_present_flag" writable="1">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gsth274.h">Whether content UUID is present (dsci_content_uuid_present_flag)</doc>
+        <type name="guint8" c:type="guint8"/>
+      </field>
+      <field name="content_uuid" writable="1">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gsth274.h">Content UUID array (dsci_content_uuid)</doc>
+        <array zero-terminated="0" fixed-size="16">
+          <type name="guint8" c:type="guint8"/>
+        </array>
+      </field>
+      <field name="num_verification_substreams" writable="1">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gsth274.h">Number of verification substreams (dsci_num_verification_substreams_minus1 + 1)</doc>
+        <type name="guint32" c:type="guint32"/>
+      </field>
+      <field name="ref_substream_flag" writable="1">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gsth274.h">Reference substream flags (dsci_ref_substream_flag), flattened 2D array</doc>
+        <array zero-terminated="0" c:type="guint8*">
+          <type name="guint8"/>
+        </array>
+      </field>
+      <field name="ref_substream_flag_len" writable="1">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gsth274.h">Number of entries in @ref_substream_flag
+  (num_verification_substreams * (num_verification_substreams - 1)) / 2</doc>
+        <type name="gsize" c:type="gsize"/>
+      </field>
+      <field name="vss_implicit_association_mode_flag" writable="1">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gsth274.h">VSS implicit association mode flag (dsci_vss_implicit_association_mode_flag)</doc>
+        <type name="guint8" c:type="guint8"/>
+      </field>
+      <field name="signed_content_start_flag" writable="1">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gsth274.h">Signed content start flag (dsci_signed_content_start_flag)</doc>
+        <type name="guint8" c:type="guint8"/>
+      </field>
+      <field name="sei_signing_flag" writable="1">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gsth274.h">SEI signing flag (dsci_sei_signing_flag)</doc>
+        <type name="guint8" c:type="guint8"/>
+      </field>
+      <field name="key_source_uri" writable="1">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gsth274.h">Key source URI string (dsci_key_source_uri)</doc>
+        <type name="utf8" c:type="gchar*"/>
+      </field>
+    </record>
+    <record name="H274DigitallySignedContentSelection" c:type="GstH274DigitallySignedContentSelection" version="1.30" glib:type-name="GstH274DigitallySignedContentSelection" glib:get-type="gst_h274_digitally_signed_content_selection_get_type" c:symbol-prefix="h274_digitally_signed_content_selection">
+      <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gsth274.h">Structure defining the H274 digitally signed content selection.</doc>
+      <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gsth274.h"/>
+      <field name="id" writable="1">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gsth274.h">Selection ID (dscs_id)</doc>
+        <type name="guint8" c:type="guint8"/>
+      </field>
+      <field name="verification_substream_id" writable="1">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gsth274.h">Verification substream ID (dscs_verification_substream_id)</doc>
+        <type name="guint8" c:type="guint8"/>
+      </field>
+    </record>
+    <record name="H274DigitallySignedContentVerification" c:type="GstH274DigitallySignedContentVerification" version="1.30" glib:type-name="GstH274DigitallySignedContentVerification" glib:get-type="gst_h274_digitally_signed_content_verification_get_type" c:symbol-prefix="h274_digitally_signed_content_verification">
+      <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gsth274.h">Structure defining the H274 digitally signed content verification.</doc>
+      <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gsth274.h"/>
+      <field name="id" writable="1">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gsth274.h">Verification ID (dscv_id)</doc>
+        <type name="guint8" c:type="guint8"/>
+      </field>
+      <field name="verification_substream_id" writable="1">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gsth274.h">Verification substream ID (dscv_verification_substream_id)</doc>
+        <type name="guint8" c:type="guint8"/>
+      </field>
+      <field name="signature_length_in_octets_minus1" writable="1">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gsth274.h">Length of signature (dscv_signature_length_in_octets_minus1 + 1)</doc>
+        <type name="guint32" c:type="guint32"/>
+      </field>
+      <field name="signature" writable="1">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gsth274.h">Signature data array (dscv_signature)</doc>
+        <array zero-terminated="0" c:type="guint8*">
+          <type name="guint8"/>
+        </array>
+      </field>
+      <field name="signed_content_end_flag" writable="1">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gsth274.h">Signed content end flag (dscv_signed_content_end_flag)</doc>
+        <type name="guint8" c:type="guint8"/>
+      </field>
+    </record>
+    <record name="H274RegisteredUserData" c:type="GstH274RegisteredUserData" version="1.30" glib:type-name="GstH274RegisteredUserData" glib:get-type="gst_h274_registered_user_data_get_type" c:symbol-prefix="h274_registered_user_data">
+      <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gsth274.h">The User data registered by Rec. ITU-T T.35 SEI message.</doc>
+      <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gsth274.h"/>
+      <field name="country_code" writable="1">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gsth274.h">an itu_t_t35_country_code.</doc>
+        <type name="guint8" c:type="guint8"/>
+      </field>
+      <field name="country_code_extension" writable="1">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gsth274.h">an itu_t_t35_country_code_extension_byte.
+  Should be ignored when @country_code is not 0xff</doc>
+        <type name="guint8" c:type="guint8"/>
+      </field>
+      <field name="size" writable="1">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gsth274.h">the size of @data in bytes</doc>
+        <type name="guint" c:type="guint"/>
+      </field>
+      <field name="data" writable="1">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gsth274.h">the data of itu_t_t35_payload_byte
+  excluding @country_code and @country_code_extension</doc>
+        <array zero-terminated="0" c:type="const guint8*">
+          <type name="guint8"/>
+        </array>
+      </field>
+    </record>
+    <record name="H274UserDataUnregistered" c:type="GstH274UserDataUnregistered" version="1.30" glib:type-name="GstH274UserDataUnregistered" glib:get-type="gst_h274_user_data_unregistered_get_type" c:symbol-prefix="h274_user_data_unregistered">
+      <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gsth274.h">The User data unregistered SEI message syntax.</doc>
+      <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gsth274.h"/>
+      <field name="uuid" writable="1">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gsth274.h">an uuid_iso_iec_11578.</doc>
+        <array zero-terminated="0" fixed-size="16">
+          <type name="guint8" c:type="guint8"/>
+        </array>
+      </field>
+      <field name="data" writable="1">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gsth274.h">the data of user_data_payload_byte</doc>
+        <type name="guint8" c:type="const guint8*"/>
+      </field>
+      <field name="size" writable="1">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gsth274.h">the size of @data in bytes</doc>
+        <array zero-terminated="0" c:type="guint">
+          <type name="guint8"/>
+        </array>
+      </field>
+      <method name="clear" c:identifier="gst_h274_user_data_unregistered_clear" version="1.30">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gsth274.h">Free resources allocated for user data unregistered SEI message</doc>
+        <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gsth274.h"/>
+        <return-value transfer-ownership="none">
+          <type name="none" c:type="void"/>
+        </return-value>
+        <parameters>
+          <instance-parameter name="udu" transfer-ownership="none">
+            <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gsth274.h">#GstH274UserDataUnregistered structure holding unregistered user data to free</doc>
+            <type name="H274UserDataUnregistered" c:type="GstH274UserDataUnregistered*"/>
+          </instance-parameter>
+        </parameters>
+      </method>
+      <function name="copy" c:identifier="gst_h274_user_data_unregistered_copy" version="1.30">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gsth274.h">Copy User Data Unregistered structure</doc>
+        <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gsth274.h"/>
+        <return-value transfer-ownership="none">
+          <type name="none" c:type="void"/>
+        </return-value>
+        <parameters>
+          <parameter name="dst_udu" direction="out" caller-allocates="1" transfer-ownership="none">
+            <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gsth274.h">Destination User Data Unregistered structure</doc>
+            <type name="H274UserDataUnregistered" c:type="GstH274UserDataUnregistered*"/>
+          </parameter>
+          <parameter name="src_udu" transfer-ownership="none">
+            <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gsth274.h">Source User Data Unregistered structure</doc>
+            <type name="H274UserDataUnregistered" c:type="const GstH274UserDataUnregistered*"/>
+          </parameter>
+        </parameters>
+      </function>
+    </record>
     <function-macro name="IS_COLOR_BALANCE" c:identifier="GST_IS_COLOR_BALANCE" introspectable="0">
       <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/video/colorbalance.h"/>
       <parameters>
@@ -3056,7 +3234,8 @@ at run-time it's not predefined here.</doc>
 
 Formats are sorted by decreasing "quality", using these criteria by priority:
   - number of components
-  - depth
+  - depth (effective for floating point formats: only the mantissa
+    counts, so RGBA_F32 ranks as 24 bits and RGBA_F16 as 11)
   - subsampling factor of the width
   - subsampling factor of the height
   - number of planes
@@ -3070,12 +3249,13 @@ Formats are sorted by decreasing "quality", using these criteria by priority:
       <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-format.h"/>
       <type name="utf8" c:type="gchar*"/>
     </constant>
-    <constant name="VIDEO_FORMATS_ALL_STR" value="A444_16BE, A444_16LE, AYUV64, ARGB64, Y416_BE, RGBA64_BE, ARGB64_BE, BGRA64_BE, ABGR64_BE, Y416_LE, RGBA64_LE, ARGB64_LE, BGRA64_LE, ABGR64_LE, A422_16BE, A422_16LE, A420_16BE, A420_16LE, A444_12BE, GBRA_12BE, A444_12LE, GBRA_12LE, Y412_BE, Y412_LE, A422_12BE, A422_12LE, A420_12BE, A420_12LE, A444_10BE, GBRA_10BE, A444_10LE, GBRA_10LE, A422_10BE, A422_10LE, A420_10BE, A420_10LE, Y410, BGR10A2_LE, RGB10A2_LE, A444, GBRA, AYUV, VUYA, RGBA, RBGA, ARGB, BGRA, ABGR, A422, A420, AV12, Y444_16BE, GBR_16BE, Y444_16LE, GBR_16LE, Y216_BE, v216, Y216_LE, P016_BE, P016_LE, Y444_12BE, GBR_12BE, Y444_12LE, GBR_12LE, I422_12BE, I422_12LE, Y212_BE, Y212_LE, I420_12BE, I420_12LE, P012_BE, P012_LE, Y444_10BE, GBR_10BE, Y444_10LE, GBR_10LE, r210, BGR10x2_LE, RGB10x2_LE, I422_10BE, I422_10LE, NV16_10LE40, NV16_10LE32, Y210, UYVP, v210, I420_10BE, I420_10LE, P010_10BE, MT2110R, MT2110T, NV12_10BE_8L128, NV12_10LE40_4L4, P010_10LE, NV12_10LE40, NV12_10LE32, Y444, BGRP, GBR, RGBP, NV24, v308, IYU2, RGBx, xRGB, BGRx, xBGR, RGB, BGR, Y42B, NV16, NV61, YUY2, YVYU, UYVY, VYUY, I420, YV12, NV12, NV21, NV12_16L32S, NV12_32L32, NV12_4L4, NV12_64Z32, NV12_8L128, Y41B, IYU1, YUV9, YVU9, BGR16, RGB16, BGR15, RGB15, RGB8P, GRAY16_BE, GRAY16_LE, GRAY10_LE16, GRAY10_LE32, GRAY8" c:type="GST_VIDEO_FORMATS_ALL_STR" version="1.24">
+    <constant name="VIDEO_FORMATS_ALL_STR" value="RGBA_F32BE, AYUV_F32, RGBA_F32LE, ARGB_F32, A444_16BE, A444_16LE, AYUV64, ARGB64, Y416_BE, RGBA64_BE, ARGB64_BE, BGRA64_BE, ABGR64_BE, Y416_LE, RGBA64_LE, ARGB64_LE, BGRA64_LE, ABGR64_LE, A422_16BE, A422_16LE, A420_16BE, A420_16LE, A444_12BE, GBRA_12BE, A444_12LE, GBRA_12LE, Y412_BE, Y412_LE, A422_12BE, A422_12LE, A420_12BE, A420_12LE, RGBA_F16BE, RGBA_F16LE, A444_10BE, GBRA_10BE, A444_10LE, GBRA_10LE, A422_10BE, A422_10LE, A420_10BE, A420_10LE, Y410, BGR10A2_LE, RGB10A2_LE, A444, GBRA, AYUV, VUYA, RGBA, RBGA, ARGB, BGRA, ABGR, A422, A420, AV12, RGBP_F32BE, RGBP_F32LE, RGB_F32BE, RGB_F32LE, Y444_16BE, GBR_16BE, Y444_16LE, GBR_16LE, Y216_BE, v216, Y216_LE, P016_BE, P016_LE, Y444_12BE, GBR_12BE, Y444_12LE, GBR_12LE, I422_12BE, I422_12LE, Y212_BE, Y212_LE, I420_12BE, I420_12LE, P012_BE, P012_LE, RGBP_F16BE, RGBP_F16LE, RGB_F16BE, RGB_F16LE, Y444_10BE, GBR_10BE, Y444_10LE, GBR_10LE, r210, BGR10x2_LE, RGB10x2_LE, I422_10BE, I422_10LE, NV16_10LE40, NV16_10LE32, Y210, UYVP, v210, I420_10BE, I420_10LE, P010_10BE, MT2110R, MT2110T, NV12_10BE_8L128, NV12_10LE40_4L4, P010_10LE, NV12_10LE40, NV12_10LE32, Y444, BGRP, GBR, RGBP, NV24, v308, IYU2, RGBx, xRGB, BGRx, xBGR, RGB, BGR, Y42B, NV16, NV61, YUY2, YVYU, UYVY, VYUY, I420, YV12, NV12, NV21, NV12_16L32S, NV12_32L32, NV12_4L4, NV12_64Z32, NV12_8L128, Y41B, IYU1, YUV9, YVU9, BGR16, RGB16, BGR15, RGB15, RGB8P, GRAY_F32BE, GRAY_F32LE, GRAY16_BE, GRAY16_LE, GRAY_F16BE, GRAY_F16LE, GRAY10_LE16, GRAY10_LE32, GRAY8" c:type="GST_VIDEO_FORMATS_ALL_STR" version="1.24">
       <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-format.h">Declare all video formats as a string.
 
 Formats are sorted by decreasing "quality", using these criteria by priority:
   - number of components
-  - depth
+  - depth (effective for floating point formats: only the mantissa
+    counts, so RGBA_F32 ranks as 24 bits and RGBA_F16 as 11)
   - subsampling factor of the width
   - subsampling factor of the height
   - number of planes
@@ -3096,7 +3276,7 @@ template caps.</doc>
       <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-format.h"/>
       <type name="utf8" c:type="gchar*"/>
     </constant>
-    <constant name="VIDEO_FORMATS_ANY_STR" value="DMA_DRM, " c:type="GST_VIDEO_FORMATS_ANY_STR" version="1.24">
+    <constant name="VIDEO_FORMATS_ANY_STR" value="AHARDWARE_BUFFER, DMA_DRM, " c:type="GST_VIDEO_FORMATS_ANY_STR" version="1.24">
       <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-format.h">This is similar to %GST_VIDEO_FORMATS_ALL_STR but includes formats like
 DMA_DRM for which no software converter exists. This should be used for
 passthrough template caps.</doc>
@@ -3182,6 +3362,15 @@ subsampling.</doc>
       <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-format.h"/>
       <parameters>
         <parameter name="info">
+        </parameter>
+      </parameters>
+    </function-macro>
+    <function-macro name="VIDEO_FORMAT_INFO_IS_FLOAT" c:identifier="GST_VIDEO_FORMAT_INFO_IS_FLOAT" version="1.30" introspectable="0">
+      <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-format.h">Checks if the components of @info are stored as floating point values.</doc>
+      <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-format.h"/>
+      <parameters>
+        <parameter name="info">
+          <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-format.h">a #GstVideoFormatInfo</doc>
         </parameter>
       </parameters>
     </function-macro>
@@ -3446,7 +3635,7 @@ Return the width of one tile in pixels, zero if its not an integer.</doc>
         </parameter>
       </parameters>
     </function-macro>
-    <constant name="VIDEO_FORMAT_LAST" value="142" c:type="GST_VIDEO_FORMAT_LAST" version="1.26">
+    <constant name="VIDEO_FORMAT_LAST" value="161" c:type="GST_VIDEO_FORMAT_LAST" version="1.26">
       <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-format.h">Number of video formats in #GstVideoFormat.</doc>
       <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-format.h"/>
       <type name="gint" c:type="gint"/>
@@ -3663,6 +3852,34 @@ Return the width of one tile in pixels, zero if its not an integer.</doc>
         </parameter>
       </parameters>
     </function-macro>
+    <constant name="VIDEO_HDR10_PLUS_MAX_BYTES" value="1024" c:type="GST_VIDEO_HDR10_PLUS_MAX_BYTES" version="1.30">
+      <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-hdr.h">Specify the max size for a HDR10+ content</doc>
+      <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-hdr.h"/>
+      <type name="gint" c:type="gint"/>
+    </constant>
+    <constant name="VIDEO_HDR10_PLUS_MAX_COLS_MD_APL" value="25" c:type="GST_VIDEO_HDR10_PLUS_MAX_COLS_MD_APL" version="1.30">
+      <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-hdr.h">Specifies the number of columns in the
+targeted_system_display_actual_peak_luminance
+array.
+Defined in CTA-861-G.</doc>
+      <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-hdr.h"/>
+      <type name="gint" c:type="gint"/>
+    </constant>
+    <constant name="VIDEO_HDR10_PLUS_MAX_ROWS_TSD_APL" value="25" c:type="GST_VIDEO_HDR10_PLUS_MAX_ROWS_TSD_APL" version="1.30">
+      <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-hdr.h">Specifies the number of columns in the
+targeted_system_display_actual_peak_luminance
+array.
+Defined in CTA-861-G.</doc>
+      <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-hdr.h"/>
+      <type name="gint" c:type="gint"/>
+    </constant>
+    <constant name="VIDEO_HDR10_PLUS_NUM_WINDOWS" value="1" c:type="GST_VIDEO_HDR10_PLUS_NUM_WINDOWS" version="1.30">
+      <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-hdr.h">Number of windows in HDR10+ dynamic metadata.
+Defined in CTA-861-G.
+Shall be 1.</doc>
+      <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-hdr.h"/>
+      <type name="gint" c:type="gint"/>
+    </constant>
     <function-macro name="VIDEO_INFO_CHROMA_SITE" c:identifier="GST_VIDEO_INFO_CHROMA_SITE" introspectable="0">
       <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-info.h"/>
       <parameters>
@@ -4002,6 +4219,14 @@ It is not valid to use this macro with a TILED format.</doc>
       <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-format.h"/>
       <type name="gint" c:type="gint"/>
     </constant>
+    <function-macro name="VIDEO_META_TRANSFORM_IS_MATRIX" c:identifier="GST_VIDEO_META_TRANSFORM_IS_MATRIX" version="1.28" introspectable="0">
+      <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gstvideometa.h">Checks if a #GType of a meta transformation is a matrix transformation</doc>
+      <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gstvideometa.h"/>
+      <parameters>
+        <parameter name="type">
+        </parameter>
+      </parameters>
+    </function-macro>
     <function-macro name="VIDEO_META_TRANSFORM_IS_SCALE" c:identifier="GST_VIDEO_META_TRANSFORM_IS_SCALE" introspectable="0">
       <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gstvideometa.h"/>
       <parameters>
@@ -6256,7 +6481,18 @@ values and can be scaled for other bit depths.</doc>
         <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-color.h">[16..235] for 8 bit components. Chroma has
                 [16..240] range.</doc>
       </member>
-      <function name="offsets" c:identifier="gst_video_color_range_offsets">
+      <member name="0_1" value="3" c:identifier="GST_VIDEO_COLOR_RANGE_0_1" version="1.30" glib:nick="0-1" glib:name="GST_VIDEO_COLOR_RANGE_0_1">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-color.h">[0.0..1.0] for floating point components, the only range supported
+by floating point formats (the other values are reserved).
+
+Values outside [0.0, 1.0] are valid: their meaning follows from the
+colorimetry (with a linear transfer function, values above 1.0
+represent luminance above reference white and negative values
+represent colors outside the gamut of the primaries). Elements
+processing floats natively should preserve out-of-range values;
+converting to an integer format clamps them.</doc>
+      </member>
+      <function name="offsets" c:identifier="gst_video_color_range_offsets" deprecated="1" deprecated-version="1.30">
         <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-color.c">Compute the offset and scale values for each component of @info. For each
 component, (c[i] - offset[i]) / scale[i] will scale the component c[i] to the
 range [0.0 .. 1.0].
@@ -6264,6 +6500,7 @@ range [0.0 .. 1.0].
 The reverse operation (c[i] * scale[i]) + offset[i] can be used to convert
 the component values in range [0.0 .. 1.0] back to their representation in
 @info and @range.</doc>
+        <doc-deprecated xml:space="preserve">Use gst_video_color_range_offsets_full() instead.</doc-deprecated>
         <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-color.h"/>
         <return-value transfer-ownership="none">
           <type name="none" c:type="void"/>
@@ -6291,7 +6528,188 @@ the component values in range [0.0 .. 1.0] back to their representation in
           </parameter>
         </parameters>
       </function>
+      <function name="offsets_full" c:identifier="gst_video_color_range_offsets_full" version="1.30">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-color.c">Compute the offset and scale values for each component of @info. For each
+component, (c[i] - offset[i]) / scale[i] will scale the component c[i] to the
+range [0.0 .. 1.0].
+
+The reverse operation (c[i] * scale[i]) + offset[i] can be used to convert
+the component values in range [0.0 .. 1.0] back to their representation in
+@info and @range.
+
+If @fullscale is provided, it will contain the maximum full-range value for
+each component. For integer formats, the value is `(1 &lt;&lt; depth) - 1`, where
+`depth` is the bit depth of each component. For floating-point formats with
+the %GST_VIDEO_COLOR_RANGE_0_1 range, the value is 1.0.</doc>
+        <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-color.h"/>
+        <return-value transfer-ownership="none">
+          <type name="none" c:type="void"/>
+        </return-value>
+        <parameters>
+          <parameter name="range" transfer-ownership="none">
+            <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-color.c">a #GstVideoColorRange</doc>
+            <type name="VideoColorRange" c:type="GstVideoColorRange"/>
+          </parameter>
+          <parameter name="info" transfer-ownership="none">
+            <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-color.c">a #GstVideoFormatInfo</doc>
+            <type name="VideoFormatInfo" c:type="const GstVideoFormatInfo*"/>
+          </parameter>
+          <parameter name="offset" direction="out" caller-allocates="1" transfer-ownership="none">
+            <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-color.c">output offsets</doc>
+            <array zero-terminated="0" c:type="gdouble*" fixed-size="4">
+              <type name="gdouble" c:type="gdouble"/>
+            </array>
+          </parameter>
+          <parameter name="scale" direction="out" caller-allocates="1" transfer-ownership="none">
+            <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-color.c">output scale</doc>
+            <array zero-terminated="0" c:type="gdouble*" fixed-size="4">
+              <type name="gdouble" c:type="gdouble"/>
+            </array>
+          </parameter>
+          <parameter name="fullscale" direction="out" caller-allocates="1" transfer-ownership="none" optional="1" allow-none="1">
+            <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-color.c">
+  full-scale values for each component</doc>
+            <array zero-terminated="0" c:type="gdouble*" fixed-size="4">
+              <type name="gdouble" c:type="gdouble"/>
+            </array>
+          </parameter>
+        </parameters>
+      </function>
     </enumeration>
+    <record name="VideoColorVolumeTransformation" c:type="GstVideoColorVolumeTransformation" version="1.30">
+      <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-hdr.h">Processing window in dynamic metadata defined in SMPTE ST 2094-40:2016
+and CTA-861-G Annex S HDR Dynamic Metadata Syntax Type 4.</doc>
+      <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-hdr.h"/>
+      <field name="window_upper_left_corner_x" writable="1">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-hdr.h">the x coordinate of the top left pixel of the w-th processing</doc>
+        <type name="guint16" c:type="guint16"/>
+      </field>
+      <field name="window_upper_left_corner_y" writable="1">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-hdr.h">the y coordinate of the top left pixel of the w-th processing</doc>
+        <type name="guint16" c:type="guint16"/>
+      </field>
+      <field name="window_lower_right_corner_x" writable="1">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-hdr.h">the x coordinate of the lower right pixel of the w-th processing</doc>
+        <type name="guint16" c:type="guint16"/>
+      </field>
+      <field name="window_lower_right_corner_y" writable="1">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-hdr.h">the y coordinate of the lower right pixel of the w-th processing</doc>
+        <type name="guint16" c:type="guint16"/>
+      </field>
+      <field name="center_of_ellipse_x" writable="1">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-hdr.h">the x coordinate of the center position of the concentric internal
+and external ellipses of the elliptical pixel selector in the w-th processing window</doc>
+        <type name="guint16" c:type="guint16"/>
+      </field>
+      <field name="center_of_ellipse_y" writable="1">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-hdr.h">the y coordinate of the center position of the concentric internal
+and external ellipses of the elliptical pixel selector in the w-th processing window</doc>
+        <type name="guint16" c:type="guint16"/>
+      </field>
+      <field name="rotation_angle" writable="1">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-hdr.h">the clockwise rotation angle in degree of arc with respect to the
+positive direction of the x-axis of the concentric internal and external ellipses of the elliptical
+pixel selector in the w-th processing window</doc>
+        <type name="guint8" c:type="guint8"/>
+      </field>
+      <field name="semimajor_axis_internal_ellipse" writable="1">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-hdr.h">the semi-major axis value of the internal ellipse of the
+elliptical pixel selector in amount of pixels in the w-th processing window</doc>
+        <type name="guint16" c:type="guint16"/>
+      </field>
+      <field name="semimajor_axis_external_ellipse" writable="1">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-hdr.h">the semi-major axis value of the external ellipse of
+the elliptical pixel selector in amount of pixels in the w-th processing window</doc>
+        <type name="guint16" c:type="guint16"/>
+      </field>
+      <field name="semiminor_axis_external_ellipse" writable="1">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-hdr.h">the semi-minor axis value of the external ellipse of
+the elliptical pixel selector in amount of pixels in the w-th processing window</doc>
+        <type name="guint16" c:type="guint16"/>
+      </field>
+      <field name="overlap_process_option" writable="1">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-hdr.h">one of the two methods of combining
+rendered pixels in the w-th processing window in an image with at least one elliptical pixel
+selector</doc>
+        <type name="guint8" c:type="guint8"/>
+      </field>
+      <field name="maxscl" writable="1">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-hdr.h">the maximum of the i-th color component of linearized RGB values in the
+w-th processing window in the scene</doc>
+        <array zero-terminated="0" fixed-size="3">
+          <type name="guint32" c:type="guint32"/>
+        </array>
+      </field>
+      <field name="average_maxrgb" writable="1">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-hdr.h">the average of linearized maxRGB values in the w-th processing
+window in the scene</doc>
+        <type name="guint32" c:type="guint32"/>
+      </field>
+      <field name="num_distributions" writable="1">
+        <type name="guint8" c:type="guint8"/>
+      </field>
+      <field name="distribution_index" writable="1">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-hdr.h">the interpretation of the corresponding
+distribution_values[w][i] value. Values of 0 through 98 indicate that
+distribution_values[w][i] contains the value below which distribution_index[w][i]
+percent of the linearized maxRGB values in the scene for the w-th processing
+window fall. A value of 99 indicates that distribution_values[w][i] contains
+the value below which 99.98% of the linearized maxRGB values in the scene for
+the w-th processing window fall.The value shall be in the range of 0 to 99, inclusive</doc>
+        <array zero-terminated="0" fixed-size="16">
+          <type name="guint8" c:type="guint8"/>
+        </array>
+      </field>
+      <field name="distribution_values" writable="1">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-hdr.h">the linearized maxRGB value at the percentile specified by
+distribution_index[w][i] in the w-th processing window in the scene. The value
+shall be in the range of 0 to 100,000, inclusive, representing 0 to 10,000 cd/m2.</doc>
+        <array zero-terminated="0" fixed-size="16">
+          <type name="guint32" c:type="guint32"/>
+        </array>
+      </field>
+      <field name="fraction_bright_pixels" writable="1">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-hdr.h">the fraction of selected pixels in the image that contains the
+brightest pixel in the scene</doc>
+        <type name="guint16" c:type="guint16"/>
+      </field>
+      <field name="tone_mapping_flag" writable="1">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-hdr.h">true if the tone mapping function in the w-th
+processing window is present</doc>
+        <type name="guint8" c:type="guint8"/>
+      </field>
+      <field name="knee_point_x" writable="1">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-hdr.h">the x coordinate of the separation point between the linear part and the
+curved part of the tone mapping function</doc>
+        <type name="guint16" c:type="guint16"/>
+      </field>
+      <field name="knee_point_y" writable="1">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-hdr.h">the y coordinate of the separation point between the linear part and the
+curved part of the tone mapping function</doc>
+        <type name="guint16" c:type="guint16"/>
+      </field>
+      <field name="num_bezier_curve_anchors" writable="1">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-hdr.h">the number of the intermediate anchor parameters of the
+tone mapping function in the w-th processing window. Maximum value should be 9.</doc>
+        <type name="guint8" c:type="guint8"/>
+      </field>
+      <field name="bezier_curve_anchors" writable="1">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-hdr.h">the i-th intermediate anchor parameter of the tone
+mapping function in the w-th processing window in the scene</doc>
+        <array zero-terminated="0" fixed-size="16">
+          <type name="guint16" c:type="guint16"/>
+        </array>
+      </field>
+      <field name="color_saturation_mapping_flag" writable="1">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-hdr.h">shall be equal to zero in this version of the standard.</doc>
+        <type name="guint8" c:type="guint8"/>
+      </field>
+      <field name="color_saturation_weight" writable="1">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-hdr.h">a number that shall adjust the color saturation gain
+in the w-th processing window in the scene</doc>
+        <type name="guint8" c:type="guint8"/>
+      </field>
+    </record>
     <record name="VideoColorimetry" c:type="GstVideoColorimetry">
       <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-color.h">Structure describing the color info.</doc>
       <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-color.h"/>
@@ -6670,6 +7088,28 @@ option and values.</doc>
           </parameter>
         </parameters>
       </method>
+      <method name="transform_metas" c:identifier="gst_video_converter_transform_metas" version="1.28">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-converter.c">Transform the GstMeta of @src into @dest using @convert.</doc>
+        <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-converter.h"/>
+        <return-value transfer-ownership="none">
+          <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-converter.c">TRUE if any meta was copied</doc>
+          <type name="gboolean" c:type="gboolean"/>
+        </return-value>
+        <parameters>
+          <instance-parameter name="convert" transfer-ownership="none">
+            <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-converter.c">a #GstVideoConverter</doc>
+            <type name="VideoConverter" c:type="GstVideoConverter*"/>
+          </instance-parameter>
+          <parameter name="src" transfer-ownership="none">
+            <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-converter.c">a #GstBuffer</doc>
+            <type name="Gst.Buffer" c:type="GstBuffer*"/>
+          </parameter>
+          <parameter name="dest" transfer-ownership="none">
+            <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-converter.c">a writable #GstBuffer</doc>
+            <type name="Gst.Buffer" c:type="GstBuffer*"/>
+          </parameter>
+        </parameters>
+      </method>
       <function name="new" c:identifier="gst_video_converter_new" version="1.6" introspectable="0">
         <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-converter.c">Create a new converter object to convert between @in_info and @out_info
 with @config.
@@ -6700,6 +7140,9 @@ with @config.
 
 The optional @pool can be used to spawn threads, this is useful when
 creating new converters rapidly, for example when updating cropping.
+
+If @config is not provided, and a @pool is provided, the number of threads for
+the converter will be set to the maximum number of threads in the pool.
 
 Returns (nullable): a #GstVideoConverter or %NULL if conversion is not possible.</doc>
         <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-converter.h"/>
@@ -6751,6 +7194,60 @@ Returns (nullable): a #GstVideoConverter or %NULL if conversion is not possible.
       </field>
       <function name="get_info" c:identifier="gst_video_crop_meta_get_info">
         <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gstvideometa.h"/>
+        <return-value transfer-ownership="none">
+          <type name="Gst.MetaInfo" c:type="const GstMetaInfo*"/>
+        </return-value>
+      </function>
+    </record>
+    <record name="VideoDSCInitializationMeta" c:type="GstVideoDSCInitializationMeta" version="1.30">
+      <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gstvideodscmeta.h">Metadata for Digitally Signed Content Initialization SEI message.</doc>
+      <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gstvideodscmeta.h"/>
+      <field name="meta" writable="1">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gstvideodscmeta.h">parent #GstMeta</doc>
+        <type name="Gst.Meta" c:type="GstMeta"/>
+      </field>
+      <field name="dsc_initialization" writable="1">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gstvideodscmeta.h">DSC Initialization data structure</doc>
+        <type name="H274DigitallySignedContentInitialization" c:type="GstH274DigitallySignedContentInitialization"/>
+      </field>
+      <function name="get_info" c:identifier="gst_video_dsc_initialization_meta_get_info" version="1.30">
+        <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gstvideodscmeta.h"/>
+        <return-value transfer-ownership="none">
+          <type name="Gst.MetaInfo" c:type="const GstMetaInfo*"/>
+        </return-value>
+      </function>
+    </record>
+    <record name="VideoDSCSelectionMeta" c:type="GstVideoDSCSelectionMeta" version="1.30">
+      <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gstvideodscmeta.h">Metadata for Digitally Signed Content Selection SEI message.</doc>
+      <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gstvideodscmeta.h"/>
+      <field name="meta" writable="1">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gstvideodscmeta.h">parent #GstMeta</doc>
+        <type name="Gst.Meta" c:type="GstMeta"/>
+      </field>
+      <field name="dsc_selection" writable="1">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gstvideodscmeta.h">DSC Selection data structure</doc>
+        <type name="H274DigitallySignedContentSelection" c:type="GstH274DigitallySignedContentSelection"/>
+      </field>
+      <function name="get_info" c:identifier="gst_video_dsc_selection_meta_get_info" version="1.30">
+        <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gstvideodscmeta.h"/>
+        <return-value transfer-ownership="none">
+          <type name="Gst.MetaInfo" c:type="const GstMetaInfo*"/>
+        </return-value>
+      </function>
+    </record>
+    <record name="VideoDSCVerificationMeta" c:type="GstVideoDSCVerificationMeta" version="1.30">
+      <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gstvideodscmeta.h">Metadata for Digitally Signed Content Verification SEI message.</doc>
+      <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gstvideodscmeta.h"/>
+      <field name="meta" writable="1">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gstvideodscmeta.h">parent #GstMeta</doc>
+        <type name="Gst.Meta" c:type="GstMeta"/>
+      </field>
+      <field name="dsc_verification" writable="1">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gstvideodscmeta.h">DSC Verification data structure</doc>
+        <type name="H274DigitallySignedContentVerification" c:type="GstH274DigitallySignedContentVerification"/>
+      </field>
+      <function name="get_info" c:identifier="gst_video_dsc_verification_meta_get_info" version="1.30">
+        <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gstvideodscmeta.h"/>
         <return-value transfer-ownership="none">
           <type name="Gst.MetaInfo" c:type="const GstMetaInfo*"/>
         </return-value>
@@ -8771,6 +9268,26 @@ performance is achieved when @quantizer is a power of 2.
         <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-dither.h">ordered dither using a bayer pattern</doc>
       </member>
     </enumeration>
+    <class name="VideoDmabufPool" c:symbol-prefix="video_dmabuf_pool" c:type="GstVideoDmabufPool" version="1.28" parent="VideoBufferPool" glib:type-name="GstVideoDmabufPool" glib:get-type="gst_video_dmabuf_pool_get_type" glib:type-struct="VideoDmabufPoolClass">
+      <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gstvideodmabufpool.c">Using #GstUdmabufAllocator, setting defaults and implementing implicit sync.</doc>
+      <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gstvideodmabufpool.h"/>
+      <constructor name="new" c:identifier="gst_video_dmabuf_pool_new" version="1.28">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gstvideodmabufpool.c">Create a new #GstVideoDmabufPool instance.</doc>
+        <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gstvideodmabufpool.h"/>
+        <return-value transfer-ownership="full" nullable="1">
+          <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gstvideodmabufpool.c">a #GstVideoDmabufPool or %NULL
+    if dmabufs are not supported.</doc>
+          <type name="Gst.BufferPool" c:type="GstBufferPool*"/>
+        </return-value>
+      </constructor>
+    </class>
+    <record name="VideoDmabufPoolClass" c:type="GstVideoDmabufPoolClass" glib:is-gtype-struct-for="VideoDmabufPool">
+      <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gstvideodmabufpool.h"/>
+      <field name="parent_class" version="1.28">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gstvideodmabufpool.h">Parent Class.</doc>
+        <type name="VideoBufferPoolClass" c:type="GstVideoBufferPoolClass"/>
+      </field>
+    </record>
     <class name="VideoEncoder" c:symbol-prefix="video_encoder" c:type="GstVideoEncoder" parent="Gst.Element" abstract="1" glib:type-name="GstVideoEncoder" glib:get-type="gst_video_encoder_get_type" glib:type-struct="VideoEncoderClass">
       <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gstvideoencoder.c">This base class is for video encoders turning raw video into
 encoded video data.
@@ -8823,6 +9340,35 @@ Things that subclass need to take care of:
   * Accept data in @handle_frame and provide encoded results to
      @gst_video_encoder_finish_frame.
 
+
+## Adaptive Presets
+
+#GstVideoEncoder supports adaptive presets, where property values in a
+preset file can vary based on the input video resolution and framerate.
+This is done using GKeyFile's locale string syntax to define alternative
+values for properties.
+
+For example, a preset file can specify different bitrates for different
+resolutions:
+
+``` ini
+[Profile YouTube]
+bitrate=2500
+bitrate[1920x1080]=8000
+bitrate[1920x1080@48]=12000
+bitrate[3840x2160]=40000
+bitrate[3840x2160@48]=60000
+```
+
+When a preset with alternatives is loaded, the best matching
+alternative is applied each time the input format changes, before
+the subclass @set_format method runs.
+
+Alternative keys use the format `WxH` (matches when the actual pixel
+count &gt;= W*H) or `WxH@FPS` (additionally requires actual fps &gt;= FPS).
+The most specific match wins (highest pixel count, then highest fps
+threshold). If no alternative matches, the base property value set by
+gst_preset_load_preset() remains.
 
 The #GstVideoEncoder:qos property will enable the Quality-of-Service
 features of the encoder which gather statistics about the real-time
@@ -8973,6 +9519,26 @@ negotiate fails.</doc>
           </instance-parameter>
           <parameter name="frame" transfer-ownership="none">
             <type name="VideoCodecFrame" c:type="GstVideoCodecFrame*"/>
+          </parameter>
+        </parameters>
+      </virtual-method>
+      <virtual-method name="prepare_allocator" version="1.30">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gstvideoencoder.h">Orchestrates #GstAllocator configuration for the negotiated @caps.
+Default implementation relies on an Allocation #GstQuery &amp;
+calls `decide_allocation()`.</doc>
+        <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gstvideoencoder.h"/>
+        <return-value transfer-ownership="none">
+          <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gstvideoencoder.h">whether the #GstAllocator could be configured.</doc>
+          <type name="gboolean" c:type="gboolean"/>
+        </return-value>
+        <parameters>
+          <instance-parameter name="encoder" transfer-ownership="none">
+            <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gstvideoencoder.h">the #GstVideoEncoder</doc>
+            <type name="VideoEncoder" c:type="GstVideoEncoder*"/>
+          </instance-parameter>
+          <parameter name="caps" transfer-ownership="none">
+            <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gstvideoencoder.h">the negotiated #GstCaps</doc>
+            <type name="Gst.Caps" c:type="GstCaps*"/>
           </parameter>
         </parameters>
       </virtual-method>
@@ -9536,6 +10102,28 @@ processing. Events from @frame are moved to the pending events list.</doc>
           </parameter>
         </parameters>
       </method>
+      <method name="set_allocator" c:identifier="gst_video_encoder_set_allocator" version="1.30">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gstvideoencoder.c">Allows #GstVideoEncoder sub-classes to set the memory @allocator and
+its @params.</doc>
+        <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gstvideoencoder.h"/>
+        <return-value transfer-ownership="none">
+          <type name="none" c:type="void"/>
+        </return-value>
+        <parameters>
+          <instance-parameter name="encoder" transfer-ownership="none">
+            <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gstvideoencoder.c">a #GstVideoEncoder</doc>
+            <type name="VideoEncoder" c:type="GstVideoEncoder*"/>
+          </instance-parameter>
+          <parameter name="allocator" transfer-ownership="full" nullable="1" allow-none="1">
+            <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gstvideoencoder.c">the #GstAllocator</doc>
+            <type name="Gst.Allocator" c:type="GstAllocator*"/>
+          </parameter>
+          <parameter name="params" transfer-ownership="none" nullable="1" allow-none="1">
+            <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gstvideoencoder.c">the #GstAllocationParams of @allocator</doc>
+            <type name="Gst.AllocationParams" c:type="const GstAllocationParams*"/>
+          </parameter>
+        </parameters>
+      </method>
       <method name="set_headers" c:identifier="gst_video_encoder_set_headers">
         <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gstvideoencoder.c">Set the codec headers to be sent downstream whenever requested.</doc>
         <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gstvideoencoder.h"/>
@@ -10080,8 +10668,27 @@ and @get_caps are likely needed as well.</doc>
           </parameters>
         </callback>
       </field>
+      <field name="prepare_allocator">
+        <callback name="prepare_allocator">
+          <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gstvideoencoder.h"/>
+          <return-value transfer-ownership="none">
+            <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gstvideoencoder.h">whether the #GstAllocator could be configured.</doc>
+            <type name="gboolean" c:type="gboolean"/>
+          </return-value>
+          <parameters>
+            <parameter name="encoder" transfer-ownership="none">
+              <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gstvideoencoder.h">the #GstVideoEncoder</doc>
+              <type name="VideoEncoder" c:type="GstVideoEncoder*"/>
+            </parameter>
+            <parameter name="caps" transfer-ownership="none">
+              <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gstvideoencoder.h">the negotiated #GstCaps</doc>
+              <type name="Gst.Caps" c:type="GstCaps*"/>
+            </parameter>
+          </parameters>
+        </callback>
+      </field>
       <field name="_gst_reserved" readable="0" private="1">
-        <array zero-terminated="0" fixed-size="16">
+        <array zero-terminated="0" fixed-size="15">
           <type name="gpointer" c:type="gpointer"/>
         </array>
       </field>
@@ -10755,6 +11362,89 @@ bits.</doc>
       <member name="rgb10x2_le" value="141" c:identifier="GST_VIDEO_FORMAT_RGB10x2_LE" version="1.28" glib:nick="rgb10x2-le" glib:name="GST_VIDEO_FORMAT_RGB10x2_LE">
         <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-format.h">packed 4:4:4 RGB (R-G-B-x), 10 bits for R/G/B channel and MSB 2 bits for padding.</doc>
       </member>
+      <member name="ahardware_buffer" value="142" c:identifier="GST_VIDEO_FORMAT_AHARDWARE_BUFFER" version="1.30" glib:nick="ahardware-buffer" glib:name="GST_VIDEO_FORMAT_AHARDWARE_BUFFER">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-format.h">Android Hardware Buffer special format. It's only used with
+memory:AHardwareBuffer #GstCapsFeatures, where an extra parameter
+(ahb-format) describes the AHardwareBuffer format.</doc>
+      </member>
+      <member name="rgba_f16le" value="143" c:identifier="GST_VIDEO_FORMAT_RGBA_F16LE" version="1.30" glib:nick="rgba-f16le" glib:name="GST_VIDEO_FORMAT_RGBA_F16LE">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-format.h">packed RGB with alpha, 16-bit floating point (half) per channel (R-G-B-A),
+little endian. See %GST_VIDEO_FORMAT_FLAG_FLOAT for the component value
+conventions.</doc>
+      </member>
+      <member name="rgba_f16be" value="144" c:identifier="GST_VIDEO_FORMAT_RGBA_F16BE" version="1.30" glib:nick="rgba-f16be" glib:name="GST_VIDEO_FORMAT_RGBA_F16BE">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-format.h">packed RGB with alpha, 16-bit floating point (half) per channel (R-G-B-A),
+big endian. See %GST_VIDEO_FORMAT_FLAG_FLOAT for the component value
+conventions.</doc>
+      </member>
+      <member name="rgba_f32le" value="145" c:identifier="GST_VIDEO_FORMAT_RGBA_F32LE" version="1.30" glib:nick="rgba-f32le" glib:name="GST_VIDEO_FORMAT_RGBA_F32LE">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-format.h">packed RGB with alpha, 32-bit floating point per channel (R-G-B-A),
+little endian. See %GST_VIDEO_FORMAT_FLAG_FLOAT for the component value
+conventions.</doc>
+      </member>
+      <member name="rgba_f32be" value="146" c:identifier="GST_VIDEO_FORMAT_RGBA_F32BE" version="1.30" glib:nick="rgba-f32be" glib:name="GST_VIDEO_FORMAT_RGBA_F32BE">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-format.h">packed RGB with alpha, 32-bit floating point per channel (R-G-B-A),
+big endian. See %GST_VIDEO_FORMAT_FLAG_FLOAT for the component value
+conventions.</doc>
+      </member>
+      <member name="argb_f32" value="147" c:identifier="GST_VIDEO_FORMAT_ARGB_F32" version="1.30" glib:nick="argb-f32" glib:name="GST_VIDEO_FORMAT_ARGB_F32">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-format.h">packed RGB with alpha channel first, 32-bit floating point
+per channel (A-R-G-B), native endian.
+See %GST_VIDEO_FORMAT_FLAG_FLOAT for the component value conventions.</doc>
+      </member>
+      <member name="rgbp_f16le" value="148" c:identifier="GST_VIDEO_FORMAT_RGBP_F16LE" version="1.30" glib:nick="rgbp-f16le" glib:name="GST_VIDEO_FORMAT_RGBP_F16LE">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-format.h">planar 4:4:4 RGB, 16-bit floating point per channel little endian.
+See %GST_VIDEO_FORMAT_FLAG_FLOAT for the component value conventions.</doc>
+      </member>
+      <member name="rgbp_f16be" value="149" c:identifier="GST_VIDEO_FORMAT_RGBP_F16BE" version="1.30" glib:nick="rgbp-f16be" glib:name="GST_VIDEO_FORMAT_RGBP_F16BE">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-format.h">planar 4:4:4 RGB, 16-bit floating point per channel big endian.
+See %GST_VIDEO_FORMAT_FLAG_FLOAT for the component value conventions.</doc>
+      </member>
+      <member name="rgbp_f32le" value="150" c:identifier="GST_VIDEO_FORMAT_RGBP_F32LE" version="1.30" glib:nick="rgbp-f32le" glib:name="GST_VIDEO_FORMAT_RGBP_F32LE">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-format.h">planar 4:4:4 RGB, 32-bit floating point per channel little endian.
+See %GST_VIDEO_FORMAT_FLAG_FLOAT for the component value conventions.</doc>
+      </member>
+      <member name="rgbp_f32be" value="151" c:identifier="GST_VIDEO_FORMAT_RGBP_F32BE" version="1.30" glib:nick="rgbp-f32be" glib:name="GST_VIDEO_FORMAT_RGBP_F32BE">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-format.h">planar 4:4:4 RGB, 32-bit floating point per channel big endian
+See %GST_VIDEO_FORMAT_FLAG_FLOAT for the component value conventions.</doc>
+      </member>
+      <member name="rgb_f16le" value="152" c:identifier="GST_VIDEO_FORMAT_RGB_F16LE" version="1.30" glib:nick="rgb-f16le" glib:name="GST_VIDEO_FORMAT_RGB_F16LE">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-format.h">packed 4:4:4 RGB, 16-bit floating point per channel little endian.
+See %GST_VIDEO_FORMAT_FLAG_FLOAT for the component value conventions.</doc>
+      </member>
+      <member name="rgb_f16be" value="153" c:identifier="GST_VIDEO_FORMAT_RGB_F16BE" version="1.30" glib:nick="rgb-f16be" glib:name="GST_VIDEO_FORMAT_RGB_F16BE">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-format.h">packed 4:4:4 RGB, 16-bit floating point per channel big endian.
+See %GST_VIDEO_FORMAT_FLAG_FLOAT for the component value conventions.</doc>
+      </member>
+      <member name="rgb_f32le" value="154" c:identifier="GST_VIDEO_FORMAT_RGB_F32LE" version="1.30" glib:nick="rgb-f32le" glib:name="GST_VIDEO_FORMAT_RGB_F32LE">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-format.h">packed 4:4:4 RGB, 32-bit floating point per channel little endian.
+See %GST_VIDEO_FORMAT_FLAG_FLOAT for the component value conventions.</doc>
+      </member>
+      <member name="rgb_f32be" value="155" c:identifier="GST_VIDEO_FORMAT_RGB_F32BE" version="1.30" glib:nick="rgb-f32be" glib:name="GST_VIDEO_FORMAT_RGB_F32BE">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-format.h">packed 4:4:4 RGB, 32-bit floating point per channel big endian.
+See %GST_VIDEO_FORMAT_FLAG_FLOAT for the component value conventions.</doc>
+      </member>
+      <member name="ayuv_f32" value="156" c:identifier="GST_VIDEO_FORMAT_AYUV_F32" version="1.30" glib:nick="ayuv-f32" glib:name="GST_VIDEO_FORMAT_AYUV_F32">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-format.h">packed YUV with alpha channel first, 32-bit floating point
+per channel (A-Y-U-V), native endian.
+See %GST_VIDEO_FORMAT_FLAG_FLOAT for the component value conventions.</doc>
+      </member>
+      <member name="gray_f16le" value="157" c:identifier="GST_VIDEO_FORMAT_GRAY_F16LE" version="1.30" glib:nick="gray-f16le" glib:name="GST_VIDEO_FORMAT_GRAY_F16LE">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-format.h">16-bit floating-point grayscale, little endian.
+See %GST_VIDEO_FORMAT_FLAG_FLOAT for the component value conventions.</doc>
+      </member>
+      <member name="gray_f16be" value="158" c:identifier="GST_VIDEO_FORMAT_GRAY_F16BE" version="1.30" glib:nick="gray-f16be" glib:name="GST_VIDEO_FORMAT_GRAY_F16BE">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-format.h">16-bit floating-point grayscale, big endian.
+See %GST_VIDEO_FORMAT_FLAG_FLOAT for the component value conventions.</doc>
+      </member>
+      <member name="gray_f32le" value="159" c:identifier="GST_VIDEO_FORMAT_GRAY_F32LE" version="1.30" glib:nick="gray-f32le" glib:name="GST_VIDEO_FORMAT_GRAY_F32LE">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-format.h">32-bit floating-point grayscale, little endian.
+See %GST_VIDEO_FORMAT_FLAG_FLOAT for the component value conventions.</doc>
+      </member>
+      <member name="gray_f32be" value="160" c:identifier="GST_VIDEO_FORMAT_GRAY_F32BE" version="1.30" glib:nick="gray-f32be" glib:name="GST_VIDEO_FORMAT_GRAY_F32BE">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-format.h">32-bit floating-point grayscale, big endian.
+See %GST_VIDEO_FORMAT_FLAG_FLOAT for the component value conventions.</doc>
+      </member>
       <function name="from_fourcc" c:identifier="gst_video_format_from_fourcc">
         <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-format.c">Converts a FOURCC value into the corresponding #GstVideoFormat.
 If the FOURCC cannot be represented by #GstVideoFormat,
@@ -10935,6 +11625,17 @@ versions were printing a critical warning and returned %NULL.</doc>
       <member name="subtiles" value="512" c:identifier="GST_VIDEO_FORMAT_FLAG_SUBTILES" version="1.22" glib:nick="subtiles" glib:name="GST_VIDEO_FORMAT_FLAG_SUBTILES">
         <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-format.h">The tile size varies per plane according to the subsampling.</doc>
       </member>
+      <member name="float" value="1024" c:identifier="GST_VIDEO_FORMAT_FLAG_FLOAT" version="1.30" glib:nick="float" glib:name="GST_VIDEO_FORMAT_FLAG_FLOAT">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-format.h">The components are stored as IEEE 754 floating point values. The
+depth of the components describes the size of the floating point type
+in bits (16 for binary16 half precision, 32 for binary32 single
+precision). Formats using other floating point encodings of the same
+sizes (bfloat16, 8-bit variants such as e4m3 or e5m2, ...) are not
+covered by this flag and would be added as distinct formats.
+
+Component values are normalized: 0.0 and 1.0 correspond to 0 and the
+maximum value of a full-range integer format with the same colorimetry.</doc>
+      </member>
     </bitfield>
     <record name="VideoFormatInfo" c:type="GstVideoFormatInfo">
       <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-format.h">Information for a video format.</doc>
@@ -11058,7 +11759,7 @@ use tile_info[] array instead.</doc>
         </array>
       </field>
       <method name="component" c:identifier="gst_video_format_info_component" version="1.18">
-        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-format.c">Fill @components with the number of all the components packed in plane @p
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-format.c">Fill @components with the number of all the components packed in @plane
 for the format @info. A value of -1 in @components indicates that no more
 components are packed in the plane.</doc>
         <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-format.h"/>
@@ -11074,9 +11775,11 @@ components are packed in the plane.</doc>
             <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-format.c">a plane number</doc>
             <type name="guint" c:type="guint"/>
           </parameter>
-          <parameter name="components" direction="out" caller-allocates="0" transfer-ownership="full">
+          <parameter name="components" direction="out" caller-allocates="1" transfer-ownership="none">
             <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-format.c">array used to store component numbers</doc>
-            <type name="gint" c:type="gint*"/>
+            <array zero-terminated="0" c:type="gint*" fixed-size="4">
+              <type name="gint" c:type="gint"/>
+            </array>
           </parameter>
         </parameters>
       </method>
@@ -11602,6 +12305,118 @@ to upload something to an OpenGL texture.</doc>
 Different gamma conversion modes</doc>
       </member>
     </enumeration>
+    <record name="VideoHDR10Plus" c:type="GstVideoHDR10Plus" version="1.30">
+      <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-hdr.h">Dynamic HDR 10+ metadata defined in SMPTE2094-40
+and CTA-861-G Annex S HDR Dynamic Metadata Syntax Type 4.</doc>
+      <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-hdr.h"/>
+      <field name="application_identifier" writable="1">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-hdr.h">the application identifier</doc>
+        <type name="guint8" c:type="guint8"/>
+      </field>
+      <field name="application_version" writable="1">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-hdr.h">the application version</doc>
+        <type name="guint8" c:type="guint8"/>
+      </field>
+      <field name="num_windows" writable="1">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-hdr.h">the number of processing windows. The first processing window shall be
+for the entire picture</doc>
+        <type name="guint8" c:type="guint8"/>
+      </field>
+      <field name="processing_window" writable="1">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-hdr.h">the color volume transformation for the processing window.</doc>
+        <array zero-terminated="0" fixed-size="1">
+          <type name="VideoColorVolumeTransformation" c:type="GstVideoColorVolumeTransformation"/>
+        </array>
+      </field>
+      <field name="targeted_system_display_maximum_luminance" writable="1">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-hdr.h">the nominal maximum display luminance
+of the targeted system display in units of 0.0001 candelas per square meter</doc>
+        <type name="guint32" c:type="guint32"/>
+      </field>
+      <field name="targeted_system_display_actual_peak_luminance_flag" writable="1">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-hdr.h">shall be equal to zero in this
+version of the standard</doc>
+        <type name="guint8" c:type="guint8"/>
+      </field>
+      <field name="num_rows_targeted_system_display_actual_peak_luminance" writable="1">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-hdr.h">the number of rows
+in the targeted_system_display_actual_peak_luminance array</doc>
+        <type name="guint8" c:type="guint8"/>
+      </field>
+      <field name="num_cols_targeted_system_display_actual_peak_luminance" writable="1">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-hdr.h">the number of columns in the
+targeted_system_display_actual_peak_luminance array</doc>
+        <type name="guint8" c:type="guint8"/>
+      </field>
+      <field name="targeted_system_display_actual_peak_luminance" writable="1">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-hdr.h">the normalized actual peak luminance of
+the targeted system display</doc>
+        <array zero-terminated="0" fixed-size="625">
+          <type name="guint8" c:type="guint8"/>
+        </array>
+      </field>
+      <field name="mastering_display_actual_peak_luminance_flag" writable="1">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-hdr.h">shall be equal to 0 for this version of this Standard</doc>
+        <type name="guint8" c:type="guint8"/>
+      </field>
+      <field name="num_rows_mastering_display_actual_peak_luminance" writable="1">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-hdr.h">the number of rows in the
+mastering_display_actual_peak_luminance array</doc>
+        <type name="guint8" c:type="guint8"/>
+      </field>
+      <field name="num_cols_mastering_display_actual_peak_luminance" writable="1">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-hdr.h">the number of columns in the
+mastering_display_actual_peak_luminance array.</doc>
+        <type name="guint8" c:type="guint8"/>
+      </field>
+      <field name="mastering_display_actual_peak_luminance" writable="1">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-hdr.h">the normalized actual peak luminance of
+the mastering display used for mastering the image essence</doc>
+        <array zero-terminated="0" fixed-size="625">
+          <type name="guint8" c:type="guint8"/>
+        </array>
+      </field>
+    </record>
+    <enumeration name="VideoHDRFormat" version="1.30" c:type="GstVideoHDRFormat">
+      <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-hdr.h">Enum value describing the most common video for High Dynamic Range (HDR) formats.</doc>
+      <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-hdr.h"/>
+      <member name="none" value="0" c:identifier="GST_VIDEO_HDR_FORMAT_NONE">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-hdr.h">No HDR format detected.</doc>
+      </member>
+      <member name="hdr10" value="1" c:identifier="GST_VIDEO_HDR_FORMAT_HDR10">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-hdr.h">HDR10 format</doc>
+      </member>
+      <member name="hdr10_plus" value="2" c:identifier="GST_VIDEO_HDR_FORMAT_HDR10_PLUS">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-hdr.h">HDR10+ format</doc>
+      </member>
+    </enumeration>
+    <record name="VideoHDRMeta" c:type="GstVideoHDRMeta" version="1.30">
+      <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-hdr.h">Dynamic HDR data should be included in video user data</doc>
+      <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-hdr.h"/>
+      <field name="meta" writable="1">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-hdr.h">parent #GstMeta</doc>
+        <type name="Gst.Meta" c:type="GstMeta"/>
+      </field>
+      <field name="format" writable="1">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-hdr.h">The type of dynamic HDR contained in the meta.</doc>
+        <type name="VideoHDRFormat" c:type="GstVideoHDRFormat"/>
+      </field>
+      <field name="data" writable="1">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-hdr.h">contains the dynamic HDR data</doc>
+        <type name="guint8" c:type="guint8*"/>
+      </field>
+      <field name="size" writable="1">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-hdr.h">The size in bytes of @data</doc>
+        <type name="gsize" c:type="gsize"/>
+      </field>
+      <function name="get_info" c:identifier="gst_video_hdr_meta_get_info">
+        <attribute name="doc.skip" value="true"/>
+        <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-hdr.h"/>
+        <return-value transfer-ownership="none">
+          <type name="Gst.MetaInfo" c:type="const GstMetaInfo*"/>
+        </return-value>
+      </function>
+    </record>
     <record name="VideoInfo" c:type="GstVideoInfo" glib:type-name="GstVideoInfo" glib:get-type="gst_video_info_get_type" c:symbol-prefix="video_info">
       <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-info.h">Information describing image properties. This information can be filled
 in from GstCaps with gst_video_info_from_caps(). The information is also used
@@ -12623,7 +13438,10 @@ defined in @meta and will fail to update if they are not.</doc>
     </record>
     <record name="VideoMetaTransform" c:type="GstVideoMetaTransform">
       <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gstvideometa.h">Extra data passed to a video transform #GstMetaTransformFunction such as:
-"gst-video-scale".</doc>
+"gst-video-scale".
+
+This transformation can not express letterbox, cropping, or rotations,
+use #GstVideoMetaTransformMatrix instead</doc>
       <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gstvideometa.h"/>
       <field name="in_info" writable="1">
         <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gstvideometa.h">the input #GstVideoInfo</doc>
@@ -12635,6 +13453,189 @@ defined in @meta and will fail to update if they are not.</doc>
       </field>
       <function name="scale_get_quark" c:identifier="gst_video_meta_transform_scale_get_quark">
         <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gstvideometa.c">Get the #GQuark for the "gst-video-scale" metadata transform operation.</doc>
+        <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gstvideometa.h"/>
+        <return-value transfer-ownership="none">
+          <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gstvideometa.c">a #GQuark</doc>
+          <type name="GLib.Quark" c:type="GQuark"/>
+        </return-value>
+      </function>
+    </record>
+    <record name="VideoMetaTransformMatrix" c:type="GstVideoMetaTransformMatrix" version="1.28">
+      <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gstvideometa.h">Extra data passed to a video transform #GstMetaTransformFunction such as:
+"gst-video-matrix".
+
+The matrix represents a transformation that is applied to the content of
+@in_rectangle, and its output is put inside @out_rectangle. The coordinate
+system has it's (0, 0) in the top-left corner of the rectangles and
+goes down and right from there..
+
+It's a programming error to have a singular matrix.</doc>
+      <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gstvideometa.h"/>
+      <field name="in_info" writable="1">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gstvideometa.h">the input #GstVideoInfo</doc>
+        <type name="VideoInfo" c:type="const GstVideoInfo*"/>
+      </field>
+      <field name="in_rectangle" writable="1">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gstvideometa.h">the input #GstVideoRectangle</doc>
+        <type name="VideoRectangle" c:type="GstVideoRectangle"/>
+      </field>
+      <field name="out_info" writable="1">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gstvideometa.h">the output #GstVideoInfo</doc>
+        <type name="VideoInfo" c:type="const GstVideoInfo*"/>
+      </field>
+      <field name="out_rectangle" writable="1">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gstvideometa.h">the output #GstVideoRectangle</doc>
+        <type name="VideoRectangle" c:type="GstVideoRectangle"/>
+      </field>
+      <field name="matrix" writable="1">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gstvideometa.h">a 3x3 matrix representing an homographic transformation</doc>
+        <array zero-terminated="0" fixed-size="9">
+          <type name="gfloat" c:type="gfloat"/>
+        </array>
+      </field>
+      <method name="init" c:identifier="gst_video_meta_transform_matrix_init" version="1.28">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gstvideometa.c">Based on the rectangles, initializes the matrix to do a translation and
+scaling from @in_rectangle to @out_rectangle</doc>
+        <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gstvideometa.h"/>
+        <return-value transfer-ownership="none">
+          <type name="none" c:type="void"/>
+        </return-value>
+        <parameters>
+          <instance-parameter name="trans" transfer-ownership="none">
+            <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gstvideometa.c">a #GstVideoMetaTransformMatrix with in_rectangle and out_rectangle
+ filled</doc>
+            <type name="VideoMetaTransformMatrix" c:type="GstVideoMetaTransformMatrix*"/>
+          </instance-parameter>
+          <parameter name="in_info" transfer-ownership="none">
+            <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gstvideometa.c">The #GstVideoInfo of the input image</doc>
+            <type name="VideoInfo" c:type="const GstVideoInfo*"/>
+          </parameter>
+          <parameter name="in_rectangle" transfer-ownership="none">
+            <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gstvideometa.c">the input #GstVideoRectangle</doc>
+            <type name="VideoRectangle" c:type="const GstVideoRectangle*"/>
+          </parameter>
+          <parameter name="out_info" transfer-ownership="none">
+            <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gstvideometa.c">the output #GstVideoInfo</doc>
+            <type name="VideoInfo" c:type="const GstVideoInfo*"/>
+          </parameter>
+          <parameter name="out_rectangle" transfer-ownership="none">
+            <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gstvideometa.c">the output #GstVideoRectangle</doc>
+            <type name="VideoRectangle" c:type="const GstVideoRectangle*"/>
+          </parameter>
+        </parameters>
+      </method>
+      <method name="point" c:identifier="gst_video_meta_transform_matrix_point" version="1.28">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gstvideometa.c">Transforms the (@x, @y) point from the input coordinates to the
+output ones.  The point's coordinates are transformed by first
+applying the @transform.matrix to it using the top left (x, y) of
+@transform.in_rectangle as the origin, then translate it to use
+the top-left of @transform.out_rectangle as new origin.</doc>
+        <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gstvideometa.h"/>
+        <return-value transfer-ownership="none">
+          <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gstvideometa.c">%FALSE if the point is outside of @transform.out_rectangle
+after the transformation has been applied</doc>
+          <type name="gboolean" c:type="gboolean"/>
+        </return-value>
+        <parameters>
+          <instance-parameter name="transform" transfer-ownership="none">
+            <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gstvideometa.c">a #GstVideoMetaTransformMatrix</doc>
+            <type name="VideoMetaTransformMatrix" c:type="const GstVideoMetaTransformMatrix*"/>
+          </instance-parameter>
+          <parameter name="x" direction="inout" caller-allocates="0" transfer-ownership="full">
+            <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gstvideometa.c">a non-NULL pointer to the X value of the coordinate</doc>
+            <type name="gint" c:type="gint*"/>
+          </parameter>
+          <parameter name="y" direction="inout" caller-allocates="0" transfer-ownership="full">
+            <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gstvideometa.c">a non-NULL pointer to the Y value of the coordinate</doc>
+            <type name="gint" c:type="gint*"/>
+          </parameter>
+        </parameters>
+      </method>
+      <method name="point_clipped" c:identifier="gst_video_meta_transform_matrix_point_clipped" version="1.28">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gstvideometa.c">Transforms the (@x, @y) point from the input coordinates to the
+output ones.  The point's coordinates are transformed by first
+applying the @transform.matrix to it using the top left (x, y) of
+@transform.in_rectangle as the origin, then translate it to use
+the top-left of @transform.out_rectangle as new origin.</doc>
+        <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gstvideometa.h"/>
+        <return-value transfer-ownership="none">
+          <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gstvideometa.c">%FALSE if the point is outside of @transform.out_rectangle
+after the transformation has been applied</doc>
+          <type name="gboolean" c:type="gboolean"/>
+        </return-value>
+        <parameters>
+          <instance-parameter name="transform" transfer-ownership="none">
+            <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gstvideometa.c">a #GstVideoMetaTransformMatrix</doc>
+            <type name="VideoMetaTransformMatrix" c:type="const GstVideoMetaTransformMatrix*"/>
+          </instance-parameter>
+          <parameter name="x" direction="inout" caller-allocates="0" transfer-ownership="full">
+            <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gstvideometa.c">a non-NULL pointer to the X value of the coordinate</doc>
+            <type name="gint" c:type="gint*"/>
+          </parameter>
+          <parameter name="y" direction="inout" caller-allocates="0" transfer-ownership="full">
+            <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gstvideometa.c">a non-NULL pointer to the Y value of the coordinate</doc>
+            <type name="gint" c:type="gint*"/>
+          </parameter>
+        </parameters>
+      </method>
+      <method name="rectangle" c:identifier="gst_video_meta_transform_matrix_rectangle" version="1.28">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gstvideometa.c">Transforms @rect from the input coordinates to the
+output ones.  The point's coordinates are transformed by first
+applying the @transform.matrix to it using the top left (x, y) of
+@transform.in_rectangle as the origin, then translate it to use
+the top-left of @transform.out_rectangle as new origin.
+
+@rect is always axis aligned at input and this function only returns
+axis aligned rectangles as output, otherwise it returns FALSE.
+
+Output rectangle could be in partially or totally outside of
+@transform.out_rectangle.</doc>
+        <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gstvideometa.h"/>
+        <return-value transfer-ownership="none">
+          <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gstvideometa.c">%FALSE is the output rectangle is not axis aligned</doc>
+          <type name="gboolean" c:type="gboolean"/>
+        </return-value>
+        <parameters>
+          <instance-parameter name="transform" transfer-ownership="none">
+            <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gstvideometa.c">A #GstVideoMetaTransformMatrix</doc>
+            <type name="VideoMetaTransformMatrix" c:type="const GstVideoMetaTransformMatrix*"/>
+          </instance-parameter>
+          <parameter name="rect" direction="inout" caller-allocates="0" transfer-ownership="full">
+            <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gstvideometa.c">a rectangle in the coordinate of the original image</doc>
+            <type name="VideoRectangle" c:type="GstVideoRectangle*"/>
+          </parameter>
+        </parameters>
+      </method>
+      <method name="rectangle_clipped" c:identifier="gst_video_meta_transform_matrix_rectangle_clipped" version="1.28">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gstvideometa.c">Transforms @rect from the input coordinates to the
+output ones.  The point's coordinates are transformed by first
+applying the @transform.matrix to it using the top left (x, y) of
+@transform.in_rectangle as the origin, then translate it to use
+the top-left of @transform.out_rectangle as new origin.
+
+@rect is always axis aligned at input and this function only returns
+axis aligned rectangles as output, otherwise it returns FALSE.
+
+Output rectangle will be clipped to fit inside @transform.out_rectangle.</doc>
+        <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gstvideometa.h"/>
+        <return-value transfer-ownership="none">
+          <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gstvideometa.c">%FALSE if the output rectangle is not axis aligned or if
+ the rectangle is entirely outside of the out_rectangle.</doc>
+          <type name="gboolean" c:type="gboolean"/>
+        </return-value>
+        <parameters>
+          <instance-parameter name="transform" transfer-ownership="none">
+            <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gstvideometa.c">A #GstVideoMetaTransformMatrix</doc>
+            <type name="VideoMetaTransformMatrix" c:type="const GstVideoMetaTransformMatrix*"/>
+          </instance-parameter>
+          <parameter name="rect" direction="inout" caller-allocates="0" transfer-ownership="full">
+            <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gstvideometa.c">a rectangle in the coordinate of the original image</doc>
+            <type name="VideoRectangle" c:type="GstVideoRectangle*"/>
+          </parameter>
+        </parameters>
+      </method>
+      <function name="get_quark" c:identifier="gst_video_meta_transform_matrix_get_quark" version="1.28">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gstvideometa.c">Get the #GQuark for the "gst-video-matrix" metadata transform operation.</doc>
         <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gstvideometa.h"/>
         <return-value transfer-ownership="none">
           <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gstvideometa.c">a #GQuark</doc>
@@ -14583,22 +15584,22 @@ gst_video_overlay_composition_copy().</doc>
       </member>
     </enumeration>
     <record name="VideoRectangle" c:type="GstVideoRectangle">
-      <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gstvideosink.h">Helper structure representing a rectangular area.</doc>
-      <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gstvideosink.h"/>
+      <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video.h">Helper structure representing a rectangular area.</doc>
+      <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video.h"/>
       <field name="x" writable="1">
-        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gstvideosink.h">X coordinate of rectangle's top-left point</doc>
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video.h">X coordinate of rectangle's top-left point</doc>
         <type name="gint" c:type="gint"/>
       </field>
       <field name="y" writable="1">
-        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gstvideosink.h">Y coordinate of rectangle's top-left point</doc>
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video.h">Y coordinate of rectangle's top-left point</doc>
         <type name="gint" c:type="gint"/>
       </field>
       <field name="w" writable="1">
-        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gstvideosink.h">width of the rectangle</doc>
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video.h">width of the rectangle</doc>
         <type name="gint" c:type="gint"/>
       </field>
       <field name="h" writable="1">
-        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gstvideosink.h">height of the rectangle</doc>
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video.h">height of the rectangle</doc>
         <type name="gint" c:type="gint"/>
       </field>
     </record>
@@ -15355,8 +16356,7 @@ These values are *NOT* automatically normalized.</doc>
         <type name="guint" c:type="guint"/>
       </field>
       <constructor name="new" c:identifier="gst_video_time_code_new" version="1.10">
-        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gstvideotimecode.c">@field_count is 0 for progressive, 1 or 2 for interlaced.
-@latest_daiy_jam reference is stolen from caller.</doc>
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gstvideotimecode.c">@field_count is 0 for progressive, 1 or 2 for interlaced.</doc>
         <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gstvideotimecode.h"/>
         <return-value transfer-ownership="full">
           <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gstvideotimecode.c">a new #GstVideoTimeCode with the given values.
@@ -15373,7 +16373,7 @@ timecode actually has valid content, use gst_video_time_code_is_valid().</doc>
             <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gstvideotimecode.c">Denominator of the frame rate</doc>
             <type name="guint" c:type="guint"/>
           </parameter>
-          <parameter name="latest_daily_jam" transfer-ownership="none">
+          <parameter name="latest_daily_jam" transfer-ownership="none" nullable="1" allow-none="1">
             <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gstvideotimecode.c">The latest daily jam of the #GstVideoTimeCode</doc>
             <type name="GLib.DateTime" c:type="GDateTime*"/>
           </parameter>
@@ -15626,7 +16626,6 @@ taken into account. Otherwise, it is assumed that the daily jam of both
       </method>
       <method name="init" c:identifier="gst_video_time_code_init" version="1.10">
         <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gstvideotimecode.c">@field_count is 0 for progressive, 1 or 2 for interlaced.
-@latest_daiy_jam reference is stolen from caller.
 
 Initializes @tc with the given values.
 The values are not checked for being in a valid range. To see if your
@@ -15849,6 +16848,9 @@ For drop frame, only 30000/1001 and 60000/1001 frame rates are supported.</doc>
       </member>
       <member name="interlaced" value="2" c:identifier="GST_VIDEO_TIME_CODE_FLAGS_INTERLACED" glib:nick="interlaced" glib:name="GST_VIDEO_TIME_CODE_FLAGS_INTERLACED">
         <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gstvideotimecode.h">Whether we have interlaced video</doc>
+      </member>
+      <member name="discont" value="4" c:identifier="GST_VIDEO_TIME_CODE_FLAGS_DISCONT" version="1.30" glib:nick="discont" glib:name="GST_VIDEO_TIME_CODE_FLAGS_DISCONT">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gstvideotimecode.h">Whether there is a timecode discontinuity</doc>
       </member>
     </bitfield>
     <record name="VideoTimeCodeInterval" c:type="GstVideoTimeCodeInterval" version="1.12" glib:type-name="GstVideoTimeCodeInterval" glib:get-type="gst_video_time_code_interval_get_type" c:symbol-prefix="video_time_code_interval">
@@ -16568,6 +17570,60 @@ the given alpha buffer.</doc>
         </parameter>
       </parameters>
     </function-macro>
+    <function name="buffer_add_video_dsc_initialization_meta" c:identifier="gst_buffer_add_video_dsc_initialization_meta" version="1.30">
+      <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gstvideodscmeta.h">Attaches GstVideoDSCInitializationMeta metadata to @buffer.</doc>
+      <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gstvideodscmeta.h"/>
+      <return-value transfer-ownership="none">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gstvideodscmeta.h">the #GstVideoDSCInitializationMeta on @buffer.</doc>
+        <type name="VideoDSCInitializationMeta" c:type="GstVideoDSCInitializationMeta*"/>
+      </return-value>
+      <parameters>
+        <parameter name="buffer" transfer-ownership="none">
+          <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gstvideodscmeta.h">a #GstBuffer</doc>
+          <type name="Gst.Buffer" c:type="GstBuffer*"/>
+        </parameter>
+        <parameter name="dsc_initialization" transfer-ownership="none">
+          <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gstvideodscmeta.h">DSC Initialization data</doc>
+          <type name="H274DigitallySignedContentInitialization" c:type="const GstH274DigitallySignedContentInitialization*"/>
+        </parameter>
+      </parameters>
+    </function>
+    <function name="buffer_add_video_dsc_selection_meta" c:identifier="gst_buffer_add_video_dsc_selection_meta" version="1.30">
+      <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gstvideodscmeta.h">Attaches GstVideoDSCSelectionMeta metadata to @buffer.</doc>
+      <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gstvideodscmeta.h"/>
+      <return-value transfer-ownership="none">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gstvideodscmeta.h">the #GstVideoDSCSelectionMeta on @buffer.</doc>
+        <type name="VideoDSCSelectionMeta" c:type="GstVideoDSCSelectionMeta*"/>
+      </return-value>
+      <parameters>
+        <parameter name="buffer" transfer-ownership="none">
+          <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gstvideodscmeta.h">a #GstBuffer</doc>
+          <type name="Gst.Buffer" c:type="GstBuffer*"/>
+        </parameter>
+        <parameter name="dsc_selection" transfer-ownership="none">
+          <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gstvideodscmeta.h">DSC Selection data</doc>
+          <type name="H274DigitallySignedContentSelection" c:type="const GstH274DigitallySignedContentSelection*"/>
+        </parameter>
+      </parameters>
+    </function>
+    <function name="buffer_add_video_dsc_verification_meta" c:identifier="gst_buffer_add_video_dsc_verification_meta" version="1.30">
+      <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gstvideodscmeta.h">Attaches GstVideoDSCVerificationMeta metadata to @buffer.</doc>
+      <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gstvideodscmeta.h"/>
+      <return-value transfer-ownership="none">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gstvideodscmeta.h">the #GstVideoDSCVerificationMeta on @buffer.</doc>
+        <type name="VideoDSCVerificationMeta" c:type="GstVideoDSCVerificationMeta*"/>
+      </return-value>
+      <parameters>
+        <parameter name="buffer" transfer-ownership="none">
+          <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gstvideodscmeta.h">a #GstBuffer</doc>
+          <type name="Gst.Buffer" c:type="GstBuffer*"/>
+        </parameter>
+        <parameter name="dsc_verification" transfer-ownership="none">
+          <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gstvideodscmeta.h">DSC Verification data</doc>
+          <type name="H274DigitallySignedContentVerification" c:type="const GstH274DigitallySignedContentVerification*"/>
+        </parameter>
+      </parameters>
+    </function>
     <function name="buffer_add_video_gl_texture_upload_meta" c:identifier="gst_buffer_add_video_gl_texture_upload_meta">
       <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gstvideometa.c">Attaches GstVideoGLTextureUploadMeta metadata to @buffer with the given
 parameters.</doc>
@@ -16608,6 +17664,33 @@ parameters.</doc>
         <parameter name="user_data_free" transfer-ownership="none" scope="call">
           <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gstvideometa.c">function to free @user_data</doc>
           <type name="GObject.BoxedFreeFunc" c:type="GBoxedFreeFunc"/>
+        </parameter>
+      </parameters>
+    </function>
+    <function name="buffer_add_video_hdr_meta" c:identifier="gst_buffer_add_video_hdr_meta" version="1.30">
+      <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-hdr.c">Attaches #GstVideoHDRMeta metadata to @buffer with the given
+parameters.</doc>
+      <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-hdr.h"/>
+      <return-value transfer-ownership="none">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-hdr.c">the #GstVideoHDRMeta on @buffer.</doc>
+        <type name="VideoHDRMeta" c:type="GstVideoHDRMeta*"/>
+      </return-value>
+      <parameters>
+        <parameter name="buffer" transfer-ownership="none">
+          <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-hdr.c">a #GstBuffer</doc>
+          <type name="Gst.Buffer" c:type="GstBuffer*"/>
+        </parameter>
+        <parameter name="format" transfer-ownership="none">
+          <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-hdr.c">The type of dynamic HDR contained in the meta.</doc>
+          <type name="VideoHDRFormat" c:type="GstVideoHDRFormat"/>
+        </parameter>
+        <parameter name="data" transfer-ownership="none">
+          <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-hdr.c">contains the dynamic HDR data</doc>
+          <type name="guint8" c:type="const guint8*"/>
+        </parameter>
+        <parameter name="size" transfer-ownership="none">
+          <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-hdr.c">The size in bytes of @data</doc>
+          <type name="gsize" c:type="gsize"/>
         </parameter>
       </parameters>
     </function>
@@ -16854,7 +17937,7 @@ parameters.</doc>
           <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gstvideometa.c">framerate denominator</doc>
           <type name="guint" c:type="guint"/>
         </parameter>
-        <parameter name="latest_daily_jam" transfer-ownership="none">
+        <parameter name="latest_daily_jam" transfer-ownership="none" nullable="1" allow-none="1">
           <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gstvideometa.c">a #GDateTime for the latest daily jam</doc>
           <type name="GLib.DateTime" c:type="GDateTime*"/>
         </parameter>
@@ -16948,10 +18031,43 @@ Note: there may be two #GstVideoAFDMeta structs for interlaced video.</doc>
         </parameter>
       </parameters>
     </function-macro>
+    <function-macro name="buffer_get_video_dsc_initialization_meta" c:identifier="gst_buffer_get_video_dsc_initialization_meta" version="1.30" introspectable="0">
+      <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gstvideodscmeta.h"/>
+      <parameters>
+        <parameter name="b">
+          <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gstvideodscmeta.h">a #GstBuffer</doc>
+        </parameter>
+      </parameters>
+    </function-macro>
+    <function-macro name="buffer_get_video_dsc_selection_meta" c:identifier="gst_buffer_get_video_dsc_selection_meta" version="1.30" introspectable="0">
+      <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gstvideodscmeta.h"/>
+      <parameters>
+        <parameter name="b">
+          <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gstvideodscmeta.h">a #GstBuffer</doc>
+        </parameter>
+      </parameters>
+    </function-macro>
+    <function-macro name="buffer_get_video_dsc_verification_meta" c:identifier="gst_buffer_get_video_dsc_verification_meta" version="1.30" introspectable="0">
+      <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gstvideodscmeta.h"/>
+      <parameters>
+        <parameter name="b">
+          <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gstvideodscmeta.h">a #GstBuffer</doc>
+        </parameter>
+      </parameters>
+    </function-macro>
     <function-macro name="buffer_get_video_gl_texture_upload_meta" c:identifier="gst_buffer_get_video_gl_texture_upload_meta" introspectable="0">
       <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gstvideometa.h"/>
       <parameters>
         <parameter name="b">
+        </parameter>
+      </parameters>
+    </function-macro>
+    <function-macro name="buffer_get_video_hdr_meta" c:identifier="gst_buffer_get_video_hdr_meta" version="1.30" introspectable="0">
+      <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-hdr.h">Gets the #GstVideoHDRMeta that might be present on @b.</doc>
+      <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-hdr.h"/>
+      <parameters>
+        <parameter name="b">
+          <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-hdr.h">A #GstBuffer</doc>
         </parameter>
       </parameters>
     </function-macro>
@@ -17135,6 +18251,26 @@ between #GstVideoChromaSite and string descriptions.
 #GstVideoChromaResample is a utility object for resampling chroma planes
 and converting between different chroma sampling sitings.</doc>
     </docsection>
+    <docsection name="gstvideodscmeta">
+      <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gstvideodscmeta.c">This meta carries Digitally Signed Content (DSC) SEI message information
+for video streams. DSC allows the verification of the integrity and authenticity
+of the video content.
+
+The mechanism is realized through three supplemental enhancement information (SEI)
+messages that enable attaching cryptographic signatures to flexible chunks of data
+within a video stream at the Network Abstraction Layer (NAL) unit level.
+
+The current implementation follows the specification defined in
+https://www.jvet-experts.org/doc_end_user/documents/40_Geneva/wg11/JVET-AN1019-v1.zip
+
+The main concepts and mechanisms are also described in the paper:
+https://www.hhi.fraunhofer.de/fileadmin/Events/2025/IBC_2025/IBC2025PaperAuthentication_HHI.pdf
+
+Three types of metadata are provided:
+- Initialization: Contains hash method, key source, and verification settings
+- Selection: Indicates which verification substream to use
+- Verification: Contains the actual signature data for verification</doc>
+    </docsection>
     <docsection name="gstvideopool">
       <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gstvideopool.c">Special GstBufferPool subclass for raw video buffers.
 
@@ -17146,6 +18282,143 @@ to automatically add #GstVideoMeta to the buffers.</doc>
       <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-sei.c">A collection of objects and methods to assist with SEI User Data Unregistered
 metadata in H.264 and H.265 streams.</doc>
     </docsection>
+    <function name="h274_dsc_initialization_clear" c:identifier="gst_h274_dsc_initialization_clear" version="1.30">
+      <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gsth274.h">Free resources allocated for digitally signed content initialization SEI message</doc>
+      <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gsth274.h"/>
+      <return-value transfer-ownership="none">
+        <type name="none" c:type="void"/>
+      </return-value>
+      <parameters>
+        <parameter name="dsci" transfer-ownership="none">
+          <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gsth274.h">#GstH274DigitallySignedContentInitialization structure holding digitally signed content initialization data to free</doc>
+          <type name="H274DigitallySignedContentInitialization" c:type="GstH274DigitallySignedContentInitialization*"/>
+        </parameter>
+      </parameters>
+    </function>
+    <function name="h274_dsc_initialization_copy" c:identifier="gst_h274_dsc_initialization_copy" version="1.30">
+      <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gsth274.h">Copy DSC Initialization structure</doc>
+      <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gsth274.h"/>
+      <return-value transfer-ownership="none">
+        <type name="none" c:type="void"/>
+      </return-value>
+      <parameters>
+        <parameter name="dst_dsc_init" direction="out" caller-allocates="1" transfer-ownership="none">
+          <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gsth274.h">Destination DSC Initialization structure</doc>
+          <type name="H274DigitallySignedContentInitialization" c:type="GstH274DigitallySignedContentInitialization*"/>
+        </parameter>
+        <parameter name="src_dsc_init" transfer-ownership="none">
+          <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gsth274.h">Source DSC Initialization structure</doc>
+          <type name="H274DigitallySignedContentInitialization" c:type="const GstH274DigitallySignedContentInitialization*"/>
+        </parameter>
+      </parameters>
+    </function>
+    <function name="h274_dsc_selection_clear" c:identifier="gst_h274_dsc_selection_clear" version="1.30">
+      <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gsth274.h">Free resources allocated for digitally signed content selection SEI message</doc>
+      <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gsth274.h"/>
+      <return-value transfer-ownership="none">
+        <type name="none" c:type="void"/>
+      </return-value>
+      <parameters>
+        <parameter name="dscs" transfer-ownership="none">
+          <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gsth274.h">#GstH274DigitallySignedContentSelection structure holding digitally signed content selection data to free</doc>
+          <type name="H274DigitallySignedContentSelection" c:type="GstH274DigitallySignedContentSelection*"/>
+        </parameter>
+      </parameters>
+    </function>
+    <function name="h274_dsc_selection_copy" c:identifier="gst_h274_dsc_selection_copy" version="1.30">
+      <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gsth274.h">Copy DSC Selection structure</doc>
+      <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gsth274.h"/>
+      <return-value transfer-ownership="none">
+        <type name="none" c:type="void"/>
+      </return-value>
+      <parameters>
+        <parameter name="dst_dsc_sel" direction="out" caller-allocates="1" transfer-ownership="none">
+          <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gsth274.h">Destination DSC Selection structure</doc>
+          <type name="H274DigitallySignedContentSelection" c:type="GstH274DigitallySignedContentSelection*"/>
+        </parameter>
+        <parameter name="src_dsc_sel" transfer-ownership="none">
+          <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gsth274.h">Source DSC Selection structure</doc>
+          <type name="H274DigitallySignedContentSelection" c:type="const GstH274DigitallySignedContentSelection*"/>
+        </parameter>
+      </parameters>
+    </function>
+    <function name="h274_dsc_verification_clear" c:identifier="gst_h274_dsc_verification_clear" version="1.30">
+      <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gsth274.h">Free resources allocated for digitally signed content verification SEI message</doc>
+      <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gsth274.h"/>
+      <return-value transfer-ownership="none">
+        <type name="none" c:type="void"/>
+      </return-value>
+      <parameters>
+        <parameter name="dscv" transfer-ownership="none">
+          <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gsth274.h">#GstH274DigitallySignedContentVerification structure holding digitally signed content verification data to free</doc>
+          <type name="H274DigitallySignedContentVerification" c:type="GstH274DigitallySignedContentVerification*"/>
+        </parameter>
+      </parameters>
+    </function>
+    <function name="h274_dsc_verification_copy" c:identifier="gst_h274_dsc_verification_copy" version="1.30">
+      <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gsth274.h">Copy DSC Verification structure</doc>
+      <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gsth274.h"/>
+      <return-value transfer-ownership="none">
+        <type name="none" c:type="void"/>
+      </return-value>
+      <parameters>
+        <parameter name="dst_dsc_ver" direction="out" caller-allocates="1" transfer-ownership="none">
+          <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gsth274.h">Destination DSC Verification structure</doc>
+          <type name="H274DigitallySignedContentVerification" c:type="GstH274DigitallySignedContentVerification*"/>
+        </parameter>
+        <parameter name="src_dsc_ver" transfer-ownership="none">
+          <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gsth274.h">Source DSC Verification structure</doc>
+          <type name="H274DigitallySignedContentVerification" c:type="const GstH274DigitallySignedContentVerification*"/>
+        </parameter>
+      </parameters>
+    </function>
+    <function name="h274_user_data_registered_clear" c:identifier="gst_h274_user_data_registered_clear" version="1.30">
+      <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gsth274.h">Free resources allocated for registered user data SEI message</doc>
+      <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gsth274.h"/>
+      <return-value transfer-ownership="none">
+        <type name="none" c:type="void"/>
+      </return-value>
+      <parameters>
+        <parameter name="rud" transfer-ownership="none">
+          <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gsth274.h">#GstH274RegisteredUserData structure holding registered user data to free</doc>
+          <type name="H274RegisteredUserData" c:type="GstH274RegisteredUserData*"/>
+        </parameter>
+      </parameters>
+    </function>
+    <function name="h274_user_data_registered_copy" c:identifier="gst_h274_user_data_registered_copy" version="1.30">
+      <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gsth274.h">Copy User Data Registered structure</doc>
+      <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gsth274.h"/>
+      <return-value transfer-ownership="none">
+        <type name="none" c:type="void"/>
+      </return-value>
+      <parameters>
+        <parameter name="dst_rud" direction="out" caller-allocates="1" transfer-ownership="none">
+          <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gsth274.h">Destination User Data Registered structure</doc>
+          <type name="H274RegisteredUserData" c:type="GstH274RegisteredUserData*"/>
+        </parameter>
+        <parameter name="src_rud" transfer-ownership="none">
+          <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gsth274.h">Source User Data Registered structure</doc>
+          <type name="H274RegisteredUserData" c:type="const GstH274RegisteredUserData*"/>
+        </parameter>
+      </parameters>
+    </function>
+    <function name="h274_user_data_unregistered_copy" c:identifier="gst_h274_user_data_unregistered_copy" moved-to="H274UserDataUnregistered.copy" version="1.30">
+      <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gsth274.h">Copy User Data Unregistered structure</doc>
+      <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gsth274.h"/>
+      <return-value transfer-ownership="none">
+        <type name="none" c:type="void"/>
+      </return-value>
+      <parameters>
+        <parameter name="dst_udu" direction="out" caller-allocates="1" transfer-ownership="none">
+          <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gsth274.h">Destination User Data Unregistered structure</doc>
+          <type name="H274UserDataUnregistered" c:type="GstH274UserDataUnregistered*"/>
+        </parameter>
+        <parameter name="src_udu" transfer-ownership="none">
+          <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gsth274.h">Source User Data Unregistered structure</doc>
+          <type name="H274UserDataUnregistered" c:type="const GstH274UserDataUnregistered*"/>
+        </parameter>
+      </parameters>
+    </function>
     <function name="is_video_overlay_prepare_window_handle_message" c:identifier="gst_is_video_overlay_prepare_window_handle_message">
       <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/videooverlay.c">Convenience function to check if the given message is a
 "prepare-window-handle" message from a #GstVideoOverlay.</doc>
@@ -18570,7 +19843,7 @@ and "ITU-T H.273 Table 2".
         </parameter>
       </parameters>
     </function>
-    <function name="video_color_range_offsets" c:identifier="gst_video_color_range_offsets" moved-to="VideoColorRange.offsets">
+    <function name="video_color_range_offsets" c:identifier="gst_video_color_range_offsets" moved-to="VideoColorRange.offsets" deprecated="1" deprecated-version="1.30">
       <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-color.c">Compute the offset and scale values for each component of @info. For each
 component, (c[i] - offset[i]) / scale[i] will scale the component c[i] to the
 range [0.0 .. 1.0].
@@ -18578,6 +19851,7 @@ range [0.0 .. 1.0].
 The reverse operation (c[i] * scale[i]) + offset[i] can be used to convert
 the component values in range [0.0 .. 1.0] back to their representation in
 @info and @range.</doc>
+      <doc-deprecated xml:space="preserve">Use gst_video_color_range_offsets_full() instead.</doc-deprecated>
       <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-color.h"/>
       <return-value transfer-ownership="none">
         <type name="none" c:type="void"/>
@@ -18601,6 +19875,53 @@ the component values in range [0.0 .. 1.0] back to their representation in
           <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-color.c">output scale</doc>
           <array zero-terminated="0" c:type="gint*" fixed-size="4">
             <type name="gint" c:type="gint"/>
+          </array>
+        </parameter>
+      </parameters>
+    </function>
+    <function name="video_color_range_offsets_full" c:identifier="gst_video_color_range_offsets_full" moved-to="VideoColorRange.offsets_full" version="1.30">
+      <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-color.c">Compute the offset and scale values for each component of @info. For each
+component, (c[i] - offset[i]) / scale[i] will scale the component c[i] to the
+range [0.0 .. 1.0].
+
+The reverse operation (c[i] * scale[i]) + offset[i] can be used to convert
+the component values in range [0.0 .. 1.0] back to their representation in
+@info and @range.
+
+If @fullscale is provided, it will contain the maximum full-range value for
+each component. For integer formats, the value is `(1 &lt;&lt; depth) - 1`, where
+`depth` is the bit depth of each component. For floating-point formats with
+the %GST_VIDEO_COLOR_RANGE_0_1 range, the value is 1.0.</doc>
+      <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-color.h"/>
+      <return-value transfer-ownership="none">
+        <type name="none" c:type="void"/>
+      </return-value>
+      <parameters>
+        <parameter name="range" transfer-ownership="none">
+          <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-color.c">a #GstVideoColorRange</doc>
+          <type name="VideoColorRange" c:type="GstVideoColorRange"/>
+        </parameter>
+        <parameter name="info" transfer-ownership="none">
+          <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-color.c">a #GstVideoFormatInfo</doc>
+          <type name="VideoFormatInfo" c:type="const GstVideoFormatInfo*"/>
+        </parameter>
+        <parameter name="offset" direction="out" caller-allocates="1" transfer-ownership="none">
+          <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-color.c">output offsets</doc>
+          <array zero-terminated="0" c:type="gdouble*" fixed-size="4">
+            <type name="gdouble" c:type="gdouble"/>
+          </array>
+        </parameter>
+        <parameter name="scale" direction="out" caller-allocates="1" transfer-ownership="none">
+          <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-color.c">output scale</doc>
+          <array zero-terminated="0" c:type="gdouble*" fixed-size="4">
+            <type name="gdouble" c:type="gdouble"/>
+          </array>
+        </parameter>
+        <parameter name="fullscale" direction="out" caller-allocates="1" transfer-ownership="none" optional="1" allow-none="1">
+          <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-color.c">
+  full-scale values for each component</doc>
+          <array zero-terminated="0" c:type="gdouble*" fixed-size="4">
+            <type name="gdouble" c:type="gdouble"/>
           </array>
         </parameter>
       </parameters>
@@ -18741,6 +20062,9 @@ with @config.
 
 The optional @pool can be used to spawn threads, this is useful when
 creating new converters rapidly, for example when updating cropping.
+
+If @config is not provided, and a @pool is provided, the number of threads for
+the converter will be set to the maximum number of threads in the pool.
 
 Returns (nullable): a #GstVideoConverter or %NULL if conversion is not possible.</doc>
       <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-converter.h"/>
@@ -18927,6 +20251,42 @@ NV12:0x0100000000000002, or NULL otherwise.</doc>
           <type name="guint64" c:type="guint64"/>
         </parameter>
       </parameters>
+    </function>
+    <function name="video_dsc_initialization_meta_api_get_type" c:identifier="gst_video_dsc_initialization_meta_api_get_type" version="1.30">
+      <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gstvideodscmeta.h"/>
+      <return-value transfer-ownership="none">
+        <type name="GType" c:type="GType"/>
+      </return-value>
+    </function>
+    <function name="video_dsc_initialization_meta_get_info" c:identifier="gst_video_dsc_initialization_meta_get_info" moved-to="VideoDSCInitializationMeta.get_info" version="1.30">
+      <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gstvideodscmeta.h"/>
+      <return-value transfer-ownership="none">
+        <type name="Gst.MetaInfo" c:type="const GstMetaInfo*"/>
+      </return-value>
+    </function>
+    <function name="video_dsc_selection_meta_api_get_type" c:identifier="gst_video_dsc_selection_meta_api_get_type" version="1.30">
+      <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gstvideodscmeta.h"/>
+      <return-value transfer-ownership="none">
+        <type name="GType" c:type="GType"/>
+      </return-value>
+    </function>
+    <function name="video_dsc_selection_meta_get_info" c:identifier="gst_video_dsc_selection_meta_get_info" moved-to="VideoDSCSelectionMeta.get_info" version="1.30">
+      <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gstvideodscmeta.h"/>
+      <return-value transfer-ownership="none">
+        <type name="Gst.MetaInfo" c:type="const GstMetaInfo*"/>
+      </return-value>
+    </function>
+    <function name="video_dsc_verification_meta_api_get_type" c:identifier="gst_video_dsc_verification_meta_api_get_type" version="1.30">
+      <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gstvideodscmeta.h"/>
+      <return-value transfer-ownership="none">
+        <type name="GType" c:type="GType"/>
+      </return-value>
+    </function>
+    <function name="video_dsc_verification_meta_get_info" c:identifier="gst_video_dsc_verification_meta_get_info" moved-to="VideoDSCVerificationMeta.get_info" version="1.30">
+      <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gstvideodscmeta.h"/>
+      <return-value transfer-ownership="none">
+        <type name="Gst.MetaInfo" c:type="const GstMetaInfo*"/>
+      </return-value>
     </function>
     <function name="video_event_is_force_key_unit" c:identifier="gst_video_event_is_force_key_unit">
       <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-event.c">Checks if an event is a force key unit event. Returns true for both upstream
@@ -19295,9 +20655,9 @@ versions were printing a critical warning and returned %NULL.</doc>
     </function>
     <function name="video_formats_any" c:identifier="gst_video_formats_any" version="1.24">
       <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-format.c">Return all the raw video formats supported by GStreamer including
-special opaque formats such as %GST_VIDEO_FORMAT_DMA_DRM for which
-no software conversion exists. This should be use for passthrough
-template cpas.</doc>
+special opaque formats such as %GST_VIDEO_FORMAT_DMA_DRM and
+%GST_VIDEO_FORMAT_AHARDWARE_BUFFER for which no software conversion exists. This
+should be used for passthrough template caps.</doc>
       <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-format.h"/>
       <return-value transfer-ownership="none">
         <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-format.c">an array of #GstVideoFormat</doc>
@@ -19472,6 +20832,73 @@ recognised, and %FALSE otherwise.</doc>
         <parameter name="dest_d" direction="out" caller-allocates="0" transfer-ownership="full" optional="1" allow-none="1">
           <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video.c">Denominator of the calculated framerate</doc>
           <type name="gint" c:type="gint*"/>
+        </parameter>
+      </parameters>
+    </function>
+    <function name="video_hdr_format_from_string" c:identifier="gst_video_hdr_format_from_string" version="1.30">
+      <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-hdr.h"/>
+      <return-value transfer-ownership="none">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-hdr.c">the #GstVideoHDRFormat for @format or GST_VIDEO_HDR_FORMAT_NONE when the
+string is not a known format.</doc>
+        <type name="VideoHDRFormat" c:type="GstVideoHDRFormat"/>
+      </return-value>
+      <parameters>
+        <parameter name="format" transfer-ownership="none" nullable="1" allow-none="1">
+          <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-hdr.c">a #GstVideoHDRFormat</doc>
+          <type name="utf8" c:type="const gchar*"/>
+        </parameter>
+      </parameters>
+    </function>
+    <function name="video_hdr_format_to_string" c:identifier="gst_video_hdr_format_to_string" version="1.30">
+      <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-hdr.h"/>
+      <return-value transfer-ownership="none" nullable="1">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-hdr.c">a string containing a descriptive name for
+the #GstVideoHDRFormat if there is one, or %NULL otherwise.</doc>
+        <type name="utf8" c:type="const gchar*"/>
+      </return-value>
+      <parameters>
+        <parameter name="format" transfer-ownership="none">
+          <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-hdr.c">a #GstVideoHDRFormat</doc>
+          <type name="VideoHDRFormat" c:type="GstVideoHDRFormat"/>
+        </parameter>
+      </parameters>
+    </function>
+    <function name="video_hdr_meta_api_get_type" c:identifier="gst_video_hdr_meta_api_get_type">
+      <attribute name="doc.skip" value="true"/>
+      <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-hdr.h"/>
+      <return-value transfer-ownership="none">
+        <type name="GType" c:type="GType"/>
+      </return-value>
+    </function>
+    <function name="video_hdr_meta_get_info" c:identifier="gst_video_hdr_meta_get_info" moved-to="VideoHDRMeta.get_info">
+      <attribute name="doc.skip" value="true"/>
+      <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-hdr.h"/>
+      <return-value transfer-ownership="none">
+        <type name="Gst.MetaInfo" c:type="const GstMetaInfo*"/>
+      </return-value>
+    </function>
+    <function name="video_hdr_parse_hdr10_plus" c:identifier="gst_video_hdr_parse_hdr10_plus" version="1.30">
+      <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-hdr.c">Parse HDR10+ (SMPTE2094-40) user data and store in @hdr10_plus
+For more details, see:
+https://www.atsc.org/wp-content/uploads/2018/02/S34-301r2-A341-Amendment-2094-40-1.pdf
+and SMPTE ST2094-40</doc>
+      <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-hdr.h"/>
+      <return-value transfer-ownership="none">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-hdr.c">%TRUE if @data was successfully parsed to @hdr10_plus</doc>
+        <type name="gboolean" c:type="gboolean"/>
+      </return-value>
+      <parameters>
+        <parameter name="data" transfer-ownership="none">
+          <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-hdr.c">HDR10+ data</doc>
+          <type name="guint8" c:type="const guint8*"/>
+        </parameter>
+        <parameter name="size" transfer-ownership="none">
+          <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-hdr.c">size of data</doc>
+          <type name="gsize" c:type="gsize"/>
+        </parameter>
+        <parameter name="hdr10_plus" direction="out" caller-allocates="1" transfer-ownership="none">
+          <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/video-hdr.c">#GstVideoHDR10Plus structure to fill in.</doc>
+          <type name="VideoHDR10Plus" c:type="GstVideoHDR10Plus*"/>
         </parameter>
       </parameters>
     </function>
@@ -19713,6 +21140,14 @@ see gst_video_formats_raw().</doc>
       <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gstvideometa.h"/>
       <return-value transfer-ownership="none">
         <type name="Gst.MetaInfo" c:type="const GstMetaInfo*"/>
+      </return-value>
+    </function>
+    <function name="video_meta_transform_matrix_get_quark" c:identifier="gst_video_meta_transform_matrix_get_quark" moved-to="VideoMetaTransformMatrix.get_quark" version="1.28">
+      <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gstvideometa.c">Get the #GQuark for the "gst-video-matrix" metadata transform operation.</doc>
+      <source-position filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gstvideometa.h"/>
+      <return-value transfer-ownership="none">
+        <doc xml:space="preserve" filename="../subprojects/gst-plugins-base/gst-libs/gst/video/gstvideometa.c">a #GQuark</doc>
+        <type name="GLib.Quark" c:type="GQuark"/>
       </return-value>
     </function>
     <function name="video_meta_transform_scale_get_quark" c:identifier="gst_video_meta_transform_scale_get_quark" moved-to="VideoMetaTransform.scale_get_quark">

@@ -64,6 +64,7 @@ enum
   PROP_BRIGHTNESS,
   PROP_CONTRAST,
   PROP_MAX_MIP_LEVELS,
+  PROP_MOST_DETAILED_MIP,
 };
 
 #define DEFAULT_ADAPTER -1
@@ -78,6 +79,7 @@ enum
 #define DEFAULT_BRIGHTNESS 0.0
 #define DEFAULT_CONTRAST 1.0
 #define DEFAULT_MAX_MIP_LEVELS 1
+#define DEFAULT_MOST_DETAILED_MIP 0
 
 #define BACK_BUFFER_COUNT 2
 
@@ -253,6 +255,7 @@ struct GstD3D12SwapChainSinkPrivate
   gdouble brightness = DEFAULT_BRIGHTNESS;
   gdouble contrast = DEFAULT_CONTRAST;
   guint mip_levels = DEFAULT_MAX_MIP_LEVELS;
+  guint most_detailed_mip = DEFAULT_MOST_DETAILED_MIP;
 };
 /* *INDENT-ON* */
 
@@ -401,8 +404,27 @@ gst_d3d12_swapchain_sink_class_init (GstD3D12SwapChainSinkClass * klass)
   g_object_class_install_property (object_class, PROP_MAX_MIP_LEVELS,
       g_param_spec_uint ("max-mip-levels", "Max Mip Levels",
           "Maximum mip levels of shader resource to create "
-          "if viewport size is smaller than shader resource "
-          "(0 = maximum level)", 0, G_MAXUINT16, DEFAULT_MAX_MIP_LEVELS,
+          "if render viewport size is smaller than shader resource "
+          "(0 = generate full mip chain, G_MAXUINT16 = generate only "
+          "the target mip level and one additional level)", 0, G_MAXUINT16,
+          DEFAULT_MAX_MIP_LEVELS,
+          (GParamFlags) (G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS)));
+
+  /**
+   * GstD3D12SwapChainSink:most-detailed-mip:
+   *
+   * Index of the most detailed mip level to start generating and sampling
+   * from, skipping the GPU-expensive high-resolution mip levels.
+   *
+   * Ignored when max-mip-levels is %G_MAXUINT16 (fast-path).
+   *
+   * Since: 1.30
+   */
+  g_object_class_install_property (object_class, PROP_MOST_DETAILED_MIP,
+      g_param_spec_uint ("most-detailed-mip", "Most Detailed Mip",
+          "Index of the most detailed mip level to generate and sample "
+          "(ignored when max-mip-levels is G_MAXUINT16)",
+          0, G_MAXUINT16, DEFAULT_MOST_DETAILED_MIP,
           (GParamFlags) (G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS)));
 
   d3d12_swapchain_sink_signals[SIGNAL_RESIZE] =
@@ -615,6 +637,13 @@ gst_d3d12_swapchain_sink_set_property (GObject * object, guint prop_id,
       if (priv->conv)
         g_object_set (priv->conv, "max-mip-levels", priv->mip_levels, nullptr);
       break;
+    case PROP_MOST_DETAILED_MIP:
+      priv->most_detailed_mip = g_value_get_uint (value);
+      if (priv->conv) {
+        g_object_set (priv->conv, "most-detailed-mip",
+            priv->most_detailed_mip, nullptr);
+      }
+      break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
       break;
@@ -812,6 +841,9 @@ gst_d3d12_swapchain_sink_get_property (GObject * object, guint prop_id,
       break;
     case PROP_MAX_MIP_LEVELS:
       g_value_set_uint (value, priv->mip_levels);
+      break;
+    case PROP_MOST_DETAILED_MIP:
+      g_value_set_uint (value, priv->most_detailed_mip);
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
@@ -1052,7 +1084,7 @@ gst_d3d12_swapchain_sink_render (GstD3D12SwapChainSink * self)
         "dest-height", priv->viewport.h, "hue", priv->hue,
         "saturation", priv->saturation, "brightness", priv->brightness,
         "contrast", priv->contrast, "max-mip-levels", priv->mip_levels,
-        nullptr);
+        "most-detailed-mip", priv->most_detailed_mip, nullptr);
     gst_d3d12_overlay_blender_update_viewport (priv->comp, &priv->viewport);
 
     priv->first_present = false;
@@ -1061,50 +1093,22 @@ gst_d3d12_swapchain_sink_render (GstD3D12SwapChainSink * self)
 
   gst_d3d12_overlay_blender_upload (priv->comp, priv->cached_buf);
 
-  GstD3D12CmdAlloc *gst_ca;
-  if (!gst_d3d12_cmd_alloc_pool_acquire (priv->ca_pool, &gst_ca)) {
-    GST_ERROR_OBJECT (self, "Couldn't acquire command allocator");
+  GstD3D12FenceData *fence_data;
+  gst_d3d12_fence_data_pool_acquire (priv->fence_data_pool, &fence_data);
+  if (!gst_d3d12_device_prepare_graphics_cmd_list (self->device,
+          priv->cl.GetAddressOf (), priv->ca_pool, nullptr, fence_data)) {
+    GST_ERROR_OBJECT (self, "Couldn't prepare command list");
+    gst_d3d12_fence_data_unref (fence_data);
+
     return FALSE;
   }
 
-  auto ca = gst_d3d12_cmd_alloc_get_handle (gst_ca);
-  auto hr = ca->Reset ();
-  if (!gst_d3d12_result (hr, self->device)) {
-    GST_ERROR_OBJECT (self, "Couldn't reset command list");
-    gst_d3d12_cmd_alloc_unref (gst_ca);
-    return FALSE;
-  }
-
-  ComPtr < ID3D12GraphicsCommandList > cl;
-  if (!priv->cl) {
-    auto device_handle = gst_d3d12_device_get_device_handle (self->device);
-    hr = device_handle->CreateCommandList (0, D3D12_COMMAND_LIST_TYPE_DIRECT,
-        ca, nullptr, IID_PPV_ARGS (&cl));
-    if (!gst_d3d12_result (hr, self->device)) {
-      GST_ERROR_OBJECT (self, "Couldn't create command list");
-      gst_d3d12_cmd_alloc_unref (gst_ca);
-      return FALSE;
-    }
-
-    priv->cl = cl;
-  } else {
-    cl = priv->cl;
-    hr = cl->Reset (ca, nullptr);
-    if (!gst_d3d12_result (hr, self->device)) {
-      GST_ERROR_OBJECT (self, "Couldn't reset command list");
-      gst_d3d12_cmd_alloc_unref (gst_ca);
-      return FALSE;
-    }
-  }
+  auto & cl = priv->cl;
 
   priv->last_backbuf_idx = priv->swapchain->GetCurrentBackBufferIndex ();
   priv->last_backbuf_pts = GST_BUFFER_PTS (priv->cached_buf);
   priv->last_backbuf_dur = GST_BUFFER_DURATION (priv->cached_buf);
   auto backbuf = priv->backbuf[priv->last_backbuf_idx]->backbuf;
-
-  GstD3D12FenceData *fence_data;
-  gst_d3d12_fence_data_pool_acquire (priv->fence_data_pool, &fence_data);
-  gst_d3d12_fence_data_push (fence_data, FENCE_NOTIFY_MINI_OBJECT (gst_ca));
 
   auto mem = (GstD3D12Memory *) gst_buffer_peek_memory (backbuf, 0);
   auto backbuf_texture = gst_d3d12_memory_get_resource_handle (mem);
@@ -1192,7 +1196,7 @@ gst_d3d12_swapchain_sink_render (GstD3D12SwapChainSink * self)
     cl->ResourceBarrier (1, &barrier);
   }
 
-  hr = cl->Close ();
+  auto hr = cl->Close ();
   if (!gst_d3d12_result (hr, self->device)) {
     GST_ERROR_OBJECT (self, "Couldn't close command list");
     gst_d3d12_fence_data_unref (fence_data);

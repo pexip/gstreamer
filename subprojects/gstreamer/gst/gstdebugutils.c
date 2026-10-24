@@ -64,6 +64,7 @@
 #include "gstutils.h"
 #include "gstvalue.h"
 #include "gstidstr-private.h"
+#include "gstversion.h"
 
 /*** PIPELINE GRAPHS **********************************************************/
 
@@ -108,6 +109,22 @@ debug_dump_get_element_state (GstElement * element)
   return state_name;
 }
 
+static gboolean
+debug_is_dots_tracer_active (void)
+{
+  static gsize enabled = 0;
+  if (g_once_init_enter (&enabled)) {
+    GList *l, *tracers = gst_tracing_get_active_tracers ();
+    gsize val = 1;
+    for (l = tracers; l; l = l->next)
+      if (!g_strcmp0 (G_OBJECT_TYPE_NAME (l->data), "GstDotsTracer"))
+        val = 2;
+    g_list_free_full (tracers, gst_object_unref);
+    g_once_init_leave (&enabled, val);
+  }
+  return enabled == 2;
+}
+
 static gchar *
 debug_dump_get_object_params (GObject * object,
     GstDebugGraphDetails details, const char *const *ignored_propnames,
@@ -121,33 +138,11 @@ debug_dump_get_object_params (GObject * object,
   const gchar *ellipses;
 
   if (details == GST_DEBUG_GRAPH_SHOW_ALL) {
-    static gsize dots_tracer_enabled = 0;
-
-    if (g_once_init_enter (&dots_tracer_enabled)) {
-      GList *tracers, *tmp;
-      gsize enabled = 1;        /* 1 = not enabled, 2 = enabled */
-
-      tracers = gst_tracing_get_active_tracers ();
-
-      for (tmp = tracers; tmp; tmp = tmp->next) {
-        GObject *tracer = G_OBJECT (tmp->data);
-        const gchar *type_name = G_OBJECT_TYPE_NAME (tracer);
-
-        if (g_strcmp0 (type_name, "GstDotsTracer") == 0) {
-          enabled = 2;
-          break;
-        }
-      }
-
-      g_list_free_full (tracers, gst_object_unref);
-      g_once_init_leave (&dots_tracer_enabled, enabled);
-    }
-
     /* If dots tracer is enabled, use SHOW_FULL_PARAMS instead of SHOW_ALL.
      * The dots tracer is meant to be used with gst-dots-viewer which will
      * ellipsize long lines for us, so we should always keep the full text
      * in the dot files in that case. */
-    if (dots_tracer_enabled == 2) {
+    if (debug_is_dots_tracer_active ()) {
       details = GST_DEBUG_GRAPH_SHOW_FULL_PARAMS;
     }
   }
@@ -300,7 +295,7 @@ debug_dump_pad (GstPad * pad, const gchar * color_name,
 
   param_name =
       debug_dump_get_object_params (G_OBJECT (pad), details, ignore_propnames,
-      "\n");
+      "\\n");
   if (details & GST_DEBUG_GRAPH_SHOW_STATES) {
     gchar pad_flags[5];
     const gchar *activation_mode = "-><";
@@ -460,6 +455,15 @@ string_append_field (const GstIdStr * field, const GValue * value, gpointer ptr)
 }
 
 static gchar *
+debug_dump_escape_caps (GstCaps * caps)
+{
+  gchar *str = gst_caps_to_string (caps);
+  gchar *esc = g_strescape (str, NULL);
+  g_free (str);
+  return esc;
+}
+
+static gchar *
 debug_dump_describe_caps (GstCaps * caps, GstDebugGraphDetails details)
 {
   gchar *media = NULL;
@@ -521,9 +525,18 @@ debug_dump_element_pad_link (GstPad * pad, GstElement * element,
   GstCaps *caps, *peer_caps;
   gchar *media = NULL;
   gchar *media_src = NULL, *media_sink = NULL;
+  gchar *caps_attr = NULL;
   gchar *pad_name, *element_name;
   gchar *peer_pad_name, *peer_element_name;
   const gchar *spc = MAKE_INDENT (indent);
+  // if the dots tracer is active, we want to keep the full caps in the label,
+  // but we don't want to show the caps details in the label itself, as that
+  // would make it too long. So we use a separate attribute for the full caps
+  // that can be shown in the tooltip of the edge in the dots viewer.
+  gboolean use_caps_attr = (details & GST_DEBUG_GRAPH_SHOW_CAPS_DETAILS)
+      && debug_is_dots_tracer_active ();
+  GstDebugGraphDetails caps_details =
+      use_caps_attr ? (details & ~GST_DEBUG_GRAPH_SHOW_CAPS_DETAILS) : details;
 
   if ((peer_pad = gst_pad_get_peer (pad))) {
     if ((details & GST_DEBUG_GRAPH_SHOW_MEDIA_TYPE) ||
@@ -536,12 +549,14 @@ debug_dump_element_pad_link (GstPad * pad, GstElement * element,
       if (!peer_caps)
         peer_caps = gst_pad_get_pad_template_caps (peer_pad);
 
-      media = debug_dump_describe_caps (caps, details);
+      media = debug_dump_describe_caps (caps, caps_details);
+      if (use_caps_attr)
+        caps_attr = debug_dump_escape_caps (caps);
       /* check if peer caps are different */
       if (peer_caps && !gst_caps_is_equal (caps, peer_caps)) {
         gchar *tmp;
 
-        tmp = debug_dump_describe_caps (peer_caps, details);
+        tmp = debug_dump_describe_caps (peer_caps, caps_details);
         if (gst_pad_get_direction (pad) == GST_PAD_SRC) {
           media_src = media;
           media_sink = tmp;
@@ -550,6 +565,7 @@ debug_dump_element_pad_link (GstPad * pad, GstElement * element,
           media_sink = media;
         }
         media = NULL;
+        g_clear_pointer (&caps_attr, g_free);
       }
       gst_caps_unref (peer_caps);
       gst_caps_unref (caps);
@@ -571,9 +587,16 @@ debug_dump_element_pad_link (GstPad * pad, GstElement * element,
 
     /* pad link */
     if (media) {
-      g_string_append_printf (str, "%s%s_%s -> %s_%s [label=\"%s\"]\n", spc,
-          element_name, pad_name, peer_element_name, peer_pad_name, media);
+      if (caps_attr)
+        g_string_append_printf (str,
+            "%s%s_%s -> %s_%s [label=\"%s\", tooltip=\"%s\"]\n",
+            spc, element_name, pad_name, peer_element_name, peer_pad_name,
+            media, caps_attr);
+      else
+        g_string_append_printf (str, "%s%s_%s -> %s_%s [label=\"%s\"]\n", spc,
+            element_name, pad_name, peer_element_name, peer_pad_name, media);
       g_free (media);
+      g_free (caps_attr);
     } else if (media_src && media_sink) {
       /* dot has some issues with placement of head and taillabels,
        * we need an empty label to make space */
@@ -679,7 +702,7 @@ debug_dump_element (GstBin * bin, GstDebugGraphDetails details,
         }
         if (details & GST_DEBUG_GRAPH_SHOW_NON_DEFAULT_PARAMS) {
           param_name = debug_dump_get_object_params (G_OBJECT (element),
-              details, ignore_propnames, "\n");
+              details, ignore_propnames, "\\n");
         }
         /* elements */
         g_string_append_printf (str, "%ssubgraph cluster_%s {\n", spc,
@@ -693,6 +716,21 @@ debug_dump_element (GstBin * bin, GstDebugGraphDetails details,
             G_OBJECT_TYPE_NAME (element), GST_OBJECT_NAME (element),
             (state_name ? state_name : ""), (param_name ? param_name : "")
             );
+        /* add tooltip with full (non-truncated) params when label is truncated */
+        if ((details & GST_DEBUG_GRAPH_SHOW_NON_DEFAULT_PARAMS) &&
+            !(details & GST_DEBUG_GRAPH_SHOW_FULL_PARAMS)) {
+          gchar *full_param_name =
+              debug_dump_get_object_params (G_OBJECT (element),
+              details | GST_DEBUG_GRAPH_SHOW_FULL_PARAMS, ignore_propnames,
+              "&#10;");
+          if (full_param_name) {
+            const gchar *params = full_param_name;
+            if (g_str_has_prefix (params, "&#10;"))
+              params += 5;
+            g_string_append_printf (str, "%s  tooltip=\"%s\";\n", spc, params);
+            g_free (full_param_name);
+          }
+        }
         if (state_name) {
           g_free (state_name);
           state_name = NULL;
@@ -840,12 +878,13 @@ debug_dump_header (GstBin * bin, GstDebugGraphDetails details, GString * str)
   }
   if (details & GST_DEBUG_GRAPH_SHOW_NON_DEFAULT_PARAMS) {
     param_name =
-        debug_dump_get_object_params (G_OBJECT (bin), details, NULL, "\n");
+        debug_dump_get_object_params (G_OBJECT (bin), details, NULL, "\\n");
   }
 
   /* write header */
   g_string_append_printf (str,
       "digraph pipeline {\n"
+      "  gst_version=\"%d.%d.%d\";\n"
       "  rankdir=LR;\n"
       "  fontname=\"sans\";\n"
       "  fontsize=\"10\";\n"
@@ -862,7 +901,8 @@ debug_dump_header (GstBin * bin, GstDebugGraphDetails details, GString * str)
       "    style=\"filled\",\n"
       "    label=\"Legend\\lElement-States: [~] void-pending, [0] null, [-] ready, [=] paused, [>] playing\\lPad-Activation: [-] none, [>] push, [<] pull\\lPad-Flags: [b]locked, [f]lushing, [b]locking, [E]OS; upper-case is set\\lPad-Task: [T] has started task, [t] has paused task\\l\",\n"
       "  ];"
-      "\n", G_OBJECT_TYPE_NAME (bin), GST_OBJECT_NAME (bin),
+      "\n", GST_VERSION_MAJOR, GST_VERSION_MINOR, GST_VERSION_MICRO,
+      G_OBJECT_TYPE_NAME (bin), GST_OBJECT_NAME (bin),
       (state_name ? state_name : ""), (param_name ? param_name : "")
       );
 
@@ -898,7 +938,8 @@ debug_dump_footer (GString * str)
  *
  * To aid debugging applications one can use this method to obtain the whole
  * network of gstreamer elements that form the pipeline into a dot file.
- * This data can be processed with graphviz to get an image.
+ *
+ * See gst_debug_bin_to_dot_file() for more details.
  *
  * Returns: (transfer full): a string containing the pipeline in graphviz
  * dot format.
@@ -923,15 +964,32 @@ gst_debug_bin_to_dot_data (GstBin * bin, GstDebugGraphDetails details)
  * gst_debug_bin_to_dot_file:
  * @bin: the top-level pipeline that should be analyzed
  * @details: type of #GstDebugGraphDetails to use
- * @file_name: (type filename): output base filename (e.g. "myplayer")
+ * @file_name: (type filename)(nullable): output base filename (e.g. "myplayer")
  *
  * To aid debugging applications one can use this method to write out the whole
  * network of gstreamer elements that form the pipeline into a dot file.
- * This file can be processed with graphviz to get an image.
+ * This file can be processed with graphviz to get an image, like this:
  *
  * ``` shell
- *  dot -Tpng -oimage.png graph_lowlevel.dot
+ * dot -Tpng -oimage.png graph_lowlevel.dot
  * ```
+ *
+ * There is also the interactive [gst-dots-viewer](https://gstreamer.freedesktop.org/documentation/coretracers/dots.html)
+ * tool, and [xdot](https://pypi.org/project/xdot/) which allows you to view the
+ * dot file directly without converting it first.
+ *
+ * If @file_name is NULL, the output filename will be based on the application
+ * name as returned by g_get_application_name(), or "unnamed" if the application
+ * name cannot be determined.
+ *
+ * The file will be written to the directory specified by the
+ * `GST_DEBUG_DUMP_DOT_DIR` environment variable, and the `.dot` extension will be
+ * added. If `GST_DEBUG_DUMP_DOT_DIR` was not defined at the time
+ * gst_init() was called, the file will not be generated. Note that the
+ * directory must already exist, it will not be created by this function.
+ *
+ * gst_debug_bin_to_dot_data() can be used if it is desired to generate the
+ * file even when `GST_DEBUG_DUMP_DOT_DIR` is not set.
  */
 void
 gst_debug_bin_to_dot_file (GstBin * bin, GstDebugGraphDetails details,
@@ -971,7 +1029,7 @@ gst_debug_bin_to_dot_file (GstBin * bin, GstDebugGraphDetails details,
  * gst_debug_bin_to_dot_file_with_ts:
  * @bin: the top-level pipeline that should be analyzed
  * @details: type of #GstDebugGraphDetails to use
- * @file_name: (type filename): output base filename (e.g. "myplayer")
+ * @file_name: (type filename)(nullable): output base filename (e.g. "myplayer")
  *
  * This works like gst_debug_bin_to_dot_file(), but adds the current timestamp
  * to the filename, so that it can be used to take multiple snapshots.

@@ -68,7 +68,7 @@ gst-validate-1.0 --set-test-file /path/to/fakesrc.simple.validatetest
 The following is an example of the `qtdemux_change_edit_list.validatetest` file using validateflow.
 
 ``` ini
-set-globals, media_dir="$(test_dir)/../../../medias/"
+set-globals, media_dir="$(test_dir)/../../../media/"
 meta,
     seek=false,
     handles-states=false,
@@ -76,7 +76,7 @@ meta,
          "appsrc ! qtdemux ! fakesink async=false",
     },
     configs = {
-       "$(validateflow), pad=fakesink0:sink, record-buffers=false",
+       [validateflow, pad=fakesink0:sink, record-buffers=false],
     }
 
 # Scenario action types
@@ -91,14 +91,7 @@ stop
 This example shows the elements of a typical validate flow test (a pipeline, a
 config and a scenario). Some actions typically used together with validateflow
 can also be seen. Notice variable interpolation is used to fill absolute paths
-for media files in the scenario (`$(test_dir)`). In the configuration,
-`$(validateflow)` is expanded to something like this, containing proper paths
-for expectations and actual results (these values are interpolated from the
-`.validatetest` file location):
-
-``` ini
-validateflow, expectations-dir="/validate/test/file/path/validateqtdemux_change_edit_list/flow-expectations/", actual-results-dir="$(GST_VALIDATE_LOGSDIR)/logs/validate/launch_pipeline/qtdemux_change_edit_list"
-```
+for media files in the scenario (`$(test_dir)`).
 
 The resulting log looks like this:
 
@@ -131,6 +124,13 @@ several overrides and listening to different pads with different settings.
 * `pad`: Required. Name of the pad that will be monitored.
 * `record-buffers`: Default: false. Whether buffers will be logged. By default
    only events are logged.
+* `record-buffers-after-event`: Default: unset. Only record buffers once the
+   given event sequence has been seen in order. Can be a single event type name
+   or a list of event types (e.g., `{flush-stop,segment}`). Unrelated events in
+   between are ignored, and seeing the sequence's first event restarts the
+   match, so a fresh seek re-arms it. Recording starts disabled and is enabled
+   once the whole sequence has been observed. This is useful for tests where the
+   number of buffers before a seek is non-deterministic.
 * `buffers-checksum`: Default: 'none'. Define the type of checksums to be used
    valid values are:
   * `none`: No checksum recorded
@@ -140,6 +140,12 @@ several overrides and listening to different pads with different settings.
   * `sha1`: sha1 checksum
   * `sha256`: sha256 checksum
   * `sha512`: sha512 checksum
+  * `raw-hex`: Rather than a checksum, record hex-encoded raw buffer contents
+  * `raw-text`: Record raw buffer contents assuming they contain text (e.g. subtitles)
+  * `dominant-frequency`: Rather than a checksum, record the dominant frequency (in
+             Hz) of the buffer's first audio channel. Useful to check that the
+             expected audio stream reached a pad regardless of how it was
+             (re)encoded. Only applies to raw audio buffers.
   * *Note*: for backward compatibility reasons, this can be passed as a
             boolean and it will default to 'sha1' if true, 'none' if false.
 * `ignored-fields`: Default: `"stream-start={ stream-id }"` (as they are often
@@ -156,23 +162,28 @@ several overrides and listening to different pads with different settings.
 * `logged-upstream-event-types`: Default: `NULL`. List of upstream event type names to record,
   for backward compatibility reasons, upstream events are not logged by default,
   and you must specify the ones you want to be logged.
+* `logged-unregistered-sei-uuids`: Default: `NULL`. List of UUIDs (in standard
+  `xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx` format) of unregistered SEI user data
+  metas to record. Only `GstVideoSEIUserDataUnregisteredMeta` with matching UUIDs
+  will be logged. If not specified, no SEI metas are logged.
 * `expectations-dir`: Path to the directory where the expectations will be
-   written if they don't exist, relative to the current working directory. By
-   default the current working directory is used, but this setting is usually
-   set automatically as part of the `%(validateflow)s` expansion to a correct
-   path like `~/gst-validate/gst-integration-testsuites/flow-expectations/<test
-   name>`.
+   written if they don't exist. Automatically derived from the test file path
+   as `<test_dir>/<test_name>/flow-expectations/`. Can be overridden explicitly.
 * `actual-results-dir`: Path to the directory where the events will be recorded.
-   The expectation file will be compared to this. By default the current working
-   directory is used, but this setting is usually set automatically as part of
-   the `%(validateflow)s` expansion to the test log directory, i.e.
-   `~/gst-validate/logs/validate/launch_pipeline/<test name>`.
+   The expectation file will be compared to this. Automatically derived as
+   `$GST_VALIDATE_LOGSDIR/<test_name_dir>/` (where dots in the test name are
+   replaced by directory separators). Can be overridden explicitly.
 * `generate-expectations`: Default: unset. When set to `true` the expectation
    file will be written and no testing will be done and if set to `false`, the
    expectation file will be required. If a validateflow config is used without
    specifying any other parametters, the validateflow plugin will consider that
    all validateflow overrides will use that value.
-
+* `extra-serialized-metas`: Default: 'none'. List of serializable `GstMeta` to
+  record in Base64.
+  * `none`: No serializable `GstMeta` will be recorded.
+  * `all`: Record every serializable `GstMeta`
+  * `{<gst_meta_type_name>[, ...]}`: List of serializable `GstMeta` types to
+    record.
 
 ## Scenario actions
 

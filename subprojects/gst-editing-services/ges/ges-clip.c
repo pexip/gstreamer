@@ -2546,13 +2546,13 @@ ges_clip_get_property (GObject * object, guint property_id,
 
   switch (property_id) {
     case PROP_LAYER:
-      g_value_set_object (value, clip->priv->layer);
+      g_value_take_object (value, ges_clip_get_layer (clip));
       break;
     case PROP_SUPPORTED_FORMATS:
-      g_value_set_flags (value, clip->priv->supportedformats);
+      g_value_set_flags (value, ges_clip_get_supported_formats (clip));
       break;
     case PROP_DURATION_LIMIT:
-      g_value_set_uint64 (value, clip->priv->duration_limit);
+      g_value_set_uint64 (value, ges_clip_get_duration_limit (clip));
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, property_id, pspec);
@@ -2844,9 +2844,16 @@ ges_clip_set_layer (GESClip * clip, GESLayer * layer)
 gboolean
 ges_clip_is_moving_between_layers (GESClip * clip)
 {
+  gboolean ret;
+  GESTimeline *_locked_timeline;
+
   g_return_val_if_fail (GES_IS_CLIP (clip), FALSE);
 
-  return ELEMENT_FLAG_IS_SET (clip, GES_CLIP_IS_MOVING_BETWEEN_LAYERS);
+  _locked_timeline = _ges_timeline_element_lock (GES_TIMELINE_ELEMENT (clip));
+  ret = ELEMENT_FLAG_IS_SET (clip, GES_CLIP_IS_MOVING_BETWEEN_LAYERS);
+  _ges_timeline_element_unlock (GES_TIMELINE_ELEMENT (clip), _locked_timeline);
+
+  return ret;
 }
 
 /**
@@ -2868,24 +2875,29 @@ ges_clip_move_to_layer_full (GESClip * clip, GESLayer * layer, GError ** error)
   gboolean ret = FALSE;
   GESLayer *current_layer;
   GESTimelineElement *element;
+  GESTimeline *_locked_timeline;
 
   g_return_val_if_fail (GES_IS_CLIP (clip), FALSE);
   g_return_val_if_fail (GES_IS_LAYER (layer), FALSE);
   g_return_val_if_fail (!error || !*error, FALSE);
+
+  _locked_timeline = _ges_timeline_element_lock (GES_TIMELINE_ELEMENT (clip));
 
   element = GES_TIMELINE_ELEMENT (clip);
   current_layer = clip->priv->layer;
 
   if (current_layer == layer) {
     GST_INFO_OBJECT (clip, "Already in the layer %" GST_PTR_FORMAT, layer);
-    return TRUE;
+    ret = TRUE;
+    goto done;
   }
 
 
   if (current_layer == NULL) {
     GST_DEBUG ("Not moving %p, only adding it to %p", clip, layer);
 
-    return ges_layer_add_clip (layer, clip);
+    ret = ges_layer_add_clip (layer, clip);
+    goto done;
   }
 
   if (element->timeline != layer->timeline) {
@@ -2895,14 +2907,15 @@ ges_clip_move_to_layer_full (GESClip * clip, GESLayer * layer, GError ** error)
         "the layer because its timeline %" GST_PTR_FORMAT " does not "
         "match the timeline of the layer %" GST_PTR_FORMAT,
         GES_ARGS (clip), element->timeline, layer->timeline);
-    return FALSE;
+    goto done;
   }
 
   if (layer->timeline && !GES_TIMELINE_ELEMENT_BEING_EDITED (clip)) {
     /* move to new layer, also checks moving of toplevel */
-    return timeline_tree_move (timeline_get_tree (layer->timeline),
+    ret = timeline_tree_move (timeline_get_tree (layer->timeline),
         element, (gint64) ges_layer_get_priority (current_layer) -
         (gint64) ges_layer_get_priority (layer), 0, GES_EDGE_NONE, 0, error);
+    goto done;
   }
 
   gst_object_ref (clip);
@@ -2915,7 +2928,7 @@ ges_clip_move_to_layer_full (GESClip * clip, GESLayer * layer, GError ** error)
   ret = ges_layer_remove_clip (current_layer, clip);
 
   if (!ret) {
-    goto done;
+    goto cleanup;
   }
 
   ret = ges_layer_add_clip (layer, clip);
@@ -2927,12 +2940,15 @@ ges_clip_move_to_layer_full (GESClip * clip, GESLayer * layer, GError ** error)
     ges_layer_add_clip (current_layer, clip);
   }
 
-done:
+cleanup:
   ELEMENT_UNSET_FLAG (clip, GES_CLIP_FREEZE_TRACK_ELEMENTS);
   ELEMENT_UNSET_FLAG (clip, GES_CLIP_IS_MOVING_BETWEEN_LAYERS);
   gst_object_unref (clip);
+  ret = ret && (clip->priv->layer == layer);
 
-  return ret && (clip->priv->layer == layer);
+done:
+  _ges_timeline_element_unlock (GES_TIMELINE_ELEMENT (clip), _locked_timeline);
+  return ret;
 }
 
 /**
@@ -2978,11 +2994,13 @@ ges_clip_find_track_element (GESClip * clip, GESTrack * track, GType type)
 {
   GList *tmp;
   GESTrackElement *otmp;
-
   GESTrackElement *ret = NULL;
+  GESTimeline *_locked_timeline;
 
   g_return_val_if_fail (GES_IS_CLIP (clip), NULL);
   g_return_val_if_fail (!(track == NULL && type == G_TYPE_NONE), NULL);
+
+  _locked_timeline = _ges_timeline_element_lock (GES_TIMELINE_ELEMENT (clip));
 
   for (tmp = GES_CONTAINER_CHILDREN (clip); tmp; tmp = g_list_next (tmp)) {
     otmp = (GESTrackElement *) tmp->data;
@@ -2997,6 +3015,7 @@ ges_clip_find_track_element (GESClip * clip, GESTrack * track, GType type)
     }
   }
 
+  _ges_timeline_element_unlock (GES_TIMELINE_ELEMENT (clip), _locked_timeline);
   return ret;
 }
 
@@ -3012,12 +3031,19 @@ ges_clip_find_track_element (GESClip * clip, GESTrack * track, GType type)
 GESLayer *
 ges_clip_get_layer (GESClip * clip)
 {
+  GESLayer *ret;
+  GESTimeline *_locked_timeline;
+
   g_return_val_if_fail (GES_IS_CLIP (clip), NULL);
 
-  if (clip->priv->layer != NULL)
-    gst_object_ref (G_OBJECT (clip->priv->layer));
+  _locked_timeline = _ges_timeline_element_lock (GES_TIMELINE_ELEMENT (clip));
 
-  return clip->priv->layer;
+  ret = clip->priv->layer;
+  if (ret != NULL)
+    gst_object_ref (G_OBJECT (ret));
+
+  _ges_timeline_element_unlock (GES_TIMELINE_ELEMENT (clip), _locked_timeline);
+  return ret;
 }
 
 /**
@@ -3032,9 +3058,16 @@ ges_clip_get_layer (GESClip * clip)
 GstClockTime
 ges_clip_get_duration_limit (GESClip * clip)
 {
+  GstClockTime ret;
+  GESTimeline *_locked_timeline;
+
   g_return_val_if_fail (GES_IS_CLIP (clip), GST_CLOCK_TIME_NONE);
 
-  return clip->priv->duration_limit;
+  _locked_timeline = _ges_timeline_element_lock (GES_TIMELINE_ELEMENT (clip));
+  ret = clip->priv->duration_limit;
+  _ges_timeline_element_unlock (GES_TIMELINE_ELEMENT (clip), _locked_timeline);
+
+  return ret;
 }
 
 static gint
@@ -3072,6 +3105,43 @@ _cmp_children_by_priority (gconstpointer a_p, gconstpointer b_p)
  * Returns: %TRUE if @effect was successfully added to @clip at @index.
  * Since: 1.18
  */
+/* Warn if @effect has no explicit source binding but @clip already routes
+ * effects per-source: ges_clip_add_top_effect() and ges_source_add_effect()
+ * should not be mixed on the same clip (bound effects are placed on their
+ * source, unbound ones on every matching-type track). */
+#ifndef GST_DISABLE_GST_DEBUG
+static void
+_warn_if_mixing_bound_effects (GESClip * clip, GESBaseEffect * effect)
+{
+  GESSource *bound;
+  GList *top, *tmp;
+
+  /* This only produces a warning, so skip the work unless it would be shown. */
+  if (gst_debug_category_get_threshold (GST_CAT_DEFAULT) < GST_LEVEL_WARNING)
+    return;
+
+  bound = ges_base_effect_get_bound_source (effect);
+  if (bound) {
+    gst_object_unref (bound);
+    return;
+  }
+
+  top = ges_clip_get_top_effects (clip);
+  for (tmp = top; tmp; tmp = tmp->next) {
+    GESSource *es = ges_base_effect_get_bound_source (tmp->data);
+
+    if (es) {
+      gst_object_unref (es);
+      GST_WARNING_OBJECT (clip, "Adding an effect with no source binding to a "
+          "clip that already has source-bound effects; do not mix "
+          "ges_clip_add_top_effect() with ges_source_add_effect()");
+      break;
+    }
+  }
+  g_list_free_full (top, gst_object_unref);
+}
+#endif
+
 gboolean
 ges_clip_add_top_effect (GESClip * clip, GESBaseEffect * effect, gint index,
     GError ** error)
@@ -3081,10 +3151,17 @@ ges_clip_add_top_effect (GESClip * clip, GESBaseEffect * effect, gint index,
   GESTimelineElement *replace;
   GESTimeline *timeline;
   gboolean res;
+  GESTimeline *_locked_timeline;
 
   g_return_val_if_fail (GES_IS_CLIP (clip), FALSE);
   g_return_val_if_fail (GES_IS_BASE_EFFECT (effect), FALSE);
   g_return_val_if_fail (!error || !*error, FALSE);
+
+#ifndef GST_DISABLE_GST_DEBUG
+  _warn_if_mixing_bound_effects (clip, effect);
+#endif
+
+  _locked_timeline = _ges_timeline_element_lock (GES_TIMELINE_ELEMENT (clip));
 
   priv = clip->priv;
 
@@ -3119,12 +3196,15 @@ ges_clip_add_top_effect (GESClip * clip, GESBaseEffect * effect, gint index,
      * means no other elements were added so the clip, so the adding error
      * for the effect, if any, should still be available on the clip */
     ges_clip_take_add_error (clip, error);
+    _ges_timeline_element_unlock (GES_TIMELINE_ELEMENT (clip),
+        _locked_timeline);
     return FALSE;
   }
 
   if (timeline && ges_timeline_take_track_selection_error (timeline, error))
     goto remove;
 
+  _ges_timeline_element_unlock (GES_TIMELINE_ELEMENT (clip), _locked_timeline);
   return TRUE;
 
 remove:
@@ -3133,6 +3213,7 @@ remove:
     GST_ERROR_OBJECT (clip, "Failed to remove effect %" GES_FORMAT,
         GES_ARGS (effect));
 
+  _ges_timeline_element_unlock (GES_TIMELINE_ELEMENT (clip), _locked_timeline);
   return FALSE;
 }
 
@@ -3172,12 +3253,19 @@ ges_clip_remove_top_effect (GESClip * clip, GESBaseEffect * effect,
     GError ** error)
 {
   gboolean res;
+  GESTimeline *_locked_timeline;
 
   g_return_val_if_fail (GES_IS_CLIP (clip), FALSE);
   g_return_val_if_fail (GES_IS_BASE_EFFECT (effect), FALSE);
   g_return_val_if_fail (!error || !*error, FALSE);
-  if (!_is_added_effect (clip, effect))
+
+  _locked_timeline = _ges_timeline_element_lock (GES_TIMELINE_ELEMENT (clip));
+
+  if (!_is_added_effect (clip, effect)) {
+    _ges_timeline_element_unlock (GES_TIMELINE_ELEMENT (clip),
+        _locked_timeline);
     return FALSE;
+  }
 
   ges_clip_set_remove_error (clip, NULL);
   res = ges_container_remove (GES_CONTAINER (clip),
@@ -3185,6 +3273,7 @@ ges_clip_remove_top_effect (GESClip * clip, GESBaseEffect * effect,
   if (!res)
     ges_clip_take_remove_error (clip, error);
 
+  _ges_timeline_element_unlock (GES_TIMELINE_ELEMENT (clip), _locked_timeline);
   return res;
 }
 
@@ -3204,8 +3293,11 @@ ges_clip_get_top_effects (GESClip * clip)
 {
   GList *tmp, *ret;
   GESTimelineElement *child;
+  GESTimeline *_locked_timeline;
 
   g_return_val_if_fail (GES_IS_CLIP (clip), NULL);
+
+  _locked_timeline = _ges_timeline_element_lock (GES_TIMELINE_ELEMENT (clip));
 
   GST_DEBUG_OBJECT (clip, "Getting the %i top effects", clip->priv->nb_effects);
   ret = NULL;
@@ -3216,7 +3308,10 @@ ges_clip_get_top_effects (GESClip * clip)
       ret = g_list_append (ret, gst_object_ref (child));
   }
 
-  return g_list_sort (ret, _cmp_children_by_priority);
+  ret = g_list_sort (ret, _cmp_children_by_priority);
+
+  _ges_timeline_element_unlock (GES_TIMELINE_ELEMENT (clip), _locked_timeline);
+  return ret;
 }
 
 /**
@@ -3238,16 +3333,24 @@ ges_clip_get_top_effect_index (GESClip * clip, GESBaseEffect * effect)
 {
   GList *top_effects;
   gint ret;
+  GESTimeline *_locked_timeline;
 
   g_return_val_if_fail (GES_IS_CLIP (clip), -1);
   g_return_val_if_fail (GES_IS_BASE_EFFECT (effect), -1);
-  if (!_is_added_effect (clip, effect))
+
+  _locked_timeline = _ges_timeline_element_lock (GES_TIMELINE_ELEMENT (clip));
+
+  if (!_is_added_effect (clip, effect)) {
+    _ges_timeline_element_unlock (GES_TIMELINE_ELEMENT (clip),
+        _locked_timeline);
     return -1;
+  }
 
   top_effects = ges_clip_get_top_effects (clip);
   ret = g_list_index (top_effects, effect);
   g_list_free_full (top_effects, gst_object_unref);
 
+  _ges_timeline_element_unlock (GES_TIMELINE_ELEMENT (clip), _locked_timeline);
   return ret;
 }
 
@@ -3291,13 +3394,17 @@ ges_clip_set_top_effect_index_full (GESClip * clip, GESBaseEffect * effect,
   GList *child_data = NULL;
   guint32 current_prio, new_prio;
   GESTimelineElement *element, *replace;
+  gboolean ret = FALSE;
+  GESTimeline *_locked_timeline;
 
   g_return_val_if_fail (GES_IS_CLIP (clip), FALSE);
   g_return_val_if_fail (GES_IS_BASE_EFFECT (effect), FALSE);
   g_return_val_if_fail (!error || !*error, FALSE);
 
+  _locked_timeline = _ges_timeline_element_lock (GES_TIMELINE_ELEMENT (clip));
+
   if (!_is_added_effect (clip, effect))
-    return FALSE;
+    goto done;
 
   element = GES_TIMELINE_ELEMENT (effect);
 
@@ -3307,11 +3414,13 @@ ges_clip_set_top_effect_index_full (GESClip * clip, GESBaseEffect * effect,
 
   if (!replace) {
     GST_WARNING_OBJECT (clip, "Does not contain %u effects", newindex + 1);
-    return FALSE;
+    goto done;
   }
 
-  if (replace == element)
-    return TRUE;
+  if (replace == element) {
+    ret = TRUE;
+    goto done;
+  }
 
   current_prio = element->priority;
   new_prio = replace->priority;
@@ -3341,7 +3450,7 @@ ges_clip_set_top_effect_index_full (GESClip * clip, GESBaseEffect * effect,
     GST_INFO_OBJECT (clip, "Cannot move top effect %" GES_FORMAT
         " to index %i because the duration-limit cannot adjust",
         GES_ARGS (effect), newindex);
-    return FALSE;
+    goto done;
   }
 
   GST_DEBUG_OBJECT (clip, "Setting top effect %" GST_PTR_FORMAT "priority: %i",
@@ -3370,7 +3479,11 @@ ges_clip_set_top_effect_index_full (GESClip * clip, GESBaseEffect * effect,
   _ges_container_sort_children (GES_CONTAINER (clip));
   /* height should have stayed the same */
 
-  return TRUE;
+  ret = TRUE;
+
+done:
+  _ges_timeline_element_unlock (GES_TIMELINE_ELEMENT (clip), _locked_timeline);
+  return ret;
 }
 
 /**
@@ -3434,18 +3547,21 @@ GESClip *
 ges_clip_split_full (GESClip * clip, guint64 position, GError ** error)
 {
   GList *tmp, *transitions = NULL;
-  GESClip *new_object;
+  GESClip *new_object = NULL;
   gboolean no_core = FALSE;
   GstClockTime start, duration, old_duration, new_duration, new_inpoint;
   GESTimelineElement *element;
   GESTimeline *timeline;
   GHashTable *track_for_copy;
   guint32 layer_prio;
+  GESTimeline *_locked_timeline;
 
   g_return_val_if_fail (GES_IS_CLIP (clip), NULL);
   g_return_val_if_fail (clip->priv->layer, NULL);
   g_return_val_if_fail (GST_CLOCK_TIME_IS_VALID (position), NULL);
   g_return_val_if_fail (!error || !*error, NULL);
+
+  _locked_timeline = _ges_timeline_element_lock (GES_TIMELINE_ELEMENT (clip));
 
   element = GES_TIMELINE_ELEMENT (clip);
   timeline = element->timeline;
@@ -3456,7 +3572,7 @@ ges_clip_split_full (GESClip * clip, guint64 position, GError ** error)
   if (position >= start + duration || position <= start) {
     GST_WARNING_OBJECT (clip, "Can not split %" GST_TIME_FORMAT
         " out of boundaries", GST_TIME_ARGS (position));
-    return NULL;
+    goto done;
   }
 
   layer_prio = ges_timeline_element_get_layer_priority (element);
@@ -3472,7 +3588,7 @@ ges_clip_split_full (GESClip * clip, guint64 position, GError ** error)
     new_inpoint = 0;
 
   if (!GST_CLOCK_TIME_IS_VALID (new_inpoint))
-    return NULL;
+    goto done;
 
   if (timeline
       && !timeline_tree_can_move_element (timeline_get_tree (timeline), element,
@@ -3481,7 +3597,7 @@ ges_clip_split_full (GESClip * clip, guint64 position, GError ** error)
         "Can not split %" GES_FORMAT " at %" GST_TIME_FORMAT
         " as timeline would be in an illegal state.", GES_ARGS (clip),
         GST_TIME_ARGS (position));
-    return NULL;
+    goto done;
   }
 
   if (timeline
@@ -3491,7 +3607,7 @@ ges_clip_split_full (GESClip * clip, guint64 position, GError ** error)
         "Can not split %" GES_FORMAT " at %" GST_TIME_FORMAT
         " as timeline would be in an illegal state.", GES_ARGS (clip),
         GST_TIME_ARGS (position));
-    return NULL;
+    goto done;
   }
 
   GST_DEBUG_OBJECT (clip, "Spliting at %" GST_TIME_FORMAT,
@@ -3595,6 +3711,8 @@ ges_clip_split_full (GESClip * clip, guint64 position, GError ** error)
   _update_duration_limit (new_object);
   _update_children_outpoints (new_object);
 
+done:
+  _ges_timeline_element_unlock (GES_TIMELINE_ELEMENT (clip), _locked_timeline);
   return new_object;
 }
 
@@ -3626,9 +3744,13 @@ ges_clip_split (GESClip * clip, guint64 position)
 void
 ges_clip_set_supported_formats (GESClip * clip, GESTrackType supportedformats)
 {
+  GESTimeline *_locked_timeline;
+
   g_return_if_fail (GES_IS_CLIP (clip));
 
+  _locked_timeline = _ges_timeline_element_lock (GES_TIMELINE_ELEMENT (clip));
   clip->priv->supportedformats = supportedformats;
+  _ges_timeline_element_unlock (GES_TIMELINE_ELEMENT (clip), _locked_timeline);
 }
 
 /**
@@ -3642,9 +3764,16 @@ ges_clip_set_supported_formats (GESClip * clip, GESTrackType supportedformats)
 GESTrackType
 ges_clip_get_supported_formats (GESClip * clip)
 {
+  GESTrackType ret;
+  GESTimeline *_locked_timeline;
+
   g_return_val_if_fail (GES_IS_CLIP (clip), GES_TRACK_TYPE_UNKNOWN);
 
-  return clip->priv->supportedformats;
+  _locked_timeline = _ges_timeline_element_lock (GES_TIMELINE_ELEMENT (clip));
+  ret = clip->priv->supportedformats;
+  _ges_timeline_element_unlock (GES_TIMELINE_ELEMENT (clip), _locked_timeline);
+
+  return ret;
 }
 
 /**
@@ -3660,23 +3789,70 @@ ges_clip_get_supported_formats (GESClip * clip)
  *
  * Returns: (transfer none) (nullable): The newly created element, or
  * %NULL if an error occurred.
+ *
+ * Deprecated: 1.30: Use ges_clip_add_asset_full() instead for MT-safety.
  */
 /* FIXME: this is not used elsewhere in the GES library */
 GESTrackElement *
 ges_clip_add_asset (GESClip * clip, GESAsset * asset)
 {
   GESTrackElement *element;
+  GESTimeline *_locked_timeline;
 
   g_return_val_if_fail (GES_IS_CLIP (clip), NULL);
   g_return_val_if_fail (GES_IS_ASSET (asset), NULL);
   g_return_val_if_fail (g_type_is_a (ges_asset_get_extractable_type
           (asset), GES_TYPE_TRACK_ELEMENT), NULL);
 
+  _locked_timeline = _ges_timeline_element_lock (GES_TIMELINE_ELEMENT (clip));
+
   element = GES_TRACK_ELEMENT (ges_asset_extract (asset, NULL));
 
   if (!ges_container_add (GES_CONTAINER (clip), GES_TIMELINE_ELEMENT (element)))
-    return NULL;
+    element = NULL;
 
+  _ges_timeline_element_unlock (GES_TIMELINE_ELEMENT (clip), _locked_timeline);
+  return element;
+
+}
+
+/**
+ * ges_clip_add_asset_full:
+ * @clip: A #GESClip
+ * @asset: An asset with #GES_TYPE_TRACK_ELEMENT as its
+ * #GESAsset:extractable-type
+ *
+ * Extracts a #GESTrackElement from an asset and adds it to the clip.
+ * This can be used to add effects that derive from the asset to the
+ * clip, but this method is not intended to be used to create the core
+ * elements of the clip.
+ *
+ * Returns: (transfer full) (nullable): The newly created element, or
+ * %NULL if an error occurred.
+ *
+ * Since: 1.30
+ */
+GESTrackElement *
+ges_clip_add_asset_full (GESClip * clip, GESAsset * asset)
+{
+  GESTrackElement *element;
+  GESTimeline *_locked_timeline;
+
+  g_return_val_if_fail (GES_IS_CLIP (clip), NULL);
+  g_return_val_if_fail (GES_IS_ASSET (asset), NULL);
+  g_return_val_if_fail (g_type_is_a (ges_asset_get_extractable_type
+          (asset), GES_TYPE_TRACK_ELEMENT), NULL);
+
+  _locked_timeline = _ges_timeline_element_lock (GES_TIMELINE_ELEMENT (clip));
+
+  element = GES_TRACK_ELEMENT (ges_asset_extract (asset, NULL));
+
+  if (!ges_container_add (GES_CONTAINER (clip), GES_TIMELINE_ELEMENT (element)))
+    element = NULL;
+  else
+    gst_object_ref (element);
+
+  _ges_timeline_element_unlock (GES_TIMELINE_ELEMENT (clip), _locked_timeline);
   return element;
 
 }
@@ -3721,12 +3897,14 @@ ges_clip_find_track_elements (GESClip * clip, GESTrack * track,
 {
   GList *tmp;
   GESTrackElement *otmp;
-
   GList *ret = NULL;
+  GESTimeline *_locked_timeline;
 
   g_return_val_if_fail (GES_IS_CLIP (clip), NULL);
   g_return_val_if_fail (!(track == NULL && type == G_TYPE_NONE &&
           track_type == GES_TRACK_TYPE_UNKNOWN), NULL);
+
+  _locked_timeline = _ges_timeline_element_lock (GES_TIMELINE_ELEMENT (clip));
 
   for (tmp = GES_CONTAINER_CHILDREN (clip); tmp; tmp = g_list_next (tmp)) {
     otmp = (GESTrackElement *) tmp->data;
@@ -3744,6 +3922,7 @@ ges_clip_find_track_elements (GESClip * clip, GESTrack * track,
       ret = g_list_append (ret, gst_object_ref (otmp));
   }
 
+  _ges_timeline_element_unlock (GES_TIMELINE_ELEMENT (clip), _locked_timeline);
   return ret;
 }
 
@@ -4073,18 +4252,22 @@ ges_clip_get_timeline_time_from_internal_time (GESClip * clip,
     GESTrackElement * child, GstClockTime internal_time, GError ** error)
 {
   GstClockTime inpoint, start, external_time;
+  GstClockTime ret = GST_CLOCK_TIME_NONE;
   gboolean decrease;
   GESTrack *track;
   GList *tmp, *time_effects;
+  GESTimeline *_locked_timeline;
 
   g_return_val_if_fail (GES_IS_CLIP (clip), GST_CLOCK_TIME_NONE);
   g_return_val_if_fail (GES_IS_TRACK_ELEMENT (child), GST_CLOCK_TIME_NONE);
   g_return_val_if_fail (!error || !*error, GST_CLOCK_TIME_NONE);
 
+  _locked_timeline = _ges_timeline_element_lock (GES_TIMELINE_ELEMENT (clip));
+
   if (!g_list_find (GES_CONTAINER_CHILDREN (clip), child)) {
     GST_WARNING_OBJECT (clip, "The track element %" GES_FORMAT " is not "
         "a child of the clip", GES_ARGS (child));
-    return GST_CLOCK_TIME_NONE;
+    goto done;
   }
 
   track = ges_track_element_get_track (child);
@@ -4093,18 +4276,18 @@ ges_clip_get_timeline_time_from_internal_time (GESClip * clip,
     GST_WARNING_OBJECT (clip, "Cannot convert the internal time of the "
         "child %" GES_FORMAT " to a timeline time because it is not part "
         "of a track", GES_ARGS (child));
-    return GST_CLOCK_TIME_NONE;
+    goto done;
   }
 
   if (!ges_track_element_is_active (child)) {
     GST_WARNING_OBJECT (clip, "Cannot convert the internal time of the "
         "child %" GES_FORMAT " to a timeline time because it is not "
         "active in its track", GES_ARGS (child));
-    return GST_CLOCK_TIME_NONE;
+    goto done;
   }
 
   if (internal_time == GST_CLOCK_TIME_NONE)
-    return GST_CLOCK_TIME_NONE;
+    goto done;
 
   inpoint = _INPOINT (child);
   if (inpoint <= internal_time) {
@@ -4136,12 +4319,14 @@ ges_clip_get_timeline_time_from_internal_time (GESClip * clip,
   g_list_free (time_effects);
 
   if (!GST_CLOCK_TIME_IS_VALID (external_time))
-    return GST_CLOCK_TIME_NONE;
+    goto done;
 
   start = _START (clip);
 
-  if (!decrease)
-    return start + external_time;
+  if (!decrease) {
+    ret = start + external_time;
+    goto done;
+  }
 
   if (external_time > start) {
     GST_INFO_OBJECT (clip, "Cannot convert the internal time %"
@@ -4157,10 +4342,14 @@ ges_clip_get_timeline_time_from_internal_time (GESClip * clip,
         GST_TIME_ARGS (external_time - start),
         GES_TIMELINE_ELEMENT_NAME (clip));
 
-    return GST_CLOCK_TIME_NONE;
+    goto done;
   }
 
-  return start - external_time;
+  ret = start - external_time;
+
+done:
+  _ges_timeline_element_unlock (GES_TIMELINE_ELEMENT (clip), _locked_timeline);
+  return ret;
 }
 
 /**
@@ -4219,18 +4408,22 @@ ges_clip_get_internal_time_from_timeline_time (GESClip * clip,
     GESTrackElement * child, GstClockTime timeline_time, GError ** error)
 {
   GstClockTime inpoint, start, external_time;
+  GstClockTime ret = GST_CLOCK_TIME_NONE;
   gboolean decrease;
   GESTrack *track;
   GList *tmp, *time_effects;
+  GESTimeline *_locked_timeline;
 
   g_return_val_if_fail (GES_IS_CLIP (clip), GST_CLOCK_TIME_NONE);
   g_return_val_if_fail (GES_IS_TRACK_ELEMENT (child), GST_CLOCK_TIME_NONE);
   g_return_val_if_fail (!error || !*error, GST_CLOCK_TIME_NONE);
 
+  _locked_timeline = _ges_timeline_element_lock (GES_TIMELINE_ELEMENT (clip));
+
   if (!g_list_find (GES_CONTAINER_CHILDREN (clip), child)) {
     GST_WARNING_OBJECT (clip, "The track element %" GES_FORMAT " is not "
         "a child of the clip", GES_ARGS (child));
-    return GST_CLOCK_TIME_NONE;
+    goto done;
   }
 
   track = ges_track_element_get_track (child);
@@ -4239,18 +4432,18 @@ ges_clip_get_internal_time_from_timeline_time (GESClip * clip,
     GST_WARNING_OBJECT (clip, "Cannot convert the timeline time to an "
         "internal time of child %" GES_FORMAT " because it is not part "
         "of a track", GES_ARGS (child));
-    return GST_CLOCK_TIME_NONE;
+    goto done;
   }
 
   if (!ges_track_element_is_active (child)) {
     GST_WARNING_OBJECT (clip, "Cannot convert the timeline time to an "
         "internal time of child %" GES_FORMAT " because it is not active "
         "in its track", GES_ARGS (child));
-    return GST_CLOCK_TIME_NONE;
+    goto done;
   }
 
   if (timeline_time == GST_CLOCK_TIME_NONE)
-    return GST_CLOCK_TIME_NONE;
+    goto done;
 
   start = _START (clip);
   if (start <= timeline_time) {
@@ -4280,12 +4473,14 @@ ges_clip_get_internal_time_from_timeline_time (GESClip * clip,
   g_list_free (time_effects);
 
   if (!GST_CLOCK_TIME_IS_VALID (external_time))
-    return GST_CLOCK_TIME_NONE;
+    goto done;
 
   inpoint = _INPOINT (child);
 
-  if (!decrease)
-    return inpoint + external_time;
+  if (!decrease) {
+    ret = inpoint + external_time;
+    goto done;
+  }
 
   if (external_time > inpoint) {
     GST_INFO_OBJECT (clip, "Cannot convert the timeline time %"
@@ -4300,10 +4495,14 @@ ges_clip_get_internal_time_from_timeline_time (GESClip * clip,
         GST_TIME_ARGS (external_time - inpoint),
         GES_TIMELINE_ELEMENT_NAME (child), GES_TIMELINE_ELEMENT_NAME (clip));
 
-    return GST_CLOCK_TIME_NONE;
+    goto done;
   }
 
-  return inpoint - external_time;
+  ret = inpoint - external_time;
+
+done:
+  _ges_timeline_element_unlock (GES_TIMELINE_ELEMENT (clip), _locked_timeline);
+  return ret;
 }
 
 static GstClockTime
@@ -4426,6 +4625,7 @@ ges_clip_get_timeline_time_from_source_frame (GESClip * clip,
   GstClockTime timeline_time = GST_CLOCK_TIME_NONE;
   GstClockTime frame_ts;
   GESClipAsset *asset;
+  GESTimeline *_locked_timeline;
 
   g_return_val_if_fail (GES_IS_CLIP (clip), GST_CLOCK_TIME_NONE);
   g_return_val_if_fail (!error || !*error, GST_CLOCK_TIME_NONE);
@@ -4433,10 +4633,12 @@ ges_clip_get_timeline_time_from_source_frame (GESClip * clip,
   if (!GES_FRAME_NUMBER_IS_VALID (frame_number))
     return GST_CLOCK_TIME_NONE;
 
+  _locked_timeline = _ges_timeline_element_lock (GES_TIMELINE_ELEMENT (clip));
+
   asset = GES_CLIP_ASSET (ges_extractable_get_asset (GES_EXTRACTABLE (clip)));
   frame_ts = ges_clip_asset_get_frame_time (asset, frame_number);
   if (!GST_CLOCK_TIME_IS_VALID (frame_ts))
-    return GST_CLOCK_TIME_NONE;
+    goto done;
 
   timeline_time = _convert_core_time (clip, frame_ts, TRUE, NULL, error);
 
@@ -4447,6 +4649,8 @@ ges_clip_get_timeline_time_from_source_frame (GESClip * clip,
         "timeline.", frame_number);
   }
 
+done:
+  _ges_timeline_element_unlock (GES_TIMELINE_ELEMENT (clip), _locked_timeline);
   return timeline_time;
 }
 
@@ -4484,32 +4688,85 @@ ges_clip_get_timeline_time_from_source_frame (GESClip * clip,
  * @child or a copy of child, or %NULL if the element could not be added.
  *
  * Since: 1.18
+ *
+ * Deprecated: 1.30: Use ges_clip_add_child_to_track_full() instead for MT-safety.
  */
 GESTrackElement *
 ges_clip_add_child_to_track (GESClip * clip, GESTrackElement * child,
     GESTrack * track, GError ** error)
 {
-  GESTimeline *timeline;
   GESTrackElement *el;
+
+  el = ges_clip_add_child_to_track_full (clip, child, track, error);
+  if (el)
+    gst_object_unref (el);
+
+  return el;
+}
+
+/**
+ * ges_clip_add_child_to_track_full:
+ * @clip: A #GESClip
+ * @child: A child of @clip
+ * @track: The track to add @child to
+ * @error: Return location for an error
+ *
+ * Adds the track element child of the clip to a specific track.
+ *
+ * If the given child is already in another track, this will create a copy
+ * of the child, add it to the clip, and add this copy to the track.
+ *
+ * You should only call this whilst a clip is part of a #GESTimeline, and
+ * for tracks that are in the same timeline.
+ *
+ * This method is an alternative to using the
+ * #GESTimeline::select-tracks-for-object signal, but can be used to
+ * complement it when, say, you wish to copy a clip's children from one
+ * track into a new one.
+ *
+ * When the child is a core child, it must be added to a track that does
+ * not already contain another core child of the same clip. If it is not a
+ * core child (an additional effect), then it must be added to a track
+ * that already contains one of the core children of the same clip.
+ *
+ * This method can also fail if the adding the track element to the track
+ * would break a configuration rule of the corresponding #GESTimeline,
+ * such as causing three sources to overlap at a single time, or causing
+ * a source to completely overlap another in the same track.
+ *
+ * Returns: (transfer full): The element that was added to @track, either
+ * @child or a copy of child, or %NULL if the element could not be added.
+ *
+ * Since: 1.30
+ */
+GESTrackElement *
+ges_clip_add_child_to_track_full (GESClip * clip, GESTrackElement * child,
+    GESTrack * track, GError ** error)
+{
+  GESTimeline *timeline;
+  GESTrackElement *el = NULL;
   GESTrack *current_track;
+  GESTimeline *_locked_timeline;
 
   g_return_val_if_fail (GES_IS_CLIP (clip), NULL);
   g_return_val_if_fail (GES_IS_TRACK_ELEMENT (child), NULL);
   g_return_val_if_fail (GES_IS_TRACK (track), NULL);
   g_return_val_if_fail (!error || !*error, NULL);
 
+  _locked_timeline = _ges_timeline_element_lock (GES_TIMELINE_ELEMENT (clip));
+
   timeline = GES_TIMELINE_ELEMENT_TIMELINE (clip);
 
   if (!g_list_find (GES_CONTAINER_CHILDREN (clip), child)) {
     GST_WARNING_OBJECT (clip, "The track element %" GES_FORMAT " is not "
         "a child of the clip", GES_ARGS (child));
-    return NULL;
+    goto done;
   }
 
   if (!timeline) {
     GST_WARNING_OBJECT (clip, "Cannot add children to tracks unless "
         "the clip is part of a timeline");
-    return NULL;
+    goto done;
   }
 
   if (timeline != ges_track_get_timeline (track)) {
@@ -4517,7 +4774,7 @@ ges_clip_add_child_to_track (GESClip * clip, GESTrackElement * child,
         GST_PTR_FORMAT " because its timeline is %" GST_PTR_FORMAT
         " rather than that of the clip %" GST_PTR_FORMAT,
         track, ges_track_get_timeline (track), timeline);
-    return NULL;
+    goto done;
   }
 
   current_track = ges_track_element_get_track (child);
@@ -4525,7 +4782,7 @@ ges_clip_add_child_to_track (GESClip * clip, GESTrackElement * child,
   if (current_track == track) {
     GST_WARNING_OBJECT (clip, "Child %s" GES_FORMAT " is already in the "
         "track %" GST_PTR_FORMAT, GES_ARGS (child), track);
-    return NULL;
+    goto done;
   }
 
   /* copy if the element is already in a track */
@@ -4546,7 +4803,7 @@ ges_clip_add_child_to_track (GESClip * clip, GESTrackElement * child,
       GST_ERROR_OBJECT (clip, "Could not add a copy of the track element %"
           GES_FORMAT " to the clip so cannot add it to the track %"
           GST_PTR_FORMAT, GES_ARGS (child), track);
-      return NULL;
+      goto done;
     }
   } else {
     el = child;
@@ -4557,7 +4814,8 @@ ges_clip_add_child_to_track (GESClip * clip, GESTrackElement * child,
         GES_FORMAT " to the track %" GST_PTR_FORMAT, GES_ARGS (el), track);
     if (el != child)
       ges_container_remove (GES_CONTAINER (clip), GES_TIMELINE_ELEMENT (el));
-    return NULL;
+    el = NULL;
+    goto done;
   }
 
   /* call _child_track_changed now so that the "active" status of the
@@ -4569,5 +4827,9 @@ ges_clip_add_child_to_track (GESClip * clip, GESTrackElement * child,
    * is already set before the duration-limit is calculated */
   _update_active_for_track (clip, el);
 
+  gst_object_ref (el);
+
+done:
+  _ges_timeline_element_unlock (GES_TIMELINE_ELEMENT (clip), _locked_timeline);
   return el;
 }

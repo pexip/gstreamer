@@ -29,6 +29,7 @@
 #include "transportstream.h"
 #include "transportreceivebin.h"
 #include "utils.h"
+#include "webrtcsdp.h"
 #include "webrtctransceiver.h"
 
 #include <stdlib.h>
@@ -641,7 +642,7 @@ _get_stats_from_ice_candidates (GstWebRTCBin * webrtc,
   if (can->ABI.abi.related_address)
     gst_structure_set (stats, "related-address", G_TYPE_STRING,
         can->ABI.abi.related_address, NULL);
-  if (can->ABI.abi.related_port)
+  if (can->ABI.abi.related_port != -1)
     gst_structure_set (stats, "related-port", G_TYPE_UINT,
         can->ABI.abi.related_port, NULL);
   if (can->ABI.abi.username_fragment)
@@ -668,6 +669,7 @@ _get_stats_from_ice_transport (GstWebRTCBin * webrtc,
   gchar *id;
   gchar *local_cand_id = NULL, *remote_cand_id = NULL;
   double ts;
+  GstWebRTCICECandidatePair *selected_pair;
   GstWebRTCICECandidateStats *local_cand = NULL, *remote_cand = NULL;
 
   gst_structure_get_double (s, "timestamp", &ts);
@@ -714,23 +716,30 @@ _get_stats_from_ice_transport (GstWebRTCBin * webrtc,
      unsigned long long            responseBytesSent;
    */
 
-  if (gst_webrtc_ice_get_selected_pair (webrtc->priv->ice, stream,
-          &local_cand, &remote_cand)) {
-    local_cand_id =
-        _get_stats_from_ice_candidates (webrtc, local_cand, transport_id,
-        "local", s);
-    remote_cand_id =
-        _get_stats_from_ice_candidates (webrtc, remote_cand, transport_id,
-        "remote", s);
+  selected_pair =
+      gst_webrtc_ice_transport_get_selected_candidate_pair (transport);
+  if (selected_pair) {
+    if (selected_pair->local) {
+      local_cand_id =
+          _get_stats_from_ice_candidates (webrtc, selected_pair->local->stats,
+          transport_id, "local", s);
+      gst_structure_set (stats, "local-candidate-id", G_TYPE_STRING,
+          local_cand_id, NULL);
+    }
+    if (selected_pair->remote) {
+      remote_cand_id =
+          _get_stats_from_ice_candidates (webrtc, selected_pair->remote->stats,
+          transport_id, "remote", s);
 
-    gst_structure_set (stats, "local-candidate-id", G_TYPE_STRING,
-        local_cand_id, NULL);
-    gst_structure_set (stats, "remote-candidate-id", G_TYPE_STRING,
-        remote_cand_id, NULL);
-  } else
+      gst_structure_set (stats, "remote-candidate-id", G_TYPE_STRING,
+          remote_cand_id, NULL);
+    }
+    gst_webrtc_ice_candidate_pair_free (selected_pair);
+  } else {
     GST_INFO_OBJECT (webrtc,
         "No selected ICE candidate pair was found for transport %s",
         GST_OBJECT_NAME (transport));
+  }
 
   /* XXX: these stats are at the rtp session level but there isn't a specific
    * stats structure for that. The RTCIceCandidatePairStats is the closest with
@@ -755,7 +764,7 @@ _get_stats_from_ice_transport (GstWebRTCBin * webrtc,
 
 /* https://www.w3.org/TR/webrtc-stats/#dom-rtctransportstats */
 static gchar *
-_get_stats_from_dtls_transport (GstWebRTCBin * webrtc,
+_get_transport_stats_from_dtls_transport (GstWebRTCBin * webrtc,
     GstWebRTCDTLSTransport * transport, GstWebRTCICEStream * stream,
     const GstStructure * twcc_stats, GstStructure * s)
 {
@@ -764,6 +773,7 @@ _get_stats_from_dtls_transport (GstWebRTCBin * webrtc,
   double ts;
   gchar *ice_id;
   GstWebRTCDTLSRole dtls_role = GST_WEBRTC_DTLS_ROLE_UNKNOWN;
+  guint dtls_version = 0;
 
   gst_structure_get_double (s, "timestamp", &ts);
 
@@ -782,13 +792,6 @@ _get_stats_from_dtls_transport (GstWebRTCBin * webrtc,
     DOMString             selectedCandidatePairId;
     DOMString             localCertificateId;
     DOMString             remoteCertificateId;
-*/
-
-/* XXX: RTCCertificateStats
-    DOMString fingerprint;
-    DOMString fingerprintAlgorithm;
-    DOMString base64Certificate;
-    DOMString issuerCertificateId;
 */
 
   ice_id =
@@ -811,10 +814,60 @@ _get_stats_from_dtls_transport (GstWebRTCBin * webrtc,
       "dtls-state", GST_TYPE_WEBRTC_DTLS_TRANSPORT_STATE, transport->state,
       NULL);
 
+  g_object_get (transport->dtlssrtpenc, "dtls-version", &dtls_version, NULL);
+  if (dtls_version) {
+    gchar *version = g_strdup_printf ("%04X", dtls_version);
+    gst_structure_set (stats, "tls-version", G_TYPE_STRING, version, NULL);
+    g_free (version);
+  }
+
+  /* The dtls agent hard-codes its SSL context to SRTP_AES128_CM_SHA1_80 and
+     uses an ECDSA certificate. These values should be adapted if the agent
+     settings change. */
+  gst_structure_set (stats, "dtls-cipher", G_TYPE_STRING,
+      "TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256", "srtp-cipher",
+      G_TYPE_STRING, "SRTP_AES128_CM_HMAC_SHA1_80", NULL);
+
   gst_structure_set (s, id, GST_TYPE_STRUCTURE, stats, NULL);
   gst_structure_free (stats);
 
   return id;
+}
+
+/* https://www.w3.org/TR/webrtc-stats/#certificatestats-dict* */
+static void
+_get_certificate_stats_from_dtls_transport (GstWebRTCBin * webrtc,
+    GstWebRTCDTLSTransport * transport, GstStructure * s)
+{
+  GstStructure *stats;
+  gchar *id;
+  double ts;
+  gchar *pem;
+  gchar *fingerprint;
+
+  gst_structure_get_double (s, "timestamp", &ts);
+
+  id = g_strdup_printf ("certificate-stats_%s", GST_OBJECT_NAME (transport));
+  stats = gst_structure_new_empty (id);
+  _set_base_stats (stats, GST_WEBRTC_STATS_CERTIFICATE, ts, id);
+
+  g_object_get (transport, "certificate", &pem, NULL);
+
+  fingerprint = _generate_fingerprint_from_certificate (pem, G_CHECKSUM_SHA256);
+  gst_structure_set (stats, "fingerprint", G_TYPE_STRING, fingerprint,
+      "fingerprint-algorithm", G_TYPE_STRING, "sha-256",
+      "base64-certificate", G_TYPE_STRING, pem, NULL);
+
+  g_free (fingerprint);
+  g_free (pem);
+
+  /* XXX: RTCCertificateStats
+     DOMString issuerCertificateId;
+   */
+
+  gst_structure_set (s, id, GST_TYPE_STRUCTURE, stats, NULL);
+  gst_structure_free (stats);
+  g_free (id);
 }
 
 /* https://www.w3.org/TR/webrtc-stats/#codec-dict* */
@@ -994,6 +1047,9 @@ _get_stats_from_pad (GstWebRTCBin * webrtc, GstPad * pad, GstStructure * s)
     case GST_WEBRTC_KIND_VIDEO:
       ts_stats.kind = "video";
       break;
+    case GST_WEBRTC_KIND_APPLICATION:
+      ts_stats.kind = "application";
+      break;
     case GST_WEBRTC_KIND_UNKNOWN:
       ts_stats.kind = NULL;
       break;
@@ -1020,8 +1076,12 @@ _get_stats_from_pad (GstWebRTCBin * webrtc, GstPad * pad, GstStructure * s)
       &ts_stats.source_stats, NULL);
 
   ts_stats.transport_id =
-      _get_stats_from_dtls_transport (webrtc, ts_stats.stream->transport,
+      _get_transport_stats_from_dtls_transport (webrtc,
+      ts_stats.stream->transport,
       GST_WEBRTC_ICE_STREAM (ts_stats.stream->stream), twcc_stats, s);
+
+  _get_certificate_stats_from_dtls_transport (webrtc,
+      ts_stats.stream->transport, s);
 
   GST_DEBUG_OBJECT (webrtc, "retrieving rtp stream stats from transport %"
       GST_PTR_FORMAT " rtp session %" GST_PTR_FORMAT " with %u rtp sources, "
@@ -1064,9 +1124,13 @@ _get_data_channel_transport_stats (GstWebRTCBin * webrtc, GstStructure * s)
       ts_stats.stream->session_id, &gst_rtp_session);
 
   ts_stats.transport_id =
-      _get_stats_from_dtls_transport (webrtc, ts_stats.stream->transport,
+      _get_transport_stats_from_dtls_transport (webrtc,
+      ts_stats.stream->transport,
       GST_WEBRTC_ICE_STREAM (ts_stats.stream->stream), NULL, s);
   g_clear_pointer (&ts_stats.transport_id, g_free);
+
+  _get_certificate_stats_from_dtls_transport (webrtc,
+      ts_stats.stream->transport, s);
 }
 
 GstStructure *

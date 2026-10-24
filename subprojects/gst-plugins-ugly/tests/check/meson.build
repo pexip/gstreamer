@@ -1,15 +1,8 @@
 # name, condition when to skip the test and extra dependencies
 ugly_tests = [
-  [ 'elements/x264enc', not x264_dep.found(), [ x264_dep, gmodule_dep ] ],
+  [ 'elements/x264enc', not x264_dep.found(), x264_dep ],
   [ 'generic/states' ],
 ]
-
-# FIXME: unistd dependency or not tested yet on windows
-if host_machine.system() != 'windows'
-  ugly_tests += [
-    [ 'elements/mpeg2dec', not mpeg2_dep.found() or not cdata.has('HAVE_UNISTD_H'), [ gstvideo_dep ] ],
-  ]
-endif
 
 fsmod = import('fs')
 test_defines = [
@@ -75,6 +68,7 @@ foreach t : ugly_tests
     env.set('GST_PLUGIN_PATH_1_0', [meson.global_build_root()] + pluginsdirs)
     env.set('GST_REGISTRY', join_paths(meson.current_build_dir(), '@0@.registry'.format(test_name)))
     env.set('GST_PLUGIN_SCANNER_1_0', gst_plugin_scanner_path)
+
     test(test_name, exe, env: env, timeout: 3 * 60)
   endif
 endforeach

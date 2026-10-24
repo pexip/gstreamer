@@ -385,7 +385,7 @@ gst_gl_handle_set_context (GstElement * element, GstContext * context,
     if (gst_structure_get (s, "context", GST_TYPE_GL_CONTEXT,
             &context_replacement, NULL)) {
       context_display = gst_gl_context_get_display (context_replacement);
-      element_display = display_replacement ? display_replacement : *display;
+      element_display = *display;
       if (element_display
           && (gst_gl_display_get_handle_type (element_display) &
               gst_gl_display_get_handle_type (context_display)) == 0) {
@@ -626,17 +626,6 @@ gst_gl_get_plane_data_size (const GstVideoInfo * info,
   const GstVideoFormatInfo *finfo = info->finfo;
   gint comp[GST_VIDEO_MAX_COMPONENTS];
   gint padded_height;
-  gsize plane_size;
-
-  gst_video_format_info_component (info->finfo, plane, comp);
-
-  padded_height = info->height;
-
-  if (align)
-    padded_height += align->padding_top + align->padding_bottom;
-
-  padded_height =
-      GST_VIDEO_FORMAT_INFO_SCALE_HEIGHT (info->finfo, comp[0], padded_height);
 
   if (GST_VIDEO_FORMAT_INFO_IS_TILED (finfo)) {
     gsize stride;
@@ -648,12 +637,23 @@ gst_gl_get_plane_data_size (const GstVideoInfo * info,
     y_tiles = GST_VIDEO_TILE_Y_TILES (stride);
     tile_size = GST_VIDEO_FORMAT_INFO_TILE_SIZE (info->finfo, plane);
 
-    plane_size = x_tiles * y_tiles * tile_size;
-  } else {
-    plane_size = GST_VIDEO_INFO_PLANE_STRIDE (info, plane) * padded_height;
+    return x_tiles * y_tiles * tile_size;
   }
 
-  return plane_size;
+  gst_video_format_info_component (info->finfo, plane, comp);
+
+  padded_height = info->height;
+  if (align)
+    padded_height += align->padding_top + align->padding_bottom;
+
+  /* Round according to the UV vertical subsampling */
+  padded_height =
+      GST_ROUND_UP_N (padded_height, 1 << info->finfo->h_sub[GST_VIDEO_COMP_U]);
+
+  padded_height =
+      GST_VIDEO_FORMAT_INFO_SCALE_HEIGHT (info->finfo, comp[0], padded_height);
+
+  return GST_VIDEO_INFO_PLANE_STRIDE (info, plane) * padded_height;
 }
 
 /**
