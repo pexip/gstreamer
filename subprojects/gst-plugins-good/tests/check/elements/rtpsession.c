@@ -3123,6 +3123,483 @@ GST_START_TEST (test_receive_key_unit_rtt_source)
 
 GST_END_TEST;
 
+/* Key unit requests made by a session, for the streams it receives */
+#define KEY_UNIT_OWN_SSRC 0xDEADBEEF
+
+typedef enum
+{
+  /* FIR rather than PLI */
+  KEY_UNIT_FIR = 1 << 0,
+  KEY_UNIT_REDUCED_SIZE = 1 << 1,
+  /* rtcp-key-unit-max-delay is 0, rather than the default */
+  KEY_UNIT_INSTANT = 1 << 2,
+} KeyUnitFlags;
+
+/* The packets of an RTCP buffer, like "RR SDES PLI(deadbeef>11111111)". The
+ * feedback has its sender SSRC and what it is about. A FIR has an item for
+ * each entry, with its sequence number: "FIR(deadbeef>11111111#1)". */
+static gchar *
+rtcp_buffer_describe (GstBuffer * buf)
+{
+  GstRTCPBuffer rtcp = GST_RTCP_BUFFER_INIT;
+  GstRTCPPacket packet;
+  GString *desc = g_string_new (NULL);
+  gboolean more;
+
+  fail_unless (gst_rtcp_buffer_validate_reduced (buf));
+  gst_rtcp_buffer_map (buf, GST_MAP_READ, &rtcp);
+
+  for (more = gst_rtcp_buffer_get_first_packet (&rtcp, &packet); more;
+      more = gst_rtcp_packet_move_to_next (&packet)) {
+    GstRTCPType type = gst_rtcp_packet_get_type (&packet);
+
+    if (desc->len > 0)
+      g_string_append_c (desc, ' ');
+
+    if (type == GST_RTCP_TYPE_SR) {
+      g_string_append (desc, "SR");
+    } else if (type == GST_RTCP_TYPE_RR) {
+      g_string_append (desc, "RR");
+    } else if (type == GST_RTCP_TYPE_SDES) {
+      g_string_append (desc, "SDES");
+    } else if (type == GST_RTCP_TYPE_PSFB
+        && gst_rtcp_packet_fb_get_type (&packet) == GST_RTCP_PSFB_TYPE_PLI) {
+      g_string_append_printf (desc, "PLI(%08x>%08x)",
+          gst_rtcp_packet_fb_get_sender_ssrc (&packet),
+          gst_rtcp_packet_fb_get_media_ssrc (&packet));
+    } else if (type == GST_RTCP_TYPE_PSFB
+        && gst_rtcp_packet_fb_get_type (&packet) == GST_RTCP_PSFB_TYPE_FIR) {
+      const guint8 *fci = gst_rtcp_packet_fb_get_fci (&packet);
+      guint n_entries = gst_rtcp_packet_fb_get_fci_length (&packet) / 2;
+      guint i;
+
+      for (i = 0; i < n_entries; i++)
+        g_string_append_printf (desc, "%sFIR(%08x>%08x#%u)", i > 0 ? " " : "",
+            gst_rtcp_packet_fb_get_sender_ssrc (&packet),
+            GST_READ_UINT32_BE (fci + 8 * i), fci[8 * i + 4]);
+    } else if (type == GST_RTCP_TYPE_RTPFB
+        && gst_rtcp_packet_fb_get_type (&packet) == GST_RTCP_RTPFB_TYPE_NACK) {
+      g_string_append_printf (desc, "NACK(%08x>%08x)",
+          gst_rtcp_packet_fb_get_sender_ssrc (&packet),
+          gst_rtcp_packet_fb_get_media_ssrc (&packet));
+    } else {
+      g_string_append_printf (desc, "?%u", type);
+    }
+  }
+
+  gst_rtcp_buffer_unmap (&rtcp);
+
+  return g_string_free (desc, FALSE);
+}
+
+typedef struct
+{
+  guint regular;
+  guint early;
+} RtcpPacketCounts;
+
+static gboolean
+count_rtcp_packets (G_GNUC_UNUSED GObject * rtpsession,
+    G_GNUC_UNUSED GstBuffer * rtcp_buffer, gboolean is_early,
+    RtcpPacketCounts * counts)
+{
+  if (is_early)
+    counts->early++;
+  else
+    counts->regular++;
+
+  return TRUE;
+}
+
+/* A session requesting key units for the first @n_streams streams of
+ * KEY_UNIT_SSRC_A, B and C. It has the RTCP timing of the session default, or
+ * the one of the instant path with KEY_UNIT_INSTANT. */
+static SessionHarness *
+session_harness_new_key_unit_requester (KeyUnitFlags flags, guint n_streams)
+{
+  SessionHarness *h = session_harness_new ();
+  guint i;
+
+  gst_caps_set_simple (h->caps,
+      (flags & KEY_UNIT_FIR) ? "rtcp-fb-ccm-fir" : "rtcp-fb-nack-pli",
+      G_TYPE_BOOLEAN, TRUE, NULL);
+  /* clear pt-map to remove the cached caps without the feedback */
+  g_signal_emit_by_name (h->session, "clear-pt-map");
+
+  g_object_set (h->internal_session, "internal-ssrc", KEY_UNIT_OWN_SSRC,
+      "rtcp-reduced-size", (flags & KEY_UNIT_REDUCED_SIZE) != 0, NULL);
+  if (flags & KEY_UNIT_INSTANT)
+    g_object_set (h->internal_session, "rtcp-key-unit-max-delay", (guint64) 0,
+        NULL);
+
+  for (i = 0; i < n_streams; i++)
+    fail_unless_equals_int (GST_FLOW_OK,
+        session_harness_recv_rtp (h, generate_test_buffer (0,
+                key_unit_ssrcs[i])));
+
+  /* wait for the RTCP thread to have settled, to ensure that the key unit
+   * requests are considered once they are made */
+  gst_test_clock_wait_for_next_pending_id (h->testclock, NULL);
+
+  return h;
+}
+
+/* The feedback of a key unit request, like "PLI(deadbeef>11111111)" */
+static gchar *
+key_unit_feedback (KeyUnitFlags flags, guint32 ssrc, guint fir_seqnum)
+{
+  if (flags & KEY_UNIT_FIR)
+    return g_strdup_printf ("FIR(%08x>%08x#%u)", KEY_UNIT_OWN_SSRC, ssrc,
+        fir_seqnum);
+
+  return g_strdup_printf ("PLI(%08x>%08x)", KEY_UNIT_OWN_SSRC, ssrc);
+}
+
+/* The whole packet for a key unit request. An early one has no report with
+ * reduced-size RTCP, unlike a regular one. */
+static gchar *
+key_unit_rtcp (KeyUnitFlags flags, gboolean early, guint32 ssrc,
+    guint fir_seqnum)
+{
+  gchar *feedback = key_unit_feedback (flags, ssrc, fir_seqnum);
+  gchar *rtcp;
+
+  if (early && (flags & KEY_UNIT_REDUCED_SIZE))
+    return feedback;
+
+  rtcp = g_strconcat ("RR SDES ", feedback, NULL);
+  g_free (feedback);
+
+  return rtcp;
+}
+
+/* A regular RTCP packet, then 1 ms on. An early packet at the time of the
+ * regular one looks like it to the rules for the early ones that follow, which
+ * would then not be held. */
+static void
+session_harness_send_regular_rtcp (SessionHarness * h)
+{
+  session_harness_produce_rtcp (h, 1);
+  gst_buffer_unref (session_harness_pull_rtcp (h));
+  gst_test_clock_advance_time (h->testclock, GST_MSECOND);
+}
+
+/* The description of the single packet that the RTCP thread has sent by the
+ * time it has settled */
+static gchar *
+session_harness_pull_rtcp_description (SessionHarness * h)
+{
+  GstBuffer *buf;
+  gchar *desc;
+
+  gst_test_clock_wait_for_next_pending_id (h->testclock, NULL);
+  fail_unless_equals_int (1, gst_harness_buffers_in_queue (h->rtcp_h));
+  buf = session_harness_pull_rtcp (h);
+  desc = rtcp_buffer_describe (buf);
+  gst_buffer_unref (buf);
+
+  return desc;
+}
+
+static void
+fail_unless_key_unit_rtcp_sent (SessionHarness * h, KeyUnitFlags flags,
+    gboolean early, guint32 ssrc, guint fir_seqnum)
+{
+  gchar *desc = session_harness_pull_rtcp_description (h);
+  gchar *expected = key_unit_rtcp (flags, early, ssrc, fir_seqnum);
+
+  fail_unless_equals_string (desc, expected);
+  g_free (desc);
+  g_free (expected);
+}
+
+static void
+fail_unless_no_rtcp_sent (SessionHarness * h)
+{
+  gst_test_clock_wait_for_next_pending_id (h->testclock, NULL);
+  fail_unless_equals_int (0, gst_harness_buffers_in_queue (h->rtcp_h));
+}
+
+#define fail_unless_clock_time(h, expected) \
+    fail_unless_equals_uint64 (expected, \
+        gst_clock_get_time (GST_CLOCK ((h)->testclock)))
+
+GST_START_TEST (test_rtcp_key_unit_max_delay_property)
+{
+  SessionHarness *h = session_harness_new ();
+  guint64 max_delay;
+
+  /* 5 s, as it was before there was a property */
+  g_object_get (h->internal_session, "rtcp-key-unit-max-delay", &max_delay,
+      NULL);
+  fail_unless_equals_uint64 (5 * GST_SECOND, max_delay);
+
+  g_object_set (h->internal_session, "rtcp-key-unit-max-delay", (guint64) 0,
+      NULL);
+  g_object_get (h->internal_session, "rtcp-key-unit-max-delay", &max_delay,
+      NULL);
+  fail_unless_equals_uint64 (0, max_delay);
+
+  g_object_set (h->internal_session, "rtcp-key-unit-max-delay",
+      200 * GST_MSECOND, NULL);
+  g_object_get (h->internal_session, "rtcp-key-unit-max-delay", &max_delay,
+      NULL);
+  fail_unless_equals_uint64 (200 * GST_MSECOND, max_delay);
+
+  session_harness_free (h);
+}
+
+GST_END_TEST;
+
+/* The first request after a regular RTCP packet is sent at once, in an early
+ * packet. The one for another stream right after it is sent at once too with
+ * the instant path. By default, the rules of RFC 4585 hold it until about T_rr
+ * after the early packet. */
+GST_START_TEST (test_request_key_unit_after_early_rtcp)
+{
+  KeyUnitFlags flags = __i__;
+  SessionHarness *h = session_harness_new_key_unit_requester (flags, 2);
+  GstClockTime start;
+  gchar *desc, *feedback;
+
+  session_harness_send_regular_rtcp (h);
+  start = gst_clock_get_time (GST_CLOCK (h->testclock));
+
+  session_harness_force_key_unit (h, 0, KEY_UNIT_SSRC_A, TEST_BUF_PT, NULL,
+      NULL);
+  fail_unless_key_unit_rtcp_sent (h, flags, TRUE, KEY_UNIT_SSRC_A, 1);
+  fail_unless_clock_time (h, start);
+
+  session_harness_force_key_unit (h, 0, KEY_UNIT_SSRC_B, TEST_BUF_PT, NULL,
+      NULL);
+  if (flags & KEY_UNIT_INSTANT) {
+    fail_unless_key_unit_rtcp_sent (h, flags, TRUE, KEY_UNIT_SSRC_B, 1);
+    fail_unless_clock_time (h, start);
+  } else {
+    fail_unless_no_rtcp_sent (h);
+
+    /* T_rr is several seconds with this session. The packet is an early one,
+     * or a regular one if it is also time for a report, so only the end of it
+     * is compared. */
+    session_harness_produce_rtcp (h, 1);
+    desc = session_harness_pull_rtcp_description (h);
+    feedback = key_unit_feedback (flags, KEY_UNIT_SSRC_B, 1);
+    fail_unless (g_str_has_suffix (desc, feedback), "unexpected %s", desc);
+    fail_unless (gst_clock_get_time (GST_CLOCK (h->testclock)) >=
+        start + GST_SECOND);
+    g_free (desc);
+    g_free (feedback);
+  }
+
+  session_harness_free (h);
+}
+
+GST_END_TEST;
+
+/* There is no early packet before the first regular one: a request is sent in
+ * the first one, which is made at once with the instant path. */
+GST_START_TEST (test_request_key_unit_first_rtcp)
+{
+  KeyUnitFlags flags = __i__;
+  SessionHarness *h = session_harness_new_key_unit_requester (flags, 1);
+  RtcpPacketCounts counts = { 0, };
+  GstClockTime start = gst_clock_get_time (GST_CLOCK (h->testclock));
+
+  g_signal_connect (h->internal_session, "on-sending-rtcp",
+      G_CALLBACK (count_rtcp_packets), &counts);
+  fail_unless (gst_test_clock_get_next_entry_time (h->testclock) > start);
+
+  session_harness_force_key_unit (h, 0, KEY_UNIT_SSRC_A, TEST_BUF_PT, NULL,
+      NULL);
+  if (flags & KEY_UNIT_INSTANT) {
+    fail_unless_clock_time (h, start);
+  } else {
+    fail_unless_no_rtcp_sent (h);
+    session_harness_produce_rtcp (h, 1);
+    fail_unless (gst_clock_get_time (GST_CLOCK (h->testclock)) > start);
+  }
+
+  /* with the report, even with reduced-size RTCP */
+  fail_unless_key_unit_rtcp_sent (h, flags, FALSE, KEY_UNIT_SSRC_A, 1);
+  fail_unless_equals_int (1, counts.regular);
+  fail_unless_equals_int (0, counts.early);
+
+  session_harness_free (h);
+}
+
+GST_END_TEST;
+
+/* The streams of a bundled or simulcast session that a key unit is requested
+ * for together do not wait for the RTCP of one another: right after one is
+ * sent, the others are sent at once too, with the same sender SSRC. */
+GST_START_TEST (test_request_key_unit_several_ssrcs_instantly)
+{
+  KeyUnitFlags flags = KEY_UNIT_INSTANT | __i__;
+  SessionHarness *h = session_harness_new_key_unit_requester (flags, 3);
+  gboolean sent[3] = { FALSE, };
+  guint n_sent = 0, attempts, i;
+  GstClockTime start;
+
+  session_harness_send_regular_rtcp (h);
+  start = gst_clock_get_time (GST_CLOCK (h->testclock));
+
+  /* The first request is sent at once in any case, being after a regular
+   * packet. As it is sent before the next ones are made, they are held by
+   * default whatever the scheduling of the RTCP thread. */
+  session_harness_force_key_unit (h, 0, KEY_UNIT_SSRC_A, TEST_BUF_PT, NULL,
+      NULL);
+  fail_unless_key_unit_rtcp_sent (h, flags, TRUE, KEY_UNIT_SSRC_A, 1);
+
+  for (i = 1; i < 3; i++)
+    session_harness_force_key_unit (h, 0, key_unit_ssrcs[i], TEST_BUF_PT, NULL,
+        NULL);
+
+  /* in a packet or in several ones, depending on when the RTCP thread gets to
+   * them */
+  for (attempts = 0; n_sent < 2 && attempts < 10; attempts++) {
+    gst_test_clock_wait_for_next_pending_id (h->testclock, NULL);
+
+    while (gst_harness_buffers_in_queue (h->rtcp_h) > 0) {
+      GstBuffer *buf = session_harness_pull_rtcp (h);
+      gchar *desc = rtcp_buffer_describe (buf);
+
+      for (i = 1; i < 3; i++) {
+        gchar *feedback = key_unit_feedback (flags, key_unit_ssrcs[i], 1);
+
+        if (strstr (desc, feedback)) {
+          fail_if (sent[i], "%s sent twice", feedback);
+          sent[i] = TRUE;
+          n_sent++;
+        }
+        g_free (feedback);
+      }
+
+      g_free (desc);
+      gst_buffer_unref (buf);
+    }
+
+    if (n_sent < 2) {
+      /* A request that is made while the RTCP thread makes a packet is waited
+       * for at the time it was made, which the test clock does not release by
+       * itself. It is due, as that is the current time. */
+      GstClockID id = gst_test_clock_process_next_clock_id (h->testclock);
+
+      fail_unless (id != NULL, "%u of 2 sent, the others are held", n_sent);
+      gst_clock_id_unref (id);
+    }
+  }
+
+  fail_unless_equals_int (2, n_sent);
+  fail_unless_clock_time (h, start);
+
+  session_harness_free (h);
+}
+
+GST_END_TEST;
+
+/* A FIR has the sequence number of the stream, that goes up with each one */
+GST_START_TEST (test_request_fir_instantly)
+{
+  KeyUnitFlags flags =
+      KEY_UNIT_INSTANT | KEY_UNIT_FIR | (__i__ ? KEY_UNIT_REDUCED_SIZE : 0);
+  SessionHarness *h = session_harness_new_key_unit_requester (flags, 2);
+  GstClockTime start;
+
+  session_harness_send_regular_rtcp (h);
+  start = gst_clock_get_time (GST_CLOCK (h->testclock));
+
+  session_harness_force_key_unit (h, 0, KEY_UNIT_SSRC_A, TEST_BUF_PT, NULL,
+      NULL);
+  fail_unless_key_unit_rtcp_sent (h, flags, TRUE, KEY_UNIT_SSRC_A, 1);
+  session_harness_force_key_unit (h, 0, KEY_UNIT_SSRC_B, TEST_BUF_PT, NULL,
+      NULL);
+  fail_unless_key_unit_rtcp_sent (h, flags, TRUE, KEY_UNIT_SSRC_B, 1);
+  session_harness_force_key_unit (h, 0, KEY_UNIT_SSRC_A, TEST_BUF_PT, NULL,
+      NULL);
+  fail_unless_key_unit_rtcp_sent (h, flags, TRUE, KEY_UNIT_SSRC_A, 2);
+  fail_unless_clock_time (h, start);
+
+  session_harness_free (h);
+}
+
+GST_END_TEST;
+
+/* Early packets postpone the regular ones, which are still sent about as often
+ * as without them: an early packet becomes a regular one once an interval has
+ * passed since the last regular one. */
+GST_START_TEST (test_request_key_unit_instantly_regular_rtcp)
+{
+  KeyUnitFlags flags = KEY_UNIT_INSTANT | (__i__ ? KEY_UNIT_REDUCED_SIZE : 0);
+  SessionHarness *h = session_harness_new_key_unit_requester (flags, 1);
+  gchar *feedback = key_unit_feedback (flags, KEY_UNIT_SSRC_A, 1);
+  RtcpPacketCounts counts = { 0, };
+  GstClockTime now, last_regular, max_gap = 0;
+  guint i;
+
+  g_signal_connect (h->internal_session, "on-sending-rtcp",
+      G_CALLBACK (count_rtcp_packets), &counts);
+
+  session_harness_send_regular_rtcp (h);
+  last_regular = now = gst_clock_get_time (GST_CLOCK (h->testclock));
+
+  /* 10 seconds with a request every 100 ms, while regular RTCP is every 0.5 s
+   * or so for the session */
+  for (i = 0; i < 100; i++) {
+    guint regular = counts.regular;
+    gchar *desc;
+
+    gst_test_clock_advance_time (h->testclock, 100 * GST_MSECOND);
+    session_harness_force_key_unit (h, 0, KEY_UNIT_SSRC_A, TEST_BUF_PT, NULL,
+        NULL);
+    desc = session_harness_pull_rtcp_description (h);
+    fail_unless (g_str_has_suffix (desc, feedback), "unexpected %s", desc);
+    g_free (desc);
+
+    now = gst_clock_get_time (GST_CLOCK (h->testclock));
+    if (counts.regular > regular) {
+      max_gap = MAX (max_gap, now - last_regular);
+      last_regular = now;
+    }
+  }
+  max_gap = MAX (max_gap, now - last_regular);
+
+  fail_unless (max_gap <= 2 * GST_SECOND, "%u regular packets, up to %"
+      GST_TIME_FORMAT " apart", counts.regular, GST_TIME_ARGS (max_gap));
+
+  g_free (feedback);
+  session_harness_free (h);
+}
+
+GST_END_TEST;
+
+/* NACK is sent at once whatever rtcp-key-unit-max-delay is, also right after a
+ * key unit request */
+GST_START_TEST (test_request_nack_after_key_unit)
+{
+  KeyUnitFlags flags = __i__ ? KEY_UNIT_INSTANT : 0;
+  SessionHarness *h = session_harness_new_key_unit_requester (flags, 1);
+  GstClockTime start;
+  gchar *desc;
+
+  session_harness_send_regular_rtcp (h);
+  start = gst_clock_get_time (GST_CLOCK (h->testclock));
+
+  session_harness_force_key_unit (h, 0, KEY_UNIT_SSRC_A, TEST_BUF_PT, NULL,
+      NULL);
+  fail_unless_key_unit_rtcp_sent (h, flags, TRUE, KEY_UNIT_SSRC_A, 1);
+
+  session_harness_rtp_retransmission_request (h, KEY_UNIT_SSRC_A, 1234, 0, 0,
+      0);
+  desc = session_harness_pull_rtcp_description (h);
+  fail_unless_equals_string (desc, "RR SDES NACK(deadbeef>11111111)");
+  fail_unless_clock_time (h, start);
+  g_free (desc);
+
+  session_harness_free (h);
+}
+
+GST_END_TEST;
+
 /* Memory that can be mapped, but neither shared nor copied */
 typedef struct
 {
@@ -8942,6 +9419,15 @@ rtpsession_suite (void)
   tcase_add_test (tc_chain, test_receive_key_unit_no_sender_ssrc);
   tcase_add_test (tc_chain, test_receive_key_unit_not_our_ssrc);
   tcase_add_loop_test (tc_chain, test_receive_key_unit_rtt_source, 0, 2);
+  tcase_add_test (tc_chain, test_rtcp_key_unit_max_delay_property);
+  tcase_add_loop_test (tc_chain, test_request_key_unit_after_early_rtcp, 0, 8);
+  tcase_add_loop_test (tc_chain, test_request_key_unit_first_rtcp, 0, 8);
+  tcase_add_loop_test (tc_chain,
+      test_request_key_unit_several_ssrcs_instantly, 0, 4);
+  tcase_add_loop_test (tc_chain, test_request_fir_instantly, 0, 2);
+  tcase_add_loop_test (tc_chain, test_request_key_unit_instantly_regular_rtcp,
+      0, 2);
+  tcase_add_loop_test (tc_chain, test_request_nack_after_key_unit, 0, 2);
   tcase_add_test (tc_chain, test_dont_send_rtcp_while_idle);
   tcase_add_test (tc_chain, test_send_rtcp_when_signalled);
   tcase_add_test (tc_chain, test_change_sent_sdes);
