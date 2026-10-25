@@ -3108,45 +3108,98 @@ rtp_session_process_app (RTPSession * sess, GstRTCPPacket * packet,
   }
 }
 
+/* Round-trip time (in ns) to the remote source @requester, or 0 if unknown */
+static GstClockTime
+rtp_session_get_key_unit_rtt (RTPSource * requester, RTPSource * media)
+{
+  guint32 round_trip;
+  GstClockTime rtt;
+
+  /* The RB that @requester sent about @media is the most precise, otherwise
+   * use the last RB it sent about any of our sources. */
+  round_trip = rtp_source_get_received_rb_round_trip (media, requester->ssrc);
+  if (round_trip == 0)
+    rtp_source_get_last_rb (requester, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+        &round_trip);
+  if (round_trip == 0)
+    return 0;
+
+  rtt = gst_util_uint64_scale (round_trip, GST_SECOND, 65536);
+
+  /* Sanity check to avoid always ignoring PLI/FIR if we receive RTCP
+   * packets with erroneous values resulting in crazy high RTT. */
+  if (rtt > 5 * GST_SECOND)
+    rtt = GST_SECOND / 2;
+
+  return rtt;
+}
+
+/* Decide whether a PLI/FIR from @requester about our source @media is
+ * forwarded. A request is dropped if the same requester already got one
+ * accepted for the same media SSRC less than 2 RTT ago; requests about other
+ * media SSRCs are independent, as a session can carry several streams that
+ * are all requested with the same sender SSRC. PLI and FIR share the state.
+ * The state is updated when the request is accepted. */
+static gboolean
+rtp_session_accept_key_unit_request (RTPSource * requester, RTPSource * media,
+    gboolean fir, GstClockTime current_time)
+{
+  GstClockTime *last;
+
+  last = g_hash_table_lookup (requester->last_keyframe_requests,
+      GUINT_TO_POINTER (media->ssrc));
+  if (last == NULL) {
+    last = g_new (GstClockTime, 1);
+    g_hash_table_insert (requester->last_keyframe_requests,
+        GUINT_TO_POINTER (media->ssrc), last);
+  } else {
+    GstClockTime rtt = rtp_session_get_key_unit_rtt (requester, media);
+
+    if (rtt != 0 && current_time - *last < 2 * rtt) {
+      media->stats.recv_key_unit_throttled_count++;
+      /* A dropped request delays the key frame by at least one retry */
+      GST_INFO ("Ignoring %s request from %08x about %08x because one was "
+          "accepted less than 2 RTT ago (%" GST_TIME_FORMAT " < 2 * %"
+          GST_TIME_FORMAT ")", fir ? "FIR" : "PLI", requester->ssrc,
+          media->ssrc, GST_TIME_ARGS (current_time - *last),
+          GST_TIME_ARGS (rtt));
+      return FALSE;
+    }
+  }
+
+  *last = current_time;
+
+  return TRUE;
+}
+
 static gboolean
 rtp_session_request_local_key_unit (RTPSession * sess, RTPSource * src,
     const guint32 * ssrcs, guint num_ssrcs, gboolean fir,
     GstClockTime current_time)
 {
-  guint32 round_trip = 0;
-  gint i;
+  gboolean forwarded = FALSE;
+  guint i;
 
   g_return_val_if_fail (ssrcs != NULL && num_ssrcs > 0, FALSE);
 
-  rtp_source_get_last_rb (src, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
-      &round_trip);
-
-  if (src->last_keyframe_request != GST_CLOCK_TIME_NONE && round_trip) {
-    GstClockTime round_trip_in_ns = gst_util_uint64_scale (round_trip,
-        GST_SECOND, 65536);
-
-    /* Sanity check to avoid always ignoring PLI/FIR if we receive RTCP
-     * packets with erroneous values resulting in crazy high RTT. */
-    if (round_trip_in_ns > 5 * GST_SECOND)
-      round_trip_in_ns = GST_SECOND / 2;
-
-    if (current_time - src->last_keyframe_request < 2 * round_trip_in_ns) {
-      GST_DEBUG ("Ignoring %s request from %X because one was send without one "
-          "RTT (%" GST_TIME_FORMAT " < %" GST_TIME_FORMAT ")",
-          fir ? "FIR" : "PLI", rtp_source_get_ssrc (src),
-          GST_TIME_ARGS (current_time - src->last_keyframe_request),
-          GST_TIME_ARGS (round_trip_in_ns));
-      return FALSE;
-    }
-  }
-
-  src->last_keyframe_request = current_time;
+  /* The session lock is released when forwarding the requests */
+  g_object_ref (src);
 
   for (i = 0; i < num_ssrcs; ++i) {
+    RTPSource *media = find_source (sess, ssrcs[i]);
+
+    if (media == NULL || !media->internal)
+      continue;
+
+    if (!rtp_session_accept_key_unit_request (src, media, fir, current_time))
+      continue;
+
     GST_LOG ("received %s request from %X about %X %p(%p)",
         fir ? "FIR" : "PLI",
         rtp_source_get_ssrc (src), ssrcs[i], sess->callbacks.process_rtp,
         sess->callbacks.request_key_unit);
+
+    forwarded = TRUE;
 
     RTP_SESSION_UNLOCK (sess);
     sess->callbacks.request_key_unit (sess, ssrcs[i], fir,
@@ -3154,7 +3207,9 @@ rtp_session_request_local_key_unit (RTPSession * sess, RTPSource * src,
     RTP_SESSION_LOCK (sess);
   }
 
-  return TRUE;
+  g_object_unref (src);
+
+  return forwarded;
 }
 
 static void

@@ -105,6 +105,7 @@ static GQuark quark_rb_ssrc;
 static GQuark quark_rb_sender_ssrc;
 static GQuark quark_received_bye;
 static GQuark quark_recv_fir_count;
+static GQuark quark_recv_key_unit_throttled_count;
 static GQuark quark_recv_nack_count;
 static GQuark quark_recv_packet_rate;
 static GQuark quark_recv_pli_count;
@@ -172,6 +173,8 @@ rtp_source_class_init (RTPSourceClass * klass)
   quark_rb_sender_ssrc = g_quark_from_static_string ("rb-sender-ssrc");
   quark_received_bye = g_quark_from_static_string ("received-bye");
   quark_recv_fir_count = g_quark_from_static_string ("recv-fir-count");
+  quark_recv_key_unit_throttled_count =
+      g_quark_from_static_string ("recv-key-unit-throttled-count");
   quark_recv_nack_count = g_quark_from_static_string ("recv-nack-count");
   quark_recv_packet_rate = g_quark_from_static_string ("recv-packet-rate");
   quark_recv_pli_count = g_quark_from_static_string ("recv-pli-count");
@@ -288,6 +291,9 @@ rtp_source_class_init (RTPSourceClass * klass)
    *
    * * "octets-sent"  G_TYPE_UINT64   number of payload bytes we sent
    * * "packets-sent" G_TYPE_UINT64   number of packets we sent
+   * * "recv-key-unit-throttled-count" G_TYPE_UINT number of PLI/FIR requests
+   *   for this source that were ignored because the same remote source had
+   *   already requested a key unit less than 2 round-trips earlier
    *
    * The following fields make sense for non-internal sources and will only
    * increase when "is-sender" is TRUE.
@@ -418,6 +424,7 @@ rtp_source_reset (RTPSource * src)
   src->sent_bye = FALSE;
   g_hash_table_remove_all (src->reported_in_sr_of);
   g_hash_table_remove_all (src->received_rr);
+  g_hash_table_remove_all (src->last_keyframe_requests);
   g_queue_foreach (src->retained_feedback, (GFunc) gst_buffer_unref, NULL);
   g_queue_clear (src->retained_feedback);
   src->last_rtptime = -1;
@@ -476,8 +483,8 @@ rtp_source_init (RTPSource * src)
   src->reported_in_sr_of = g_hash_table_new (g_direct_hash, g_direct_equal);
   src->received_rr =
       g_hash_table_new_full (g_direct_hash, g_direct_equal, NULL, g_free);
-
-  src->last_keyframe_request = GST_CLOCK_TIME_NONE;
+  src->last_keyframe_requests =
+      g_hash_table_new_full (g_direct_hash, g_direct_equal, NULL, g_free);
 
   rtp_source_reset (src);
 
@@ -522,6 +529,7 @@ rtp_source_finalize (GObject * object)
 
   g_hash_table_unref (src->reported_in_sr_of);
   g_hash_table_unref (src->received_rr);
+  g_hash_table_unref (src->last_keyframe_requests);
 
   G_OBJECT_CLASS (rtp_source_parent_class)->finalize (object);
 }
@@ -645,6 +653,8 @@ rtp_source_create_stats (RTPSource * src)
           quark_packets_sent, G_TYPE_UINT64, src->stats.packets_sent,
           quark_recv_pli_count, G_TYPE_UINT, src->stats.recv_pli_count,
           quark_recv_fir_count, G_TYPE_UINT, src->stats.recv_fir_count,
+          quark_recv_key_unit_throttled_count, G_TYPE_UINT,
+          src->stats.recv_key_unit_throttled_count,
           quark_recv_nack_count, G_TYPE_UINT, src->stats.recv_nack_count, NULL);
     } else {
       gst_structure_id_set (s,
@@ -1333,6 +1343,7 @@ init_seq (RTPSource * src, guint16 seq)
   src->stats.prev_expected = 0;
   src->stats.recv_pli_count = 0;
   src->stats.recv_fir_count = 0;
+  src->stats.recv_key_unit_throttled_count = 0;
 
   /* if there are queued packets, consider them too in the stats */
   g_queue_foreach (src->packets, (GFunc) update_queued_stats, src);
@@ -2195,6 +2206,33 @@ rtp_source_get_last_rb (RTPSource * src, guint32 * ssrc,
     *round_trip = curr->round_trip;
 
   return TRUE;
+}
+
+/**
+ * rtp_source_get_received_rb_round_trip:
+ * @src: an internal #RTPSource
+ * @sender_ssrc: SSRC of the remote source that sent the report
+ *
+ * Get the round-trip time computed from the last RB that @sender_ssrc sent
+ * about @src. Unlike rtp_source_get_last_rb(), this is not affected by the RBs
+ * that @sender_ssrc sent about our other sources in the same session.
+ *
+ * Returns: the round-trip time (in NTP Short Format, 16.16 fixed point), or 0
+ * if @sender_ssrc did not send an RB about @src or the round-trip time could
+ * not be computed from it (for example because it carried no LSR).
+ */
+guint32
+rtp_source_get_received_rb_round_trip (RTPSource * src, guint32 sender_ssrc)
+{
+  RTPReceiverReport *rr;
+
+  g_return_val_if_fail (RTP_IS_SOURCE (src), 0);
+
+  rr = g_hash_table_lookup (src->received_rr, GUINT_TO_POINTER (sender_ssrc));
+  if (rr == NULL)
+    return 0;
+
+  return rr->round_trip;
 }
 
 gboolean
