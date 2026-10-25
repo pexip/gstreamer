@@ -83,6 +83,7 @@ enum
 #define DEFAULT_SSRC_COLLISION_DETECTION TRUE
 #define DEFAULT_RTP_PROFILE          GST_RTP_PROFILE_AVP
 #define DEFAULT_RTCP_REDUCED_SIZE    FALSE
+#define DEFAULT_RTCP_KEY_UNIT_MAX_DELAY (5 * GST_SECOND)
 #define DEFAULT_RTCP_DISABLE_SR_TIMESTAMP FALSE
 #define DEFAULT_FAVOR_NEW            FALSE
 #define DEFAULT_TWCC_FEEDBACK_INTERVAL GST_CLOCK_TIME_NONE
@@ -116,6 +117,7 @@ enum
   PROP_STATS_NOTIFY_MIN_INTERVAL,
   PROP_RTP_PROFILE,
   PROP_RTCP_REDUCED_SIZE,
+  PROP_RTCP_KEY_UNIT_MAX_DELAY,
   PROP_RTCP_DISABLE_SR_TIMESTAMP,
   PROP_TWCC_FEEDBACK_INTERVAL,
   PROP_UPDATE_NTP64_HEADER_EXT,
@@ -745,6 +747,26 @@ rtp_session_class_init (RTPSessionClass * klass)
       DEFAULT_RTCP_REDUCED_SIZE, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS);
 
   /**
+   * RTPSession:rtcp-key-unit-max-delay:
+   *
+   * The maximum time the early RTCP packet carrying a PLI or FIR can be
+   * delayed. With the default, the timing rules of RFC 4585 section 3.5.2
+   * apply, so a request made shortly after another RTCP packet was sent can
+   * wait for about one RTCP interval. With 0 the early RTCP packet is sent
+   * immediately, ignoring those rules like it is done for NACK. Requests are
+   * then not rate limited when sent, so callers need to space them out.
+   *
+   * Since: 1.28
+   */
+  properties[PROP_RTCP_KEY_UNIT_MAX_DELAY] =
+      g_param_spec_uint64 ("rtcp-key-unit-max-delay",
+      "RTCP key unit maximum delay",
+      "Maximum time (in ns) the early RTCP packet carrying a PLI or FIR can be "
+      "delayed, 0 to send it immediately",
+      0, G_MAXINT64, DEFAULT_RTCP_KEY_UNIT_MAX_DELAY,
+      G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS);
+
+  /**
    * RTPSession:disable-sr-timestamp:
    *
    * Whether sender reports should be timestamped.
@@ -908,6 +930,7 @@ rtp_session_init (RTPSession * sess)
       DEFAULT_RTCP_IMMEDIATE_FEEDBACK_THRESHOLD;
   sess->rtp_profile = DEFAULT_RTP_PROFILE;
   sess->reduced_size_rtcp = DEFAULT_RTCP_REDUCED_SIZE;
+  sess->rtcp_key_unit_max_delay = DEFAULT_RTCP_KEY_UNIT_MAX_DELAY;
   sess->timestamp_sender_reports = !DEFAULT_RTCP_DISABLE_SR_TIMESTAMP;
 
   sess->last_stats_notify_time = GST_CLOCK_TIME_NONE;
@@ -1129,6 +1152,11 @@ rtp_session_set_property (GObject * object, guint prop_id,
     case PROP_RTCP_REDUCED_SIZE:
       sess->reduced_size_rtcp = g_value_get_boolean (value);
       break;
+    case PROP_RTCP_KEY_UNIT_MAX_DELAY:
+      RTP_SESSION_LOCK (sess);
+      sess->rtcp_key_unit_max_delay = g_value_get_uint64 (value);
+      RTP_SESSION_UNLOCK (sess);
+      break;
     case PROP_RTCP_DISABLE_SR_TIMESTAMP:
       sess->timestamp_sender_reports = !g_value_get_boolean (value);
       break;
@@ -1232,6 +1260,11 @@ rtp_session_get_property (GObject * object, guint prop_id,
       break;
     case PROP_RTCP_REDUCED_SIZE:
       g_value_set_boolean (value, sess->reduced_size_rtcp);
+      break;
+    case PROP_RTCP_KEY_UNIT_MAX_DELAY:
+      RTP_SESSION_LOCK (sess);
+      g_value_set_uint64 (value, sess->rtcp_key_unit_max_delay);
+      RTP_SESSION_UNLOCK (sess);
       break;
     case PROP_RTCP_DISABLE_SR_TIMESTAMP:
       g_value_set_boolean (value, !sess->timestamp_sender_reports);
@@ -5617,6 +5650,7 @@ rtp_session_request_key_unit (RTPSession * sess, guint32 ssrc,
     gboolean fir, gint count)
 {
   RTPSource *src;
+  GstClockTime max_delay;
 
   RTP_SESSION_LOCK (sess);
   src = find_source (sess, ssrc);
@@ -5633,9 +5667,10 @@ rtp_session_request_key_unit (RTPSession * sess, guint32 ssrc,
   } else if (!src->send_fir) {
     src->send_pli = TRUE;
   }
+  max_delay = sess->rtcp_key_unit_max_delay;
   RTP_SESSION_UNLOCK (sess);
 
-  if (!rtp_session_send_rtcp (sess, 5 * GST_SECOND)) {
+  if (!rtp_session_send_rtcp (sess, max_delay)) {
     GST_DEBUG ("FIR/PLI not sent early, sending with next regular RTCP");
   }
 

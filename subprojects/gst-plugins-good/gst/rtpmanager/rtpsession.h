@@ -261,6 +261,10 @@ struct _RTPSession
 
   gboolean reduced_size_rtcp;
 
+  /* maximum delay allowed for the early RTCP carrying a PLI or FIR, 0 to send
+   * it instantly */
+  GstClockTime rtcp_key_unit_max_delay;
+
   /* bandwidths */
   gboolean recalc_bandwidth;
   guint bandwidth;
