@@ -2547,6 +2547,582 @@ GST_START_TEST (test_receive_fir_padding)
 
 GST_END_TEST;
 
+/* Key unit requests from a remote source, about the streams of a session that
+ * sends several (as when simulcasting). A session has a single sender SSRC
+ * for its feedback, so these are all requested by the same remote source. */
+#define KEY_UNIT_REQUESTER 0xAAAAAAAA
+#define KEY_UNIT_REQUESTER_2 0xBBBBBBBB
+#define KEY_UNIT_SSRC_A 0x11111111
+#define KEY_UNIT_SSRC_B 0x22222222
+#define KEY_UNIT_SSRC_C 0x33333333
+#define KEY_UNIT_START_TIME (10 * GST_SECOND)
+/* Requests are throttled for 2 RTT, which is 500 ms with this round-trip */
+#define KEY_UNIT_RTT (250 * GST_MSECOND)
+
+static const guint32 key_unit_ssrcs[] =
+    { KEY_UNIT_SSRC_A, KEY_UNIT_SSRC_B, KEY_UNIT_SSRC_C };
+
+typedef struct
+{
+  guint32 ssrc;
+  /* 0 if the report has no LSR, which makes the round-trip time unknown */
+  GstClockTime rtt;
+} KeyUnitReport;
+
+/* The NTP time as rtp_source_process_rb() computes it from @ntpns */
+static guint32
+ntp_short_format (GstClockTime ntpns)
+{
+  guint64 ntp =
+      gst_util_uint64_scale (ntpns, G_GUINT64_CONSTANT (1) << 32, GST_SECOND);
+
+  return ((ntp + 0xffff) >> 16) & 0xffffffff;
+}
+
+/* An RR with a report block per entry in @reports. When received at @ntpns,
+ * each gets the round-trip time of its entry. */
+static void
+add_rtcp_rr_packet (GstBuffer * gstbuf, guint32 sender_ssrc,
+    GstClockTime ntpns, const KeyUnitReport * reports, guint n_reports)
+{
+  GstRTCPPacket packet;
+  GstRTCPBuffer buffer = GST_RTCP_BUFFER_INIT;
+  guint i;
+
+  gst_rtcp_buffer_map (gstbuf, GST_MAP_READWRITE, &buffer);
+  fail_unless (gst_rtcp_buffer_add_packet (&buffer, GST_RTCP_TYPE_RR, &packet));
+  gst_rtcp_packet_rr_set_ssrc (&packet, sender_ssrc);
+  for (i = 0; i < n_reports; i++) {
+    guint32 lsr = 0;
+
+    if (reports[i].rtt != 0)
+      lsr = ntp_short_format (ntpns) -
+          gst_util_uint64_scale (reports[i].rtt, 65536, GST_SECOND);
+    fail_unless (gst_rtcp_packet_add_rb (&packet, reports[i].ssrc, 0, 0, 0, 0,
+            lsr, 0));
+  }
+  gst_rtcp_buffer_unmap (&buffer);
+}
+
+static void
+add_rtcp_pli_packet (GstBuffer * gstbuf, guint32 sender_ssrc,
+    guint32 media_ssrc)
+{
+  GstRTCPPacket packet;
+  GstRTCPBuffer buffer = GST_RTCP_BUFFER_INIT;
+
+  gst_rtcp_buffer_map (gstbuf, GST_MAP_READWRITE, &buffer);
+  fail_unless (gst_rtcp_buffer_add_packet (&buffer, GST_RTCP_TYPE_PSFB,
+          &packet));
+  gst_rtcp_packet_fb_set_type (&packet, GST_RTCP_PSFB_TYPE_PLI);
+  gst_rtcp_packet_fb_set_sender_ssrc (&packet, sender_ssrc);
+  gst_rtcp_packet_fb_set_media_ssrc (&packet, media_ssrc);
+  gst_rtcp_buffer_unmap (&buffer);
+}
+
+static void
+add_rtcp_fir_packet (GstBuffer * gstbuf, guint32 sender_ssrc,
+    const guint32 * media_ssrcs, guint n_ssrcs)
+{
+  GstRTCPPacket packet;
+  GstRTCPBuffer buffer = GST_RTCP_BUFFER_INIT;
+  guint8 *fci;
+  guint i;
+
+  gst_rtcp_buffer_map (gstbuf, GST_MAP_READWRITE, &buffer);
+  fail_unless (gst_rtcp_buffer_add_packet (&buffer, GST_RTCP_TYPE_PSFB,
+          &packet));
+  gst_rtcp_packet_fb_set_type (&packet, GST_RTCP_PSFB_TYPE_FIR);
+  gst_rtcp_packet_fb_set_sender_ssrc (&packet, sender_ssrc);
+  /* the media SSRCs are in the FCI */
+  gst_rtcp_packet_fb_set_media_ssrc (&packet, 0);
+  fail_unless (gst_rtcp_packet_fb_set_fci_length (&packet, 2 * n_ssrcs));
+  fci = gst_rtcp_packet_fb_get_fci (&packet);
+  for (i = 0; i < n_ssrcs; i++) {
+    GST_WRITE_UINT32_BE (fci + 8 * i, media_ssrcs[i]);
+    /* sequence number and reserved bytes */
+    GST_WRITE_UINT32_BE (fci + 8 * i + 4, 0x01000000);
+  }
+  gst_rtcp_buffer_unmap (&buffer);
+}
+
+static void
+session_harness_recv_rr (SessionHarness * h, guint32 sender_ssrc,
+    const KeyUnitReport * reports, guint n_reports)
+{
+  GstBuffer *buf = gst_rtcp_buffer_new (1000);
+
+  add_rtcp_rr_packet (buf, sender_ssrc,
+      gst_clock_get_time (GST_CLOCK (h->testclock)), reports, n_reports);
+  fail_unless_equals_int (GST_FLOW_OK, session_harness_recv_rtcp (h, buf));
+}
+
+static void
+session_harness_recv_pli (SessionHarness * h, guint32 sender_ssrc,
+    guint32 media_ssrc)
+{
+  GstBuffer *buf = gst_rtcp_buffer_new (1000);
+
+  add_rtcp_pli_packet (buf, sender_ssrc, media_ssrc);
+  fail_unless_equals_int (GST_FLOW_OK, session_harness_recv_rtcp (h, buf));
+}
+
+static void
+session_harness_recv_fir (SessionHarness * h, guint32 sender_ssrc,
+    const guint32 * media_ssrcs, guint n_ssrcs)
+{
+  GstBuffer *buf = gst_rtcp_buffer_new (1000);
+
+  add_rtcp_fir_packet (buf, sender_ssrc, media_ssrcs, n_ssrcs);
+  fail_unless_equals_int (GST_FLOW_OK, session_harness_recv_rtcp (h, buf));
+}
+
+/* A session sending the 3 streams, with an NTP time that follows the
+ * TestClock to be able to craft reports with a known round-trip time. */
+static SessionHarness *
+session_harness_new_key_unit_sender (void)
+{
+  SessionHarness *h = session_harness_new ();
+  guint i;
+
+  gst_util_set_object_arg (G_OBJECT (h->session), "ntp-time-source",
+      "clock-time");
+  gst_test_clock_set_time (h->testclock, KEY_UNIT_START_TIME);
+
+  for (i = 0; i < G_N_ELEMENTS (key_unit_ssrcs); i++)
+    fail_unless_equals_int (GST_FLOW_OK,
+        session_harness_send_rtp (h, generate_test_buffer (i,
+                key_unit_ssrcs[i])));
+
+  return h;
+}
+
+/* Verify, and consume, the key units requested from upstream since the last
+ * call: exactly the ones for @ssrcs, in that order. */
+static void
+fail_unless_key_unit_requests (SessionHarness * h, const guint32 * ssrcs,
+    guint n_ssrcs)
+{
+  GPtrArray *events =
+      pull_upstream_custom_events (h->send_rtp_h, "GstForceKeyUnit");
+  guint i;
+
+  fail_unless_equals_int (events->len, n_ssrcs);
+  for (i = 0; i < n_ssrcs; i++)
+    fail_unless_equals_uint64 (_get_ssrc_from_event (g_ptr_array_index (events,
+                i)), ssrcs[i]);
+
+  g_ptr_array_unref (events);
+}
+
+static guint
+session_harness_get_throttled_key_units (SessionHarness * h, guint32 ssrc)
+{
+  GObject *source = NULL;
+  GstStructure *stats = NULL;
+  guint count = G_MAXUINT;
+
+  g_signal_emit_by_name (h->internal_session, "get-source-by-ssrc", ssrc,
+      &source);
+  fail_unless (source != NULL);
+  g_object_get (source, "stats", &stats, NULL);
+  fail_unless (gst_structure_get_uint (stats, "recv-key-unit-throttled-count",
+          &count));
+
+  gst_structure_free (stats);
+  g_object_unref (source);
+
+  return count;
+}
+
+/* One PLI per stream used to be throttled as a single request, as they all
+ * come from the same remote source, so only the first one made it. */
+GST_START_TEST (test_receive_key_unit_several_ssrcs)
+{
+  SessionHarness *h = session_harness_new_key_unit_sender ();
+  const KeyUnitReport reports[] = {
+    {KEY_UNIT_SSRC_A, KEY_UNIT_RTT},
+    {KEY_UNIT_SSRC_B, KEY_UNIT_RTT},
+    {KEY_UNIT_SSRC_C, KEY_UNIT_RTT},
+  };
+  guint i;
+
+  if (__i__ == 0) {
+    /* all in the same compound packet */
+    GstBuffer *buf = gst_rtcp_buffer_new (1000);
+
+    add_rtcp_rr_packet (buf, KEY_UNIT_REQUESTER,
+        gst_clock_get_time (GST_CLOCK (h->testclock)), reports,
+        G_N_ELEMENTS (reports));
+    for (i = 0; i < G_N_ELEMENTS (key_unit_ssrcs); i++)
+      add_rtcp_pli_packet (buf, KEY_UNIT_REQUESTER, key_unit_ssrcs[i]);
+    fail_unless_equals_int (GST_FLOW_OK, session_harness_recv_rtcp (h, buf));
+  } else {
+    /* or in a packet each, a millisecond apart */
+    session_harness_recv_rr (h, KEY_UNIT_REQUESTER, reports,
+        G_N_ELEMENTS (reports));
+    for (i = 0; i < G_N_ELEMENTS (key_unit_ssrcs); i++) {
+      session_harness_recv_pli (h, KEY_UNIT_REQUESTER, key_unit_ssrcs[i]);
+      gst_test_clock_advance_time (h->testclock, GST_MSECOND);
+    }
+  }
+
+  fail_unless_key_unit_requests (h, key_unit_ssrcs,
+      G_N_ELEMENTS (key_unit_ssrcs));
+  for (i = 0; i < G_N_ELEMENTS (key_unit_ssrcs); i++)
+    fail_unless_equals_int (0,
+        session_harness_get_throttled_key_units (h, key_unit_ssrcs[i]));
+
+  session_harness_free (h);
+}
+
+GST_END_TEST;
+
+GST_START_TEST (test_receive_key_unit_throttled_per_ssrc)
+{
+  SessionHarness *h = session_harness_new_key_unit_sender ();
+  const KeyUnitReport reports[] = { {KEY_UNIT_SSRC_A, KEY_UNIT_RTT} };
+  const guint32 a[] = { KEY_UNIT_SSRC_A };
+
+  session_harness_recv_rr (h, KEY_UNIT_REQUESTER, reports,
+      G_N_ELEMENTS (reports));
+
+  session_harness_recv_pli (h, KEY_UNIT_REQUESTER, KEY_UNIT_SSRC_A);
+  fail_unless_key_unit_requests (h, a, 1);
+
+  /* repeating it within 2 RTT is dropped, whether as PLI or FIR... */
+  gst_test_clock_advance_time (h->testclock, 100 * GST_MSECOND);
+  session_harness_recv_pli (h, KEY_UNIT_REQUESTER, KEY_UNIT_SSRC_A);
+  gst_test_clock_advance_time (h->testclock, 100 * GST_MSECOND);
+  session_harness_recv_fir (h, KEY_UNIT_REQUESTER, a, 1);
+  fail_unless_key_unit_requests (h, NULL, 0);
+  fail_unless_equals_int (2,
+      session_harness_get_throttled_key_units (h, KEY_UNIT_SSRC_A));
+
+  /* ...and dropped requests do not extend the window, this is 550 ms after
+   * the forwarded one */
+  gst_test_clock_advance_time (h->testclock, 350 * GST_MSECOND);
+  session_harness_recv_fir (h, KEY_UNIT_REQUESTER, a, 1);
+  fail_unless_key_unit_requests (h, a, 1);
+
+  /* a PLI is throttled by that FIR */
+  gst_test_clock_advance_time (h->testclock, 100 * GST_MSECOND);
+  session_harness_recv_pli (h, KEY_UNIT_REQUESTER, KEY_UNIT_SSRC_A);
+  fail_unless_key_unit_requests (h, NULL, 0);
+  fail_unless_equals_int (3,
+      session_harness_get_throttled_key_units (h, KEY_UNIT_SSRC_A));
+
+  /* the window is less than 2 RTT, relative to the forwarded FIR */
+  gst_test_clock_advance_time (h->testclock, 400 * GST_MSECOND - GST_NSECOND);
+  session_harness_recv_pli (h, KEY_UNIT_REQUESTER, KEY_UNIT_SSRC_A);
+  fail_unless_key_unit_requests (h, NULL, 0);
+  gst_test_clock_advance_time (h->testclock, GST_NSECOND);
+  session_harness_recv_pli (h, KEY_UNIT_REQUESTER, KEY_UNIT_SSRC_A);
+  fail_unless_key_unit_requests (h, a, 1);
+  fail_unless_equals_int (4,
+      session_harness_get_throttled_key_units (h, KEY_UNIT_SSRC_A));
+
+  session_harness_free (h);
+}
+
+GST_END_TEST;
+
+/* The streams are throttled independently of each other */
+GST_START_TEST (test_receive_key_unit_throttled_per_ssrc_interleaved)
+{
+  SessionHarness *h = session_harness_new_key_unit_sender ();
+  const KeyUnitReport reports[] = {
+    {KEY_UNIT_SSRC_A, KEY_UNIT_RTT},
+    {KEY_UNIT_SSRC_B, KEY_UNIT_RTT},
+    {KEY_UNIT_SSRC_C, KEY_UNIT_RTT},
+  };
+  const guint32 a[] = { KEY_UNIT_SSRC_A };
+  const guint32 b[] = { KEY_UNIT_SSRC_B };
+  const guint32 c[] = { KEY_UNIT_SSRC_C };
+
+  session_harness_recv_rr (h, KEY_UNIT_REQUESTER, reports,
+      G_N_ELEMENTS (reports));
+
+  session_harness_recv_pli (h, KEY_UNIT_REQUESTER, KEY_UNIT_SSRC_A);
+  fail_unless_key_unit_requests (h, a, 1);
+
+  gst_test_clock_advance_time (h->testclock, 300 * GST_MSECOND);
+  session_harness_recv_pli (h, KEY_UNIT_REQUESTER, KEY_UNIT_SSRC_B);
+  fail_unless_key_unit_requests (h, b, 1);
+  /* still throttled for A */
+  session_harness_recv_pli (h, KEY_UNIT_REQUESTER, KEY_UNIT_SSRC_A);
+  fail_unless_key_unit_requests (h, NULL, 0);
+
+  gst_test_clock_advance_time (h->testclock, 300 * GST_MSECOND);
+  session_harness_recv_pli (h, KEY_UNIT_REQUESTER, KEY_UNIT_SSRC_C);
+  fail_unless_key_unit_requests (h, c, 1);
+  /* A is over, and B is still throttled */
+  session_harness_recv_pli (h, KEY_UNIT_REQUESTER, KEY_UNIT_SSRC_B);
+  session_harness_recv_pli (h, KEY_UNIT_REQUESTER, KEY_UNIT_SSRC_A);
+  fail_unless_key_unit_requests (h, a, 1);
+
+  fail_unless_equals_int (1,
+      session_harness_get_throttled_key_units (h, KEY_UNIT_SSRC_A));
+  fail_unless_equals_int (1,
+      session_harness_get_throttled_key_units (h, KEY_UNIT_SSRC_B));
+  fail_unless_equals_int (0,
+      session_harness_get_throttled_key_units (h, KEY_UNIT_SSRC_C));
+
+  session_harness_free (h);
+}
+
+GST_END_TEST;
+
+GST_START_TEST (test_receive_key_unit_two_requesters)
+{
+  SessionHarness *h = session_harness_new_key_unit_sender ();
+  const KeyUnitReport reports[] = { {KEY_UNIT_SSRC_A, KEY_UNIT_RTT} };
+  const guint32 a_twice[] = { KEY_UNIT_SSRC_A, KEY_UNIT_SSRC_A };
+
+  session_harness_recv_rr (h, KEY_UNIT_REQUESTER, reports,
+      G_N_ELEMENTS (reports));
+  session_harness_recv_rr (h, KEY_UNIT_REQUESTER_2, reports,
+      G_N_ELEMENTS (reports));
+
+  /* two remote sources can ask for the same stream */
+  session_harness_recv_pli (h, KEY_UNIT_REQUESTER, KEY_UNIT_SSRC_A);
+  session_harness_recv_pli (h, KEY_UNIT_REQUESTER_2, KEY_UNIT_SSRC_A);
+  fail_unless_key_unit_requests (h, a_twice, 2);
+
+  /* and each is throttled by its own previous request */
+  gst_test_clock_advance_time (h->testclock, 100 * GST_MSECOND);
+  session_harness_recv_pli (h, KEY_UNIT_REQUESTER, KEY_UNIT_SSRC_A);
+  session_harness_recv_pli (h, KEY_UNIT_REQUESTER_2, KEY_UNIT_SSRC_A);
+  fail_unless_key_unit_requests (h, NULL, 0);
+  fail_unless_equals_int (2,
+      session_harness_get_throttled_key_units (h, KEY_UNIT_SSRC_A));
+
+  gst_test_clock_advance_time (h->testclock, 500 * GST_MSECOND);
+  session_harness_recv_pli (h, KEY_UNIT_REQUESTER, KEY_UNIT_SSRC_A);
+  session_harness_recv_pli (h, KEY_UNIT_REQUESTER_2, KEY_UNIT_SSRC_A);
+  fail_unless_key_unit_requests (h, a_twice, 2);
+
+  session_harness_free (h);
+}
+
+GST_END_TEST;
+
+/* A FIR for several streams is evaluated per stream, it was all or nothing */
+GST_START_TEST (test_receive_key_unit_fir_several_ssrcs)
+{
+  SessionHarness *h = session_harness_new_key_unit_sender ();
+  const KeyUnitReport reports[] = {
+    {KEY_UNIT_SSRC_A, KEY_UNIT_RTT},
+    {KEY_UNIT_SSRC_B, KEY_UNIT_RTT},
+    {KEY_UNIT_SSRC_C, KEY_UNIT_RTT},
+  };
+  const guint32 b[] = { KEY_UNIT_SSRC_B };
+  const guint32 a_and_c[] = { KEY_UNIT_SSRC_A, KEY_UNIT_SSRC_C };
+
+  session_harness_recv_rr (h, KEY_UNIT_REQUESTER, reports,
+      G_N_ELEMENTS (reports));
+
+  session_harness_recv_pli (h, KEY_UNIT_REQUESTER, KEY_UNIT_SSRC_B);
+  fail_unless_key_unit_requests (h, b, 1);
+
+  /* only B is throttled */
+  gst_test_clock_advance_time (h->testclock, 100 * GST_MSECOND);
+  session_harness_recv_fir (h, KEY_UNIT_REQUESTER, key_unit_ssrcs,
+      G_N_ELEMENTS (key_unit_ssrcs));
+  fail_unless_key_unit_requests (h, a_and_c, 2);
+  fail_unless_equals_int (0,
+      session_harness_get_throttled_key_units (h, KEY_UNIT_SSRC_A));
+  fail_unless_equals_int (1,
+      session_harness_get_throttled_key_units (h, KEY_UNIT_SSRC_B));
+  fail_unless_equals_int (0,
+      session_harness_get_throttled_key_units (h, KEY_UNIT_SSRC_C));
+
+  /* 600 ms after A and C, 700 ms after B */
+  gst_test_clock_advance_time (h->testclock, 600 * GST_MSECOND);
+  session_harness_recv_fir (h, KEY_UNIT_REQUESTER, key_unit_ssrcs,
+      G_N_ELEMENTS (key_unit_ssrcs));
+  fail_unless_key_unit_requests (h, key_unit_ssrcs,
+      G_N_ELEMENTS (key_unit_ssrcs));
+
+  /* all are throttled */
+  gst_test_clock_advance_time (h->testclock, 100 * GST_MSECOND);
+  session_harness_recv_fir (h, KEY_UNIT_REQUESTER, key_unit_ssrcs,
+      G_N_ELEMENTS (key_unit_ssrcs));
+  fail_unless_key_unit_requests (h, NULL, 0);
+
+  session_harness_free (h);
+}
+
+GST_END_TEST;
+
+GST_START_TEST (test_receive_key_unit_unknown_rtt)
+{
+  SessionHarness *h = session_harness_new_key_unit_sender ();
+  /* No LSR, so the round-trip time can not be computed */
+  const KeyUnitReport reports[] = { {KEY_UNIT_SSRC_A, 0} };
+  const guint32 a[] = { KEY_UNIT_SSRC_A };
+  const guint32 a_thrice[] =
+      { KEY_UNIT_SSRC_A, KEY_UNIT_SSRC_A, KEY_UNIT_SSRC_A };
+
+  session_harness_recv_rr (h, KEY_UNIT_REQUESTER, reports,
+      G_N_ELEMENTS (reports));
+
+  /* nothing to throttle with */
+  session_harness_recv_pli (h, KEY_UNIT_REQUESTER, KEY_UNIT_SSRC_A);
+  session_harness_recv_pli (h, KEY_UNIT_REQUESTER, KEY_UNIT_SSRC_A);
+  session_harness_recv_fir (h, KEY_UNIT_REQUESTER, a, 1);
+  fail_unless_key_unit_requests (h, a_thrice, 3);
+  fail_unless_equals_int (0,
+      session_harness_get_throttled_key_units (h, KEY_UNIT_SSRC_A));
+
+  session_harness_free (h);
+}
+
+GST_END_TEST;
+
+/* An absurd round-trip time must not disable the key units */
+GST_START_TEST (test_receive_key_unit_rtt_capped)
+{
+  SessionHarness *h = session_harness_new_key_unit_sender ();
+  const KeyUnitReport reports[] = { {KEY_UNIT_SSRC_A, 6 * GST_SECOND} };
+  const guint32 a[] = { KEY_UNIT_SSRC_A };
+
+  session_harness_recv_rr (h, KEY_UNIT_REQUESTER, reports,
+      G_N_ELEMENTS (reports));
+
+  session_harness_recv_pli (h, KEY_UNIT_REQUESTER, KEY_UNIT_SSRC_A);
+  fail_unless_key_unit_requests (h, a, 1);
+
+  /* it is considered to be 500 ms, so 1 s of throttling */
+  gst_test_clock_advance_time (h->testclock, 500 * GST_MSECOND);
+  session_harness_recv_pli (h, KEY_UNIT_REQUESTER, KEY_UNIT_SSRC_A);
+  fail_unless_key_unit_requests (h, NULL, 0);
+
+  gst_test_clock_advance_time (h->testclock, 600 * GST_MSECOND);
+  session_harness_recv_pli (h, KEY_UNIT_REQUESTER, KEY_UNIT_SSRC_A);
+  fail_unless_key_unit_requests (h, a, 1);
+
+  session_harness_free (h);
+}
+
+GST_END_TEST;
+
+/* Without the sender SSRC, each stream is its own requester */
+GST_START_TEST (test_receive_key_unit_no_sender_ssrc)
+{
+  SessionHarness *h = session_harness_new_key_unit_sender ();
+  const KeyUnitReport reports[] = {
+    {KEY_UNIT_SSRC_A, KEY_UNIT_RTT},
+    {KEY_UNIT_SSRC_B, KEY_UNIT_RTT},
+    {KEY_UNIT_SSRC_C, KEY_UNIT_RTT},
+  };
+  const guint32 a[] = { KEY_UNIT_SSRC_A };
+
+  session_harness_recv_rr (h, KEY_UNIT_REQUESTER, reports,
+      G_N_ELEMENTS (reports));
+
+  session_harness_recv_pli (h, 0, KEY_UNIT_SSRC_A);
+  session_harness_recv_pli (h, 0, KEY_UNIT_SSRC_B);
+  session_harness_recv_pli (h, 0, KEY_UNIT_SSRC_C);
+  fail_unless_key_unit_requests (h, key_unit_ssrcs,
+      G_N_ELEMENTS (key_unit_ssrcs));
+
+  /* the round-trip time is known from the last report about that stream */
+  gst_test_clock_advance_time (h->testclock, 100 * GST_MSECOND);
+  session_harness_recv_pli (h, 0, KEY_UNIT_SSRC_A);
+  fail_unless_key_unit_requests (h, NULL, 0);
+  fail_unless_equals_int (1,
+      session_harness_get_throttled_key_units (h, KEY_UNIT_SSRC_A));
+
+  gst_test_clock_advance_time (h->testclock, 500 * GST_MSECOND);
+  session_harness_recv_pli (h, 0, KEY_UNIT_SSRC_A);
+  fail_unless_key_unit_requests (h, a, 1);
+
+  session_harness_free (h);
+}
+
+GST_END_TEST;
+
+/* Only the streams that the session sends can be requested */
+GST_START_TEST (test_receive_key_unit_not_our_ssrc)
+{
+  SessionHarness *h = session_harness_new_key_unit_sender ();
+  const KeyUnitReport reports[] = { {KEY_UNIT_SSRC_A, KEY_UNIT_RTT} };
+  const guint32 remote_ssrc = 0xCCCCCCCC;
+  const guint32 unknown_ssrc = 0xDDDDDDDD;
+  const guint32 fir_ssrcs[] = { remote_ssrc, unknown_ssrc, KEY_UNIT_SSRC_A };
+  const guint32 a[] = { KEY_UNIT_SSRC_A };
+
+  /* a stream that we receive */
+  fail_unless_equals_int (GST_FLOW_OK,
+      session_harness_recv_rtp (h, generate_test_buffer (0, remote_ssrc)));
+  session_harness_recv_rr (h, KEY_UNIT_REQUESTER, reports,
+      G_N_ELEMENTS (reports));
+
+  session_harness_recv_pli (h, KEY_UNIT_REQUESTER, remote_ssrc);
+  session_harness_recv_pli (h, KEY_UNIT_REQUESTER, unknown_ssrc);
+  session_harness_recv_fir (h, KEY_UNIT_REQUESTER, fir_ssrcs,
+      G_N_ELEMENTS (fir_ssrcs));
+  fail_unless_key_unit_requests (h, a, 1);
+  fail_unless_equals_int (0,
+      session_harness_get_throttled_key_units (h, KEY_UNIT_SSRC_A));
+
+  session_harness_free (h);
+}
+
+GST_END_TEST;
+
+/* The round-trip time is the one of the report about the requested stream,
+ * or if there is none, of the last report that the requester sent. */
+GST_START_TEST (test_receive_key_unit_rtt_source)
+{
+  SessionHarness *h = session_harness_new_key_unit_sender ();
+  const guint32 a[] = { KEY_UNIT_SSRC_A };
+  const guint32 b[] = { KEY_UNIT_SSRC_B };
+  const guint32 a_and_b[] = { KEY_UNIT_SSRC_A, KEY_UNIT_SSRC_B };
+
+  if (__i__ == 0) {
+    /* The last report is about B, with a round-trip time that gives a
+     * 100 ms window. That one is not for A. */
+    const KeyUnitReport reports[] = {
+      {KEY_UNIT_SSRC_A, KEY_UNIT_RTT},
+      {KEY_UNIT_SSRC_B, KEY_UNIT_RTT / 5},
+    };
+
+    session_harness_recv_rr (h, KEY_UNIT_REQUESTER, reports,
+        G_N_ELEMENTS (reports));
+    session_harness_recv_pli (h, KEY_UNIT_REQUESTER, KEY_UNIT_SSRC_A);
+    session_harness_recv_pli (h, KEY_UNIT_REQUESTER, KEY_UNIT_SSRC_B);
+    fail_unless_key_unit_requests (h, a_and_b, 2);
+
+    gst_test_clock_advance_time (h->testclock, 300 * GST_MSECOND);
+    session_harness_recv_pli (h, KEY_UNIT_REQUESTER, KEY_UNIT_SSRC_A);
+    session_harness_recv_pli (h, KEY_UNIT_REQUESTER, KEY_UNIT_SSRC_B);
+    fail_unless_key_unit_requests (h, b, 1);
+  } else {
+    /* The report about A has no LSR, use the last report which is about B */
+    const KeyUnitReport reports[] = {
+      {KEY_UNIT_SSRC_A, 0},
+      {KEY_UNIT_SSRC_B, KEY_UNIT_RTT},
+    };
+
+    session_harness_recv_rr (h, KEY_UNIT_REQUESTER, reports,
+        G_N_ELEMENTS (reports));
+    session_harness_recv_pli (h, KEY_UNIT_REQUESTER, KEY_UNIT_SSRC_A);
+    fail_unless_key_unit_requests (h, a, 1);
+
+    gst_test_clock_advance_time (h->testclock, 100 * GST_MSECOND);
+    session_harness_recv_pli (h, KEY_UNIT_REQUESTER, KEY_UNIT_SSRC_A);
+    fail_unless_key_unit_requests (h, NULL, 0);
+    fail_unless_equals_int (1,
+        session_harness_get_throttled_key_units (h, KEY_UNIT_SSRC_A));
+  }
+
+  session_harness_free (h);
+}
+
+GST_END_TEST;
+
 /* Memory that can be mapped, but neither shared nor copied */
 typedef struct
 {
@@ -8355,6 +8931,17 @@ rtpsession_suite (void)
   tcase_add_test (tc_chain, test_receive_regular_pli);
   tcase_add_test (tc_chain, test_receive_pli_no_sender_ssrc);
   tcase_add_loop_test (tc_chain, test_receive_pli_padding, 0, 2);
+  tcase_add_loop_test (tc_chain, test_receive_key_unit_several_ssrcs, 0, 2);
+  tcase_add_test (tc_chain, test_receive_key_unit_throttled_per_ssrc);
+  tcase_add_test (tc_chain,
+      test_receive_key_unit_throttled_per_ssrc_interleaved);
+  tcase_add_test (tc_chain, test_receive_key_unit_two_requesters);
+  tcase_add_test (tc_chain, test_receive_key_unit_fir_several_ssrcs);
+  tcase_add_test (tc_chain, test_receive_key_unit_unknown_rtt);
+  tcase_add_test (tc_chain, test_receive_key_unit_rtt_capped);
+  tcase_add_test (tc_chain, test_receive_key_unit_no_sender_ssrc);
+  tcase_add_test (tc_chain, test_receive_key_unit_not_our_ssrc);
+  tcase_add_loop_test (tc_chain, test_receive_key_unit_rtt_source, 0, 2);
   tcase_add_test (tc_chain, test_dont_send_rtcp_while_idle);
   tcase_add_test (tc_chain, test_send_rtcp_when_signalled);
   tcase_add_test (tc_chain, test_change_sent_sdes);
