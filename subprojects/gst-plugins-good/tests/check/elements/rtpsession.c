@@ -3123,6 +3123,51 @@ GST_START_TEST (test_receive_key_unit_rtt_source)
 
 GST_END_TEST;
 
+GST_START_TEST (test_receive_key_unit_stream_replacement)
+{
+  SessionHarness *h = session_harness_new_key_unit_sender ();
+  const KeyUnitReport reports[] = { {KEY_UNIT_SSRC_A, KEY_UNIT_RTT} };
+  const guint32 a[] = { KEY_UNIT_SSRC_A };
+  GstClockTime request_time;
+  GstBuffer *buf;
+  GObject *source;
+  guint i;
+
+  g_object_set (h->session, "rtcp-min-interval", 20 * GST_MSECOND, NULL);
+  session_harness_recv_rr (h, KEY_UNIT_REQUESTER, reports,
+      G_N_ELEMENTS (reports));
+  session_harness_recv_pli (h, KEY_UNIT_REQUESTER, KEY_UNIT_SSRC_A);
+  fail_unless_key_unit_requests (h, a, 1);
+  request_time = gst_clock_get_time (GST_CLOCK (h->testclock));
+
+  g_signal_emit_by_name (h->session, "send-bye");
+  for (i = 0; i < 8; i++) {
+    session_harness_produce_rtcp (h, 1);
+    buf = session_harness_pull_rtcp (h);
+    fail_unless (buf != NULL);
+    gst_buffer_unref (buf);
+
+    source = NULL;
+    g_signal_emit_by_name (h->internal_session, "get-source-by-ssrc",
+        KEY_UNIT_SSRC_A, &source);
+    if (source == NULL)
+      break;
+    g_object_unref (source);
+  }
+  fail_unless (source == NULL);
+  fail_unless (gst_clock_get_time (GST_CLOCK (h->testclock)) - request_time <
+      2 * KEY_UNIT_RTT);
+
+  fail_unless_equals_int (GST_FLOW_OK,
+      session_harness_send_rtp (h, generate_test_buffer (0, KEY_UNIT_SSRC_A)));
+  session_harness_recv_pli (h, KEY_UNIT_REQUESTER, KEY_UNIT_SSRC_A);
+  fail_unless_key_unit_requests (h, a, 1);
+
+  session_harness_free (h);
+}
+
+GST_END_TEST;
+
 /* Key unit requests made by a session, for the streams it receives */
 #define KEY_UNIT_OWN_SSRC 0xDEADBEEF
 
@@ -9419,6 +9464,7 @@ rtpsession_suite (void)
   tcase_add_test (tc_chain, test_receive_key_unit_no_sender_ssrc);
   tcase_add_test (tc_chain, test_receive_key_unit_not_our_ssrc);
   tcase_add_loop_test (tc_chain, test_receive_key_unit_rtt_source, 0, 2);
+  tcase_add_test (tc_chain, test_receive_key_unit_stream_replacement);
   tcase_add_test (tc_chain, test_rtcp_key_unit_max_delay_property);
   tcase_add_loop_test (tc_chain, test_request_key_unit_after_early_rtcp, 0, 8);
   tcase_add_loop_test (tc_chain, test_request_key_unit_first_rtcp, 0, 8);

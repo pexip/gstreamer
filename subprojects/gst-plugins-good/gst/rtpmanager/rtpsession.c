@@ -4956,11 +4956,20 @@ clone_ssrcs_hashtable (gchar * key, RTPSource * source, GHashTable * hash_table)
   g_hash_table_insert (hash_table, key, g_object_ref (source));
 }
 
+static void
+remove_keyframe_request (G_GNUC_UNUSED gpointer key, RTPSource * requester,
+    gpointer user_data)
+{
+  g_hash_table_remove (requester->last_keyframe_requests, user_data);
+}
+
 static gboolean
 remove_closing_sources (const gchar * key, RTPSource * source,
     ReportData * data)
 {
   if (source->closing) {
+    g_hash_table_foreach (data->sess->ssrcs[data->sess->mask_idx],
+        (GHFunc) remove_keyframe_request, GUINT_TO_POINTER (source->ssrc));
     GST_INFO ("Removing source %08x %p, "
         "internal=%u, marked_bye=%u, sent_bye=%u, bye_reason=%s",
         source->ssrc, source, source->internal, source->marked_bye,
