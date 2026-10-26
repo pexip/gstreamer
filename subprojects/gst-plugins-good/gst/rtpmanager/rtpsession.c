@@ -3148,8 +3148,8 @@ rtp_session_get_key_unit_rtt (RTPSource * requester, RTPSource * media)
   guint32 round_trip;
   GstClockTime rtt;
 
-  /* The RB that @requester sent about @media is the most precise, otherwise
-   * use the last RB it sent about any of our sources. */
+  /* The RR sender and feedback requester may use different SSRCs, so this
+   * per-pair lookup can miss; fall back to the requester's last RB. */
   round_trip = rtp_source_get_received_rb_round_trip (media, requester->ssrc);
   if (round_trip == 0)
     rtp_source_get_last_rb (requester, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
@@ -3191,7 +3191,7 @@ rtp_session_accept_key_unit_request (RTPSource * requester, RTPSource * media,
     if (rtt != 0 && current_time - *last < 2 * rtt) {
       media->stats.recv_key_unit_throttled_count++;
       /* A dropped request delays the key frame by at least one retry */
-      GST_INFO ("Ignoring %s request from %08x about %08x because one was "
+      GST_DEBUG ("Ignoring %s request from %08x about %08x because one was "
           "accepted less than 2 RTT ago (%" GST_TIME_FORMAT " < 2 * %"
           GST_TIME_FORMAT ")", fir ? "FIR" : "PLI", requester->ssrc,
           media->ssrc, GST_TIME_ARGS (current_time - *last),
