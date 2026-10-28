@@ -1616,6 +1616,23 @@ gst_video_rate_transform_ip (GstBaseTransform * trans, GstBuffer * buffer)
               videorate->segment.start + videorate->segment.base;
         }
       }
+    } else if (videorate->max_duplication_time > 0
+        && videorate->segment.rate > 0.0 && intime > videorate->next_ts
+        && intime - videorate->next_ts > videorate->max_duplication_time) {
+      /* PEXHACK mcu#50792
+       * The next output is due further back than max-duplication-time, so it
+       * can not be made up for any more. The two buffer path lets a
+       * discontinuity through for a gap that large
+       * (gst_video_rate_do_max_duplicate): do the same here, where the buffer
+       * is the first since the caps changed, or the one let through when
+       * dropping only, instead of leaving next_ts behind. Left there, the
+       * buffer after this one back-fills the whole gap with duplicates in
+       * one push, or, when dropping only, every buffer is let through until
+       * next_ts has caught up. */
+      videorate->next_ts = intime;
+      videorate->base_ts = in_ts - videorate->segment.start;
+      videorate->out_frame_count = 0;
+      videorate->discont = TRUE;
     }
 
     /* In drop-only mode we can already decide here if we should output the
