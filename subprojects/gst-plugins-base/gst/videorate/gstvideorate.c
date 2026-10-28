@@ -1458,7 +1458,16 @@ gst_video_rate_do_max_duplicate (GstVideoRate * videorate, GstBuffer * buffer,
     if (videorate->segment.rate < 0.0) {
       videorate->base_ts -= prevtime - intime;
     } else {
-      videorate->base_ts += intime - prevtime;
+      /* PEXHACK mcu#50792
+       * Resync base_ts and out_frame_count together with next_ts, as the
+       * single buffer path does for the first buffer. Moving base_ts along
+       * and keeping out_frame_count leaves next_ts up to a frame behind
+       * base_ts as soon as the caps change before the next buffer is output,
+       * which reads as a huge value in the two buffer path: nothing is output
+       * any more, and the next gap makes up for all the time that went by. */
+      videorate->base_ts =
+          intime - videorate->segment.base - videorate->segment.start;
+      videorate->out_frame_count = 0;
     }
     videorate->next_ts = intime;
     /* Swap in new buffer and get rid of old buffer so that starting with
