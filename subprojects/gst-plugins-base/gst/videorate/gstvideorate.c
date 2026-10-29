@@ -883,6 +883,20 @@ gst_video_rate_sink_event (GstBaseTransform * trans, GstEvent * event)
       if (reset_base_ts) {
         base_ts = 0;
         videorate->out_frame_count = 0;
+
+        /* PEXHACK mcu#50792
+         * base_ts is relative to the segment start but is translated above as
+         * a position, so a segment that does not start at 0 lands here even
+         * when it is the same segment sent again, as pextee does every time a
+         * simulcast layer comes back. next_ts and the held buffer are kept,
+         * so resetting base_ts on its own puts the next output back at the
+         * segment start, and the buffer after it is duplicated all the way
+         * up to next_ts, which max-duplication-time never sees. Resync
+         * base_ts to next_ts, as the gap resyncs do in
+         * gst_video_rate_do_max_duplicate and the single buffer path. */
+        if (GST_CLOCK_TIME_IS_VALID (next_ts) && segment.rate > 0.0
+            && next_ts >= segment.base + segment.start)
+          base_ts = next_ts - segment.base - segment.start;
       }
       videorate->next_ts = next_ts;
       videorate->base_ts = base_ts;
