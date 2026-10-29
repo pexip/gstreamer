@@ -83,6 +83,7 @@ enum
 #define DEFAULT_SSRC_COLLISION_DETECTION TRUE
 #define DEFAULT_RTP_PROFILE          GST_RTP_PROFILE_AVP
 #define DEFAULT_RTCP_REDUCED_SIZE    FALSE
+#define DEFAULT_RTCP_KEY_UNIT_MAX_DELAY (5 * GST_SECOND)
 #define DEFAULT_RTCP_DISABLE_SR_TIMESTAMP FALSE
 #define DEFAULT_FAVOR_NEW            FALSE
 #define DEFAULT_TWCC_FEEDBACK_INTERVAL GST_CLOCK_TIME_NONE
@@ -116,6 +117,7 @@ enum
   PROP_STATS_NOTIFY_MIN_INTERVAL,
   PROP_RTP_PROFILE,
   PROP_RTCP_REDUCED_SIZE,
+  PROP_RTCP_KEY_UNIT_MAX_DELAY,
   PROP_RTCP_DISABLE_SR_TIMESTAMP,
   PROP_TWCC_FEEDBACK_INTERVAL,
   PROP_UPDATE_NTP64_HEADER_EXT,
@@ -745,6 +747,26 @@ rtp_session_class_init (RTPSessionClass * klass)
       DEFAULT_RTCP_REDUCED_SIZE, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS);
 
   /**
+   * RTPSession:rtcp-key-unit-max-delay:
+   *
+   * The maximum time the early RTCP packet carrying a PLI or FIR can be
+   * delayed. With the default, the timing rules of RFC 4585 section 3.5.2
+   * apply, so a request made shortly after another RTCP packet was sent can
+   * wait for about one RTCP interval. With 0 the early RTCP packet is sent
+   * immediately, ignoring those rules like it is done for NACK. Requests are
+   * then not rate limited when sent, so callers need to space them out.
+   *
+   * Since: 1.28
+   */
+  properties[PROP_RTCP_KEY_UNIT_MAX_DELAY] =
+      g_param_spec_uint64 ("rtcp-key-unit-max-delay",
+      "RTCP key unit maximum delay",
+      "Maximum time (in ns) the early RTCP packet carrying a PLI or FIR can be "
+      "delayed, 0 to send it immediately",
+      0, G_MAXINT64, DEFAULT_RTCP_KEY_UNIT_MAX_DELAY,
+      G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS);
+
+  /**
    * RTPSession:disable-sr-timestamp:
    *
    * Whether sender reports should be timestamped.
@@ -908,6 +930,7 @@ rtp_session_init (RTPSession * sess)
       DEFAULT_RTCP_IMMEDIATE_FEEDBACK_THRESHOLD;
   sess->rtp_profile = DEFAULT_RTP_PROFILE;
   sess->reduced_size_rtcp = DEFAULT_RTCP_REDUCED_SIZE;
+  sess->rtcp_key_unit_max_delay = DEFAULT_RTCP_KEY_UNIT_MAX_DELAY;
   sess->timestamp_sender_reports = !DEFAULT_RTCP_DISABLE_SR_TIMESTAMP;
 
   sess->last_stats_notify_time = GST_CLOCK_TIME_NONE;
@@ -1129,6 +1152,11 @@ rtp_session_set_property (GObject * object, guint prop_id,
     case PROP_RTCP_REDUCED_SIZE:
       sess->reduced_size_rtcp = g_value_get_boolean (value);
       break;
+    case PROP_RTCP_KEY_UNIT_MAX_DELAY:
+      RTP_SESSION_LOCK (sess);
+      sess->rtcp_key_unit_max_delay = g_value_get_uint64 (value);
+      RTP_SESSION_UNLOCK (sess);
+      break;
     case PROP_RTCP_DISABLE_SR_TIMESTAMP:
       sess->timestamp_sender_reports = !g_value_get_boolean (value);
       break;
@@ -1232,6 +1260,11 @@ rtp_session_get_property (GObject * object, guint prop_id,
       break;
     case PROP_RTCP_REDUCED_SIZE:
       g_value_set_boolean (value, sess->reduced_size_rtcp);
+      break;
+    case PROP_RTCP_KEY_UNIT_MAX_DELAY:
+      RTP_SESSION_LOCK (sess);
+      g_value_set_uint64 (value, sess->rtcp_key_unit_max_delay);
+      RTP_SESSION_UNLOCK (sess);
       break;
     case PROP_RTCP_DISABLE_SR_TIMESTAMP:
       g_value_set_boolean (value, !sess->timestamp_sender_reports);
@@ -3108,45 +3141,98 @@ rtp_session_process_app (RTPSession * sess, GstRTCPPacket * packet,
   }
 }
 
+/* Round-trip time (in ns) to the remote source @requester, or 0 if unknown */
+static GstClockTime
+rtp_session_get_key_unit_rtt (RTPSource * requester, RTPSource * media)
+{
+  guint32 round_trip;
+  GstClockTime rtt;
+
+  /* The RR sender and feedback requester may use different SSRCs, so this
+   * per-pair lookup can miss; fall back to the requester's last RB. */
+  round_trip = rtp_source_get_received_rb_round_trip (media, requester->ssrc);
+  if (round_trip == 0)
+    rtp_source_get_last_rb (requester, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+        &round_trip);
+  if (round_trip == 0)
+    return 0;
+
+  rtt = gst_util_uint64_scale (round_trip, GST_SECOND, 65536);
+
+  /* Sanity check to avoid always ignoring PLI/FIR if we receive RTCP
+   * packets with erroneous values resulting in crazy high RTT. */
+  if (rtt > 5 * GST_SECOND)
+    rtt = GST_SECOND / 2;
+
+  return rtt;
+}
+
+/* Decide whether a PLI/FIR from @requester about our source @media is
+ * forwarded. A request is dropped if the same requester already got one
+ * accepted for the same media SSRC less than 2 RTT ago; requests about other
+ * media SSRCs are independent, as a session can carry several streams that
+ * are all requested with the same sender SSRC. PLI and FIR share the state.
+ * The state is updated when the request is accepted. */
+static gboolean
+rtp_session_accept_key_unit_request (RTPSource * requester, RTPSource * media,
+    gboolean fir, GstClockTime current_time)
+{
+  GstClockTime *last;
+
+  last = g_hash_table_lookup (requester->last_keyframe_requests,
+      GUINT_TO_POINTER (media->ssrc));
+  if (last == NULL) {
+    last = g_new (GstClockTime, 1);
+    g_hash_table_insert (requester->last_keyframe_requests,
+        GUINT_TO_POINTER (media->ssrc), last);
+  } else {
+    GstClockTime rtt = rtp_session_get_key_unit_rtt (requester, media);
+
+    if (rtt != 0 && current_time - *last < 2 * rtt) {
+      media->stats.recv_key_unit_throttled_count++;
+      /* A dropped request delays the key frame by at least one retry */
+      GST_DEBUG ("Ignoring %s request from %08x about %08x because one was "
+          "accepted less than 2 RTT ago (%" GST_TIME_FORMAT " < 2 * %"
+          GST_TIME_FORMAT ")", fir ? "FIR" : "PLI", requester->ssrc,
+          media->ssrc, GST_TIME_ARGS (current_time - *last),
+          GST_TIME_ARGS (rtt));
+      return FALSE;
+    }
+  }
+
+  *last = current_time;
+
+  return TRUE;
+}
+
 static gboolean
 rtp_session_request_local_key_unit (RTPSession * sess, RTPSource * src,
     const guint32 * ssrcs, guint num_ssrcs, gboolean fir,
     GstClockTime current_time)
 {
-  guint32 round_trip = 0;
-  gint i;
+  gboolean forwarded = FALSE;
+  guint i;
 
   g_return_val_if_fail (ssrcs != NULL && num_ssrcs > 0, FALSE);
 
-  rtp_source_get_last_rb (src, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
-      &round_trip);
-
-  if (src->last_keyframe_request != GST_CLOCK_TIME_NONE && round_trip) {
-    GstClockTime round_trip_in_ns = gst_util_uint64_scale (round_trip,
-        GST_SECOND, 65536);
-
-    /* Sanity check to avoid always ignoring PLI/FIR if we receive RTCP
-     * packets with erroneous values resulting in crazy high RTT. */
-    if (round_trip_in_ns > 5 * GST_SECOND)
-      round_trip_in_ns = GST_SECOND / 2;
-
-    if (current_time - src->last_keyframe_request < 2 * round_trip_in_ns) {
-      GST_DEBUG ("Ignoring %s request from %X because one was send without one "
-          "RTT (%" GST_TIME_FORMAT " < %" GST_TIME_FORMAT ")",
-          fir ? "FIR" : "PLI", rtp_source_get_ssrc (src),
-          GST_TIME_ARGS (current_time - src->last_keyframe_request),
-          GST_TIME_ARGS (round_trip_in_ns));
-      return FALSE;
-    }
-  }
-
-  src->last_keyframe_request = current_time;
+  /* The session lock is released when forwarding the requests */
+  g_object_ref (src);
 
   for (i = 0; i < num_ssrcs; ++i) {
+    RTPSource *media = find_source (sess, ssrcs[i]);
+
+    if (media == NULL || !media->internal)
+      continue;
+
+    if (!rtp_session_accept_key_unit_request (src, media, fir, current_time))
+      continue;
+
     GST_LOG ("received %s request from %X about %X %p(%p)",
         fir ? "FIR" : "PLI",
         rtp_source_get_ssrc (src), ssrcs[i], sess->callbacks.process_rtp,
         sess->callbacks.request_key_unit);
+
+    forwarded = TRUE;
 
     RTP_SESSION_UNLOCK (sess);
     sess->callbacks.request_key_unit (sess, ssrcs[i], fir,
@@ -3154,7 +3240,9 @@ rtp_session_request_local_key_unit (RTPSession * sess, RTPSource * src,
     RTP_SESSION_LOCK (sess);
   }
 
-  return TRUE;
+  g_object_unref (src);
+
+  return forwarded;
 }
 
 static void
@@ -4868,11 +4956,20 @@ clone_ssrcs_hashtable (gchar * key, RTPSource * source, GHashTable * hash_table)
   g_hash_table_insert (hash_table, key, g_object_ref (source));
 }
 
+static void
+remove_keyframe_request (G_GNUC_UNUSED gpointer key, RTPSource * requester,
+    gpointer user_data)
+{
+  g_hash_table_remove (requester->last_keyframe_requests, user_data);
+}
+
 static gboolean
 remove_closing_sources (const gchar * key, RTPSource * source,
     ReportData * data)
 {
   if (source->closing) {
+    g_hash_table_foreach (data->sess->ssrcs[data->sess->mask_idx],
+        (GHFunc) remove_keyframe_request, GUINT_TO_POINTER (source->ssrc));
     GST_INFO ("Removing source %08x %p, "
         "internal=%u, marked_bye=%u, sent_bye=%u, bye_reason=%s",
         source->ssrc, source, source->internal, source->marked_bye,
@@ -5562,6 +5659,7 @@ rtp_session_request_key_unit (RTPSession * sess, guint32 ssrc,
     gboolean fir, gint count)
 {
   RTPSource *src;
+  GstClockTime max_delay;
 
   RTP_SESSION_LOCK (sess);
   src = find_source (sess, ssrc);
@@ -5578,9 +5676,10 @@ rtp_session_request_key_unit (RTPSession * sess, guint32 ssrc,
   } else if (!src->send_fir) {
     src->send_pli = TRUE;
   }
+  max_delay = sess->rtcp_key_unit_max_delay;
   RTP_SESSION_UNLOCK (sess);
 
-  if (!rtp_session_send_rtcp (sess, 5 * GST_SECOND)) {
+  if (!rtp_session_send_rtcp (sess, max_delay)) {
     GST_DEBUG ("FIR/PLI not sent early, sending with next regular RTCP");
   }
 

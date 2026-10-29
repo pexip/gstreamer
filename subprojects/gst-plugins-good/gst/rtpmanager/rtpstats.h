@@ -160,6 +160,7 @@ typedef struct {
   guint        recv_pli_count;
   guint        sent_fir_count;
   guint        recv_fir_count;
+  guint        recv_key_unit_throttled_count;
   guint        sent_nack_count;
   guint        recv_nack_count;
 

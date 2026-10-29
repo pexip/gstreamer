@@ -203,7 +203,9 @@ struct _RTPSource {
   gboolean     send_fir;
   guint8       current_send_fir_seqnum;
   gint         last_fir_count;
-  GstClockTime last_keyframe_request;
+  /* media SSRC -> (GstClockTime *), when a PLI/FIR from this source for that
+   * media SSRC was last accepted. Protected by the session lock. */
+  GHashTable  *last_keyframe_requests;
 
   gboolean     send_nack;
   GArray      *nacks;
@@ -278,6 +280,7 @@ gboolean        rtp_source_get_last_sr         (RTPSource *src, GstClockTime *ti
 gboolean        rtp_source_get_last_rb         (RTPSource *src, guint32 * ssrc, guint8 *fractionlost, gint32 *packetslost,
                                                 guint32 *exthighestseq, guint32 *jitter,
                                                 guint32 *lsr, guint32 *dlsr, guint32 *round_trip);
+guint32         rtp_source_get_received_rb_round_trip (RTPSource *src, guint32 sender_ssrc);
 
 void            rtp_source_reset               (RTPSource * src);
 
