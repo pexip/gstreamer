@@ -883,6 +883,20 @@ gst_video_rate_sink_event (GstBaseTransform * trans, GstEvent * event)
       if (reset_base_ts) {
         base_ts = 0;
         videorate->out_frame_count = 0;
+
+        /* PEXHACK mcu#50792
+         * base_ts is relative to the segment start but is translated above as
+         * a position, so a segment that does not start at 0 lands here even
+         * when it is the same segment sent again, as pextee does every time a
+         * simulcast layer comes back. next_ts and the held buffer are kept,
+         * so resetting base_ts on its own puts the next output back at the
+         * segment start, and the buffer after it is duplicated all the way
+         * up to next_ts, which max-duplication-time never sees. Resync
+         * base_ts to next_ts, as the gap resyncs do in
+         * gst_video_rate_do_max_duplicate and the single buffer path. */
+        if (GST_CLOCK_TIME_IS_VALID (next_ts) && segment.rate > 0.0
+            && next_ts >= segment.base + segment.start)
+          base_ts = next_ts - segment.base - segment.start;
       }
       videorate->next_ts = next_ts;
       videorate->base_ts = base_ts;
@@ -1414,6 +1428,26 @@ gst_video_rate_switch_mode_if_needed (GstVideoRate * videorate)
   return skip;
 }
 
+/* PEXHACK mcu#50792
+ * A single input never makes up for more than max-duplication-time worth of
+ * output frames, whatever left the output clock behind: a segment, a caps
+ * change, a rate change. The cap in do_max_duplicate compares the two buffers
+ * and never looks at next_ts, which push_buffer re-derives from base_ts and
+ * out_frame_count on every push, so any of those getting out of step with the
+ * input made one push fill the difference, on the streaming thread. */
+static gboolean
+gst_video_rate_dup_limit_reached (GstVideoRate * videorate, gint count)
+{
+  if (videorate->max_duplication_time == 0 || !videorate->to_rate_numerator
+      || videorate->segment.rate < 0.0)
+    return FALSE;
+
+  return (guint64) count >
+      gst_util_uint64_scale (videorate->max_duplication_time,
+      videorate->to_rate_numerator,
+      videorate->to_rate_denominator * GST_SECOND) + 2;
+}
+
 static gboolean
 gst_video_rate_do_max_duplicate (GstVideoRate * videorate, GstBuffer * buffer,
     GstClockTime intime, GstClockTime prevtime, gint * count)
@@ -1442,6 +1476,13 @@ gst_video_rate_do_max_duplicate (GstVideoRate * videorate, GstBuffer * buffer,
       while (videorate->next_ts <= prevtime) {
         gst_video_rate_flush_prev (videorate, *count > 0, GST_CLOCK_TIME_NONE);
         *count += 1;
+        /* PEXHACK mcu#50792: the discontinuity below restarts the output
+         * clock at the new buffer */
+        if (gst_video_rate_dup_limit_reached (videorate, *count)) {
+          GST_WARNING_OBJECT (videorate, "%d frames to reach the previous "
+              "buffer, more than max-duplication-time allows", *count);
+          break;
+        }
       }
     }
 
@@ -1458,7 +1499,16 @@ gst_video_rate_do_max_duplicate (GstVideoRate * videorate, GstBuffer * buffer,
     if (videorate->segment.rate < 0.0) {
       videorate->base_ts -= prevtime - intime;
     } else {
-      videorate->base_ts += intime - prevtime;
+      /* PEXHACK mcu#50792
+       * Resync base_ts and out_frame_count together with next_ts, as the
+       * single buffer path does for the first buffer. Moving base_ts along
+       * and keeping out_frame_count leaves next_ts up to a frame behind
+       * base_ts as soon as the caps change before the next buffer is output,
+       * which reads as a huge value in the two buffer path: nothing is output
+       * any more, and the next gap makes up for all the time that went by. */
+      videorate->base_ts =
+          intime - videorate->segment.base - videorate->segment.start;
+      videorate->out_frame_count = 0;
     }
     videorate->next_ts = intime;
     /* Swap in new buffer and get rid of old buffer so that starting with
@@ -1616,6 +1666,23 @@ gst_video_rate_transform_ip (GstBaseTransform * trans, GstBuffer * buffer)
               videorate->segment.start + videorate->segment.base;
         }
       }
+    } else if (videorate->max_duplication_time > 0
+        && videorate->segment.rate > 0.0 && intime > videorate->next_ts
+        && intime - videorate->next_ts > videorate->max_duplication_time) {
+      /* PEXHACK mcu#50792
+       * The next output is due further back than max-duplication-time, so it
+       * can not be made up for any more. The two buffer path lets a
+       * discontinuity through for a gap that large
+       * (gst_video_rate_do_max_duplicate): do the same here, where the buffer
+       * is the first since the caps changed, or the one let through when
+       * dropping only, instead of leaving next_ts behind. Left there, the
+       * buffer after this one back-fills the whole gap with duplicates in
+       * one push, or, when dropping only, every buffer is let through until
+       * next_ts has caught up. */
+      videorate->next_ts = intime;
+      videorate->base_ts = in_ts - videorate->segment.start;
+      videorate->out_frame_count = 0;
+      videorate->discont = TRUE;
     }
 
     /* In drop-only mode we can already decide here if we should output the
@@ -1766,6 +1833,20 @@ gst_video_rate_transform_ip (GstBaseTransform * trans, GstBuffer * buffer)
           res = r;
           goto done;
         }
+      }
+
+      /* PEXHACK mcu#50792: restart the output clock at the new buffer, as the
+       * single buffer path and do_max_duplicate do for a gap */
+      if (gst_video_rate_dup_limit_reached (videorate, count)) {
+        GST_WARNING_OBJECT (videorate,
+            "%d duplicates in one push, more than max-duplication-time "
+            "allows, restarting at %" GST_TIME_FORMAT, count,
+            GST_TIME_ARGS (intime));
+        videorate->discont = TRUE;
+        videorate->base_ts = in_ts - videorate->segment.start;
+        videorate->out_frame_count = 0;
+        videorate->next_ts = intime;
+        break;
       }
 
       /* continue while the first one was the best, if they were equal avoid
