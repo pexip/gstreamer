@@ -1428,6 +1428,26 @@ gst_video_rate_switch_mode_if_needed (GstVideoRate * videorate)
   return skip;
 }
 
+/* PEXHACK mcu#50792
+ * A single input never makes up for more than max-duplication-time worth of
+ * output frames, whatever left the output clock behind: a segment, a caps
+ * change, a rate change. The cap in do_max_duplicate compares the two buffers
+ * and never looks at next_ts, which push_buffer re-derives from base_ts and
+ * out_frame_count on every push, so any of those getting out of step with the
+ * input made one push fill the difference, on the streaming thread. */
+static gboolean
+gst_video_rate_dup_limit_reached (GstVideoRate * videorate, gint count)
+{
+  if (videorate->max_duplication_time == 0 || !videorate->to_rate_numerator
+      || videorate->segment.rate < 0.0)
+    return FALSE;
+
+  return (guint64) count >
+      gst_util_uint64_scale (videorate->max_duplication_time,
+      videorate->to_rate_numerator,
+      videorate->to_rate_denominator * GST_SECOND) + 2;
+}
+
 static gboolean
 gst_video_rate_do_max_duplicate (GstVideoRate * videorate, GstBuffer * buffer,
     GstClockTime intime, GstClockTime prevtime, gint * count)
@@ -1456,6 +1476,13 @@ gst_video_rate_do_max_duplicate (GstVideoRate * videorate, GstBuffer * buffer,
       while (videorate->next_ts <= prevtime) {
         gst_video_rate_flush_prev (videorate, *count > 0, GST_CLOCK_TIME_NONE);
         *count += 1;
+        /* PEXHACK mcu#50792: the discontinuity below restarts the output
+         * clock at the new buffer */
+        if (gst_video_rate_dup_limit_reached (videorate, *count)) {
+          GST_WARNING_OBJECT (videorate, "%d frames to reach the previous "
+              "buffer, more than max-duplication-time allows", *count);
+          break;
+        }
       }
     }
 
@@ -1806,6 +1833,20 @@ gst_video_rate_transform_ip (GstBaseTransform * trans, GstBuffer * buffer)
           res = r;
           goto done;
         }
+      }
+
+      /* PEXHACK mcu#50792: restart the output clock at the new buffer, as the
+       * single buffer path and do_max_duplicate do for a gap */
+      if (gst_video_rate_dup_limit_reached (videorate, count)) {
+        GST_WARNING_OBJECT (videorate,
+            "%d duplicates in one push, more than max-duplication-time "
+            "allows, restarting at %" GST_TIME_FORMAT, count,
+            GST_TIME_ARGS (intime));
+        videorate->discont = TRUE;
+        videorate->base_ts = in_ts - videorate->segment.start;
+        videorate->out_frame_count = 0;
+        videorate->next_ts = intime;
+        break;
       }
 
       /* continue while the first one was the best, if they were equal avoid
