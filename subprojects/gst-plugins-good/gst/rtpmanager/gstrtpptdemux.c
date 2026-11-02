@@ -719,6 +719,14 @@ gst_rtp_pt_demux_push_group (GstRtpPtDemux * rtpdemux, GstBufferList * group,
   return ret;
 }
 
+/* Packets a list has to exceed before the pass below reaches for the heap. A
+ * burst of RTP from one socket read stays well inside this. */
+#define PT_DEMUX_LIST_STACK_PACKETS 128
+
+/* Not a valid RTP payload type (7 bits), so it marks a packet whose payload
+ * type could not be read and separates the runs around it. */
+#define PT_DEMUX_PT_INVALID 0xff
+
 /* Splits the list into runs of the same payload type and pushes each run as a
  * list of its own. Since a run is uniform by construction, the caps for its
  * payload type are sent exactly once before it, which is what the per-buffer
@@ -727,67 +735,84 @@ gst_rtp_pt_demux_push_group (GstRtpPtDemux * rtpdemux, GstBufferList * group,
  * Buffers are moved out of the incoming list rather than shared with it: the
  * per-buffer path hands downstream the only reference, and keeping a second
  * one here would turn every gst_buffer_make_writable() downstream (the FEC
- * decoder clearing DISCONT, for one) into a copy. */
+ * decoder clearing DISCONT, for one) into a copy.
+ *
+ * The move is done in one pass, before any grouping: taking the buffers one
+ * at a time off the front would shift the remainder of the array on every
+ * step, which is quadratic in the length of the list. Payload types are read
+ * in the same pass, so each run's length -- and with it the exact size of the
+ * list it goes into -- is known before the list is allocated. */
 static GstFlowReturn
 gst_rtp_pt_demux_chain_list (GstPad * pad, GstObject * parent,
     GstBufferList * list)
 {
   GstRtpPtDemux *rtpdemux = GST_RTP_PT_DEMUX (parent);
   GstFlowReturn ret = GST_FLOW_OK;
-  GstBufferList *group = NULL;
-  guint8 group_pt = 0;
-  guint len;
+  GstBuffer *stack_bufs[PT_DEMUX_LIST_STACK_PACKETS];
+  guint8 stack_pts[PT_DEMUX_LIST_STACK_PACKETS];
+  GstBuffer **bufs = stack_bufs;
+  GstBuffer **heap_bufs = NULL;
+  guint8 *pts = stack_pts;
+  guint8 *heap_pts = NULL;
+  guint len, i;
   (void) pad;
 
   len = gst_buffer_list_length (list);
   GST_LOG_OBJECT (rtpdemux, "received buffer list with %u buffers", len);
 
-  list = gst_buffer_list_make_writable (list);
+  if (len == 0) {
+    gst_buffer_list_unref (list);
+    return GST_FLOW_OK;
+  }
 
-  while (gst_buffer_list_length (list) > 0 && ret == GST_FLOW_OK) {
-    GstBuffer *buf = gst_buffer_ref (gst_buffer_list_get (list, 0));
-    guint8 pt;
+  if (len > PT_DEMUX_LIST_STACK_PACKETS) {
+    bufs = heap_bufs = g_new (GstBuffer *, len);
+    pts = heap_pts = g_new (guint8, len);
+  }
 
-    gst_buffer_list_remove (list, 0, 1);
+  for (i = 0; i < len; i++) {
+    bufs[i] = gst_buffer_ref (gst_buffer_list_get (list, i));
+    if (!gst_rtp_pt_demux_buffer_pt (bufs[i], &pts[i]))
+      pts[i] = PT_DEMUX_PT_INVALID;
+  }
+  gst_buffer_list_unref (list);
 
-    if (!gst_rtp_pt_demux_buffer_pt (buf, &pt)) {
+  i = 0;
+  while (i < len) {
+    GstBufferList *group;
+    guint run, j;
+
+    if (pts[i] == PT_DEMUX_PT_INVALID) {
       /* this should not be fatal, and it ends the run: the packets after it
        * may well belong to another payload type */
       GST_ELEMENT_WARNING (rtpdemux, STREAM, DEMUX, (NULL),
           ("Dropping invalid RTP payload"));
-      gst_buffer_unref (buf);
-      if (group != NULL) {
-        ret = gst_rtp_pt_demux_push_group (rtpdemux, group, group_pt);
-        group = NULL;
-      }
+      gst_buffer_unref (bufs[i]);
+      i++;
       continue;
     }
 
-    if (group != NULL && pt != group_pt) {
-      ret = gst_rtp_pt_demux_push_group (rtpdemux, group, group_pt);
-      group = NULL;
-      if (ret != GST_FLOW_OK) {
-        gst_buffer_unref (buf);
-        break;
-      }
-    }
+    run = 1;
+    while (i + run < len && pts[i + run] == pts[i])
+      run++;
 
-    if (group == NULL) {
-      group = gst_buffer_list_new_sized (gst_buffer_list_length (list) + 1);
-      group_pt = pt;
-    }
+    group = gst_buffer_list_new_sized (run);
+    for (j = 0; j < run; j++)
+      gst_buffer_list_add (group, bufs[i + j]);
 
-    gst_buffer_list_add (group, buf);
+    ret = gst_rtp_pt_demux_push_group (rtpdemux, group, pts[i]);
+    i += run;
+
+    if (ret != GST_FLOW_OK)
+      break;
   }
 
-  if (group != NULL) {
-    if (ret == GST_FLOW_OK)
-      ret = gst_rtp_pt_demux_push_group (rtpdemux, group, group_pt);
-    else
-      gst_buffer_list_unref (group);
-  }
+  /* whatever the failed push did not take */
+  for (; i < len; i++)
+    gst_buffer_unref (bufs[i]);
 
-  gst_buffer_list_unref (list);
+  g_free (heap_bufs);
+  g_free (heap_pts);
 
   return ret;
 }

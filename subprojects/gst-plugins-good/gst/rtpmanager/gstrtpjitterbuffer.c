@@ -4394,9 +4394,18 @@ pop_and_push_batch (GstRtpJitterBuffer * jitterbuffer, guint seqnum)
     g_queue_push_tail (&messages, msg);
 
   while (batched < priv->max_push_batch) {
-    RTPJitterBufferItem *item = rtp_jitter_buffer_peek (priv->jbuf);
+    RTPJitterBufferItem *item;
     guint next_seqnum;
 
+    /* In mode=buffer every pop re-evaluates the fill level, so the packet we
+     * just took may have dropped the queue below its low watermark and
+     * restarted buffering. The single-buffer path notices that the next time
+     * handle_next_buffer() runs; the batch has to notice it here, or it would
+     * drain straight through the watermark it is supposed to respect. */
+    if (rtp_jitter_buffer_is_buffering (priv->jbuf))
+      break;
+
+    item = rtp_jitter_buffer_peek (priv->jbuf);
     /* Anything that is not a plain buffer ends the run: it has to travel
      * through pop_and_push_next() to keep its place in the stream. */
     if (item == NULL || item->type != ITEM_TYPE_BUFFER)
