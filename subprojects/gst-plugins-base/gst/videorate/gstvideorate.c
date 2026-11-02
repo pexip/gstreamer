@@ -1434,12 +1434,15 @@ gst_video_rate_switch_mode_if_needed (GstVideoRate * videorate)
  * change, a rate change. The cap in do_max_duplicate compares the two buffers
  * and never looks at next_ts, which push_buffer re-derives from base_ts and
  * out_frame_count on every push, so any of those getting out of step with the
- * input made one push fill the difference, on the streaming thread. */
+ * input made one push fill the difference, on the streaming thread.
+ * Restarting at the input time does not keep the output clock of a rate other
+ * than 1, which scales next_ts around base_ts, so that and reverse playback are
+ * left as they were. */
 static gboolean
 gst_video_rate_dup_limit_reached (GstVideoRate * videorate, gint count)
 {
   if (videorate->max_duplication_time == 0 || !videorate->to_rate_numerator
-      || videorate->segment.rate < 0.0)
+      || videorate->segment.rate < 0.0 || videorate->rate != 1.0)
     return FALSE;
 
   return (guint64) count >
