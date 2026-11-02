@@ -1407,10 +1407,28 @@ gst_rtp_rtx_send_chain (GstPad * pad, GstObject * parent, GstBuffer * buffer)
   return ret;
 }
 
+/* Collects the last stream context seen while walking a list, so stuffing can
+ * be evaluated once the whole list has gone out. */
+typedef struct
+{
+  GstRtpRtxSend *rtx;
+  SSRCRtxData *rtx_data;
+} ProcessListCtx;
+
 static gboolean
 process_buffer_from_list (GstBuffer ** buffer, guint idx, gpointer user_data)
 {
-  process_buffer (user_data, *buffer);
+  ProcessListCtx *ctx = user_data;
+  SSRCRtxData *rtx_data;
+  (void) idx;
+
+  /* Not process_buffer() directly: get_rtx_data() also maintains
+   * last_stuffing_ssrc, which stuffing falls back on when a buffer carries no
+   * context of its own. */
+  rtx_data = gst_rtp_rtx_send_get_rtx_data (ctx->rtx, *buffer);
+  if (rtx_data != NULL)
+    ctx->rtx_data = rtx_data;
+
   return TRUE;
 }
 
@@ -1447,15 +1465,37 @@ gst_rtp_rtx_send_chain_list (GstPad * pad, GstObject * parent,
 {
   GstRtpRtxSend *rtx = GST_RTP_RTX_SEND_CAST (parent);
   GstFlowReturn ret;
+  GstClock *clock;
 
   GST_OBJECT_LOCK (rtx);
-  if (IS_RTX_ENABLED (rtx)) {
-    if (rtx->stuffing_kbps != 0)
-      GST_WARNING_OBJECT (rtx, "RTX stuffing for chain_list not implemented");
+  clock = GST_ELEMENT_CLOCK (rtx);
 
-    gst_buffer_list_foreach (list, process_buffer_from_list, rtx);
+  /* Refill the stuffing budget before the list spends it, as the per-buffer
+   * path does. Without this the bucket is only ever drained on this path. */
+  if (clock)
+    token_bucket_add_tokens (&rtx->stuff_tb, gst_clock_get_time (clock));
+
+  if (IS_RTX_ENABLED (rtx)) {
+    ProcessListCtx ctx = { rtx, NULL };
+
+    gst_buffer_list_foreach (list, process_buffer_from_list, &ctx);
 
     ret = gst_rtp_rtx_send_push_list (rtx, list);
+
+    /* Stuffing tops the outgoing rate up to stuffing-kbps: the bucket is
+     * refilled from the clock and spent by the media that just went out, so
+     * whatever is left is the room to fill with padded RTX copies.
+     *
+     * The per-buffer path evaluates that after every buffer; a list evaluates
+     * it once, after the whole list, with the last context that carried one.
+     * The accounting is identical -- the same tokens added and the same ones
+     * taken -- but stuffing-max-burst-packets caps a single evaluation, so a
+     * list gets one chance to fill the budget where N buffers got N. With a
+     * large accumulated budget a list can therefore stuff less. */
+    if (ret == GST_FLOW_OK && clock && ctx.rtx_data != NULL
+        && rtx->stuffing_kbps != 0)
+      ret = gst_rtp_rtx_send_push_stuffing (rtx, ctx.rtx_data);
+
     GST_OBJECT_UNLOCK (rtx);
     return ret;
   }
