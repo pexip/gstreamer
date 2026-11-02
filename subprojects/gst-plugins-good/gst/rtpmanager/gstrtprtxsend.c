@@ -1414,6 +1414,33 @@ process_buffer_from_list (GstBuffer ** buffer, guint idx, gpointer user_data)
   return TRUE;
 }
 
+/* The list counterpart of gst_rtp_rtx_send_push(): the media goes straight
+ * out of the streaming thread, exactly as a single buffer does.
+ *
+ * It must not go through gst_rtp_rtx_send_push_out() instead. That queue
+ * feeds gst_rtp_rtx_send_src_loop(), which handles buffers and events only
+ * and asserts on anything else, and which counts everything it pops as a
+ * retransmitted packet. Queueing the media list there aborted the element as
+ * soon as anything upstream actually produced a list -- nothing did until
+ * the TX chain learned to forward them. */
+static GstFlowReturn
+gst_rtp_rtx_send_push_list (GstRtpRtxSend * rtx, GstBufferList * list)
+{
+  GstFlowReturn ret;
+  guint i, len = gst_buffer_list_length (list);
+
+  for (i = 0; i < len; i++)
+    token_bucket_take_tokens (&rtx->stuff_tb,
+        get_buffer_bytes_size (gst_buffer_list_get (list, i)) * 8, TRUE);
+
+  GST_OBJECT_UNLOCK (rtx);
+  GST_LOG_OBJECT (rtx, "Pushing a list of %u buffers", len);
+  ret = gst_pad_push_list (rtx->srcpad, list);
+  GST_OBJECT_LOCK (rtx);
+
+  return ret;
+}
+
 static GstFlowReturn
 gst_rtp_rtx_send_chain_list (GstPad * pad, GstObject * parent,
     GstBufferList * list)
@@ -1428,9 +1455,9 @@ gst_rtp_rtx_send_chain_list (GstPad * pad, GstObject * parent,
 
     gst_buffer_list_foreach (list, process_buffer_from_list, rtx);
 
+    ret = gst_rtp_rtx_send_push_list (rtx, list);
     GST_OBJECT_UNLOCK (rtx);
-    gst_rtp_rtx_send_push_out (rtx, list);
-    return GST_FLOW_OK;
+    return ret;
   }
   GST_OBJECT_UNLOCK (rtx);
 
