@@ -1212,12 +1212,27 @@ process_buffer (GstRtpRtxSend * rtx, GstBuffer * buffer)
   return data;
 }
 
+/* Sends one buffer on its way and charges it to the stuffing budget.
+ *
+ * With @out set the buffer is appended to that list instead of being pushed,
+ * so a whole list can be assembled and handed downstream in one go. The
+ * tokens are taken either way and in the same order, which is what keeps the
+ * two paths producing the same stream. */
 static GstFlowReturn
-gst_rtp_rtx_send_push (GstRtpRtxSend * rtx, GstBuffer * buffer)
+gst_rtp_rtx_send_push (GstRtpRtxSend * rtx, GstBuffer * buffer,
+    GstBufferList * out)
 {
   GstFlowReturn ret;
   guint buffer_size = get_buffer_bytes_size (buffer);
   token_bucket_take_tokens (&rtx->stuff_tb, buffer_size * 8, TRUE);
+
+  if (out != NULL) {
+    GST_LOG_OBJECT (rtx,
+        "Adding buffer %" GST_PTR_FORMAT " with network size: %u to the list",
+        buffer, buffer_size);
+    gst_buffer_list_add (out, buffer);
+    return GST_FLOW_OK;
+  }
 
   GST_OBJECT_UNLOCK (rtx);
   GST_LOG_OBJECT (rtx,
@@ -1287,8 +1302,15 @@ gst_rtp_rtx_send_get_stuffing_buffers (GstRtpRtxSend * rtx,
   return available_stuffing_bytes * 8;
 }
 
+/* Tops the outgoing rate up to stuffing-kbps with padded copies of recent
+ * RTX buffers, spending whatever is left of the budget.
+ *
+ * @out is handed straight to gst_rtp_rtx_send_push(): when it is set the
+ * stuffing is appended to that list rather than pushed, so it ends up right
+ * behind the media buffer it was generated for. */
 static GstFlowReturn
-gst_rtp_rtx_send_push_stuffing (GstRtpRtxSend * rtx, SSRCRtxData * rtx_data)
+gst_rtp_rtx_send_push_stuffing (GstRtpRtxSend * rtx, SSRCRtxData * rtx_data,
+    GstBufferList * out)
 {
   GstFlowReturn ret = GST_FLOW_OK;
   GSequenceIter *first = NULL;
@@ -1340,7 +1362,7 @@ gst_rtp_rtx_send_push_stuffing (GstRtpRtxSend * rtx, SSRCRtxData * rtx_data)
         "Pushing 1 stuffing packet with size %u - bucket_size=%d",
         (guint) get_buffer_bytes_size (rtx_buf),
         (gint) (rtx->stuff_tb.bucket_size / 8));
-    ret = gst_rtp_rtx_send_push (rtx, rtx_buf);
+    ret = gst_rtp_rtx_send_push (rtx, rtx_buf, out);
 
     current = g_sequence_iter_next (current);
 
@@ -1397,111 +1419,103 @@ gst_rtp_rtx_send_chain (GstPad * pad, GstObject * parent, GstBuffer * buffer)
   if (IS_RTX_ENABLED (rtx))
     rtx_data = gst_rtp_rtx_send_get_rtx_data (rtx, buffer);
 
-  ret = gst_rtp_rtx_send_push (rtx, buffer);
+  ret = gst_rtp_rtx_send_push (rtx, buffer, NULL);
 
   if (ret == GST_FLOW_OK && clock && rtx_data && rtx->stuffing_kbps != 0)
-    ret = gst_rtp_rtx_send_push_stuffing (rtx, rtx_data);
+    ret = gst_rtp_rtx_send_push_stuffing (rtx, rtx_data, NULL);
 
   GST_OBJECT_UNLOCK (rtx);
 
   return ret;
 }
 
-/* Collects the last stream context seen while walking a list, so stuffing can
- * be evaluated once the whole list has gone out. */
-typedef struct
-{
-  GstRtpRtxSend *rtx;
-  SSRCRtxData *rtx_data;
-} ProcessListCtx;
+/* Packets a list has to exceed before the pass below reaches for the heap. */
+#define RTX_LIST_STACK_PACKETS 128
 
-static gboolean
-process_buffer_from_list (GstBuffer ** buffer, guint idx, gpointer user_data)
-{
-  ProcessListCtx *ctx = user_data;
-  SSRCRtxData *rtx_data;
-  (void) idx;
-
-  /* Not process_buffer() directly: get_rtx_data() also maintains
-   * last_stuffing_ssrc, which stuffing falls back on when a buffer carries no
-   * context of its own. */
-  rtx_data = gst_rtp_rtx_send_get_rtx_data (ctx->rtx, *buffer);
-  if (rtx_data != NULL)
-    ctx->rtx_data = rtx_data;
-
-  return TRUE;
-}
-
-/* The list counterpart of gst_rtp_rtx_send_push(): the media goes straight
- * out of the streaming thread, exactly as a single buffer does.
+/* Media and the stuffing it earns leave in one push, interleaved exactly as
+ * the per-buffer path emits them.
  *
- * It must not go through gst_rtp_rtx_send_push_out() instead. That queue
+ * That ordering is the whole point. Per buffer, gst_rtp_rtx_send_chain()
+ * charges the packet to the budget, sends it, and then tops the budget back
+ * up with stuffing -- so the stuffing sits right behind the packet it was
+ * computed for, and the packets after it are charged against what is left.
+ *
+ * Evaluating the budget once for a whole list instead gets both halves
+ * wrong: the stuffing is computed after every packet of the list has already
+ * been charged (so there is less of it, often none), and it lands at the
+ * tail instead of in the middle. Measured on four 600-byte packets, the
+ * per-buffer path emits "m m m s s s s m" where the list emitted
+ * "m m m m s s s".
+ *
+ * Note it must not go through gst_rtp_rtx_send_push_out() either. That queue
  * feeds gst_rtp_rtx_send_src_loop(), which handles buffers and events only
  * and asserts on anything else, and which counts everything it pops as a
- * retransmitted packet. Queueing the media list there aborted the element as
- * soon as anything upstream actually produced a list -- nothing did until
- * the TX chain learned to forward them. */
-static GstFlowReturn
-gst_rtp_rtx_send_push_list (GstRtpRtxSend * rtx, GstBufferList * list)
-{
-  GstFlowReturn ret;
-  guint i, len = gst_buffer_list_length (list);
-
-  for (i = 0; i < len; i++)
-    token_bucket_take_tokens (&rtx->stuff_tb,
-        get_buffer_bytes_size (gst_buffer_list_get (list, i)) * 8, TRUE);
-
-  GST_OBJECT_UNLOCK (rtx);
-  GST_LOG_OBJECT (rtx, "Pushing a list of %u buffers", len);
-  ret = gst_pad_push_list (rtx->srcpad, list);
-  GST_OBJECT_LOCK (rtx);
-
-  return ret;
-}
-
+ * retransmitted packet. */
 static GstFlowReturn
 gst_rtp_rtx_send_chain_list (GstPad * pad, GstObject * parent,
     GstBufferList * list)
 {
   GstRtpRtxSend *rtx = GST_RTP_RTX_SEND_CAST (parent);
-  GstFlowReturn ret;
+  GstBuffer *stack_bufs[RTX_LIST_STACK_PACKETS];
+  GstBuffer **heap_bufs = NULL;
+  GstBuffer **bufs = stack_bufs;
+  GstBufferList *out;
+  GstFlowReturn ret = GST_FLOW_OK;
   GstClock *clock;
+  guint len, i;
+  (void) pad;
 
   GST_OBJECT_LOCK (rtx);
   clock = GST_ELEMENT_CLOCK (rtx);
 
   /* Refill the stuffing budget before the list spends it, as the per-buffer
-   * path does. Without this the bucket is only ever drained on this path. */
+   * path does. The clock does not move within one list, so reading it once
+   * is the same as reading it per packet. */
   if (clock)
     token_bucket_add_tokens (&rtx->stuff_tb, gst_clock_get_time (clock));
 
-  if (IS_RTX_ENABLED (rtx)) {
-    ProcessListCtx ctx = { rtx, NULL };
-
-    gst_buffer_list_foreach (list, process_buffer_from_list, &ctx);
-
-    ret = gst_rtp_rtx_send_push_list (rtx, list);
-
-    /* Stuffing tops the outgoing rate up to stuffing-kbps: the bucket is
-     * refilled from the clock and spent by the media that just went out, so
-     * whatever is left is the room to fill with padded RTX copies.
-     *
-     * The per-buffer path evaluates that after every buffer; a list evaluates
-     * it once, after the whole list, with the last context that carried one.
-     * The accounting is identical -- the same tokens added and the same ones
-     * taken -- but stuffing-max-burst-packets caps a single evaluation, so a
-     * list gets one chance to fill the budget where N buffers got N. With a
-     * large accumulated budget a list can therefore stuff less. */
-    if (ret == GST_FLOW_OK && clock && ctx.rtx_data != NULL
-        && rtx->stuffing_kbps != 0)
-      ret = gst_rtp_rtx_send_push_stuffing (rtx, ctx.rtx_data);
-
+  if (!IS_RTX_ENABLED (rtx)) {
     GST_OBJECT_UNLOCK (rtx);
-    return ret;
+    return gst_pad_push_list (rtx->srcpad, list);
   }
+
+  len = gst_buffer_list_length (list);
+  if (len == 0) {
+    GST_OBJECT_UNLOCK (rtx);
+    gst_buffer_list_unref (list);
+    return GST_FLOW_OK;
+  }
+
+  if (len > RTX_LIST_STACK_PACKETS)
+    bufs = heap_bufs = g_new (GstBuffer *, len);
+
+  /* Take the buffers out of the arrival list in one pass, so the walk below
+   * owns them and the list can be released before anything is pushed. */
+  for (i = 0; i < len; i++)
+    bufs[i] = gst_buffer_ref (gst_buffer_list_get (list, i));
+  gst_buffer_list_unref (list);
+
+  /* Room for the media plus the stuffing it earns. */
+  out = gst_buffer_list_new_sized (len * 2);
+
+  for (i = 0; i < len; i++) {
+    SSRCRtxData *rtx_data;
+
+    /* Not process_buffer() directly: get_rtx_data() also maintains
+     * last_stuffing_ssrc, which stuffing falls back on when a buffer carries
+     * no context of its own. */
+    rtx_data = gst_rtp_rtx_send_get_rtx_data (rtx, bufs[i]);
+
+    gst_rtp_rtx_send_push (rtx, bufs[i], out);
+
+    if (clock && rtx_data && rtx->stuffing_kbps != 0)
+      gst_rtp_rtx_send_push_stuffing (rtx, rtx_data, out);
+  }
+
+  g_free (heap_bufs);
   GST_OBJECT_UNLOCK (rtx);
 
-  ret = gst_pad_push_list (rtx->srcpad, list);
+  ret = gst_pad_push_list (rtx->srcpad, out);
 
   return ret;
 }
@@ -1518,7 +1532,7 @@ gst_rtp_rtx_send_src_loop (GstRtpRtxSend * rtx)
       GST_OBJECT_LOCK (rtx);
       /* Update statistics just before pushing. */
       rtx->num_rtx_packets++;
-      gst_rtp_rtx_send_push (rtx, GST_BUFFER (data->object));
+      gst_rtp_rtx_send_push (rtx, GST_BUFFER (data->object), NULL);
       GST_OBJECT_UNLOCK (rtx);
 
     } else if (GST_IS_EVENT (data->object)) {
