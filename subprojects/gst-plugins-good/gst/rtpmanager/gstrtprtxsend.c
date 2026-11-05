@@ -1474,12 +1474,25 @@ gst_rtp_rtx_send_chain_list (GstPad * pad, GstObject * parent,
   if (clock)
     token_bucket_add_tokens (&rtx->stuff_tb, gst_clock_get_time (clock));
 
+  len = gst_buffer_list_length (list);
+
   if (!IS_RTX_ENABLED (rtx)) {
+    /* Still charge for what goes out. gst_rtp_rtx_send_push() debits the
+     * bucket for every buffer it forwards whether or not retransmission is
+     * on, so the per-buffer path keeps the budget at zero while RTX is
+     * disabled. Forwarding the list without charging would let the bucket
+     * fill to its ceiling -- a whole second of stuffing at stuffing-kbps --
+     * and the moment the payload type map arrives and enables RTX, all of it
+     * would go out as one burst that the per-buffer path never produces.
+     * Updating the map does not reset the bucket. */
+    for (i = 0; i < len; i++)
+      token_bucket_take_tokens (&rtx->stuff_tb,
+          get_buffer_bytes_size (gst_buffer_list_get (list, i)) * 8, TRUE);
+
     GST_OBJECT_UNLOCK (rtx);
     return gst_pad_push_list (rtx->srcpad, list);
   }
 
-  len = gst_buffer_list_length (list);
   if (len == 0) {
     GST_OBJECT_UNLOCK (rtx);
     gst_buffer_list_unref (list);
