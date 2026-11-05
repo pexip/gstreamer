@@ -184,6 +184,12 @@ validate_mid (const char *mid)
 {
   const char *iter;
 
+  /* A two-byte header extension element carries at most 255 bytes of data
+   * (RFC 8285 Section 4.3)
+   */
+  if (mid && strlen (mid) > 255)
+    return FALSE;
+
   /* RFC 8843 Section 15.2: the MID header extension carries the SDP
    * identification-tag, which RFC 5888 defines as an RFC 4566 token:
    *

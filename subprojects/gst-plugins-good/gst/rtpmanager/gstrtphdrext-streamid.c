@@ -190,6 +190,12 @@ validate_rid (const char *rid)
 {
   const char *iter;
 
+  /* RFC 8852 Section 3: As with all SDES items, RtpStreamId and
+   * RepairedRtpStreamId are limited to a total of 255 octets in length.
+   */
+  if (rid && strlen (rid) > 255)
+    return FALSE;
+
   /* For avoidance of doubt, the only allowed byte values for
    * these IDs are decimal 48 through 57, 65 through 90, and 97 through
    * 122.
