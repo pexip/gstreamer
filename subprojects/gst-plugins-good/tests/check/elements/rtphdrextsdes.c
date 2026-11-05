@@ -29,6 +29,7 @@
 #define URN_REPAIRED_STREAM_ID "urn:ietf:params:rtp-hdrext:sdes:repaired-rtp-stream-id"
 
 #define ALL_VALID_PROPERTY_ALPHANUMERIC "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVYZ"
+#define ALL_VALID_PROPERTY_TOKEN "!#$%&'*+-.0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ^_`abcdefghijklmnopqrstuvwxyz{|}~"
 
 typedef struct
 {
@@ -139,6 +140,27 @@ test_invalid_sdes_value (GstRTPHeaderExtension * ext, const char *property_name)
   fail_unless_equals_pointer (val, NULL);
 }
 
+static void
+test_invalid_mid_value (GstRTPHeaderExtension * ext)
+{
+  /* a mid is an RFC 4566 token, test the invalid boundary conditions of
+   * token-char in ascii and a non-ascii value */
+  const char *invalid[] = { " ", "\"", "(", ")", ",", "/", ":", "@", "[", "]",
+    "\x7f", "\x80", "audio 1",
+  };
+  char *val;
+  guint i;
+
+  g_object_set (ext, "mid", NULL, NULL);
+
+  for (i = 0; i < G_N_ELEMENTS (invalid); i++) {
+    g_object_set (ext, "mid", invalid[i], NULL);
+    g_object_get (ext, "mid", &val, NULL);
+    fail_unless (val == NULL, "mid \'%s\' should have been rejected",
+        invalid[i]);
+  }
+}
+
 GST_START_TEST (rtprfc8843_one_byte)
 {
   GstRTPHeaderExtension *read_ext, *write_ext;
@@ -155,6 +177,8 @@ GST_START_TEST (rtprfc8843_one_byte)
       "mid", "0");
   read_write_extension (read_ext, write_ext, GST_RTP_HEADER_EXTENSION_ONE_BYTE,
       "mid", "01");
+  read_write_extension (read_ext, write_ext, GST_RTP_HEADER_EXTENSION_ONE_BYTE,
+      "mid", "audio-1");
 
   gst_object_unref (write_ext);
   gst_object_unref (read_ext);
@@ -178,6 +202,8 @@ GST_START_TEST (rtprfc8843_two_bytes)
       "mid", "0");
   read_write_extension (read_ext, write_ext, GST_RTP_HEADER_EXTENSION_TWO_BYTE,
       "mid", "01");
+  read_write_extension (read_ext, write_ext, GST_RTP_HEADER_EXTENSION_TWO_BYTE,
+      "mid", "audio-1");
 
   gst_object_unref (write_ext);
   gst_object_unref (read_ext);
@@ -212,7 +238,7 @@ GST_START_TEST (rtprfc8843_invalid_property_set)
   fail_unless (write_ext != NULL);
   gst_rtp_header_extension_set_id (write_ext, 1);
 
-  test_invalid_sdes_value (write_ext, "mid");
+  test_invalid_mid_value (write_ext);
 
   gst_object_unref (write_ext);
 }
@@ -254,9 +280,9 @@ GST_START_TEST (rtprfc8843_all_valid_values)
   fail_unless (write_ext != NULL);
   gst_rtp_header_extension_set_id (write_ext, 1);
 
-  g_object_set (write_ext, "mid", ALL_VALID_PROPERTY_ALPHANUMERIC, NULL);
+  g_object_set (write_ext, "mid", ALL_VALID_PROPERTY_TOKEN, NULL);
   g_object_get (write_ext, "mid", &mid, NULL);
-  fail_unless_equals_string (mid, ALL_VALID_PROPERTY_ALPHANUMERIC);
+  fail_unless_equals_string (mid, ALL_VALID_PROPERTY_TOKEN);
 
   gst_object_unref (write_ext);
   g_clear_pointer (&mid, g_free);
