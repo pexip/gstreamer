@@ -4377,19 +4377,17 @@ static GstFlowReturn
 pop_and_push_batch (GstRtpJitterBuffer * jitterbuffer, guint seqnum)
 {
   GstRtpJitterBufferPrivate *priv = jitterbuffer->priv;
-  GstBufferList *outlist;
+  GstBufferList *outlist = NULL;
+  GstBuffer *first;
   GQueue messages = G_QUEUE_INIT;
   GstMessage *msg = NULL;
   GstFlowReturn result;
   guint batched = 1;
 
-  /* Size the hint by what is actually queued rather than by the cap: with a
-   * large max-push-batch the allocation would otherwise be dominated by the
-   * limit instead of by the run. */
-  outlist = gst_buffer_list_new_sized (MIN (priv->max_push_batch,
-          rtp_jitter_buffer_num_packets (priv->jbuf)));
-  gst_buffer_list_add (outlist, prepare_next_buffer (jitterbuffer, seqnum,
-          &msg));
+  /* Held on its own until a second buffer is known to be coming. A run of one
+   * is not a rare case -- media interleaved with FEC or RED produces mostly
+   * runs of one -- and it should cost no more than the single-buffer path. */
+  first = prepare_next_buffer (jitterbuffer, seqnum, &msg);
   if (msg)
     g_queue_push_tail (&messages, msg);
 
@@ -4417,6 +4415,18 @@ pop_and_push_batch (GstRtpJitterBuffer * jitterbuffer, guint seqnum)
     if (gst_rtp_buffer_compare_seqnum (priv->next_out_seqnum, next_seqnum) != 0)
       break;
 
+    /* Only now is a list worth paying for. Size the hint by what is actually
+     * queued rather than by the cap: with a large max-push-batch the
+     * allocation would otherwise be dominated by the limit instead of by the
+     * run. num_packets() no longer counts the buffer already in hand, so add
+     * it back. */
+    if (outlist == NULL) {
+      outlist = gst_buffer_list_new_sized (MIN (priv->max_push_batch,
+              rtp_jitter_buffer_num_packets (priv->jbuf) + 1));
+      gst_buffer_list_add (outlist, first);
+      first = NULL;
+    }
+
     msg = NULL;
     gst_buffer_list_add (outlist, prepare_next_buffer (jitterbuffer,
             next_seqnum, &msg));
@@ -4431,13 +4441,11 @@ pop_and_push_batch (GstRtpJitterBuffer * jitterbuffer, guint seqnum)
   while ((msg = g_queue_pop_head (&messages)))
     gst_element_post_message (GST_ELEMENT_CAST (jitterbuffer), msg);
 
-  GST_DEBUG_OBJECT (jitterbuffer, "Pushing a list of %u buffers", batched);
-  if (batched == 1) {
-    GstBuffer *outbuf = gst_buffer_ref (gst_buffer_list_get (outlist, 0));
-
-    gst_buffer_list_unref (outlist);
-    result = gst_pad_push (priv->srcpad, outbuf);
+  if (outlist == NULL) {
+    GST_DEBUG_OBJECT (jitterbuffer, "Pushing a single buffer");
+    result = gst_pad_push (priv->srcpad, first);
   } else {
+    GST_DEBUG_OBJECT (jitterbuffer, "Pushing a list of %u buffers", batched);
     result = gst_pad_push_list (priv->srcpad, outlist);
   }
 

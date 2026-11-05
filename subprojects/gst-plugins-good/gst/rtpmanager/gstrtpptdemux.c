@@ -684,36 +684,50 @@ no_caps:
   }
 }
 
-/* Pushes the buffers collected for one payload type. Takes ownership of
- * @group. */
+/* Pushes the buffers collected for one payload type. Takes ownership of the
+ * @run buffers at @bufs.
+ *
+ * A run of one goes out as a plain buffer rather than as a one-element list.
+ * That is the common shape whenever media is interleaved with FEC or RED, and
+ * wrapping it would cost an allocation here and put everything downstream on
+ * the list path for the sake of a single packet. */
 static GstFlowReturn
-gst_rtp_pt_demux_push_group (GstRtpPtDemux * rtpdemux, GstBufferList * group,
-    guint8 pt)
+gst_rtp_pt_demux_push_run (GstRtpPtDemux * rtpdemux, GstBuffer ** bufs,
+    guint run, guint8 pt)
 {
+  GstBufferList *group;
   GstPad *srcpad;
   GstFlowReturn ret;
+  guint i;
 
-  if (gst_buffer_list_length (group) == 0) {
-    gst_buffer_list_unref (group);
+  if (run == 0)
     return GST_FLOW_OK;
-  }
 
   switch (gst_rtp_pt_demux_get_srcpad_for_pt (rtpdemux, pt, &srcpad)) {
     case PT_DEMUX_PAD_IGNORED:
-      GST_DEBUG_OBJECT (rtpdemux, "Dropped %u buffers for pt %d",
-          gst_buffer_list_length (group), pt);
-      gst_buffer_list_unref (group);
+      GST_DEBUG_OBJECT (rtpdemux, "Dropped %u buffers for pt %d", run, pt);
+      for (i = 0; i < run; i++)
+        gst_buffer_unref (bufs[i]);
       return GST_FLOW_OK;
     case PT_DEMUX_PAD_NO_CAPS:
       GST_ELEMENT_ERROR (rtpdemux, STREAM, DECODE, (NULL),
           ("Could not get caps for payload"));
-      gst_buffer_list_unref (group);
+      for (i = 0; i < run; i++)
+        gst_buffer_unref (bufs[i]);
       return GST_FLOW_ERROR;
     case PT_DEMUX_PAD_OK:
       break;
   }
 
-  ret = gst_pad_push_list (srcpad, group);
+  if (run == 1) {
+    ret = gst_pad_push (srcpad, bufs[0]);
+  } else {
+    group = gst_buffer_list_new_sized (run);
+    for (i = 0; i < run; i++)
+      gst_buffer_list_add (group, bufs[i]);
+    ret = gst_pad_push_list (srcpad, group);
+  }
+
   gst_object_unref (srcpad);
 
   return ret;
@@ -779,8 +793,7 @@ gst_rtp_pt_demux_chain_list (GstPad * pad, GstObject * parent,
 
   i = 0;
   while (i < len) {
-    GstBufferList *group;
-    guint run, j;
+    guint run;
 
     if (pts[i] == PT_DEMUX_PT_INVALID) {
       /* this should not be fatal, and it ends the run: the packets after it
@@ -796,11 +809,7 @@ gst_rtp_pt_demux_chain_list (GstPad * pad, GstObject * parent,
     while (i + run < len && pts[i + run] == pts[i])
       run++;
 
-    group = gst_buffer_list_new_sized (run);
-    for (j = 0; j < run; j++)
-      gst_buffer_list_add (group, bufs[i + j]);
-
-    ret = gst_rtp_pt_demux_push_group (rtpdemux, group, pts[i]);
+    ret = gst_rtp_pt_demux_push_run (rtpdemux, &bufs[i], run, pts[i]);
     i += run;
 
     if (ret != GST_FLOW_OK)
