@@ -134,6 +134,8 @@ static gboolean gst_rtp_pt_demux_sink_event (GstPad * pad, GstObject * parent,
     GstEvent * event);
 static GstFlowReturn gst_rtp_pt_demux_chain (GstPad * pad, GstObject * parent,
     GstBuffer * buf);
+static GstFlowReturn gst_rtp_pt_demux_chain_list (GstPad * pad,
+    GstObject * parent, GstBufferList * list);
 static GstStateChangeReturn gst_rtp_pt_demux_change_state (GstElement * element,
     GstStateChange transition);
 static void gst_rtp_pt_demux_clear_pt_map (GstRtpPtDemux * rtpdemux);
@@ -295,6 +297,8 @@ gst_rtp_pt_demux_init (GstRtpPtDemux * ptdemux)
   g_assert (ptdemux->sink != NULL);
 
   gst_pad_set_chain_function (ptdemux->sink, gst_rtp_pt_demux_chain);
+  gst_pad_set_chain_list_function (ptdemux->sink,
+      gst_rtp_pt_demux_chain_list);
   gst_pad_set_event_function (ptdemux->sink, gst_rtp_pt_demux_sink_event);
 
   gst_element_add_pad (GST_ELEMENT (ptdemux), ptdemux->sink);
@@ -469,31 +473,39 @@ gst_rtp_pt_demux_pt_is_ignored (GstRtpPtDemux * ptdemux, guint8 pt)
   return ret;
 }
 
-static GstFlowReturn
-gst_rtp_pt_demux_chain (GstPad * pad, GstObject * parent, GstBuffer * buf)
+/* Outcome of resolving the src pad for a payload type. */
+typedef enum
 {
-  GstFlowReturn ret = GST_FLOW_OK;
-  GstRtpPtDemux *rtpdemux;
-  guint8 pt;
-  GstPad *srcpad;
+  PT_DEMUX_PAD_OK,
+  PT_DEMUX_PAD_IGNORED,
+  PT_DEMUX_PAD_NO_CAPS
+} GstRtpPtDemuxPadResult;
+
+/* Finds (or creates) the src pad for @pt, emits the signals that go with a
+ * new or changed payload type, and sends the caps the pad still needs.
+ *
+ * Everything the chain functions do apart from the push itself lives here, so
+ * the per-buffer and the list path cannot drift apart: a second copy of this
+ * would have to keep the pad creation, the two signals and the caps in step
+ * with each other forever.
+ *
+ * On success returns a reference to the pad in @srcpad. */
+static GstRtpPtDemuxPadResult
+gst_rtp_pt_demux_get_srcpad_for_pt (GstRtpPtDemux * rtpdemux, guint8 pt,
+    GstPad ** srcpad)
+{
   GstCaps *caps;
-  GstRTPBuffer rtp = { NULL };
+  GstPad *pad;
 
-  rtpdemux = GST_RTP_PT_DEMUX (parent);
-
-  if (!gst_rtp_buffer_map (buf, GST_MAP_READ, &rtp))
-    goto invalid_buffer;
-
-  pt = gst_rtp_buffer_get_payload_type (&rtp);
-  gst_rtp_buffer_unmap (&rtp);
+  *srcpad = NULL;
 
   if (gst_rtp_pt_demux_pt_is_ignored (rtpdemux, pt))
-    goto ignored;
+    return PT_DEMUX_PAD_IGNORED;
 
   GST_DEBUG_OBJECT (rtpdemux, "received buffer for pt %d", pt);
 
-  srcpad = find_pad_for_pt (rtpdemux, pt);
-  if (srcpad == NULL) {
+  pad = find_pad_for_pt (rtpdemux, pt);
+  if (pad == NULL) {
     /* new PT, create a src pad */
     GstRtpPtDemuxPad *rtpdemuxpad;
     GstElementClass *klass;
@@ -502,34 +514,34 @@ gst_rtp_pt_demux_chain (GstPad * pad, GstObject * parent, GstBuffer * buf)
 
     caps = gst_rtp_pt_demux_get_caps (rtpdemux, pt);
     if (!caps)
-      goto no_caps;
+      return PT_DEMUX_PAD_NO_CAPS;
 
     /* must be after the get_caps() call as get_caps() may cause external code
      * (e.g. rtpbin) to update the ignored-pt list */
     if (gst_rtp_pt_demux_pt_is_ignored (rtpdemux, pt)) {
       gst_clear_caps (&caps);
-      goto ignored;
+      return PT_DEMUX_PAD_IGNORED;
     }
 
     klass = GST_ELEMENT_GET_CLASS (rtpdemux);
     templ = gst_element_class_get_pad_template (klass, "src_%u");
     padname = g_strdup_printf ("src_%u", pt);
-    srcpad = gst_pad_new_from_template (templ, padname);
-    gst_pad_use_fixed_caps (srcpad);
+    pad = gst_pad_new_from_template (templ, padname);
+    gst_pad_use_fixed_caps (pad);
     g_free (padname);
-    gst_pad_set_event_function (srcpad, gst_rtp_pt_demux_src_event);
+    gst_pad_set_event_function (pad, gst_rtp_pt_demux_src_event);
 
     GST_DEBUG_OBJECT (rtpdemux, "Adding pt=%d to the list.", pt);
     rtpdemuxpad = g_new0 (GstRtpPtDemuxPad, 1);
     rtpdemuxpad->pt = pt;
     rtpdemuxpad->newcaps = FALSE;
-    rtpdemuxpad->pad = srcpad;
-    gst_object_ref (srcpad);
+    rtpdemuxpad->pad = pad;
+    gst_object_ref (pad);
     GST_OBJECT_LOCK (rtpdemux);
     rtpdemux->srcpads = g_slist_append (rtpdemux->srcpads, rtpdemuxpad);
     GST_OBJECT_UNLOCK (rtpdemux);
 
-    gst_pad_set_active (srcpad, TRUE);
+    gst_pad_set_active (pad, TRUE);
 
     /* First push the stream-start event, it must always come first */
     {
@@ -542,7 +554,7 @@ gst_rtp_pt_demux_chain (GstPad * pad, GstObject * parent, GstBuffer * buf)
           gst_pad_get_sticky_event (rtpdemux->sink, GST_EVENT_STREAM_START, 0);
 
       stream_id =
-          gst_pad_create_stream_id_printf (srcpad, GST_ELEMENT_CAST (rtpdemux),
+          gst_pad_create_stream_id_printf (pad, GST_ELEMENT_CAST (rtpdemux),
           "%u", pt);
 
       event = gst_event_new_stream_start (stream_id);
@@ -552,25 +564,24 @@ gst_rtp_pt_demux_chain (GstPad * pad, GstObject * parent, GstBuffer * buf)
       gst_event_parse_stream_flags (sink_event, &flags);
       gst_event_set_stream_flags (event, flags);
 
-      gst_pad_push_event (srcpad, event);
+      gst_pad_push_event (pad, event);
 
       gst_event_unref (sink_event);
       g_free (stream_id);
     }
 
     /* Then caps event is sent */
-    gst_pad_set_caps (srcpad, caps);
+    gst_pad_set_caps (pad, caps);
     gst_caps_unref (caps);
 
     /* First sticky events on sink pad are forwarded to the new src pad */
-    gst_pad_sticky_events_foreach (rtpdemux->sink, forward_sticky_events,
-        srcpad);
+    gst_pad_sticky_events_foreach (rtpdemux->sink, forward_sticky_events, pad);
 
-    gst_element_add_pad (GST_ELEMENT_CAST (rtpdemux), srcpad);
+    gst_element_add_pad (GST_ELEMENT_CAST (rtpdemux), pad);
 
     GST_DEBUG_OBJECT (rtpdemux, "emitting new-payload-type for pt %d", pt);
     g_signal_emit (G_OBJECT (rtpdemux),
-        gst_rtp_pt_demux_signals[SIGNAL_NEW_PAYLOAD_TYPE], 0, pt, srcpad);
+        gst_rtp_pt_demux_signals[SIGNAL_NEW_PAYLOAD_TYPE], 0, pt, pad);
   }
 
   if (pt != rtpdemux->last_pt) {
@@ -581,16 +592,64 @@ gst_rtp_pt_demux_chain (GstPad * pad, GstObject * parent, GstBuffer * buf)
         gst_rtp_pt_demux_signals[SIGNAL_PAYLOAD_TYPE_CHANGE], 0, pt);
   }
 
+  /* The caps carry the payload type, so they have to reach the pad before the
+   * first buffer that needs them -- including after a clear-pt-map in the
+   * middle of the stream. */
   while (need_caps_for_pt (rtpdemux, pt)) {
     GST_DEBUG_OBJECT (rtpdemux, "need new caps for %d", pt);
     caps = gst_rtp_pt_demux_get_caps (rtpdemux, pt);
-    if (!caps)
-      goto no_caps;
+    if (!caps) {
+      gst_object_unref (pad);
+      return PT_DEMUX_PAD_NO_CAPS;
+    }
 
     clear_newcaps_for_pt (rtpdemux, pt);
 
-    gst_pad_set_caps (srcpad, caps);
+    gst_pad_set_caps (pad, caps);
     gst_caps_unref (caps);
+  }
+
+  *srcpad = pad;
+
+  return PT_DEMUX_PAD_OK;
+}
+
+/* Reads the payload type of @buf. Returns FALSE when the buffer is not a
+ * valid RTP packet. */
+static gboolean
+gst_rtp_pt_demux_buffer_pt (GstBuffer * buf, guint8 * pt)
+{
+  GstRTPBuffer rtp = { NULL };
+
+  if (!gst_rtp_buffer_map (buf, GST_MAP_READ, &rtp))
+    return FALSE;
+
+  *pt = gst_rtp_buffer_get_payload_type (&rtp);
+  gst_rtp_buffer_unmap (&rtp);
+
+  return TRUE;
+}
+
+static GstFlowReturn
+gst_rtp_pt_demux_chain (GstPad * pad, GstObject * parent, GstBuffer * buf)
+{
+  GstFlowReturn ret = GST_FLOW_OK;
+  GstRtpPtDemux *rtpdemux;
+  guint8 pt;
+  GstPad *srcpad;
+
+  rtpdemux = GST_RTP_PT_DEMUX (parent);
+
+  if (!gst_rtp_pt_demux_buffer_pt (buf, &pt))
+    goto invalid_buffer;
+
+  switch (gst_rtp_pt_demux_get_srcpad_for_pt (rtpdemux, pt, &srcpad)) {
+    case PT_DEMUX_PAD_IGNORED:
+      goto ignored;
+    case PT_DEMUX_PAD_NO_CAPS:
+      goto no_caps;
+    case PT_DEMUX_PAD_OK:
+      break;
   }
 
   /* push to srcpad */
@@ -621,10 +680,150 @@ no_caps:
     GST_ELEMENT_ERROR (rtpdemux, STREAM, DECODE, (NULL),
         ("Could not get caps for payload"));
     gst_buffer_unref (buf);
-    if (srcpad)
-      gst_object_unref (srcpad);
     return GST_FLOW_ERROR;
   }
+}
+
+/* Pushes the buffers collected for one payload type. Takes ownership of the
+ * @run buffers at @bufs.
+ *
+ * A run of one goes out as a plain buffer rather than as a one-element list.
+ * That is the common shape whenever media is interleaved with FEC or RED, and
+ * wrapping it would cost an allocation here and put everything downstream on
+ * the list path for the sake of a single packet. */
+static GstFlowReturn
+gst_rtp_pt_demux_push_run (GstRtpPtDemux * rtpdemux, GstBuffer ** bufs,
+    guint run, guint8 pt)
+{
+  GstBufferList *group;
+  GstPad *srcpad;
+  GstFlowReturn ret;
+  guint i;
+
+  if (run == 0)
+    return GST_FLOW_OK;
+
+  switch (gst_rtp_pt_demux_get_srcpad_for_pt (rtpdemux, pt, &srcpad)) {
+    case PT_DEMUX_PAD_IGNORED:
+      GST_DEBUG_OBJECT (rtpdemux, "Dropped %u buffers for pt %d", run, pt);
+      for (i = 0; i < run; i++)
+        gst_buffer_unref (bufs[i]);
+      return GST_FLOW_OK;
+    case PT_DEMUX_PAD_NO_CAPS:
+      GST_ELEMENT_ERROR (rtpdemux, STREAM, DECODE, (NULL),
+          ("Could not get caps for payload"));
+      for (i = 0; i < run; i++)
+        gst_buffer_unref (bufs[i]);
+      return GST_FLOW_ERROR;
+    case PT_DEMUX_PAD_OK:
+      break;
+  }
+
+  if (run == 1) {
+    ret = gst_pad_push (srcpad, bufs[0]);
+  } else {
+    group = gst_buffer_list_new_sized (run);
+    for (i = 0; i < run; i++)
+      gst_buffer_list_add (group, bufs[i]);
+    ret = gst_pad_push_list (srcpad, group);
+  }
+
+  gst_object_unref (srcpad);
+
+  return ret;
+}
+
+/* Packets a list has to exceed before the pass below reaches for the heap. A
+ * burst of RTP from one socket read stays well inside this. */
+#define PT_DEMUX_LIST_STACK_PACKETS 128
+
+/* Not a valid RTP payload type (7 bits), so it marks a packet whose payload
+ * type could not be read and separates the runs around it. */
+#define PT_DEMUX_PT_INVALID 0xff
+
+/* Splits the list into runs of the same payload type and pushes each run as a
+ * list of its own. Since a run is uniform by construction, the caps for its
+ * payload type are sent exactly once before it, which is what the per-buffer
+ * path does too.
+ *
+ * Buffers are moved out of the incoming list rather than shared with it: the
+ * per-buffer path hands downstream the only reference, and keeping a second
+ * one here would turn every gst_buffer_make_writable() downstream (the FEC
+ * decoder clearing DISCONT, for one) into a copy.
+ *
+ * The move is done in one pass, before any grouping: taking the buffers one
+ * at a time off the front would shift the remainder of the array on every
+ * step, which is quadratic in the length of the list. Payload types are read
+ * in the same pass, so each run's length -- and with it the exact size of the
+ * list it goes into -- is known before the list is allocated. */
+static GstFlowReturn
+gst_rtp_pt_demux_chain_list (GstPad * pad, GstObject * parent,
+    GstBufferList * list)
+{
+  GstRtpPtDemux *rtpdemux = GST_RTP_PT_DEMUX (parent);
+  GstFlowReturn ret = GST_FLOW_OK;
+  GstBuffer *stack_bufs[PT_DEMUX_LIST_STACK_PACKETS];
+  guint8 stack_pts[PT_DEMUX_LIST_STACK_PACKETS];
+  GstBuffer **bufs = stack_bufs;
+  GstBuffer **heap_bufs = NULL;
+  guint8 *pts = stack_pts;
+  guint8 *heap_pts = NULL;
+  guint len, i;
+  (void) pad;
+
+  len = gst_buffer_list_length (list);
+  GST_LOG_OBJECT (rtpdemux, "received buffer list with %u buffers", len);
+
+  if (len == 0) {
+    gst_buffer_list_unref (list);
+    return GST_FLOW_OK;
+  }
+
+  if (len > PT_DEMUX_LIST_STACK_PACKETS) {
+    bufs = heap_bufs = g_new (GstBuffer *, len);
+    pts = heap_pts = g_new (guint8, len);
+  }
+
+  for (i = 0; i < len; i++) {
+    bufs[i] = gst_buffer_ref (gst_buffer_list_get (list, i));
+    if (!gst_rtp_pt_demux_buffer_pt (bufs[i], &pts[i]))
+      pts[i] = PT_DEMUX_PT_INVALID;
+  }
+  gst_buffer_list_unref (list);
+
+  i = 0;
+  while (i < len) {
+    guint run;
+
+    if (pts[i] == PT_DEMUX_PT_INVALID) {
+      /* this should not be fatal, and it ends the run: the packets after it
+       * may well belong to another payload type */
+      GST_ELEMENT_WARNING (rtpdemux, STREAM, DEMUX, (NULL),
+          ("Dropping invalid RTP payload"));
+      gst_buffer_unref (bufs[i]);
+      i++;
+      continue;
+    }
+
+    run = 1;
+    while (i + run < len && pts[i + run] == pts[i])
+      run++;
+
+    ret = gst_rtp_pt_demux_push_run (rtpdemux, &bufs[i], run, pts[i]);
+    i += run;
+
+    if (ret != GST_FLOW_OK)
+      break;
+  }
+
+  /* whatever the failed push did not take */
+  for (; i < len; i++)
+    gst_buffer_unref (bufs[i]);
+
+  g_free (heap_bufs);
+  g_free (heap_pts);
+
+  return ret;
 }
 
 static GstPad *

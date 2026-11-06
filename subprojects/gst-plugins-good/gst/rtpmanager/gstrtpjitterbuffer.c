@@ -156,6 +156,8 @@ enum
 #define DEFAULT_RTX_STATS_TIMEOUT   1000
 #define DEFAULT_MAX_RTCP_RTP_TIME_DIFF -1
 #define DEFAULT_MAX_DROPOUT_TIME    60000
+/* 1 keeps the historical behaviour: one buffer per gst_pad_push(). */
+#define DEFAULT_MAX_PUSH_BATCH      1
 #define DEFAULT_MAX_MISORDER_TIME   2000
 #define DEFAULT_RFC7273_SYNC        FALSE
 #define DEFAULT_ADD_REFERENCE_TIMESTAMP_META FALSE
@@ -204,6 +206,7 @@ enum
   PROP_RFC7273_REFERENCE_TIMESTAMP_META_ONLY,
   PROP_MIN_SYNC_INTERVAL,
   PROP_DUMP_QUEUE_THRESHOLD,
+  PROP_MAX_PUSH_BATCH,
 };
 
 #define JBUF_LOCK(priv)   G_STMT_START {			\
@@ -359,6 +362,7 @@ struct _GstRtpJitterBufferPrivate
   gint rtx_deadline_ms;
   gint max_rtcp_rtp_time_diff;
   guint32 max_dropout_time;
+  guint max_push_batch;
   guint32 max_misorder_time;
   guint faststart_min_packets;
   gboolean add_reference_timestamp_meta;
@@ -998,6 +1002,27 @@ gst_rtp_jitter_buffer_class_init (GstRtpJitterBufferClass * klass)
           0, G_MAXUINT, DEFAULT_RTX_STATS_TIMEOUT,
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 
+  /**
+   * GstRtpJitterBuffer:max-push-batch:
+   *
+   * How many consecutive, in-order buffers may be pushed downstream in a
+   * single #GstBufferList. All the packets of a video frame carry the same
+   * RTP timestamp and so become ready together; pushing them one by one
+   * costs a JBUF_UNLOCK/JBUF_LOCK pair and a gst_pad_push() each.
+   *
+   * A batch always stops at anything that is not a plain buffer -- a lost
+   * packet, an event or a query -- so those keep their position in the
+   * stream, and at a sequence number gap.
+   *
+   * The default of 1 is the historical behaviour: one push per buffer.
+   */
+  g_object_class_install_property (gobject_class, PROP_MAX_PUSH_BATCH,
+      g_param_spec_uint ("max-push-batch", "Max push batch",
+          "Maximum number of consecutive in-order buffers pushed downstream "
+          "as one buffer list (1 = one push per buffer)",
+          1, 1024, DEFAULT_MAX_PUSH_BATCH,
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+
   g_object_class_install_property (gobject_class, PROP_MAX_DROPOUT_TIME,
       g_param_spec_uint ("max-dropout-time", "Max dropout time",
           "The maximum time (milliseconds) of missing packets tolerated.",
@@ -1316,6 +1341,7 @@ gst_rtp_jitter_buffer_init (GstRtpJitterBuffer * jitterbuffer)
   priv->rtx_stats_timeout = DEFAULT_RTX_STATS_TIMEOUT;
   priv->max_rtcp_rtp_time_diff = DEFAULT_MAX_RTCP_RTP_TIME_DIFF;
   priv->max_dropout_time = DEFAULT_MAX_DROPOUT_TIME;
+  priv->max_push_batch = DEFAULT_MAX_PUSH_BATCH;
   priv->max_misorder_time = DEFAULT_MAX_MISORDER_TIME;
   priv->faststart_min_packets = DEFAULT_FASTSTART_MIN_PACKETS;
   priv->add_reference_timestamp_meta = DEFAULT_ADD_REFERENCE_TIMESTAMP_META;
@@ -4260,6 +4286,180 @@ update_estimated_eos (GstRtpJitterBuffer * jitterbuffer,
   }
 }
 
+/* Pops one ITEM_TYPE_BUFFER and does every bit of work that belongs under
+ * JBUF_LOCK: timestamps, flags, seqnum bookkeeping and stats. The caller then
+ * releases the lock, posts *msg if it is set, and pushes the buffer.
+ *
+ * Splitting this out of pop_and_push_next() is what lets several buffers be
+ * prepared under one lock and leave as a single list; it also keeps the
+ * single-buffer path and the batched path sharing one copy of the logic.
+ *
+ * Must be called with the lock held and with a BUFFER item at the head of the
+ * queue. Returns the buffer to push; never NULL. */
+static GstBuffer *
+prepare_next_buffer (GstRtpJitterBuffer * jitterbuffer, guint seqnum,
+    GstMessage ** msg)
+{
+  GstRtpJitterBufferPrivate *priv = jitterbuffer->priv;
+  RTPJitterBufferItem *item;
+  GstBuffer *outbuf;
+  GstClockTime dts, pts;
+  gint percent = -1;
+
+  item = rtp_jitter_buffer_pop (priv->jbuf, &percent);
+  g_assert (item->type == ITEM_TYPE_BUFFER);
+
+  /* we need to make writable to change the flags and timestamps */
+  outbuf = gst_buffer_make_writable (item->data);
+
+  if (G_UNLIKELY (priv->discont)) {
+    /* set DISCONT flag when we missed a packet. We pushed the buffer writable
+     * into the jitterbuffer so we can modify now. */
+    GST_DEBUG_OBJECT (jitterbuffer, "mark output buffer discont");
+    GST_BUFFER_FLAG_SET (outbuf, GST_BUFFER_FLAG_DISCONT);
+    priv->discont = FALSE;
+  }
+  if (G_UNLIKELY (priv->ts_discont)) {
+    GST_BUFFER_FLAG_SET (outbuf, GST_BUFFER_FLAG_RESYNC);
+    priv->ts_discont = FALSE;
+  }
+
+  dts =
+      gst_segment_position_from_running_time (&priv->segment,
+      GST_FORMAT_TIME, item->dts);
+  pts =
+      gst_segment_position_from_running_time (&priv->segment,
+      GST_FORMAT_TIME, item->pts);
+
+  /* if this is a new frame, check if ts_offset needs to be updated */
+  if (pts != priv->last_pts) {
+    update_offset (jitterbuffer);
+  }
+
+  /* apply timestamp with offset to buffer now */
+  GST_BUFFER_DTS (outbuf) = apply_offset (jitterbuffer, dts);
+  GST_BUFFER_PTS (outbuf) = apply_offset (jitterbuffer, pts);
+
+  /* update the elapsed time when we need to check against the npt stop time. */
+  update_estimated_eos (jitterbuffer, item);
+
+  priv->last_pts = pts;
+  priv->last_out_time = GST_BUFFER_PTS (outbuf);
+
+  if (seqnum != -1) {
+    priv->last_popped_seqnum = seqnum;
+    priv->next_out_seqnum = (seqnum + item->count) & 0xffff;
+    GST_LOG_OBJECT (jitterbuffer, "Pushed out #%u, next expected #%u",
+        priv->last_popped_seqnum, priv->next_out_seqnum);
+  }
+  /* stats are read under the lock, so update them before releasing it */
+  priv->num_pushed++;
+  *msg = check_buffering_percent (jitterbuffer, percent);
+
+  item->data = NULL;
+  rtp_jitter_buffer_free_item (item);
+
+  GST_BUFFER_DTS (outbuf) = GST_CLOCK_TIME_NONE;
+
+  return outbuf;
+}
+
+/* Pops and pushes a run of consecutive in-order buffers as one list.
+ *
+ * The run stops at the first queue item that is not a plain buffer -- a lost
+ * packet, an event or a query -- so those keep their position relative to the
+ * buffers, which is what downstream FEC recovery relies on. It also stops at
+ * a sequence number gap and at the configured batch limit, so the lock is
+ * never held for an unbounded drain.
+ *
+ * Must be called with the lock held and with a BUFFER item at the head. */
+static GstFlowReturn
+pop_and_push_batch (GstRtpJitterBuffer * jitterbuffer, guint seqnum)
+{
+  GstRtpJitterBufferPrivate *priv = jitterbuffer->priv;
+  GstBufferList *outlist = NULL;
+  GstBuffer *first;
+  GQueue messages = G_QUEUE_INIT;
+  GstMessage *msg = NULL;
+  GstFlowReturn result;
+  guint batched = 1;
+
+  /* Held on its own until a second buffer is known to be coming. A run of one
+   * is not a rare case -- media interleaved with FEC or RED produces mostly
+   * runs of one -- and it should cost no more than the single-buffer path. */
+  first = prepare_next_buffer (jitterbuffer, seqnum, &msg);
+  if (msg)
+    g_queue_push_tail (&messages, msg);
+
+  while (batched < priv->max_push_batch) {
+    RTPJitterBufferItem *item;
+    guint next_seqnum;
+
+    /* In mode=buffer every pop re-evaluates the fill level, so the packet we
+     * just took may have dropped the queue below its low watermark and
+     * restarted buffering. The single-buffer path notices that the next time
+     * handle_next_buffer() runs; the batch has to notice it here, or it would
+     * drain straight through the watermark it is supposed to respect. */
+    if (rtp_jitter_buffer_is_buffering (priv->jbuf))
+      break;
+
+    item = rtp_jitter_buffer_peek (priv->jbuf);
+    /* Anything that is not a plain buffer ends the run: it has to travel
+     * through pop_and_push_next() to keep its place in the stream. */
+    if (item == NULL || item->type != ITEM_TYPE_BUFFER)
+      break;
+
+    next_seqnum = item->seqnum;
+    if (next_seqnum == -1 || priv->next_out_seqnum == -1)
+      break;
+    if (gst_rtp_buffer_compare_seqnum (priv->next_out_seqnum, next_seqnum) != 0)
+      break;
+
+    /* Only now is a list worth paying for. Size the hint by what is actually
+     * queued rather than by the cap: with a large max-push-batch the
+     * allocation would otherwise be dominated by the limit instead of by the
+     * run. num_packets() no longer counts the buffer already in hand, so add
+     * it back. */
+    if (outlist == NULL) {
+      outlist = gst_buffer_list_new_sized (MIN (priv->max_push_batch,
+              rtp_jitter_buffer_num_packets (priv->jbuf) + 1));
+      gst_buffer_list_add (outlist, first);
+      first = NULL;
+    }
+
+    msg = NULL;
+    gst_buffer_list_add (outlist, prepare_next_buffer (jitterbuffer,
+            next_seqnum, &msg));
+    if (msg)
+      g_queue_push_tail (&messages, msg);
+    batched++;
+  }
+
+  JBUF_UNLOCK (priv);
+
+  /* Messages must not be posted with the lock held. */
+  while ((msg = g_queue_pop_head (&messages)))
+    gst_element_post_message (GST_ELEMENT_CAST (jitterbuffer), msg);
+
+  if (outlist == NULL) {
+    GST_DEBUG_OBJECT (jitterbuffer, "Pushing a single buffer");
+    result = gst_pad_push (priv->srcpad, first);
+  } else {
+    GST_DEBUG_OBJECT (jitterbuffer, "Pushing a list of %u buffers", batched);
+    result = gst_pad_push_list (priv->srcpad, outlist);
+  }
+
+  JBUF_LOCK_CHECK (priv, out_flushing);
+
+  return result;
+
+  /* ERRORS */
+out_flushing:
+  {
+    return priv->srcresult;
+  }
+}
+
 /* take a buffer from the queue and push it */
 static GstFlowReturn
 pop_and_push_next (GstRtpJitterBuffer * jitterbuffer, guint seqnum)
@@ -4270,56 +4470,36 @@ pop_and_push_next (GstRtpJitterBuffer * jitterbuffer, guint seqnum)
   GstBuffer *outbuf = NULL;
   GstEvent *outevent = NULL;
   GstQuery *outquery = NULL;
-  GstClockTime dts, pts;
   gint percent = -1;
   gboolean do_push = TRUE;
   guint type;
-  GstMessage *msg;
+  GstMessage *msg = NULL;
 
-  /* when we get here we are ready to pop and push the buffer */
+  /* A plain buffer goes through the same preparation the batched path uses,
+   * so the two cannot drift apart. */
+  item = rtp_jitter_buffer_peek (priv->jbuf);
+  if (item != NULL && item->type == ITEM_TYPE_BUFFER) {
+    outbuf = prepare_next_buffer (jitterbuffer, seqnum, &msg);
+
+    JBUF_UNLOCK (priv);
+
+    if (msg)
+      gst_element_post_message (GST_ELEMENT_CAST (jitterbuffer), msg);
+
+    GST_DEBUG_OBJECT (jitterbuffer, "Pushing buffer %d, pts %" GST_TIME_FORMAT,
+        seqnum, GST_TIME_ARGS (GST_BUFFER_PTS (outbuf)));
+    result = gst_pad_push (priv->srcpad, outbuf);
+
+    JBUF_LOCK_CHECK (priv, out_flushing);
+
+    return result;
+  }
+
+  /* when we get here we are ready to pop and push the item */
   item = rtp_jitter_buffer_pop (priv->jbuf, &percent);
   type = item->type;
 
   switch (type) {
-    case ITEM_TYPE_BUFFER:
-
-      /* we need to make writable to change the flags and timestamps */
-      outbuf = gst_buffer_make_writable (item->data);
-
-      if (G_UNLIKELY (priv->discont)) {
-        /* set DISCONT flag when we missed a packet. We pushed the buffer writable
-         * into the jitterbuffer so we can modify now. */
-        GST_DEBUG_OBJECT (jitterbuffer, "mark output buffer discont");
-        GST_BUFFER_FLAG_SET (outbuf, GST_BUFFER_FLAG_DISCONT);
-        priv->discont = FALSE;
-      }
-      if (G_UNLIKELY (priv->ts_discont)) {
-        GST_BUFFER_FLAG_SET (outbuf, GST_BUFFER_FLAG_RESYNC);
-        priv->ts_discont = FALSE;
-      }
-
-      dts =
-          gst_segment_position_from_running_time (&priv->segment,
-          GST_FORMAT_TIME, item->dts);
-      pts =
-          gst_segment_position_from_running_time (&priv->segment,
-          GST_FORMAT_TIME, item->pts);
-
-      /* if this is a new frame, check if ts_offset needs to be updated */
-      if (pts != priv->last_pts) {
-        update_offset (jitterbuffer);
-      }
-
-      /* apply timestamp with offset to buffer now */
-      GST_BUFFER_DTS (outbuf) = apply_offset (jitterbuffer, dts);
-      GST_BUFFER_PTS (outbuf) = apply_offset (jitterbuffer, pts);
-
-      /* update the elapsed time when we need to check against the npt stop time. */
-      update_estimated_eos (jitterbuffer, item);
-
-      priv->last_pts = pts;
-      priv->last_out_time = GST_BUFFER_PTS (outbuf);
-      break;
     case ITEM_TYPE_LOST:
       priv->discont = TRUE;
       if (!priv->do_lost)
@@ -4331,9 +4511,12 @@ pop_and_push_next (GstRtpJitterBuffer * jitterbuffer, guint seqnum)
     case ITEM_TYPE_QUERY:
       outquery = item->data;
       break;
+    default:
+      g_assert_not_reached ();
+      break;
   }
 
-  /* now we are ready to push the buffer. Save the seqnum and release the lock
+  /* now we are ready to push the item. Save the seqnum and release the lock
    * so the other end can push stuff in the queue again. */
   if (seqnum != -1) {
     priv->last_popped_seqnum = seqnum;
@@ -4341,9 +4524,6 @@ pop_and_push_next (GstRtpJitterBuffer * jitterbuffer, guint seqnum)
     GST_LOG_OBJECT (jitterbuffer, "Pushed out #%u, next expected #%u",
         priv->last_popped_seqnum, priv->next_out_seqnum);
   }
-  /* stats are read under the lock, so update them before releasing it */
-  if (type == ITEM_TYPE_BUFFER)
-    priv->num_pushed++;
   msg = check_buffering_percent (jitterbuffer, percent);
 
   if (type == ITEM_TYPE_EVENT && outevent &&
@@ -4365,17 +4545,6 @@ pop_and_push_next (GstRtpJitterBuffer * jitterbuffer, guint seqnum)
     gst_element_post_message (GST_ELEMENT_CAST (jitterbuffer), msg);
 
   switch (type) {
-    case ITEM_TYPE_BUFFER:
-      /* push buffer */
-      GST_DEBUG_OBJECT (jitterbuffer,
-          "Pushing buffer %d, dts %" GST_TIME_FORMAT ", pts %" GST_TIME_FORMAT,
-          seqnum, GST_TIME_ARGS (GST_BUFFER_DTS (outbuf)),
-          GST_TIME_ARGS (GST_BUFFER_PTS (outbuf)));
-      GST_BUFFER_DTS (outbuf) = GST_CLOCK_TIME_NONE;
-      result = gst_pad_push (priv->srcpad, outbuf);
-
-      JBUF_LOCK_CHECK (priv, out_flushing);
-      break;
     case ITEM_TYPE_LOST:
     case ITEM_TYPE_EVENT:
       /* We got not enough consecutive packets with a huge gap, we can
@@ -4476,8 +4645,14 @@ handle_next_buffer (GstRtpJitterBuffer * jitterbuffer)
     gint gap = gst_rtp_buffer_compare_seqnum (next_seqnum, seqnum);
 
     if (G_LIKELY (gap == 0)) {
-      /* no missing packet, pop and push */
-      result = pop_and_push_next (jitterbuffer, seqnum);
+      /* no missing packet, pop and push. All the packets of a video frame
+       * share an RTP timestamp and so become ready together, so when
+       * batching is enabled take the whole run in one go: one lock cycle and
+       * one push instead of one of each per packet. */
+      if (item->type == ITEM_TYPE_BUFFER && priv->max_push_batch > 1)
+        result = pop_and_push_batch (jitterbuffer, seqnum);
+      else
+        result = pop_and_push_next (jitterbuffer, seqnum);
     } else if (G_UNLIKELY (gap < 0)) {
       /* if we have a packet that we already pushed or considered dropped, pop it
        * off and get the next packet */
@@ -5798,6 +5973,11 @@ gst_rtp_jitter_buffer_set_property (GObject * object,
       priv->max_rtcp_rtp_time_diff = g_value_get_int (value);
       JBUF_UNLOCK (priv);
       break;
+    case PROP_MAX_PUSH_BATCH:
+      JBUF_LOCK (priv);
+      priv->max_push_batch = g_value_get_uint (value);
+      JBUF_UNLOCK (priv);
+      break;
     case PROP_MAX_DROPOUT_TIME:
       JBUF_LOCK (priv);
       priv->max_dropout_time = g_value_get_uint (value);
@@ -5982,6 +6162,11 @@ gst_rtp_jitter_buffer_get_property (GObject * object,
     case PROP_MAX_RTCP_RTP_TIME_DIFF:
       JBUF_LOCK (priv);
       g_value_set_int (value, priv->max_rtcp_rtp_time_diff);
+      JBUF_UNLOCK (priv);
+      break;
+    case PROP_MAX_PUSH_BATCH:
+      JBUF_LOCK (priv);
+      g_value_set_uint (value, priv->max_push_batch);
       JBUF_UNLOCK (priv);
       break;
     case PROP_MAX_DROPOUT_TIME:
