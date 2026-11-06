@@ -180,23 +180,25 @@ gst_rtp_header_extension_mid_get_property (GObject * object,
 }
 
 static gboolean
-validate_mid (const char *rid)
+validate_mid (const char *mid)
 {
   const char *iter;
 
-  /* For avoidance of doubt, the only allowed byte values for
-   * these IDs are decimal 48 through 57, 65 through 90, and 97 through
-   * 122.
+  /* RFC 8843 Section 15.2: the MID header extension carries the SDP
+   * identification-tag, which RFC 5888 defines as an RFC 4566 token:
+   *
+   * token-char = %x21 / %x23-27 / %x2A-2B / %x2D-2E / %x30-39
+   *              / %x41-5A / %x5E-7E
    */
-  for (iter = rid; iter && iter[0]; iter++) {
-    if (iter[0] < 48)
-      return FALSE;
-    if (iter[0] > 122)
-      return FALSE;
-    if (iter[0] > 57 && iter[0] < 65)
-      return FALSE;
-    if (iter[0] > 90 && iter[0] < 97)
-      return FALSE;
+  for (iter = mid; iter && iter[0]; iter++) {
+    guchar c = (guchar) iter[0];
+
+    if (c == 0x21 || (c >= 0x23 && c <= 0x27) || (c >= 0x2A && c <= 0x2B)
+        || (c >= 0x2D && c <= 0x2E) || (c >= 0x30 && c <= 0x39)
+        || (c >= 0x41 && c <= 0x5A) || (c >= 0x5E && c <= 0x7E))
+      continue;
+
+    return FALSE;
   }
 
   return TRUE;
