@@ -530,6 +530,7 @@ gst_new_sim_get_throttle_ms (GstNetSim * netsim, GstClockTime now)
   return ret;
 }
 
+/* must be called with GST_NET_SIM_LOCK */
 static void
 gst_net_sim_queue_buffer (GstNetSim * netsim, GstBuffer * buf)
 {
@@ -561,11 +562,9 @@ gst_net_sim_queue_buffer (GstNetSim * netsim, GstBuffer * buf)
     net_sim_buffer_free (nsbuf);
   } else {
     GST_DEBUG_OBJECT (netsim, "queueing buf #%u", nsbuf->seqnum);
-    GST_NET_SIM_LOCK (netsim);
     g_queue_insert_sorted (netsim->bqueue, nsbuf, netsim->compare_func, NULL);
     netsim->bits_in_queue += nsbuf->size_bits;
     GST_NET_SIM_SIGNAL (netsim);
-    GST_NET_SIM_UNLOCK (netsim);
   }
 }
 
@@ -574,6 +573,8 @@ gst_net_sim_chain (GstPad * pad, GstObject * parent, GstBuffer * buf)
 {
   GstNetSim *netsim = GST_NET_SIM_CAST (parent);
   gboolean dropped = FALSE;
+
+  GST_NET_SIM_LOCK (netsim);
 
   if (netsim->max_buffer_size
       && gst_buffer_get_size (buf) > (netsim->max_buffer_size)) {
@@ -615,6 +616,8 @@ gst_net_sim_chain (GstPad * pad, GstObject * parent, GstBuffer * buf)
       gst_net_sim_queue_buffer (netsim, buf);
     }
   }
+
+  GST_NET_SIM_UNLOCK (netsim);
 
   gst_buffer_unref (buf);
 
@@ -701,6 +704,7 @@ gst_net_sim_set_property (GObject * object,
 {
   GstNetSim *netsim = GST_NET_SIM_CAST (object);
 
+  GST_NET_SIM_LOCK (netsim);
   switch (prop_id) {
     case PROP_MIN_DELAY:
       netsim->min_delay = g_value_get_int (value);
@@ -760,6 +764,7 @@ gst_net_sim_set_property (GObject * object,
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
       break;
   }
+  GST_NET_SIM_UNLOCK (netsim);
 }
 
 static void
@@ -768,6 +773,7 @@ gst_net_sim_get_property (GObject * object,
 {
   GstNetSim *netsim = GST_NET_SIM_CAST (object);
 
+  GST_NET_SIM_LOCK (netsim);
   switch (prop_id) {
     case PROP_MIN_DELAY:
       g_value_set_int (value, netsim->min_delay);
@@ -821,6 +827,7 @@ gst_net_sim_get_property (GObject * object,
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
       break;
   }
+  GST_NET_SIM_UNLOCK (netsim);
 }
 
 
