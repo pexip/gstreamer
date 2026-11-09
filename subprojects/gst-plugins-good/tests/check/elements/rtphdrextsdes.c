@@ -107,6 +107,29 @@ read_write_extension (GstRTPHeaderExtension * read_ext,
 }
 
 static void
+test_sdes_value_max_length (GstRTPHeaderExtension * ext,
+    const char *property_name)
+{
+  char *max_len_val = g_strnfill (255, 'a');
+  char *too_long_val = g_strnfill (256, 'a');
+  char *val;
+
+  /* a two-byte header extension element carries at most 255 bytes */
+  g_object_set (ext, property_name, max_len_val, NULL);
+  g_object_get (ext, property_name, &val, NULL);
+  fail_unless_equals_string (val, max_len_val);
+  g_free (val);
+
+  g_object_set (ext, property_name, NULL, NULL);
+  g_object_set (ext, property_name, too_long_val, NULL);
+  g_object_get (ext, property_name, &val, NULL);
+  fail_unless_equals_pointer (val, NULL);
+
+  g_free (max_len_val);
+  g_free (too_long_val);
+}
+
+static void
 test_invalid_sdes_value (GstRTPHeaderExtension * ext, const char *property_name)
 {
   char *val;
@@ -290,6 +313,21 @@ GST_START_TEST (rtprfc8843_all_valid_values)
 
 GST_END_TEST;
 
+GST_START_TEST (rtprfc8843_max_length)
+{
+  GstRTPHeaderExtension *write_ext;
+
+  write_ext = gst_rtp_header_extension_create_from_uri (URN_MID);
+  fail_unless (write_ext != NULL);
+  gst_rtp_header_extension_set_id (write_ext, 1);
+
+  test_sdes_value_max_length (write_ext, "mid");
+
+  gst_object_unref (write_ext);
+}
+
+GST_END_TEST;
+
 GST_START_TEST (rtprfc8852_stream_id_one_byte)
 {
   GstRTPHeaderExtension *read_ext, *write_ext;
@@ -385,6 +423,21 @@ GST_START_TEST (rtprfc8852_stream_id_all_valid_values)
 
   gst_object_unref (write_ext);
   g_clear_pointer (&rid, g_free);
+}
+
+GST_END_TEST;
+
+GST_START_TEST (rtprfc8852_stream_id_max_length)
+{
+  GstRTPHeaderExtension *write_ext;
+
+  write_ext = gst_rtp_header_extension_create_from_uri (URN_STREAM_ID);
+  fail_unless (write_ext != NULL);
+  gst_rtp_header_extension_set_id (write_ext, 1);
+
+  test_sdes_value_max_length (write_ext, "rid");
+
+  gst_object_unref (write_ext);
 }
 
 GST_END_TEST;
@@ -488,6 +541,21 @@ GST_START_TEST (rtprfc8852_repaired_stream_id_all_valid_values)
 
 GST_END_TEST;
 
+GST_START_TEST (rtprfc8852_repaired_stream_id_max_length)
+{
+  GstRTPHeaderExtension *write_ext;
+
+  write_ext = gst_rtp_header_extension_create_from_uri (URN_REPAIRED_STREAM_ID);
+  fail_unless (write_ext != NULL);
+  gst_rtp_header_extension_set_id (write_ext, 1);
+
+  test_sdes_value_max_length (write_ext, "rid");
+
+  gst_object_unref (write_ext);
+}
+
+GST_END_TEST;
+
 static Suite *
 rtprfc6464_suite (void)
 {
@@ -502,12 +570,14 @@ rtprfc6464_suite (void)
   tcase_add_test (tc_chain, rtprfc8843_invalid_property_set);
   tcase_add_test (tc_chain, rtprfc8843_all_valid_values);
   tcase_add_test (tc_chain, rtprfc8843_mid_in_caps);
+  tcase_add_test (tc_chain, rtprfc8843_max_length);
 
   tcase_add_test (tc_chain, rtprfc8852_stream_id_one_byte);
   tcase_add_test (tc_chain, rtprfc8852_stream_id_two_bytes);
   tcase_add_test (tc_chain, rtprfc8852_stream_id_long_rid_uses_two_byte);
   tcase_add_test (tc_chain, rtprfc8852_stream_id_invalid_property_set);
   tcase_add_test (tc_chain, rtprfc8852_stream_id_all_valid_values);
+  tcase_add_test (tc_chain, rtprfc8852_stream_id_max_length);
 
   tcase_add_test (tc_chain, rtprfc8852_repaired_stream_id_one_byte);
   tcase_add_test (tc_chain, rtprfc8852_repaired_stream_id_two_bytes);
@@ -515,6 +585,7 @@ rtprfc6464_suite (void)
       rtprfc8852_repaired_stream_id_long_rid_uses_two_byte);
   tcase_add_test (tc_chain, rtprfc8852_repaired_stream_id_invalid_property_set);
   tcase_add_test (tc_chain, rtprfc8852_repaired_stream_id_all_valid_values);
+  tcase_add_test (tc_chain, rtprfc8852_repaired_stream_id_max_length);
 
   return s;
 }
