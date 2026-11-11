@@ -5700,6 +5700,83 @@ GST_START_TEST (test_twcc_sent_packets_wrap)
 
 GST_END_TEST;
 
+GST_START_TEST (test_twcc_sent_packets_pruned)
+{
+  /* the history is capped at 65536 packets, which is also when the seqnum
+     wraps, so send well over that for the oldest packet kept to be from
+     before the wrap and the newest ones to be after it */
+  const guint num_sent = 65536 + 20000;
+  const guint num_fb = 51;
+  guint fci_len = 8 + 2 + num_fb;
+  SessionHarness *h;
+  GstStructure *twcc_stats;
+  GstDebugLevel level = gst_debug_get_default_threshold ();
+  guint logged_warnings = 0;
+  guint8 *fci;
+  guint i;
+
+  /* test is very intense for valgrind or debug build */
+  if (RUNNING_ON_VALGRIND || g_getenv ("EXECUTING_UNDER_DEBUG_BUILD"))
+    return;
+
+  h = session_harness_new ();
+  session_harness_add_twcc_caps_for_pt (h, TEST_BUF_PT);
+
+  gst_element_send_event (h->session, gst_event_new_latency (10 * GST_MSECOND));
+
+  gst_debug_set_default_threshold (GST_LEVEL_WARNING);
+  gst_debug_add_log_function (_count_warns_log_func, &logged_warnings, NULL);
+
+  /* send without any feedback, so the sent packets history gets pruned */
+  for (i = 0; i < num_sent; i++) {
+    GstBuffer *buf;
+    GstTxFeedbackMeta *meta;
+
+    buf = generate_twcc_send_buffer (i, FALSE);
+    /* make the packets after the wrap smaller, to tell if the feedback gets
+       matched to a stale packet with the same seqnum from before the wrap */
+    if (i >= 65536)
+      gst_buffer_resize (buf, 0, gst_buffer_get_size (buf) - 100);
+    fail_unless_equals_int64 (session_harness_send_rtp (h, buf), GST_FLOW_OK);
+
+    buf = session_harness_pull_send_rtp (h);
+    meta = gst_buffer_get_tx_feedback_meta (buf);
+    fail_unless (meta);
+
+    gst_tx_feedback_meta_set_tx_time (meta, i * TEST_BUF_DURATION);
+    gst_buffer_unref (buf);
+  }
+
+  /* feedback for the last packets, all received with the same spacing as
+     they were sent, so every one of them must match its sent packet */
+  fci = g_malloc0 (fci_len);
+  GST_WRITE_UINT16_BE (&fci[0], (num_sent - num_fb) & 0xffff);
+  GST_WRITE_UINT16_BE (&fci[2], num_fb);
+  /* run-length chunk with small delta status for all the packets */
+  GST_WRITE_UINT16_BE (&fci[8], (1 << 13) | num_fb);
+  memset (&fci[10], TEST_BUF_DURATION / TWCC_DELTA_UNIT, num_fb);
+  session_harness_recv_rtcp (h, generate_twcc_feedback_rtcp (fci, fci_len));
+  g_free (fci);
+
+  /* 40000 bps less than the 532800 of full size packets, as they are 100 bytes
+     smaller with 50 of them per second */
+  twcc_stats = session_harness_get_twcc_stats_full (h,
+      num_fb * TEST_BUF_DURATION, 0);
+  twcc_verify_stats (twcc_stats, 492800, 492800, num_fb, num_fb, 0.0f, 0);
+  gst_structure_free (twcc_stats);
+
+  /* demand no warnings have been logged, means all the sent packets "send"
+     timestamps were set and the feedback was parsed fine */
+  fail_unless_equals_uint64 (logged_warnings, 0);
+
+  gst_debug_remove_log_function_by_data (&logged_warnings);
+  gst_debug_set_default_threshold (level);
+
+  session_harness_free (h);
+}
+
+GST_END_TEST;
+
 GST_START_TEST (test_send_rtcp_instantly)
 {
   SessionHarness *h = session_harness_new ();
@@ -6284,6 +6361,7 @@ rtpsession_suite (void)
   tcase_add_test (tc_chain, test_twcc_non_twcc_pt_no_twcc_seqnum);
   tcase_add_test (tc_chain, test_twcc_overwrites_exthdr_seqnum_if_present);
   tcase_add_test (tc_chain, test_twcc_sent_packets_wrap);
+  tcase_add_test (tc_chain, test_twcc_sent_packets_pruned);
 
   tcase_add_test (tc_chain, test_send_rtcp_instantly);
   tcase_add_test (tc_chain, test_send_bye_signal);

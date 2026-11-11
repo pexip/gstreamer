@@ -42,6 +42,8 @@ GST_DEBUG_CATEGORY (rtp_twcc_debug);
 #define STATUS_VECTOR_TWO_BIT_MAX_CAPACITY 7
 
 #define MAX_PACKETS_PER_FEEDBACK 65536
+/* Prune this much below the cap, to memmove once per block, not per packet */
+#define SENT_PACKETS_PRUNE_HEADROOM 4096
 
 typedef enum
 {
@@ -1008,7 +1010,8 @@ _prune_old_sent_packets (RTPTWCCManager * twcc)
   if (twcc->sent_packets->len <= MAX_PACKETS_PER_FEEDBACK)
     return;
 
-  length = twcc->sent_packets->len - MAX_PACKETS_PER_FEEDBACK;
+  length = twcc->sent_packets->len -
+      (MAX_PACKETS_PER_FEEDBACK - SENT_PACKETS_PRUNE_HEADROOM);
   g_array_remove_range (twcc->sent_packets, 0, length);
 }
 
