@@ -1247,8 +1247,15 @@ gst_rtsp_connection_connect_with_response_usec (GstRTSPConnection * conn,
           GST_LOG ("redirect from %s to %s.", connection_uri, request_uri);
 
           stream0_reset (conn);
+          /* setup_tunneling() replaced request_uri with the redirect target,
+           * which becomes the URI to connect to: hand it over rather than
+           * aliasing it, so no exit path frees it twice */
+          g_free (connection_uri);
           connection_uri = request_uri;
-          gst_uri_unref (uri);
+          request_uri = NULL;
+          /* NULL until the first redirect */
+          if (uri != NULL)
+            gst_uri_unref (uri);
 
           uri = gst_uri_from_string (connection_uri);
           if (uri == NULL) {
@@ -1257,9 +1264,29 @@ gst_rtsp_connection_connect_with_response_usec (GstRTSPConnection * conn,
             goto tunneling_failed;
           }
 
+          /* The credentials were given for the server this connection was
+           * created for. Don't let a redirect to another host or port have
+           * them sent there (in clear text, with Basic authentication). */
+          if (g_ascii_strcasecmp (conn->url->host,
+                  GST_STR_NULL (gst_uri_get_host (uri))) != 0
+              || gst_uri_get_port (uri) != url_port) {
+            if (conn->username != NULL)
+              GST_WARNING ("tunnel redirected to another server, "
+                  "dropping the credentials");
+            conn->auth_method = GST_RTSP_AUTH_NONE;
+            g_free (conn->username);
+            conn->username = NULL;
+            g_free (conn->passwd);
+            conn->passwd = NULL;
+            gst_rtsp_connection_clear_auth_params (conn);
+          }
+
+          g_free (conn->url->abspath);
           conn->url->abspath = gst_uri_get_path (uri);
+          g_free (conn->url->host);
           conn->url->host = g_strdup (gst_uri_get_host (uri));
           conn->url->port = gst_uri_get_port (uri);
+          g_free (conn->url->query);
           conn->url->query = gst_uri_get_query_string (uri);
           res = GST_RTSP_OK;
 
@@ -1282,6 +1309,8 @@ gst_rtsp_connection_connect_with_response_usec (GstRTSPConnection * conn,
   }
   g_free (connection_uri);
   g_free (request_uri);
+  if (uri != NULL)
+    gst_uri_unref (uri);
 
   return res;
 
@@ -1293,6 +1322,8 @@ connect_failed:
     g_clear_error (&error);
     g_free (connection_uri);
     g_free (request_uri);
+    if (uri != NULL)
+      gst_uri_unref (uri);
     return res;
   }
 remote_address_failed:
@@ -1303,6 +1334,8 @@ remote_address_failed:
     g_clear_error (&error);
     g_free (connection_uri);
     g_free (request_uri);
+    if (uri != NULL)
+      gst_uri_unref (uri);
     return res;
   }
 tunneling_failed:
@@ -1310,6 +1343,8 @@ tunneling_failed:
     GST_ERROR ("failed to setup tunneling");
     g_free (connection_uri);
     g_free (request_uri);
+    if (uri != NULL)
+      gst_uri_unref (uri);
     return res;
   }
 }
