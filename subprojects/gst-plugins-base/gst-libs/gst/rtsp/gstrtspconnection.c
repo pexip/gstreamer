@@ -1257,6 +1257,23 @@ gst_rtsp_connection_connect_with_response_usec (GstRTSPConnection * conn,
             goto tunneling_failed;
           }
 
+          /* The credentials were given for the server this connection was
+           * created for. Don't let a redirect to another host or port have
+           * them sent there (in clear text, with Basic authentication). */
+          if (g_ascii_strcasecmp (conn->url->host,
+                  GST_STR_NULL (gst_uri_get_host (uri))) != 0
+              || gst_uri_get_port (uri) != url_port) {
+            if (conn->username != NULL)
+              GST_WARNING ("tunnel redirected to another server, "
+                  "dropping the credentials");
+            conn->auth_method = GST_RTSP_AUTH_NONE;
+            g_free (conn->username);
+            conn->username = NULL;
+            g_free (conn->passwd);
+            conn->passwd = NULL;
+            gst_rtsp_connection_clear_auth_params (conn);
+          }
+
           conn->url->abspath = gst_uri_get_path (uri);
           conn->url->host = g_strdup (gst_uri_get_host (uri));
           conn->url->port = gst_uri_get_port (uri);
