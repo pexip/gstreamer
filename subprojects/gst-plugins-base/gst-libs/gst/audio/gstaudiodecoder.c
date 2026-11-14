@@ -273,7 +273,7 @@ struct _GstAudioDecoderPrivate
   gboolean needs_format;
 
   /* dtx */
-  gboolean dtx_running;
+  gboolean dtx_running;         /* protected by dtx_lock */
   GMutex dtx_lock;
   GstClockID dtx_clock_id;
   GstClockTime last_pts;
@@ -3958,7 +3958,15 @@ gst_audio_decoder_start_dtx (GstAudioDecoder * dec)
 gboolean
 gst_audio_decoder_dtx_running (GstAudioDecoder * dec)
 {
-  return dec->priv->dtx_running;
+  gboolean result;
+
+  g_return_val_if_fail (GST_IS_AUDIO_DECODER (dec), FALSE);
+
+  GST_AUDIO_DECODER_DTX_LOCK (dec);
+  result = dec->priv->dtx_running;
+  GST_AUDIO_DECODER_DTX_UNLOCK (dec);
+
+  return result;
 }
 
 /**

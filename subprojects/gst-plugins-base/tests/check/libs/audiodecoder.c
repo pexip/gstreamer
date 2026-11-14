@@ -75,6 +75,12 @@ struct _GstAudioDecoderTester
   gboolean output_too_many_frames;
   gboolean delay_decoding;
   GstBuffer *prev_buf;
+
+  /* hold DTX frames in handle_frame () until DTX is stopped */
+  gboolean hold_dtx_frames;
+  GMutex lock;
+  GCond cond;
+  gboolean holding_dtx_frame;
 };
 
 struct _GstAudioDecoderTesterClass
@@ -143,6 +149,17 @@ gst_audio_decoder_tester_handle_frame (GstAudioDecoder * dec,
   if (buffer == NULL || (!do_plc && gst_buffer_get_size (buffer) == 0))
     return GST_FLOW_OK;
 
+  if (tester->hold_dtx_frames && gst_buffer_get_size (buffer) == 0) {
+    g_mutex_lock (&tester->lock);
+    tester->holding_dtx_frame = TRUE;
+    g_cond_signal (&tester->cond);
+    g_mutex_unlock (&tester->lock);
+
+    /* DTX aware decoders check the DTX state from handle_frame () */
+    while (gst_audio_decoder_dtx_running (dec))
+      g_usleep (G_USEC_PER_SEC / 1000);
+  }
+
   gst_buffer_ref (buffer);
 
   /* for testing purposes, 1byte size buffers signals the start of DTX */
@@ -208,8 +225,20 @@ gst_audio_decoder_tester_handle_frame (GstAudioDecoder * dec,
 }
 
 static void
+gst_audio_decoder_tester_finalize (GObject * object)
+{
+  GstAudioDecoderTester *tester = (GstAudioDecoderTester *) object;
+
+  g_mutex_clear (&tester->lock);
+  g_cond_clear (&tester->cond);
+
+  G_OBJECT_CLASS (gst_audio_decoder_tester_parent_class)->finalize (object);
+}
+
+static void
 gst_audio_decoder_tester_class_init (GstAudioDecoderTesterClass * klass)
 {
+  GObjectClass *gobject_class = G_OBJECT_CLASS (klass);
   GstElementClass *element_class = GST_ELEMENT_CLASS (klass);
   GstAudioDecoderClass *audiosink_class = GST_AUDIO_DECODER_CLASS (klass);
 
@@ -220,6 +249,8 @@ gst_audio_decoder_tester_class_init (GstAudioDecoderTesterClass * klass)
   static GstStaticPadTemplate src_templ = GST_STATIC_PAD_TEMPLATE ("src",
       GST_PAD_SRC, GST_PAD_ALWAYS,
       GST_STATIC_CAPS ("audio/x-raw"));
+
+  gobject_class->finalize = gst_audio_decoder_tester_finalize;
 
   gst_element_class_add_static_pad_template (element_class, &sink_templ);
   gst_element_class_add_static_pad_template (element_class, &src_templ);
@@ -235,8 +266,10 @@ gst_audio_decoder_tester_class_init (GstAudioDecoderTesterClass * klass)
 }
 
 static void
-gst_audio_decoder_tester_init (G_GNUC_UNUSED GstAudioDecoderTester * tester)
+gst_audio_decoder_tester_init (GstAudioDecoderTester * tester)
 {
+  g_mutex_init (&tester->lock);
+  g_cond_init (&tester->cond);
 }
 
 static GstHarness *
@@ -1297,6 +1330,57 @@ GST_START_TEST (audiodecoder_lost_pkt_stops_dtx)
 
 GST_END_TEST;
 
+GST_START_TEST (audiodecoder_dtx_stop_during_dtx_frame)
+{
+  GstClockTime dtx_pts, pts;
+  GstBuffer *buf;
+  GstHarness *h = setup_audiodecodertester (NULL, NULL);
+  GstAudioDecoder *dec = GST_AUDIO_DECODER (h->element);
+  GstAudioDecoderTester *tester = (GstAudioDecoderTester *) dec;
+
+  gst_audio_decoder_set_plc_aware (dec, TRUE);
+  gst_audio_decoder_set_plc (dec, TRUE);
+  tester->hold_dtx_frames = TRUE;
+
+  fail_if (gst_audio_decoder_dtx_running (dec));
+
+  /* the DTX packet goes through and starts DTX */
+  buf = create_dtx_buffer (0);
+  dtx_pts = GST_BUFFER_PTS (buf) + GST_BUFFER_DURATION (buf);
+  fail_unless_equals_int (GST_FLOW_OK, gst_harness_push (h, buf));
+  fail_unless_silent_buffer (gst_harness_pull (h));
+  fail_unless (gst_audio_decoder_dtx_running (dec));
+
+  /* release a DTX frame and wait until the decoder is handling it */
+  fail_unless (gst_harness_crank_single_clock_wait (h));
+  g_mutex_lock (&tester->lock);
+  while (!tester->holding_dtx_frame)
+    g_cond_wait (&tester->cond, &tester->lock);
+  g_mutex_unlock (&tester->lock);
+
+  /* an audio buffer stops DTX while the DTX frame is being handled */
+  buf = create_test_buffer (2);
+  pts = GST_BUFFER_PTS (buf);
+  fail_unless_equals_int (GST_FLOW_OK, gst_harness_push (h, buf));
+  fail_if (gst_audio_decoder_dtx_running (dec));
+
+  /* the DTX frame is pushed before the audio buffer */
+  buf = gst_harness_pull (h);
+  fail_unless_equals_uint64 (dtx_pts, GST_BUFFER_PTS (buf));
+  fail_unless_silent_buffer (buf);
+
+  buf = gst_harness_pull (h);
+  fail_unless_equals_uint64 (pts, GST_BUFFER_PTS (buf));
+  gst_buffer_unref (buf);
+
+  /* the decoder does not produce more packets */
+  fail_unless (gst_harness_try_pull (h) == NULL);
+
+  gst_harness_teardown (h);
+}
+
+GST_END_TEST;
+
 static GstBuffer *
 audiodecoder_dtx_stress_prepare_buffer (G_GNUC_UNUSED GstHarness * h,
     gpointer data)
@@ -1369,6 +1453,7 @@ gst_audiodecoder_suite (void)
   suite_add_tcase (s, tc = tcase_create ("dtx"));
   tcase_add_test (tc, audiodecoder_dtx);
   tcase_add_test (tc, audiodecoder_lost_pkt_stops_dtx);
+  tcase_add_test (tc, audiodecoder_dtx_stop_during_dtx_frame);
   tcase_add_test (tc, audiodecoder_dtx_stress_push);
 
   return s;
