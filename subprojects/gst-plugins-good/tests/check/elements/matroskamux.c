@@ -23,6 +23,7 @@
 #include <gst/check/gstcheck.h>
 #include <gst/base/gstadapter.h>
 #include <gst/check/gstharness.h>
+#include <gst/video/video.h>
 
 #define AC3_CAPS_STRING "audio/x-ac3, " \
                         "channels = (int) 1, " \
@@ -350,6 +351,319 @@ GST_START_TEST (test_timecodescale)
   gst_buffer_unref (outbuffer);
   gst_buffer_unref (gst_harness_pull (h));
 
+  gst_harness_teardown (h);
+}
+
+GST_END_TEST;
+
+/* Reassemble everything the harness produced, up to and including EOS, into
+ * the byte stream that would have ended up in a file. */
+static GstBuffer *
+pull_merged_output (GstHarness * h)
+{
+  GstBuffer *merged, *outbuffer;
+  GstMapInfo info;
+
+  merged = gst_buffer_new ();
+
+  outbuffer = gst_harness_pull (h);
+  fail_unless (outbuffer != NULL);
+
+  while (outbuffer != NULL) {
+    if (outbuffer->offset == gst_buffer_get_size (merged)) {
+      gst_buffer_append_memory (merged,
+          gst_buffer_get_all_memory (outbuffer));
+    } else {
+      fail_unless (gst_buffer_map (outbuffer, &info, GST_MAP_READ));
+      gst_buffer_fill (merged, outbuffer->offset, info.data, info.size);
+      gst_buffer_unmap (outbuffer, &info);
+    }
+
+    gst_buffer_unref (outbuffer);
+    fail_unless (gst_harness_pull_until_eos (h, &outbuffer));
+  }
+
+  return merged;
+}
+
+static gboolean
+buffer_contains (GstBuffer * buffer, const guint8 * pattern, gsize size)
+{
+  GstMapInfo info;
+  gboolean found = FALSE;
+
+  fail_unless (gst_buffer_map (buffer, &info, GST_MAP_READ));
+
+  for (gsize i = 0; info.size >= size && i <= info.size - size; i++) {
+    if (memcmp (info.data + i, pattern, size) == 0) {
+      found = TRUE;
+      break;
+    }
+  }
+
+  gst_buffer_unmap (buffer, &info);
+
+  return found;
+}
+
+#define RAW_VIDEO_WIDTH 16
+#define RAW_VIDEO_HEIGHT 16
+
+static const gchar *raw_video_formats[] = { "I420", "A420", "NV12" };
+
+static void
+raw_video_info (const gchar * format, GstVideoInfo * info)
+{
+  GstVideoFormat video_format = gst_video_format_from_string (format);
+
+  fail_unless (video_format != GST_VIDEO_FORMAT_UNKNOWN);
+  fail_unless (gst_video_info_set_format (info, video_format, RAW_VIDEO_WIDTH,
+          RAW_VIDEO_HEIGHT));
+}
+
+static GstHarness *
+setup_matroskamux_raw_video_harness (const gchar * format)
+{
+  GstHarness *h;
+  gchar *caps_str;
+
+  h = gst_harness_new_with_padnames ("matroskamux", "video_%u", "src");
+
+  caps_str = g_strdup_printf ("video/x-raw, format=(string)%s, "
+      "width=(int)%d, height=(int)%d, framerate=(fraction)25/1", format,
+      RAW_VIDEO_WIDTH, RAW_VIDEO_HEIGHT);
+  gst_harness_set_src_caps_str (h, caps_str);
+  g_free (caps_str);
+
+  gst_harness_set_sink_caps_str (h, "video/x-matroska; audio/x-matroska");
+
+  return h;
+}
+
+static GstBuffer *
+mux_one_raw_buffer (const gchar * format, GstBuffer * inbuffer)
+{
+  GstHarness *h;
+  GstBuffer *merged;
+
+  h = setup_matroskamux_raw_video_harness (format);
+
+  GST_BUFFER_PTS (inbuffer) = 0;
+  GST_BUFFER_DURATION (inbuffer) = GST_SECOND / 25;
+  fail_unless_equals_int (GST_FLOW_OK, gst_harness_push (h, inbuffer));
+  fail_unless (gst_harness_push_event (h, gst_event_new_eos ()));
+
+  merged = pull_merged_output (h);
+  gst_harness_teardown (h);
+
+  return merged;
+}
+
+static GstBuffer *
+mux_one_raw_frame (const gchar * format, const guint8 * frame, gsize frame_size)
+{
+  GstBuffer *inbuffer = gst_buffer_new_allocate (NULL, frame_size, NULL);
+
+  gst_buffer_fill (inbuffer, 0, frame, frame_size);
+
+  return mux_one_raw_buffer (format, inbuffer);
+}
+
+static guint8 *
+new_raw_frame (gsize frame_size)
+{
+  guint8 *frame = g_malloc (frame_size);
+
+  for (gsize i = 0; i < frame_size; i++)
+    frame[i] = (guint8) (i & 0xff);
+
+  return frame;
+}
+
+GST_START_TEST (test_video_raw_colourspace)
+{
+  const gchar *format = raw_video_formats[__i__];
+  guint8 colourspace[] = { 0x2e, 0xb5, 0x24, 0x84, 0x00, 0x00, 0x00, 0x00 };
+  GstVideoInfo info;
+  gsize frame_size;
+  guint8 *frame;
+  GstBuffer *merged;
+
+  raw_video_info (format, &info);
+  frame_size = GST_VIDEO_INFO_SIZE (&info);
+
+  memcpy (colourspace + 4, format, 4);
+
+  frame = new_raw_frame (frame_size);
+  merged = mux_one_raw_frame (format, frame, frame_size);
+
+  fail_unless (buffer_contains (merged, colourspace, sizeof (colourspace)),
+      "no %s ColourSpace written for V_UNCOMPRESSED", format);
+
+  gst_buffer_unref (merged);
+  g_free (frame);
+}
+
+GST_END_TEST;
+
+static void
+demux_pad_added_cb (G_GNUC_UNUSED GstElement * matroskademux, GstPad * pad,
+    gpointer user_data)
+{
+  GstHarness *h = user_data;
+
+  gst_harness_add_element_src_pad (h, pad);
+}
+
+/* Mux @inbuffer, read the file back with matroskademux and require the frame
+ * that comes out to be @frame exactly. Consumes @inbuffer. */
+static void
+check_raw_frame_roundtrip (const gchar * format, GstBuffer * inbuffer,
+    const guint8 * frame, gsize frame_size)
+{
+  GstHarness *h;
+  GstBuffer *merged, *outbuffer;
+  GstCaps *caps;
+  GstStructure *s;
+
+  merged = mux_one_raw_buffer (format, inbuffer);
+
+  h = gst_harness_new_with_padnames ("matroskademux", "sink", NULL);
+  g_signal_connect (h->element, "pad-added", G_CALLBACK (demux_pad_added_cb),
+      h);
+  gst_harness_set_src_caps_str (h, "video/x-matroska");
+
+  GST_BUFFER_OFFSET (merged) = 0;
+  fail_unless_equals_int (GST_FLOW_OK, gst_harness_push (h, merged));
+  gst_harness_push_event (h, gst_event_new_eos ());
+
+  outbuffer = gst_harness_pull (h);
+  fail_unless (outbuffer != NULL);
+
+  caps = gst_pad_get_current_caps (h->sinkpad);
+  fail_unless (caps != NULL);
+  s = gst_caps_get_structure (caps, 0);
+  fail_unless_equals_string (gst_structure_get_name (s), "video/x-raw");
+  fail_unless_equals_string (gst_structure_get_string (s, "format"), format);
+  gst_caps_unref (caps);
+
+  fail_unless_equals_int (frame_size, gst_buffer_get_size (outbuffer));
+  fail_unless (gst_buffer_memcmp (outbuffer, 0, frame, frame_size) == 0,
+      "%s frame did not survive the round trip", format);
+
+  gst_buffer_unref (outbuffer);
+  gst_harness_teardown (h);
+}
+
+GST_START_TEST (test_video_raw_roundtrip)
+{
+  const gchar *format = raw_video_formats[__i__];
+  GstVideoInfo info;
+  gsize frame_size;
+  guint8 *frame;
+  GstBuffer *inbuffer;
+
+  raw_video_info (format, &info);
+  frame_size = GST_VIDEO_INFO_SIZE (&info);
+
+  frame = new_raw_frame (frame_size);
+  inbuffer = gst_buffer_new_allocate (NULL, frame_size, NULL);
+  gst_buffer_fill (inbuffer, 0, frame, frame_size);
+
+  check_raw_frame_roundtrip (format, inbuffer, frame, frame_size);
+
+  g_free (frame);
+}
+
+GST_END_TEST;
+
+/* The same pixels at oversized strides and a padded height, described by a
+ * GstVideoMeta the way a decoder would. The padding is poisoned so that a
+ * stride mix-up shows up as wrong content and not merely as the wrong size. */
+static GstBuffer *
+new_padded_raw_buffer (GstVideoInfo * packed, const guint8 * frame)
+{
+  GstVideoInfo padded = *packed;
+  GstVideoAlignment align;
+  GstBuffer *packed_buffer, *padded_buffer;
+  GstVideoFrame src, dst;
+
+  gst_video_alignment_reset (&align);
+  align.padding_right = RAW_VIDEO_WIDTH;
+  align.padding_bottom = RAW_VIDEO_HEIGHT;
+  fail_unless (gst_video_info_align (&padded, &align));
+  fail_unless (GST_VIDEO_INFO_SIZE (&padded) > GST_VIDEO_INFO_SIZE (packed));
+
+  packed_buffer =
+      gst_buffer_new_allocate (NULL, GST_VIDEO_INFO_SIZE (packed), NULL);
+  gst_buffer_fill (packed_buffer, 0, frame, GST_VIDEO_INFO_SIZE (packed));
+
+  padded_buffer =
+      gst_buffer_new_allocate (NULL, GST_VIDEO_INFO_SIZE (&padded), NULL);
+  gst_buffer_memset (padded_buffer, 0, 0xaa, GST_VIDEO_INFO_SIZE (&padded));
+
+  fail_unless (gst_video_frame_map (&src, packed, packed_buffer, GST_MAP_READ));
+  fail_unless (gst_video_frame_map (&dst, &padded, padded_buffer,
+          GST_MAP_WRITE));
+  gst_video_frame_copy (&dst, &src);
+  gst_video_frame_unmap (&dst);
+  gst_video_frame_unmap (&src);
+  gst_buffer_unref (packed_buffer);
+
+  gst_buffer_add_video_meta_full (padded_buffer, GST_VIDEO_FRAME_FLAG_NONE,
+      GST_VIDEO_INFO_FORMAT (&padded), RAW_VIDEO_WIDTH, RAW_VIDEO_HEIGHT,
+      GST_VIDEO_INFO_N_PLANES (&padded), padded.offset, padded.stride);
+
+  return padded_buffer;
+}
+
+GST_START_TEST (test_video_raw_padded_roundtrip)
+{
+  const gchar *format = raw_video_formats[__i__];
+  GstVideoInfo info;
+  gsize frame_size;
+  guint8 *frame;
+  GstBuffer *inbuffer;
+
+  raw_video_info (format, &info);
+  frame_size = GST_VIDEO_INFO_SIZE (&info);
+
+  frame = new_raw_frame (frame_size);
+  inbuffer = new_padded_raw_buffer (&info, frame);
+
+  check_raw_frame_roundtrip (format, inbuffer, frame, frame_size);
+
+  g_free (frame);
+}
+
+GST_END_TEST;
+
+GST_START_TEST (test_subtitle_keyframe_flag)
+{
+  GstHarness *h;
+  GstBuffer *inbuffer, *merged;
+  /* SimpleBlock id, size, track number, relative timestamp, flags, payload */
+  guint8 keyframe_block[] = { 0xa3, 0x86, 0x81, 0x00, 0x00, 0x80, 'i', 'd' };
+  guint8 delta_block[] = { 0xa3, 0x86, 0x81, 0x00, 0x00, 0x00, 'i', 'd' };
+
+  h = gst_harness_new_with_padnames ("matroskamux", "subtitle_%u", "src");
+  gst_harness_set_src_caps_str (h, "text/x-raw, format=(string)utf8");
+  gst_harness_set_sink_caps_str (h, "video/x-matroska; audio/x-matroska");
+
+  /* no duration, so this goes out as a SimpleBlock rather than a BlockGroup */
+  inbuffer = gst_harness_create_buffer (h, 2);
+  gst_buffer_fill (inbuffer, 0, "id", 2);
+  GST_BUFFER_PTS (inbuffer) = 0;
+  fail_unless_equals_int (GST_FLOW_OK, gst_harness_push (h, inbuffer));
+  fail_unless (gst_harness_push_event (h, gst_event_new_eos ()));
+
+  merged = pull_merged_output (h);
+
+  fail_unless (buffer_contains (merged, keyframe_block,
+          sizeof (keyframe_block)), "subtitle block is not a keyframe");
+  fail_if (buffer_contains (merged, delta_block, sizeof (delta_block)));
+
+  gst_buffer_unref (merged);
   gst_harness_teardown (h);
 }
 
@@ -1014,6 +1328,14 @@ matroskamux_suite (void)
   tcase_add_test (tc_chain, test_link_webmmux_webm_sink);
   tcase_add_loop_test (tc_chain, test_timecodescale,
       0, G_N_ELEMENTS (timecodescales));
+
+  tcase_add_loop_test (tc_chain, test_video_raw_colourspace,
+      0, G_N_ELEMENTS (raw_video_formats));
+  tcase_add_loop_test (tc_chain, test_video_raw_roundtrip,
+      0, G_N_ELEMENTS (raw_video_formats));
+  tcase_add_loop_test (tc_chain, test_video_raw_padded_roundtrip,
+      0, G_N_ELEMENTS (raw_video_formats));
+  tcase_add_test (tc_chain, test_subtitle_keyframe_flag);
 
   tcase_add_test (tc_chain, test_toc_with_edition);
   tcase_add_test (tc_chain, test_toc_without_edition);
