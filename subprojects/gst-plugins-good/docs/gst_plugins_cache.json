@@ -22195,6 +22195,18 @@
                         "type": "gboolean",
                         "writable": true
                     },
+                    "auth-methods": {
+                        "blurb": "Authentication methods that may be used to answer a server's challenge",
+                        "conditionally-available": false,
+                        "construct": false,
+                        "construct-only": false,
+                        "controllable": false,
+                        "default": "digest+basic",
+                        "mutable": "null",
+                        "readable": true,
+                        "type": "GstRTSPSrcAuthMethods",
+                        "writable": true
+                    },
                     "backchannel": {
                         "blurb": "The type of backchannel to setup. Default is 'none'.",
                         "conditionally-available": false,
@@ -23074,6 +23086,21 @@
                         "desc": "Send Dummy packets",
                         "name": "dummy",
                         "value": "1"
+                    }
+                ]
+            },
+            "GstRTSPSrcAuthMethods": {
+                "kind": "flags",
+                "values": [
+                    {
+                        "desc": "Basic",
+                        "name": "basic",
+                        "value": "0x00000001"
+                    },
+                    {
+                        "desc": "Digest",
+                        "name": "digest",
+                        "value": "0x00000002"
                     }
                 ]
             },

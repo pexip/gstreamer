@@ -1007,6 +1007,17 @@ setup_tunneling (GstRTSPConnection * conn, gint64 timeout, gchar ** req_uri,
   if (!conn->ignore_x_server_reply &&
       gst_rtsp_message_get_header (response, GST_RTSP_HDR_X_SERVER_IP_ADDRESS,
           &value, 0) == GST_RTSP_OK) {
+    if (g_ascii_strcasecmp (url->host, value) != 0) {
+      if (conn->username != NULL)
+        GST_WARNING ("tunnel redirected to another server, "
+            "dropping the credentials");
+      conn->auth_method = GST_RTSP_AUTH_NONE;
+      g_free (conn->username);
+      conn->username = NULL;
+      g_free (conn->passwd);
+      conn->passwd = NULL;
+      gst_rtsp_connection_clear_auth_params (conn);
+    }
     g_free (url->host);
     url->host = g_strdup (value);
     g_free (conn->remote_ip);
@@ -1247,8 +1258,15 @@ gst_rtsp_connection_connect_with_response_usec (GstRTSPConnection * conn,
           GST_LOG ("redirect from %s to %s.", connection_uri, request_uri);
 
           stream0_reset (conn);
+          /* setup_tunneling() replaced request_uri with the redirect target,
+           * which becomes the URI to connect to: hand it over rather than
+           * aliasing it, so no exit path frees it twice */
+          g_free (connection_uri);
           connection_uri = request_uri;
-          gst_uri_unref (uri);
+          request_uri = NULL;
+          /* NULL until the first redirect */
+          if (uri != NULL)
+            gst_uri_unref (uri);
 
           uri = gst_uri_from_string (connection_uri);
           if (uri == NULL) {
@@ -1257,9 +1275,41 @@ gst_rtsp_connection_connect_with_response_usec (GstRTSPConnection * conn,
             goto tunneling_failed;
           }
 
+          /* Resolve omitted HTTP ports for the origin check and both tunnel
+           * connections. The next connect also reads this parsed URI. */
+          if (gst_uri_get_port (uri) == GST_URI_NO_PORT) {
+            const gchar *scheme = gst_uri_get_scheme (uri);
+
+            if (scheme != NULL && g_ascii_strcasecmp (scheme, "http") == 0)
+              gst_uri_set_port (uri, 80);
+            else if (scheme != NULL &&
+                g_ascii_strcasecmp (scheme, "https") == 0)
+              gst_uri_set_port (uri, 443);
+          }
+
+          /* The credentials were given for the server this connection was
+           * created for. Don't let a redirect to another host or port have
+           * them sent there (in clear text, with Basic authentication). */
+          if (g_ascii_strcasecmp (conn->url->host,
+                  GST_STR_NULL (gst_uri_get_host (uri))) != 0
+              || gst_uri_get_port (uri) != url_port) {
+            if (conn->username != NULL)
+              GST_WARNING ("tunnel redirected to another server, "
+                  "dropping the credentials");
+            conn->auth_method = GST_RTSP_AUTH_NONE;
+            g_free (conn->username);
+            conn->username = NULL;
+            g_free (conn->passwd);
+            conn->passwd = NULL;
+            gst_rtsp_connection_clear_auth_params (conn);
+          }
+
+          g_free (conn->url->abspath);
           conn->url->abspath = gst_uri_get_path (uri);
+          g_free (conn->url->host);
           conn->url->host = g_strdup (gst_uri_get_host (uri));
           conn->url->port = gst_uri_get_port (uri);
+          g_free (conn->url->query);
           conn->url->query = gst_uri_get_query_string (uri);
           res = GST_RTSP_OK;
 
@@ -1282,6 +1332,8 @@ gst_rtsp_connection_connect_with_response_usec (GstRTSPConnection * conn,
   }
   g_free (connection_uri);
   g_free (request_uri);
+  if (uri != NULL)
+    gst_uri_unref (uri);
 
   return res;
 
@@ -1293,6 +1345,8 @@ connect_failed:
     g_clear_error (&error);
     g_free (connection_uri);
     g_free (request_uri);
+    if (uri != NULL)
+      gst_uri_unref (uri);
     return res;
   }
 remote_address_failed:
@@ -1303,6 +1357,8 @@ remote_address_failed:
     g_clear_error (&error);
     g_free (connection_uri);
     g_free (request_uri);
+    if (uri != NULL)
+      gst_uri_unref (uri);
     return res;
   }
 tunneling_failed:
@@ -1310,6 +1366,8 @@ tunneling_failed:
     GST_ERROR ("failed to setup tunneling");
     g_free (connection_uri);
     g_free (request_uri);
+    if (uri != NULL)
+      gst_uri_unref (uri);
     return res;
   }
 }

@@ -346,6 +346,7 @@ gst_rtsp_backchannel_get_type (void)
 #define DEFAULT_TCP_TIMESTAMP FALSE
 #define DEFAULT_FORCE_NON_COMPLIANT_URL FALSE
 #define DEFAULT_CLIENT_MANAGED_MIKEY FALSE
+#define DEFAULT_AUTH_METHODS (GST_RTSP_AUTH_BASIC | GST_RTSP_AUTH_DIGEST)
 
 enum
 {
@@ -400,6 +401,7 @@ enum
   PROP_TCP_TIMESTAMP,
   PROP_FORCE_NON_COMPLIANT_URL,
   PROP_CLIENT_MANAGED_MIKEY,
+  PROP_AUTH_METHODS,
 };
 
 #define GST_TYPE_RTSP_NAT_METHOD (gst_rtsp_nat_method_get_type())
@@ -418,6 +420,27 @@ gst_rtsp_nat_method_get_type (void)
         g_enum_register_static ("GstRTSPNatMethod", rtsp_nat_method);
   }
   return rtsp_nat_method_type;
+}
+
+/* Same bit values as GstRTSPAuthMethod, which is registered as an enum, so
+ * the flags can be used as a mask of GstRTSPAuthMethod values directly */
+#define GST_TYPE_RTSP_SRC_AUTH_METHODS (gst_rtsp_src_auth_methods_get_type())
+static GType
+gst_rtsp_src_auth_methods_get_type (void)
+{
+  static GType rtsp_src_auth_methods_type = 0;
+  static const GFlagsValue rtsp_src_auth_methods[] = {
+    {GST_RTSP_AUTH_BASIC, "Basic", "basic"},
+    {GST_RTSP_AUTH_DIGEST, "Digest", "digest"},
+    {0, NULL, NULL},
+  };
+
+  if (!rtsp_src_auth_methods_type) {
+    rtsp_src_auth_methods_type =
+        g_flags_register_static ("GstRTSPSrcAuthMethods",
+        rtsp_src_auth_methods);
+  }
+  return rtsp_src_auth_methods_type;
 }
 
 #define RTSP_SRC_RESPONSE_ERROR(src, response_msg, err_cat, err_code, error_message) \
@@ -457,7 +480,7 @@ static gboolean gst_rtspsrc_send_event (GstElement * element, GstEvent * event);
 static void gst_rtspsrc_handle_message (GstBin * bin, GstMessage * message);
 
 static gboolean gst_rtspsrc_setup_auth (GstRTSPSrc * src,
-    GstRTSPMessage * response);
+    GstRTSPMessage * response, gboolean *policy_rejected);
 
 static gboolean gst_rtspsrc_loop_send_cmd (GstRTSPSrc * src, gint cmd,
     gint mask);
@@ -472,6 +495,8 @@ static GstRTSPResult gst_rtspsrc_close (GstRTSPSrc * src, gboolean async,
     gboolean only_close);
 
 static gboolean gst_rtspsrc_uri_set_uri (GstURIHandler * handler,
+    const gchar * uri, GError ** error);
+static gboolean gst_rtspsrc_set_location (GstRTSPSrc * src,
     const gchar * uri, GError ** error);
 static gchar *gst_rtspsrc_uri_get_uri (GstURIHandler * handler);
 
@@ -780,6 +805,27 @@ gst_rtspsrc_class_init (GstRTSPSrcClass * klass)
   g_object_class_install_property (gobject_class, PROP_USER_PW,
       g_param_spec_string ("user-pw", "user-pw",
           "RTSP location URI user password for authentication", DEFAULT_USER_PW,
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+
+  /**
+   * GstRTSPSrc:auth-methods:
+   *
+   * The authentication methods that may be used to answer a server's
+   * challenge. rtspsrc otherwise answers with the strongest method the
+   * server offers, so a server, or anyone on the path of an unencrypted
+   * connection rewriting the challenge, can have the password sent with
+   * Basic authentication: base64, so clear text. Over plain rtsp://,
+   * allowing only digest avoids that.
+   *
+   * A challenge offering none of the allowed methods fails the same way
+   * as one rejecting the credentials.
+   *
+   * Since: 1.28
+   */
+  g_object_class_install_property (gobject_class, PROP_AUTH_METHODS,
+      g_param_spec_flags ("auth-methods", "Authentication methods",
+          "Authentication methods that may be used to answer a server's "
+          "challenge", GST_TYPE_RTSP_SRC_AUTH_METHODS, DEFAULT_AUTH_METHODS,
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 
   /**
@@ -1598,6 +1644,7 @@ gst_rtspsrc_class_init (GstRTSPSrcClass * klass)
   gst_type_mark_as_plugin_api (GST_TYPE_RTSP_SRC_TIMEOUT_CAUSE, 0);
   gst_type_mark_as_plugin_api (GST_TYPE_RTSP_SRC_BUFFER_MODE, 0);
   gst_type_mark_as_plugin_api (GST_TYPE_RTSP_SRC_NTP_TIME_SOURCE, 0);
+  gst_type_mark_as_plugin_api (GST_TYPE_RTSP_SRC_AUTH_METHODS, 0);
   gst_type_mark_as_plugin_api (GST_TYPE_RTSP_BACKCHANNEL, 0);
   gst_type_mark_as_plugin_api (GST_TYPE_RTSP_NAT_METHOD, 0);
 }
@@ -1749,6 +1796,7 @@ gst_rtspsrc_init (GstRTSPSrc * src)
   src->rtp_blocksize = DEFAULT_RTP_BLOCKSIZE;
   src->user_id = g_strdup (DEFAULT_USER_ID);
   src->user_pw = g_strdup (DEFAULT_USER_PW);
+  src->auth_methods = DEFAULT_AUTH_METHODS;
   src->buffer_mode = DEFAULT_BUFFER_MODE;
   src->client_port_range.min = 0;
   src->client_port_range.max = 0;
@@ -1840,6 +1888,7 @@ gst_rtspsrc_finalize (GObject * object)
   g_free (rtspsrc->conninfo.url_str);
   g_free (rtspsrc->user_id);
   g_free (rtspsrc->user_pw);
+  gst_rtsp_url_free (rtspsrc->auth_origin);
   g_free (rtspsrc->multi_iface);
   g_free (rtspsrc->user_agent);
   g_free (rtspsrc->prop_proxy_id);
@@ -2032,6 +2081,9 @@ gst_rtspsrc_set_property (GObject * object, guint prop_id, const GValue * value,
     case PROP_USER_PW:
       g_free (rtspsrc->user_pw);
       rtspsrc->user_pw = g_value_dup_string (value);
+      break;
+    case PROP_AUTH_METHODS:
+      rtspsrc->auth_methods = g_value_get_flags (value);
       break;
     case PROP_BUFFER_MODE:
       rtspsrc->buffer_mode = g_value_get_enum (value);
@@ -2243,6 +2295,9 @@ gst_rtspsrc_get_property (GObject * object, guint prop_id, GValue * value,
       break;
     case PROP_USER_PW:
       g_value_set_string (value, rtspsrc->user_pw);
+      break;
+    case PROP_AUTH_METHODS:
+      g_value_set_flags (value, rtspsrc->auth_methods);
       break;
     case PROP_BUFFER_MODE:
       g_value_set_enum (value, rtspsrc->buffer_mode);
@@ -5752,13 +5807,17 @@ _add_header_to_conn (const GstIdStr * fieldname, const GValue * value,
 
 static GstRTSPResult
 gst_rtsp_conninfo_connect (GstRTSPSrc * src, GstRTSPConnInfo * info,
-    gboolean async)
+    gboolean async, gboolean *auth_policy_rejected)
 {
   GstRTSPResult res;
   GstRTSPMessage response;
   gboolean retry = FALSE;
   GstRTSPUrl *url;
   gchar *new_url;
+
+  if (auth_policy_rejected != NULL)
+    *auth_policy_rejected = FALSE;
+
   memset (&response, 0, sizeof (response));
   gst_rtsp_message_init (&response);
   do {
@@ -5774,7 +5833,15 @@ gst_rtsp_conninfo_connect (GstRTSPSrc * src, GstRTSPConnInfo * info,
         goto could_not_create;
 
       if (retry) {
-        gst_rtspsrc_setup_auth (src, &response);
+        gboolean policy_rejected = FALSE;
+
+        if (!gst_rtspsrc_setup_auth (src, &response, &policy_rejected)
+            && policy_rejected) {
+          if (auth_policy_rejected != NULL)
+            *auth_policy_rejected = TRUE;
+          res = GST_RTSP_ERROR;
+          goto could_not_connect;
+        }
       }
 
       g_free (info->url_str);
@@ -5913,7 +5980,7 @@ gst_rtsp_conninfo_reconnect (GstRTSPSrc * src, GstRTSPConnInfo * info,
 
   GST_DEBUG_OBJECT (src, "reconnecting connection...");
   gst_rtsp_conninfo_close (src, info, FALSE);
-  res = gst_rtsp_conninfo_connect (src, info, async);
+  res = gst_rtsp_conninfo_connect (src, info, async, NULL);
 
   return res;
 }
@@ -6496,7 +6563,7 @@ gst_rtspsrc_loop_udp (GstRTSPSrc * src)
         DEBUG_RTSP (src, &message);
         if (message.type_data.response.code == GST_RTSP_STS_UNAUTHORIZED) {
           GST_DEBUG_OBJECT (src, "but is Unauthorized response ...");
-          if (gst_rtspsrc_setup_auth (src, &message) && !(retry++)) {
+          if (gst_rtspsrc_setup_auth (src, &message, NULL) && !(retry++)) {
             GST_DEBUG_OBJECT (src, "so retrying keep-alive");
             if ((res = gst_rtspsrc_send_keep_alive (src)) == GST_RTSP_EINTR)
               goto interrupt;
@@ -6981,6 +7048,28 @@ gst_rtspsrc_parse_auth_hdr (GstRTSPMessage * response,
   return TRUE;
 }
 
+/* Whether @url is on the same server as @origin: same host and port, and
+ * both or neither using TLS */
+static gboolean
+gst_rtspsrc_url_same_origin (const GstRTSPUrl * origin, const GstRTSPUrl * url)
+{
+  guint16 origin_port, url_port;
+
+  if (url == NULL || origin->host == NULL || url->host == NULL)
+    return FALSE;
+
+  if ((origin->transports & GST_RTSP_LOWER_TRANS_TLS) !=
+      (url->transports & GST_RTSP_LOWER_TRANS_TLS))
+    return FALSE;
+
+  if (g_ascii_strcasecmp (origin->host, url->host) != 0)
+    return FALSE;
+
+  gst_rtsp_url_get_port (origin, &origin_port);
+  gst_rtsp_url_get_port (url, &url_port);
+  return origin_port == url_port;
+}
+
 /**
  * gst_rtspsrc_setup_auth:
  * @src: the rtsp source
@@ -6996,7 +7085,8 @@ gst_rtspsrc_parse_auth_hdr (GstRTSPMessage * response,
  * Returns: TRUE if authentication information could be set up correctly.
  */
 static gboolean
-gst_rtspsrc_setup_auth (GstRTSPSrc * src, GstRTSPMessage * response)
+gst_rtspsrc_setup_auth (GstRTSPSrc * src, GstRTSPMessage * response,
+    gboolean *policy_rejected)
 {
   gchar *user = NULL;
   gchar *pass = NULL;
@@ -7009,6 +7099,9 @@ gst_rtspsrc_setup_auth (GstRTSPSrc * src, GstRTSPMessage * response)
 
   g_return_val_if_fail (response != NULL, FALSE);
 
+  if (policy_rejected != NULL)
+    *policy_rejected = FALSE;
+
   conn = src->conninfo.connection;
 
   /* Identify the available auth methods and see if any are supported. If no
@@ -7019,6 +7112,18 @@ gst_rtspsrc_setup_auth (GstRTSPSrc * src, GstRTSPMessage * response)
   if (avail_methods == GST_RTSP_AUTH_NONE)
     goto no_auth_available;
 
+  /* Only answer with the methods the application allows. Offering nothing
+   * else fails like a rejection of the credentials, not like a server
+   * without any supported method. */
+  if ((avail_methods & src->auth_methods) == GST_RTSP_AUTH_NONE) {
+    GST_WARNING_OBJECT (src, "the server only offers authentication methods "
+        "that the auth-methods property doesn't allow");
+    if (policy_rejected != NULL)
+      *policy_rejected = TRUE;
+    goto propagate_error;
+  }
+  avail_methods &= src->auth_methods;
+
   /* For digest auth, if the response indicates that the session
    * data are stale, we just update them in the connection object and
    * return TRUE to retry the request */
@@ -7026,6 +7131,17 @@ gst_rtspsrc_setup_auth (GstRTSPSrc * src, GstRTSPMessage * response)
     src->tried_url_auth = FALSE;
 
   url = gst_rtsp_connection_get_url (conn);
+
+  /* A redirect (an RTSP one, or an HTTP one while tunneling) may have taken
+   * the connection to another server. The credentials were given for the
+   * configured one, so don't send them anywhere else: not the properties,
+   * and not those of the configured location's URL. */
+  if (src->auth_origin != NULL
+      && !gst_rtspsrc_url_same_origin (src->auth_origin, url)) {
+    GST_WARNING_OBJECT (src, "redirected to a different server than the "
+        "configured one, not sending credentials there");
+    goto propagate_error;
+  }
 
   /* Do we have username and password available? */
   if (url != NULL && !src->tried_url_auth && url->user != NULL
@@ -7351,7 +7467,7 @@ gst_rtspsrc_send (GstRTSPSrc * src, GstRTSPConnInfo * conninfo,
     switch (int_code) {
       case GST_RTSP_STS_UNAUTHORIZED:
       case GST_RTSP_STS_NOT_FOUND:
-        if (gst_rtspsrc_setup_auth (src, response)) {
+        if (gst_rtspsrc_setup_auth (src, response, NULL)) {
           /* Try the request/response again after configuring the auth info
            * and loop again */
           retry = TRUE;
@@ -7427,7 +7543,9 @@ error_response:
         else
           transports = GST_RTSP_LOWER_TRANS_UNKNOWN;
 
-        gst_rtspsrc_uri_set_uri (GST_URI_HANDLER (src), new_location, NULL);
+        /* not gst_rtspsrc_uri_set_uri: the credentials stay bound to the
+         * origin of the location the application configured */
+        gst_rtspsrc_set_location (src, new_location, NULL);
 
         /* set old transports */
         if (src->conninfo.url && transports != GST_RTSP_LOWER_TRANS_UNKNOWN)
@@ -8129,7 +8247,7 @@ gst_rtspsrc_setup_streams_start (GstRTSPSrc * src, gboolean async)
     }
 
     if (src->conninfo.connection == NULL) {
-      if (!gst_rtsp_conninfo_connect (src, &stream->conninfo, async)) {
+      if (!gst_rtsp_conninfo_connect (src, &stream->conninfo, async, NULL)) {
         GST_WARNING_OBJECT (src, "skipping stream %p, failed to connect",
             stream);
         continue;
@@ -8793,7 +8911,7 @@ gst_rtspsrc_open_from_sdp (GstRTSPSrc * src, GstSDPMessage * sdp,
         src->conninfo.location = g_strdup (control);
         /* make a connection for this, if there was a connection already, nothing
          * happens. */
-        if (gst_rtsp_conninfo_connect (src, &src->conninfo, async) < 0) {
+        if (gst_rtsp_conninfo_connect (src, &src->conninfo, async, NULL) < 0) {
           GST_ERROR_OBJECT (src, "could not connect");
         }
       }
@@ -8934,6 +9052,7 @@ gst_rtspsrc_retrieve_sdp (GstRTSPSrc * src, GstSDPMessage ** sdp,
   GstRTSPResult res;
   GstRTSPMessage request = { 0 };
   GstRTSPMessage response = { 0 };
+  gboolean auth_policy_rejected = FALSE;
   guint8 *data;
   guint size;
   gchar *respcont = NULL;
@@ -8955,7 +9074,8 @@ restart:
   }
   src->tried_url_auth = FALSE;
 
-  if ((res = gst_rtsp_conninfo_connect (src, &src->conninfo, async)) < 0)
+  if ((res = gst_rtsp_conninfo_connect (src, &src->conninfo, async,
+              &auth_policy_rejected)) < 0)
     goto connect_failed;
 
   /* create OPTIONS */
@@ -9084,7 +9204,10 @@ connect_failed:
   {
     gchar *str = gst_rtsp_strresult (res);
 
-    if (res != GST_RTSP_EINTR) {
+    if (res != GST_RTSP_EINTR && auth_policy_rejected) {
+      GST_ELEMENT_ERROR (src, RESOURCE, NOT_AUTHORIZED, (NULL),
+          ("Unauthorized"));
+    } else if (res != GST_RTSP_EINTR) {
       GST_ELEMENT_ERROR (src, RESOURCE, OPEN_READ_WRITE, (NULL),
           ("Failed to connect. (%s)", str));
     } else {
@@ -10368,13 +10491,28 @@ static gboolean
 gst_rtspsrc_uri_set_uri (GstURIHandler * handler, const gchar * uri,
     GError ** error)
 {
-  GstRTSPSrc *src;
+  GstRTSPSrc *src = GST_RTSPSRC (handler);
+
+  if (!gst_rtspsrc_set_location (src, uri, error))
+    return FALSE;
+
+  /* The application configured this location, so this is where its
+   * credentials may be sent. Redirects followed later don't change it. */
+  gst_rtsp_url_free (src->auth_origin);
+  src->auth_origin =
+      src->conninfo.url ? gst_rtsp_url_copy (src->conninfo.url) : NULL;
+
+  return TRUE;
+}
+
+static gboolean
+gst_rtspsrc_set_location (GstRTSPSrc * src, const gchar * uri,
+    GError ** error)
+{
   GstRTSPResult res;
   GstSDPResult sres;
   GstRTSPUrl *newurl = NULL;
   GstSDPMessage *sdp = NULL;
-
-  src = GST_RTSPSRC (handler);
 
   /* same URI, we're fine */
   if (src->conninfo.location && uri && !strcmp (uri, src->conninfo.location))
