@@ -1264,6 +1264,18 @@ gst_rtsp_connection_connect_with_response_usec (GstRTSPConnection * conn,
             goto tunneling_failed;
           }
 
+          /* Resolve omitted HTTP ports for the origin check and both tunnel
+           * connections. The next connect also reads this parsed URI. */
+          if (gst_uri_get_port (uri) == GST_URI_NO_PORT) {
+            const gchar *scheme = gst_uri_get_scheme (uri);
+
+            if (scheme != NULL && g_ascii_strcasecmp (scheme, "http") == 0)
+              gst_uri_set_port (uri, 80);
+            else if (scheme != NULL &&
+                g_ascii_strcasecmp (scheme, "https") == 0)
+              gst_uri_set_port (uri, 443);
+          }
+
           /* The credentials were given for the server this connection was
            * created for. Don't let a redirect to another host or port have
            * them sent there (in clear text, with Basic authentication). */
