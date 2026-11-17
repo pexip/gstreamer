@@ -1007,6 +1007,17 @@ setup_tunneling (GstRTSPConnection * conn, gint64 timeout, gchar ** req_uri,
   if (!conn->ignore_x_server_reply &&
       gst_rtsp_message_get_header (response, GST_RTSP_HDR_X_SERVER_IP_ADDRESS,
           &value, 0) == GST_RTSP_OK) {
+    if (g_ascii_strcasecmp (url->host, value) != 0) {
+      if (conn->username != NULL)
+        GST_WARNING ("tunnel redirected to another server, "
+            "dropping the credentials");
+      conn->auth_method = GST_RTSP_AUTH_NONE;
+      g_free (conn->username);
+      conn->username = NULL;
+      g_free (conn->passwd);
+      conn->passwd = NULL;
+      gst_rtsp_connection_clear_auth_params (conn);
+    }
     g_free (url->host);
     url->host = g_strdup (value);
     g_free (conn->remote_ip);
