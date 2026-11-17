@@ -810,11 +810,11 @@ GST_START_TEST (test_rtspconnection_tunnel_x_server_auth)
   server_thread = g_thread_new ("tunnel auth server",
       tunnel_auth_server_thread, &data);
   res = gst_rtsp_connection_connect_usec (rtsp_conn, 5 * G_USEC_PER_SEC);
-  if (res != GST_RTSP_OK)
+  if (res != GST_RTSP_OK_REDIRECT)
     g_socket_listener_close (data.listener);
   g_thread_join (server_thread);
 
-  fail_unless_equals_int (res, GST_RTSP_OK);
+  fail_unless_equals_int (res, GST_RTSP_OK_REDIRECT);
   fail_unless (data.success);
   fail_unless (data.get_request != NULL);
   fail_unless (data.post_request != NULL);
