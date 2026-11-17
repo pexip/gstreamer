@@ -480,7 +480,7 @@ static gboolean gst_rtspsrc_send_event (GstElement * element, GstEvent * event);
 static void gst_rtspsrc_handle_message (GstBin * bin, GstMessage * message);
 
 static gboolean gst_rtspsrc_setup_auth (GstRTSPSrc * src,
-    GstRTSPMessage * response);
+    GstRTSPMessage * response, gboolean *policy_rejected);
 
 static gboolean gst_rtspsrc_loop_send_cmd (GstRTSPSrc * src, gint cmd,
     gint mask);
@@ -5807,13 +5807,17 @@ _add_header_to_conn (const GstIdStr * fieldname, const GValue * value,
 
 static GstRTSPResult
 gst_rtsp_conninfo_connect (GstRTSPSrc * src, GstRTSPConnInfo * info,
-    gboolean async)
+    gboolean async, gboolean *auth_policy_rejected)
 {
   GstRTSPResult res;
   GstRTSPMessage response;
   gboolean retry = FALSE;
   GstRTSPUrl *url;
   gchar *new_url;
+
+  if (auth_policy_rejected != NULL)
+    *auth_policy_rejected = FALSE;
+
   memset (&response, 0, sizeof (response));
   gst_rtsp_message_init (&response);
   do {
@@ -5829,7 +5833,15 @@ gst_rtsp_conninfo_connect (GstRTSPSrc * src, GstRTSPConnInfo * info,
         goto could_not_create;
 
       if (retry) {
-        gst_rtspsrc_setup_auth (src, &response);
+        gboolean policy_rejected = FALSE;
+
+        if (!gst_rtspsrc_setup_auth (src, &response, &policy_rejected)
+            && policy_rejected) {
+          if (auth_policy_rejected != NULL)
+            *auth_policy_rejected = TRUE;
+          res = GST_RTSP_ERROR;
+          goto could_not_connect;
+        }
       }
 
       g_free (info->url_str);
@@ -5968,7 +5980,7 @@ gst_rtsp_conninfo_reconnect (GstRTSPSrc * src, GstRTSPConnInfo * info,
 
   GST_DEBUG_OBJECT (src, "reconnecting connection...");
   gst_rtsp_conninfo_close (src, info, FALSE);
-  res = gst_rtsp_conninfo_connect (src, info, async);
+  res = gst_rtsp_conninfo_connect (src, info, async, NULL);
 
   return res;
 }
@@ -6551,7 +6563,7 @@ gst_rtspsrc_loop_udp (GstRTSPSrc * src)
         DEBUG_RTSP (src, &message);
         if (message.type_data.response.code == GST_RTSP_STS_UNAUTHORIZED) {
           GST_DEBUG_OBJECT (src, "but is Unauthorized response ...");
-          if (gst_rtspsrc_setup_auth (src, &message) && !(retry++)) {
+          if (gst_rtspsrc_setup_auth (src, &message, NULL) && !(retry++)) {
             GST_DEBUG_OBJECT (src, "so retrying keep-alive");
             if ((res = gst_rtspsrc_send_keep_alive (src)) == GST_RTSP_EINTR)
               goto interrupt;
@@ -7073,7 +7085,8 @@ gst_rtspsrc_url_same_origin (const GstRTSPUrl * origin, const GstRTSPUrl * url)
  * Returns: TRUE if authentication information could be set up correctly.
  */
 static gboolean
-gst_rtspsrc_setup_auth (GstRTSPSrc * src, GstRTSPMessage * response)
+gst_rtspsrc_setup_auth (GstRTSPSrc * src, GstRTSPMessage * response,
+    gboolean *policy_rejected)
 {
   gchar *user = NULL;
   gchar *pass = NULL;
@@ -7085,6 +7098,9 @@ gst_rtspsrc_setup_auth (GstRTSPSrc * src, GstRTSPMessage * response)
   gboolean stale = FALSE;
 
   g_return_val_if_fail (response != NULL, FALSE);
+
+  if (policy_rejected != NULL)
+    *policy_rejected = FALSE;
 
   conn = src->conninfo.connection;
 
@@ -7102,6 +7118,8 @@ gst_rtspsrc_setup_auth (GstRTSPSrc * src, GstRTSPMessage * response)
   if ((avail_methods & src->auth_methods) == GST_RTSP_AUTH_NONE) {
     GST_WARNING_OBJECT (src, "the server only offers authentication methods "
         "that the auth-methods property doesn't allow");
+    if (policy_rejected != NULL)
+      *policy_rejected = TRUE;
     goto propagate_error;
   }
   avail_methods &= src->auth_methods;
@@ -7449,7 +7467,7 @@ gst_rtspsrc_send (GstRTSPSrc * src, GstRTSPConnInfo * conninfo,
     switch (int_code) {
       case GST_RTSP_STS_UNAUTHORIZED:
       case GST_RTSP_STS_NOT_FOUND:
-        if (gst_rtspsrc_setup_auth (src, response)) {
+        if (gst_rtspsrc_setup_auth (src, response, NULL)) {
           /* Try the request/response again after configuring the auth info
            * and loop again */
           retry = TRUE;
@@ -8229,7 +8247,7 @@ gst_rtspsrc_setup_streams_start (GstRTSPSrc * src, gboolean async)
     }
 
     if (src->conninfo.connection == NULL) {
-      if (!gst_rtsp_conninfo_connect (src, &stream->conninfo, async)) {
+      if (!gst_rtsp_conninfo_connect (src, &stream->conninfo, async, NULL)) {
         GST_WARNING_OBJECT (src, "skipping stream %p, failed to connect",
             stream);
         continue;
@@ -8893,7 +8911,7 @@ gst_rtspsrc_open_from_sdp (GstRTSPSrc * src, GstSDPMessage * sdp,
         src->conninfo.location = g_strdup (control);
         /* make a connection for this, if there was a connection already, nothing
          * happens. */
-        if (gst_rtsp_conninfo_connect (src, &src->conninfo, async) < 0) {
+        if (gst_rtsp_conninfo_connect (src, &src->conninfo, async, NULL) < 0) {
           GST_ERROR_OBJECT (src, "could not connect");
         }
       }
@@ -9034,6 +9052,7 @@ gst_rtspsrc_retrieve_sdp (GstRTSPSrc * src, GstSDPMessage ** sdp,
   GstRTSPResult res;
   GstRTSPMessage request = { 0 };
   GstRTSPMessage response = { 0 };
+  gboolean auth_policy_rejected = FALSE;
   guint8 *data;
   guint size;
   gchar *respcont = NULL;
@@ -9055,7 +9074,8 @@ restart:
   }
   src->tried_url_auth = FALSE;
 
-  if ((res = gst_rtsp_conninfo_connect (src, &src->conninfo, async)) < 0)
+  if ((res = gst_rtsp_conninfo_connect (src, &src->conninfo, async,
+              &auth_policy_rejected)) < 0)
     goto connect_failed;
 
   /* create OPTIONS */
@@ -9184,7 +9204,10 @@ connect_failed:
   {
     gchar *str = gst_rtsp_strresult (res);
 
-    if (res != GST_RTSP_EINTR) {
+    if (res != GST_RTSP_EINTR && auth_policy_rejected) {
+      GST_ELEMENT_ERROR (src, RESOURCE, NOT_AUTHORIZED, (NULL),
+          ("Unauthorized"));
+    } else if (res != GST_RTSP_EINTR) {
       GST_ELEMENT_ERROR (src, RESOURCE, OPEN_READ_WRITE, (NULL),
           ("Failed to connect. (%s)", str));
     } else {
