@@ -730,6 +730,7 @@ read_http_request (GSocketConnection *connection)
 
   input = g_data_input_stream_new (g_io_stream_get_input_stream
       (G_IO_STREAM (connection)));
+  g_data_input_stream_set_newline_type (input, G_DATA_STREAM_NEWLINE_TYPE_CR_LF);
   request = g_string_new (NULL);
   while ((line = g_data_input_stream_read_line (input, NULL, NULL, NULL))) {
     if (*line == '\0') {
