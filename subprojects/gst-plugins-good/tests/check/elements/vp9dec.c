@@ -92,7 +92,8 @@ GST_START_TEST (test_decode_drops_delta_frames_after_error)
   /* Count a key frame request for every frame libvpx fails to decode: no rate
    * limiting, and no automatic requests, which would also be made for each
    * frame the base class discards */
-  g_object_set (h->element, "max-errors", -1, "min-force-key-unit-interval", 0,
+  g_object_set (h->element, "max-errors", -1,
+      "min-force-key-unit-interval", G_GUINT64_CONSTANT (0),
       "automatic-request-sync-points", FALSE, NULL);
   gst_harness_set_src_caps_str (h, "video/x-vp9");
 
