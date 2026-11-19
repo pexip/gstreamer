@@ -144,6 +144,7 @@ if host_machine.system() != 'windows'
     [ 'elements/apev2mux', not taglib_dep.found() ],
     [ 'elements/vp8enc', not vpx_dep.found() or not have_vp8_encoder ],
     [ 'elements/vp8dec', not vpx_dep.found() or not have_vp8_decoder ],
+    [ 'elements/vp9dec', not vpx_dep.found() or not have_vp9_decoder or not have_vp9_encoder ],
     [ 'elements/vp9enc', not vpx_dep.found() or not have_vp9_encoder ],
     [ 'pipelines/lame', not lame_dep.found() ],
     [ 'elements/wavpackdec', not wavpack_dep.found() ],

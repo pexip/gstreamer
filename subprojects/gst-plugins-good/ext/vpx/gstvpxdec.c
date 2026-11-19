@@ -214,7 +214,6 @@ static void
 gst_vpx_dec_init (GstVPXDec * gst_vpx_dec)
 {
   GstVideoDecoder *decoder = (GstVideoDecoder *) gst_vpx_dec;
-  GstVPXDecClass *vpxclass = GST_VPX_DEC_GET_CLASS (gst_vpx_dec);
 
   GST_DEBUG_OBJECT (gst_vpx_dec, "gst_vpx_dec_init");
   gst_video_decoder_set_packetized (decoder, TRUE);
@@ -223,11 +222,6 @@ gst_vpx_dec_init (GstVPXDec * gst_vpx_dec)
   gst_vpx_dec->deblocking_level = DEFAULT_DEBLOCKING_LEVEL;
   gst_vpx_dec->noise_level = DEFAULT_NOISE_LEVEL;
   gst_vpx_dec->direct_rendering = DEFAULT_DIRECT_RENDERING;
-
-  if (vpxclass->get_needs_sync_point) {
-    gst_video_decoder_set_needs_sync_point (GST_VIDEO_DECODER (gst_vpx_dec),
-        vpxclass->get_needs_sync_point (gst_vpx_dec));
-  }
 
   gst_video_decoder_set_needs_format (decoder, TRUE);
   gst_video_decoder_set_use_default_pad_acceptcaps (decoder, TRUE);
@@ -307,10 +301,18 @@ static gboolean
 gst_vpx_dec_start (GstVideoDecoder * decoder)
 {
   GstVPXDec *gst_vpx_dec = GST_VPX_DEC (decoder);
+  GstVPXDecClass *vpxclass = GST_VPX_DEC_GET_CLASS (gst_vpx_dec);
 
   GST_DEBUG_OBJECT (gst_vpx_dec, "start");
   gst_vpx_dec->decoder_inited = FALSE;
   gst_vpx_dec->safe_remap = FALSE;
+
+  /* This cannot be done in instance_init: the class seen there is the one
+   * of GstVPXDec, not the subclass that implements get_needs_sync_point */
+  if (vpxclass->get_needs_sync_point) {
+    gst_video_decoder_set_needs_sync_point (decoder,
+        vpxclass->get_needs_sync_point (gst_vpx_dec));
+  }
 
   return TRUE;
 }
