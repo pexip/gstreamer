@@ -24,6 +24,7 @@
 
 #include <gst/check/check.h>
 #include <gst/check/gstharness.h>
+#include <gst/rtp/rtp.h>
 
 #define RTP_VP8_CAPS_STR \
   "application/x-rtp,media=video,encoding-name=VP8,clock-rate=90000,payload=96"
@@ -866,6 +867,66 @@ GST_START_TEST (test_pay_delta_unit_flag)
 
 GST_END_TEST;
 
+/* The payloader leaves room for the RTP header extension, so no packet is
+ * larger than the MTU. A 16-byte MID is the longest the one-byte form holds:
+ * with the 4 bytes that start the header extension and the 1-byte element
+ * header it takes 21 bytes, padded to 24. */
+GST_START_TEST (test_pay_mtu_with_header_extension)
+{
+  const guint mtu = 1200;
+  const gsize frame_size = 4000;
+  GstHarness *h =
+      gst_harness_new_parse ("rtpvp8pay mtu=1200 parse-frames=false");
+  GstRTPHeaderExtension *ext;
+  GstElement *pay;
+  GstBuffer *buffer;
+  guint i, n_packets;
+
+  ext = GST_RTP_HEADER_EXTENSION (gst_element_factory_make ("rtphdrextmid",
+          NULL));
+  fail_unless (ext != NULL);
+  gst_rtp_header_extension_set_id (ext, 1);
+  g_object_set (ext, "mid", "0123456789abcdef", NULL);
+  pay = gst_harness_find_element (h, "rtpvp8pay");
+  g_signal_emit_by_name (pay, "add-extension", ext);
+
+  gst_harness_set_src_caps_str (h, "video/x-vp8");
+
+  buffer = gst_buffer_new_allocate (NULL, frame_size, NULL);
+  gst_buffer_memset (buffer, 0, 0, frame_size);
+  fail_unless_equals_int (gst_harness_push (h, buffer), GST_FLOW_OK);
+
+  n_packets = gst_harness_buffers_in_queue (h);
+  fail_unless (n_packets > 1);
+  for (i = 0; i < n_packets; i++) {
+    GstRTPBuffer rtp = GST_RTP_BUFFER_INIT;
+    gpointer data;
+    guint size;
+
+    buffer = gst_harness_pull (h);
+    fail_unless (gst_buffer_get_size (buffer) <= mtu,
+        "packet %u is %" G_GSIZE_FORMAT " bytes, larger than the MTU", i,
+        gst_buffer_get_size (buffer));
+    /* The payloader fills the packets that are not the last one up to the
+     * MTU */
+    if (i + 1 < n_packets)
+      fail_unless_equals_int (gst_buffer_get_size (buffer), mtu);
+
+    fail_unless (gst_rtp_buffer_map (buffer, GST_MAP_READ, &rtp));
+    fail_unless (gst_rtp_buffer_get_extension_onebyte_header (&rtp, 1, 0,
+            &data, &size));
+    fail_unless_equals_int (size, 16);
+    gst_rtp_buffer_unmap (&rtp);
+    gst_buffer_unref (buffer);
+  }
+
+  gst_object_unref (pay);
+  gst_object_unref (ext);
+  gst_harness_teardown (h);
+}
+
+GST_END_TEST;
+
 static Suite *
 rtpvp8_suite (void)
 {
@@ -881,6 +942,7 @@ rtpvp8_suite (void)
   tcase_add_test (tc_chain, test_pay_tl0picidx_split_buffer);
   tcase_add_test (tc_chain, test_pay_continuous_picture_id_on_flush);
   tcase_add_test (tc_chain, test_pay_delta_unit_flag);
+  tcase_add_test (tc_chain, test_pay_mtu_with_header_extension);
 
   suite_add_tcase (s, (tc_chain = tcase_create ("vp8depay")));
   tcase_add_loop_test (tc_chain, test_depay_stop_gap_events, 0,
