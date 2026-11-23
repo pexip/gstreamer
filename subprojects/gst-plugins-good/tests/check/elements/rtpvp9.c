@@ -24,7 +24,7 @@
 
 #include <gst/check/check.h>
 #include <gst/check/gstharness.h>
-#include <gst/rtp/gstrtpbuffer.h>
+#include <gst/rtp/rtp.h>
 
 #define RTP_VP9_CAPS_STR \
   "application/x-rtp,media=video,encoding-name=VP9,clock-rate=90000,payload=96"
@@ -598,6 +598,116 @@ GST_START_TEST (test_pay_ss_resolution_profile_3)
 
 GST_END_TEST;
 
+/* The payloader leaves room for the RTP header extension, so no packet is
+ * larger than the MTU. A 16-byte MID is the longest the one-byte form holds:
+ * with the 4 bytes that start the header extension and the 1-byte element
+ * header it takes 21 bytes, padded to 24. */
+GST_START_TEST (test_pay_mtu_with_header_extension)
+{
+  const guint mtu = 1200;
+  const gsize frame_size = 4000;
+  GstHarness *h =
+      gst_harness_new_parse ("rtpvp9pay mtu=1200 parse-frames=false");
+  GstRTPHeaderExtension *ext;
+  GstElement *pay;
+  guint frame;
+
+  ext = GST_RTP_HEADER_EXTENSION (gst_element_factory_make ("rtphdrextmid",
+          NULL));
+  fail_unless (ext != NULL);
+  gst_rtp_header_extension_set_id (ext, 1);
+  g_object_set (ext, "mid", "0123456789abcdef", NULL);
+  pay = gst_harness_find_element (h, "rtpvp9pay");
+  g_signal_emit_by_name (pay, "add-extension", ext);
+
+  gst_harness_set_src_caps_str (h, "video/x-vp9,width=320,height=240");
+
+  /* A key frame, whose first packet carries the scalability structure, then
+   * a delta frame */
+  for (frame = 0; frame < 2; frame++) {
+    GstBuffer *buffer;
+    guint i, n_packets;
+
+    buffer = gst_buffer_new_allocate (NULL, frame_size, NULL);
+    gst_buffer_memset (buffer, 0, 0, frame_size);
+    if (frame > 0)
+      GST_BUFFER_FLAG_SET (buffer, GST_BUFFER_FLAG_DELTA_UNIT);
+    fail_unless_equals_int (gst_harness_push (h, buffer), GST_FLOW_OK);
+
+    n_packets = gst_harness_buffers_in_queue (h);
+    fail_unless (n_packets > 1);
+    for (i = 0; i < n_packets; i++) {
+      GstRTPBuffer rtp = GST_RTP_BUFFER_INIT;
+      gpointer data;
+      guint size;
+
+      buffer = gst_harness_pull (h);
+      fail_unless (gst_buffer_get_size (buffer) <= mtu,
+          "packet %u of frame %u is %" G_GSIZE_FORMAT " bytes, larger than "
+          "the MTU", i, frame, gst_buffer_get_size (buffer));
+      /* The payloader fills the first packet up to the MTU */
+      if (i == 0)
+        fail_unless_equals_int (gst_buffer_get_size (buffer), mtu);
+
+      fail_unless (gst_rtp_buffer_map (buffer, GST_MAP_READ, &rtp));
+      fail_unless (gst_rtp_buffer_get_extension_onebyte_header (&rtp, 1, 0,
+              &data, &size));
+      fail_unless_equals_int (size, 16);
+      gst_rtp_buffer_unmap (&rtp);
+      gst_buffer_unref (buffer);
+    }
+  }
+
+  gst_object_unref (pay);
+  gst_object_unref (ext);
+  gst_harness_teardown (h);
+}
+
+GST_END_TEST;
+
+/* A frame that only shows an earlier frame (show_existing_frame) is parsed
+ * too, and the payloader must unmap it like any other frame */
+GST_START_TEST (test_pay_show_existing_frame)
+{
+  /* frame_marker 0b10, profile 0, show_existing_frame 1,
+   * frame_to_show_map_idx 0 */
+  const guint8 show_existing_frame[] = { 0x88, 0x00, 0x00 };
+  GstHarness *h = gst_harness_new_parse ("rtpvp9pay parse-frames=true");
+  GstRTPBuffer rtp = GST_RTP_BUFFER_INIT;
+  GstBuffer *buffer;
+  GstMemory *mem;
+
+  gst_harness_set_src_caps_str (h, "video/x-vp9");
+
+  buffer = gst_buffer_new_memdup (show_existing_frame,
+      sizeof (show_existing_frame));
+  GST_BUFFER_FLAG_SET (buffer, GST_BUFFER_FLAG_DELTA_UNIT);
+  mem = gst_memory_ref (gst_buffer_peek_memory (buffer, 0));
+  fail_unless_equals_int (gst_harness_push (h, buffer), GST_FLOW_OK);
+
+  /* The frame goes out in one packet */
+  fail_unless_equals_int (gst_harness_buffers_in_queue (h), 1);
+  buffer = gst_harness_pull (h);
+  fail_unless (gst_rtp_buffer_map (buffer, GST_MAP_READ, &rtp));
+  fail_unless (gst_rtp_buffer_get_marker (&rtp));
+  fail_unless_equals_int (gst_rtp_buffer_get_payload_len (&rtp),
+      1 + sizeof (show_existing_frame));
+  fail_unless_equals_int (memcmp ((guint8 *)
+          gst_rtp_buffer_get_payload (&rtp) + 1, show_existing_frame,
+          sizeof (show_existing_frame)), 0);
+  gst_rtp_buffer_unmap (&rtp);
+  gst_buffer_unref (buffer);
+
+  /* Nothing but this test holds the memory of the frame any more. A mapping
+   * the payloader did not undo would hold a reference to it. */
+  ASSERT_MINI_OBJECT_REFCOUNT (mem, "frame memory", 1);
+  gst_memory_unref (mem);
+
+  gst_harness_teardown (h);
+}
+
+GST_END_TEST;
+
 
 static Suite *
 rtpvp9_suite (void)
@@ -607,6 +717,8 @@ rtpvp9_suite (void)
 
   suite_add_tcase (s, (tc_chain = tcase_create ("vp9pay")));
   tcase_add_test (tc_chain, test_pay_delta_unit_flag);
+  tcase_add_test (tc_chain, test_pay_mtu_with_header_extension);
+  tcase_add_test (tc_chain, test_pay_show_existing_frame);
 
   suite_add_tcase (s, (tc_chain =
           tcase_create ("vp9pay-ss-resolution-profile")));

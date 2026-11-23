@@ -50,6 +50,9 @@ typedef struct _GstRtpDummyPayClass GstRtpDummyPayClass;
 struct _GstRtpDummyPay
 {
   GstRTPBasePayload payload;
+  /* What gst_rtp_base_payload_get_extension_header_size() returned while
+   * the payloader handled the last buffer */
+  gsize extension_header_size;
 };
 
 struct _GstRtpDummyPayClass
@@ -112,6 +115,9 @@ gst_rtp_dummy_pay_handle_buffer (GstRTPBasePayload * pay, GstBuffer * buffer)
   GstBuffer *paybuffer;
 
   GST_LOG ("payloading %" GST_PTR_FORMAT, buffer);
+
+  GST_RTP_DUMMY_PAY (pay)->extension_header_size =
+      gst_rtp_base_payload_get_extension_header_size (pay);
 
   if (!gst_pad_has_current_caps (GST_RTP_BASE_PAYLOAD_SRCPAD (pay))) {
     if (!gst_rtp_base_payload_set_outcaps (GST_RTP_BASE_PAYLOAD (pay),
@@ -2137,6 +2143,77 @@ GST_START_TEST (rtp_base_payload_multiple_exts)
 
 GST_END_TEST;
 
+/* Pushes buffer @k through the payloader of @state and returns what
+ * gst_rtp_base_payload_get_extension_header_size() returned while the
+ * payloader handled it. The max size of an extension may depend on the input
+ * buffer, so the size is only known while the payloader handles one. */
+static gsize
+push_for_extension_header_size (State * state, guint k)
+{
+  push_buffer (state, "pts", k * GST_SECOND, NULL);
+  return GST_RTP_DUMMY_PAY (state->element)->extension_header_size;
+}
+
+/* gst_rtp_base_payload_get_extension_header_size() returns the most room the
+ * header extensions can take in a packet, the room set_headers() reserves:
+ * the 4 bytes that start the header extension, then an element header and
+ * the max size of every extension, padded to a multiple of 4 bytes.
+ * Payloaders subtract it from the MTU when they cut a frame into packets. */
+GST_START_TEST (rtp_base_payload_extension_header_size)
+{
+  GstRTPHeaderExtension *ext1, *ext2;
+  State *state;
+  guint k = 0;
+
+  state = create_payloader ("application/x-rtp", &sinktmpl, NULL);
+  set_state (state, GST_STATE_PLAYING);
+
+  /* No header extension takes no room */
+  fail_unless_equals_int (push_for_extension_header_size (state, k++), 0);
+
+  /* One-byte form: 4 + 1 + 16, padded to 24 */
+  ext1 = rtp_dummy_hdr_ext_new ();
+  GST_RTP_DUMMY_HDR_EXT (ext1)->max_size = 16;
+  gst_rtp_header_extension_set_id (ext1, 1);
+  g_signal_emit_by_name (state->element, "add-extension", ext1);
+  fail_unless_equals_int (push_for_extension_header_size (state, k++), 24);
+
+  /* 4 + 1 + 16 + 1 + 1, padded to 24 */
+  ext2 = rtp_dummy_hdr_ext_new ();
+  gst_rtp_header_extension_set_id (ext2, 2);
+  g_signal_emit_by_name (state->element, "add-extension", ext2);
+  fail_unless_equals_int (push_for_extension_header_size (state, k++), 24);
+
+  /* An extension that only supports the two-byte form makes every element
+   * header 2 bytes: 4 + 2 + 16 + 2 + 1, padded to 28 */
+  GST_RTP_DUMMY_HDR_EXT (ext2)->supported_flags =
+      GST_RTP_HEADER_EXTENSION_TWO_BYTE;
+  fail_unless_equals_int (push_for_extension_header_size (state, k++), 28);
+
+  /* So does an ID above 14 */
+  GST_RTP_DUMMY_HDR_EXT (ext2)->supported_flags =
+      GST_RTP_HEADER_EXTENSION_ONE_BYTE | GST_RTP_HEADER_EXTENSION_TWO_BYTE;
+  gst_rtp_header_extension_set_id (ext2, 15);
+  fail_unless_equals_int (push_for_extension_header_size (state, k++), 28);
+
+  /* And a max size above 16 bytes: 4 + 2 + 17 + 2 + 1, padded to 28 */
+  gst_rtp_header_extension_set_id (ext2, 2);
+  GST_RTP_DUMMY_HDR_EXT (ext1)->max_size = 17;
+  fail_unless_equals_int (push_for_extension_header_size (state, k++), 28);
+
+  g_signal_emit_by_name (state->element, "clear-extensions");
+  fail_unless_equals_int (push_for_extension_header_size (state, k++), 0);
+
+  set_state (state, GST_STATE_NULL);
+  validate_buffers_received (k);
+
+  gst_object_unref (ext1);
+  gst_object_unref (ext2);
+  destroy_payloader (state);
+}
+
+GST_END_TEST;
+
 static GstStaticPadTemplate sinktmpl_with_extmap_str =
 GST_STATIC_PAD_TEMPLATE ("sink",
     GST_PAD_SINK,
@@ -2410,6 +2487,7 @@ rtp_basepayloading_suite (void)
   tcase_add_test (tc_chain, rtp_base_payload_two_byte_hdr_ext);
   tcase_add_test (tc_chain, rtp_base_payload_clear_extensions);
   tcase_add_test (tc_chain, rtp_base_payload_multiple_exts);
+  tcase_add_test (tc_chain, rtp_base_payload_extension_header_size);
   tcase_add_test (tc_chain, rtp_base_payload_caps_request);
   tcase_add_test (tc_chain, rtp_base_payload_caps_request_ignored);
   tcase_add_test (tc_chain, rtp_base_payload_extensions_in_output_caps);

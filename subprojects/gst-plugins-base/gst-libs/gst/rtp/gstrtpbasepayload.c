@@ -2456,22 +2456,34 @@ gst_rtp_base_payload_get_source_count (GstRTPBasePayload * payload,
  * gst_rtp_base_payload_get_extension_header_size:
  * @payload: a #GstRTPBasePayload
  *
- * Calculate the total size of the RTP header extensions configured on
- * @payload, rounded up to a multiple of 4 bytes.
+ * Calculate the most room the RTP header extensions configured on @payload
+ * can take in a packet: the 4 bytes that start the header extension, then
+ * every element with its header, padded to a multiple of 4 bytes. This is
+ * the most that the header extensions can add to a packet.
  *
- * Returns: The size in bytes of the RTP header extensions.
+ * Returns: The size in bytes of the RTP header extension, or 0 when @payload
+ * has no header extensions.
  */
 gsize
 gst_rtp_base_payload_get_extension_header_size (GstRTPBasePayload * payload)
 {
   guint unit_size = 0;
   HeaderExt hdrext = { NULL, };
+  gsize n_exts, extlen;
+
   hdrext.payload = payload;
+  /* As in set_headers(): each extension clears the flags it does not
+   * support */
+  hdrext.flags =
+      GST_RTP_HEADER_EXTENSION_ONE_BYTE | GST_RTP_HEADER_EXTENSION_TWO_BYTE;
   GST_OBJECT_LOCK (payload);
-  gsize extlen = payload->priv->header_exts->len;
+  n_exts = payload->priv->header_exts->len;
   g_ptr_array_foreach (payload->priv->header_exts,
       (GFunc) determine_header_extension_flags_size, &hdrext);
   GST_OBJECT_UNLOCK (payload);
+
+  if (n_exts == 0)
+    return 0;
 
   if (hdrext.flags & GST_RTP_HEADER_EXTENSION_ONE_BYTE) {
     unit_size = 1;
@@ -2481,8 +2493,8 @@ gst_rtp_base_payload_get_extension_header_size (GstRTPBasePayload * payload)
     unit_size = 0;
   }
 
-  extlen = unit_size * extlen + hdrext.allocated_size;
+  extlen = unit_size * n_exts + hdrext.allocated_size;
 
-  return ((extlen / 4) + ((extlen % 4) ? 1 : 0)) * 4;
+  return 4 + ((extlen / 4) + ((extlen % 4) ? 1 : 0)) * 4;
 }
 
