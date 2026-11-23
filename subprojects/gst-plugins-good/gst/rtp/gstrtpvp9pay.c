@@ -310,9 +310,10 @@ gst_rtp_vp9_pay_parse_frame (GstRtpVP9Pay * self, GstBuffer * buffer,
   if (!gst_bit_reader_get_bits_uint32 (&reader, &tmp, 1))
     goto error;
   if (tmp) {
+    /* frame to show map idx */
     if (!gst_bit_reader_skip (&reader, 3))
       goto error;
-    return TRUE;
+    goto done;
   }
 
   /* frame type */
@@ -377,7 +378,7 @@ gst_rtp_vp9_pay_parse_frame (GstRtpVP9Pay * self, GstBuffer * buffer,
         self->height);
   }
 
-
+done:
   gst_buffer_unmap (buffer, &map);
   return TRUE;
 

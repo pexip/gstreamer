@@ -665,6 +665,49 @@ GST_START_TEST (test_pay_mtu_with_header_extension)
 
 GST_END_TEST;
 
+/* A frame that only shows an earlier frame (show_existing_frame) is parsed
+ * too, and the payloader must unmap it like any other frame */
+GST_START_TEST (test_pay_show_existing_frame)
+{
+  /* frame_marker 0b10, profile 0, show_existing_frame 1,
+   * frame_to_show_map_idx 0 */
+  const guint8 show_existing_frame[] = { 0x88, 0x00, 0x00 };
+  GstHarness *h = gst_harness_new_parse ("rtpvp9pay parse-frames=true");
+  GstRTPBuffer rtp = GST_RTP_BUFFER_INIT;
+  GstBuffer *buffer;
+  GstMemory *mem;
+
+  gst_harness_set_src_caps_str (h, "video/x-vp9");
+
+  buffer = gst_buffer_new_memdup (show_existing_frame,
+      sizeof (show_existing_frame));
+  GST_BUFFER_FLAG_SET (buffer, GST_BUFFER_FLAG_DELTA_UNIT);
+  mem = gst_memory_ref (gst_buffer_peek_memory (buffer, 0));
+  fail_unless_equals_int (gst_harness_push (h, buffer), GST_FLOW_OK);
+
+  /* The frame goes out in one packet */
+  fail_unless_equals_int (gst_harness_buffers_in_queue (h), 1);
+  buffer = gst_harness_pull (h);
+  fail_unless (gst_rtp_buffer_map (buffer, GST_MAP_READ, &rtp));
+  fail_unless (gst_rtp_buffer_get_marker (&rtp));
+  fail_unless_equals_int (gst_rtp_buffer_get_payload_len (&rtp),
+      1 + sizeof (show_existing_frame));
+  fail_unless_equals_int (memcmp ((guint8 *)
+          gst_rtp_buffer_get_payload (&rtp) + 1, show_existing_frame,
+          sizeof (show_existing_frame)), 0);
+  gst_rtp_buffer_unmap (&rtp);
+  gst_buffer_unref (buffer);
+
+  /* Nothing but this test holds the memory of the frame any more. A mapping
+   * the payloader did not undo would hold a reference to it. */
+  ASSERT_MINI_OBJECT_REFCOUNT (mem, "frame memory", 1);
+  gst_memory_unref (mem);
+
+  gst_harness_teardown (h);
+}
+
+GST_END_TEST;
+
 
 static Suite *
 rtpvp9_suite (void)
@@ -675,6 +718,7 @@ rtpvp9_suite (void)
   suite_add_tcase (s, (tc_chain = tcase_create ("vp9pay")));
   tcase_add_test (tc_chain, test_pay_delta_unit_flag);
   tcase_add_test (tc_chain, test_pay_mtu_with_header_extension);
+  tcase_add_test (tc_chain, test_pay_show_existing_frame);
 
   suite_add_tcase (s, (tc_chain =
           tcase_create ("vp9pay-ss-resolution-profile")));
