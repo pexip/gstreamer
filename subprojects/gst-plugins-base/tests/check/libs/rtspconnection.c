@@ -712,6 +712,126 @@ GST_START_TEST (test_rtspconnection_connect)
 
 GST_END_TEST;
 
+typedef struct
+{
+  GSocketListener *listener;
+  guint16 port;
+  gchar *get_request;
+  gchar *post_request;
+  gboolean success;
+} TunnelAuthTestData;
+
+static gchar *
+read_http_request (GSocketConnection *connection)
+{
+  GDataInputStream *input;
+  GString *request;
+  gchar *line;
+
+  input = g_data_input_stream_new (g_io_stream_get_input_stream
+      (G_IO_STREAM (connection)));
+  g_data_input_stream_set_newline_type (input, G_DATA_STREAM_NEWLINE_TYPE_CR_LF);
+  request = g_string_new (NULL);
+  while ((line = g_data_input_stream_read_line (input, NULL, NULL, NULL))) {
+    if (*line == '\0') {
+      g_free (line);
+      break;
+    }
+    g_string_append_printf (request, "%s\n", line);
+    g_free (line);
+  }
+  g_object_unref (input);
+
+  return g_string_free (request, FALSE);
+}
+
+static gpointer
+tunnel_auth_server_thread (gpointer user_data)
+{
+  TunnelAuthTestData *data = user_data;
+  GSocketConnection *get_connection;
+  GSocketConnection *post_connection;
+  GOutputStream *output;
+  const gchar response[] =
+      "HTTP/1.0 200 OK\r\nX-Server-IP-Address: 127.0.0.2\r\n\r\n";
+  gsize written;
+
+  get_connection = g_socket_listener_accept (data->listener, NULL, NULL, NULL);
+  if (get_connection == NULL)
+    return NULL;
+
+  data->get_request = read_http_request (get_connection);
+  output = g_io_stream_get_output_stream (G_IO_STREAM (get_connection));
+  data->success = g_output_stream_write_all (output, response,
+      sizeof (response) - 1, &written, NULL, NULL) &&
+      written == sizeof (response) - 1;
+  if (!data->success) {
+    g_object_unref (get_connection);
+    return NULL;
+  }
+
+  post_connection = g_socket_listener_accept (data->listener, NULL, NULL, NULL);
+  if (post_connection == NULL) {
+    data->success = FALSE;
+    g_object_unref (get_connection);
+    return NULL;
+  }
+  data->post_request = read_http_request (post_connection);
+  g_object_unref (post_connection);
+  g_object_unref (get_connection);
+
+  return NULL;
+}
+
+GST_START_TEST (test_rtspconnection_tunnel_x_server_auth)
+{
+  TunnelAuthTestData data = { 0, };
+  GstRTSPConnection *rtsp_conn = NULL;
+  GstRTSPUrl *url = NULL;
+  GThread *server_thread;
+  GError *error = NULL;
+  gchar *path;
+  GstRTSPResult res;
+
+  data.listener = g_socket_listener_new ();
+  data.port = g_socket_listener_add_any_inet_port (data.listener, NULL,
+      &error);
+  fail_unless (data.port != 0, "%s", error ? error->message : "no port");
+  g_clear_error (&error);
+
+  path = g_strdup_printf ("rtsp://127.0.0.1:%u/stream", data.port);
+  fail_unless (gst_rtsp_url_parse (path, &url) == GST_RTSP_OK);
+  g_free (path);
+  fail_unless (gst_rtsp_connection_create (url, &rtsp_conn) == GST_RTSP_OK);
+  gst_rtsp_connection_set_tunneled (rtsp_conn, TRUE);
+  fail_unless (gst_rtsp_connection_set_auth (rtsp_conn, GST_RTSP_AUTH_BASIC,
+          "user", "password") == GST_RTSP_OK);
+
+  server_thread = g_thread_new ("tunnel auth server",
+      tunnel_auth_server_thread, &data);
+  res = gst_rtsp_connection_connect_usec (rtsp_conn, 5 * G_USEC_PER_SEC);
+  if (res != GST_RTSP_OK_REDIRECT)
+    g_socket_listener_close (data.listener);
+  g_thread_join (server_thread);
+
+  fail_unless_equals_int (res, GST_RTSP_OK_REDIRECT);
+  fail_unless (data.success);
+  fail_unless (data.get_request != NULL);
+  fail_unless (data.post_request != NULL);
+  fail_unless (g_strstr_len (data.get_request, -1,
+          "Authorization: Basic ") != NULL);
+  fail_if (g_strstr_len (data.post_request, -1, "Authorization:") != NULL);
+
+  gst_rtsp_url_free (url);
+  fail_unless (gst_rtsp_connection_close (rtsp_conn) == GST_RTSP_OK);
+  fail_unless (gst_rtsp_connection_free (rtsp_conn) == GST_RTSP_OK);
+  g_object_unref (data.listener);
+  g_free (data.get_request);
+  g_free (data.post_request);
+}
+
+GST_END_TEST;
+
 GST_START_TEST (test_rtspconnection_poll)
 {
   GSocketConnection *conn1 = NULL;
@@ -940,6 +1060,7 @@ rtspconnection_suite (void)
   tcase_add_test (tc_chain, test_rtspconnection_send_receive);
   tcase_add_test (tc_chain, test_rtspconnection_send_receive_check_headers);
   tcase_add_test (tc_chain, test_rtspconnection_connect);
+  tcase_add_test (tc_chain, test_rtspconnection_tunnel_x_server_auth);
   tcase_add_test (tc_chain, test_rtspconnection_poll);
   tcase_add_test (tc_chain, test_rtspconnection_backlog);
   tcase_add_test (tc_chain, test_rtspconnection_ip);

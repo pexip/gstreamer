@@ -255,6 +255,7 @@ struct _GstRTSPSrc {
   guint             rtp_blocksize;
   gchar            *user_id;
   gchar            *user_pw;
+  guint             auth_methods;
   gint              buffer_mode;
   GstRTSPRange      client_port_range;
   gint              udp_buffer_size;
@@ -293,6 +294,9 @@ struct _GstRTSPSrc {
   gchar             *content_base;
   GstRTSPLowerTrans  cur_protocols;
   gboolean           tried_url_auth;
+  /* the location the application configured, without the redirects
+   * followed since: credentials are only sent to its origin */
+  GstRTSPUrl        *auth_origin;
   gchar             *addr;
   gboolean           need_redirect;
   GstRTSPTimeRange  *range;
