@@ -46,7 +46,7 @@ void rtp_twcc_stats_set_sock_ts (TWCCStatsManager * stats_manager,
     guint16 seqnum, GstClockTime sock_ts);
 
 void rtp_twcc_manager_tx_start_feedback (TWCCStatsManager * stats_manager);
-void rtp_twcc_stats_pkt_feedback (TWCCStatsManager * stats_manager,
+gboolean rtp_twcc_stats_pkt_feedback (TWCCStatsManager * stats_manager,
     guint16 seqnum, GstClockTime remote_ts, GstClockTime current_time,
     TWCCPktState status);
 void rtp_twcc_manager_tx_end_feedback (TWCCStatsManager * stats_manager);
@@ -57,4 +57,9 @@ void rtp_twcc_stats_check_for_lost_packets (TWCCStatsManager * statsman,
     guint16 base_seqnum, guint16 packet_count, guint8 fb_pkt_count);
 
 guint rtp_twcc_stats_queue_len (TWCCStatsManager * stats_manager);
+
+/* Returns FALSE when nothing has been sent (or everything was evicted),
+   otherwise the first and last TWCC seqnum still in the send history. */
+gboolean rtp_twcc_stats_history_seqnum_range (TWCCStatsManager * stats_manager,
+    guint16 * first, guint16 * last);
 #endif /* __RTP_TWCC_STATS_H__ */

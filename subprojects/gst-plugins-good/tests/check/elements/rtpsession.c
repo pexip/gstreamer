@@ -8541,6 +8541,129 @@ GST_START_TEST (test_twcc_seqnum_wrap_gap_detection)
 
 GST_END_TEST;
 
+static void
+_count_rtptwcc_warns_log_func (GstDebugCategory * category,
+    GstDebugLevel level, G_GNUC_UNUSED const gchar * file,
+    G_GNUC_UNUSED const gchar * function, G_GNUC_UNUSED gint line,
+    G_GNUC_UNUSED GObject * object, G_GNUC_UNUSED GstDebugMessage * message,
+    gpointer user_data)
+{
+  if (level == GST_LEVEL_WARNING &&
+      g_strcmp0 (gst_debug_category_get_name (category), "rtptwcc") == 0)
+    g_atomic_int_inc ((gint *) user_data);
+}
+
+/* After a gap of more than 32768 packets some endpoints unwraps backwards and keeps
+ * reporting a stale block "ahead" of what we have sent: feedback starting at
+ * our in-flight packets, a long not-received run past our latest packet, then
+ * the stale block. */
+GST_START_TEST (test_twcc_feedback_beyond_sent)
+{
+  SessionHarness *h = session_harness_new ();
+  GstStructure *twcc_stats;
+  gint logged_warnings = 0;
+  gdouble loss_pct;
+  GArray *fci;
+  guint i;
+  const guint nbuffs = 20;
+  const guint16 base = BASE_SEQNUM + nbuffs - 10;
+  const guint16 count = 10 + 3000 + 4;
+  guint8 phantom[] = {
+    base >> 8, base & 0xff,
+    count >> 8, count & 0xff,
+    0x00, 0x00, 0x00,           /* reference time */
+    0x00,                       /* feedback packet count */
+    0x0b, 0xc2,                 /* run-length, not received: 3010 */
+    0x60, 0x04,                 /* run-length, received without delta: 4 */
+  };
+
+  session_harness_add_twcc_caps_for_pt (h, TEST_BUF_PT);
+  for (i = 0; i < nbuffs; i++) {
+    session_harness_send_rtp (h, generate_twcc_send_buffer (i, FALSE));
+    session_harness_advance_and_crank (h, TEST_BUF_DURATION);
+  }
+
+  gst_debug_set_threshold_for_name ("rtptwcc", GST_LEVEL_WARNING);
+  gst_debug_add_log_function (_count_rtptwcc_warns_log_func, &logged_warnings,
+      NULL);
+  /* the receiver repeats it on every report interval */
+  for (i = 0; i < 3; i++)
+    session_harness_recv_rtcp (h,
+        generate_twcc_feedback_rtcp (phantom, sizeof (phantom)));
+  gst_debug_remove_log_function_by_data (&logged_warnings);
+  gst_debug_unset_threshold_for_name ("rtptwcc");
+  fail_unless_equals_int (logged_warnings, 1);
+
+  /* the 10 in-flight packets are not lost */
+  twcc_stats = session_harness_get_twcc_stats_full (h,
+      nbuffs * TEST_BUF_DURATION, 0);
+  fail_unless (gst_structure_get_double (twcc_stats, "packet-loss-pct",
+          &loss_pct));
+  fail_unless_equals_float (loss_pct, 0.0);
+  gst_structure_free (twcc_stats);
+
+  /* a normal feedback acknowledging all of them still counts */
+  fci = cook_fci (BASE_SEQNUM, 0, nbuffs, TRUE);
+  session_harness_recv_rtcp (h, generate_twcc_feedback_rtcp ((guint8 *)
+          fci->data, g_array_get_element_size (fci) * fci->len));
+  g_array_free (fci, TRUE);
+  twcc_stats = session_harness_get_twcc_stats_full (h,
+      nbuffs * TEST_BUF_DURATION, 0);
+  twcc_verify_stats (twcc_stats, TEST_BUF_BPS, TEST_BUF_BPS, nbuffs, nbuffs,
+      0.f, 0);
+  gst_structure_free (twcc_stats);
+
+  session_harness_free (h);
+}
+
+GST_END_TEST;
+
+/* In a feedback that reaches past our latest packet, not-received statuses
+ * followed by one of our received packets are still real losses. */
+GST_START_TEST (test_twcc_feedback_beyond_sent_keeps_loss)
+{
+  SessionHarness *h = session_harness_new ();
+  GstStructure *twcc_stats;
+  guint packets_sent, packets_recv;
+  gdouble loss_pct;
+  guint i;
+  const guint nbuffs = 20;
+  const guint16 count = 5 + 3 + 2 + 2000;
+  guint8 fci[] = {
+    BASE_SEQNUM >> 8, BASE_SEQNUM & 0xff,
+    count >> 8, count & 0xff,
+    0x00, 0x00, 0x00,           /* reference time */
+    0x00,                       /* feedback packet count */
+    0x60, 0x05,                 /* received without delta: 0..4 */
+    0x00, 0x03,                 /* not received: 5..7 */
+    0x60, 0x02,                 /* received without delta: 8..9 */
+    0x07, 0xd0,                 /* not received: 10..19, then never sent */
+  };
+
+  session_harness_add_twcc_caps_for_pt (h, TEST_BUF_PT);
+  for (i = 0; i < nbuffs; i++) {
+    session_harness_send_rtp (h, generate_twcc_send_buffer (i, FALSE));
+    session_harness_advance_and_crank (h, TEST_BUF_DURATION);
+  }
+
+  session_harness_recv_rtcp (h, generate_twcc_feedback_rtcp (fci,
+          sizeof (fci)));
+
+  /* 5..7 lost, 10..19 untouched */
+  twcc_stats = session_harness_get_twcc_stats_full (h,
+      nbuffs * TEST_BUF_DURATION, 0);
+  fail_unless (gst_structure_get (twcc_stats,
+          "packets-sent", G_TYPE_UINT, &packets_sent,
+          "packets-recv", G_TYPE_UINT, &packets_recv,
+          "packet-loss-pct", G_TYPE_DOUBLE, &loss_pct, NULL));
+  fail_unless_equals_int (packets_sent, 10);
+  fail_unless_equals_int (packets_recv, 7);
+  fail_unless_equals_float (loss_pct, 30.0);
+  gst_structure_free (twcc_stats);
+
+  session_harness_free (h);
+}
+
 /*
  * Stress-test for the race between rtp_twcc_stats_sent_pkt() (called from the
  * session thread under RTP_SESSION_LOCK) and rtp_twcc_stats_set_sock_ts()
@@ -9551,6 +9674,8 @@ rtpsession_suite (void)
   tcase_add_test (tc_chain, test_twcc_sent_packets_wrap);
   tcase_add_test (tc_chain, test_twcc_keep_queue_size);
   tcase_add_test (tc_chain, test_twcc_seqnum_wrap_gap_detection);
+  tcase_add_test (tc_chain, test_twcc_feedback_beyond_sent);
+  tcase_add_test (tc_chain, test_twcc_feedback_beyond_sent_keeps_loss);
   tcase_add_test (tc_chain, test_twcc_set_sock_ts_race);
   tcase_add_test (tc_chain, test_twcc_set_sock_ts_stats_race);
 

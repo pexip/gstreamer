@@ -46,6 +46,8 @@ GST_DEBUG_CATEGORY (rtp_twcc_debug);
 
 #define MAX_PACKETS_PER_FEEDBACK 65536
 
+#define UNKNOWN_FEEDBACK_LOG_INTERVAL GST_SECOND
+
 typedef enum
 {
   RTP_TWCC_CHUNK_TYPE_RUN_LENGTH = 0,
@@ -157,6 +159,9 @@ struct _RTPTWCCManager
   RTPTWCCManagerCaps caps_cb;
   gpointer caps_ud;
 
+  GstClockTime unknown_fb_log_time;
+  guint unknown_fb_suppressed;
+
   TWCCStatsManager *stats_manager;
 };
 
@@ -201,6 +206,7 @@ rtp_twcc_manager_init (RTPTWCCManager * twcc)
      if a future timestamp is earlier than the first. */
   twcc->remote_ts_base = G_GINT64_CONSTANT (1) << 24;
   twcc->last_report_time = GST_CLOCK_TIME_NONE;
+  twcc->unknown_fb_log_time = GST_CLOCK_TIME_NONE;
 
   twcc->stats_manager = rtp_twcc_stats_manager_new (G_OBJECT (twcc));
 }
@@ -1154,6 +1160,36 @@ _parse_status_vector_chunk (GstBitReader * reader, GArray * parsed_packets,
   return num_bits;
 }
 
+static inline gboolean
+_seqnum_in_range (guint16 seqnum, guint16 first, guint16 last)
+{
+  return (guint16) (seqnum - first) <= (guint16) (last - first);
+}
+
+static void
+_log_unknown_feedback (RTPTWCCManager * twcc, GstClockTime current_time,
+    guint16 base_seqnum, guint16 packet_count, guint n_unknown,
+    guint16 first_unknown, guint16 last_unknown, guint n_unknown_recv,
+    guint n_in_flight)
+{
+  if (GST_CLOCK_TIME_IS_VALID (twcc->unknown_fb_log_time) &&
+      GST_CLOCK_TIME_IS_VALID (current_time) &&
+      current_time <
+      twcc->unknown_fb_log_time + UNKNOWN_FEEDBACK_LOG_INTERVAL) {
+    twcc->unknown_fb_suppressed++;
+    return;
+  }
+
+  GST_WARNING_OBJECT (twcc, "Feedback #%u+%u: %u statuses on packets not in "
+      "the send history (#%u..#%u, %u reported received), ignored %u "
+      "not-received statuses on in-flight packets, %u such feedbacks "
+      "suppressed", base_seqnum, packet_count, n_unknown, first_unknown,
+      last_unknown, n_unknown_recv, n_in_flight, twcc->unknown_fb_suppressed);
+
+  twcc->unknown_fb_log_time = current_time;
+  twcc->unknown_fb_suppressed = 0;
+}
+
 static void
 _add_parsed_packet_to_value_array (GValueArray * array, ParsedPacket * pkt)
 {
@@ -1186,6 +1222,16 @@ rtp_twcc_manager_parse_fci (RTPTWCCManager * twcc,
   guint packets_parsed = 0;
   guint fci_parsed;
   guint i;
+  guint16 first_sent = 0;
+  guint16 last_sent = 0;
+  gboolean have_history;
+  gboolean report_beyond_sent;
+  gint last_sent_recv_idx = -1;
+  guint n_unknown = 0;
+  guint n_unknown_recv = 0;
+  guint n_in_flight = 0;
+  guint16 first_unknown = 0;
+  guint16 last_unknown = 0;
 
   if (fci_length < 10) {
     GST_WARNING ("Malformed TWCC RTCP feedback packet");
@@ -1229,6 +1275,30 @@ rtp_twcc_manager_parse_fci (RTPTWCCManager * twcc,
           twcc->parsed_packets, seqnum_offset, remaining_packets);
     }
     fci_parsed += 2;
+  }
+
+  have_history = rtp_twcc_stats_history_seqnum_range (twcc->stats_manager,
+      &first_sent, &last_sent);
+A feedback reaching past our latest packet comes from a receiver whose
+     view of the seqnum space is broken, e.g. libwebrtc after a gap of more
+     than 32768 packets keeps reporting stale packets "ahead" of what we
+     send. Its not-received statuses for our in-flight packets only mean the
+     receiver hasn't seen them yet: count them as lost only up to the last
+     of our packets this feedback reports as received. *
+  /* The feedback covers packets the sender has not send yet.
+   * This could happen if the receiver has a broken view
+   * of seqnum space, e.g. after a long gap.
+   */
+  report_beyond_sent = have_history &&
+      (guint16) (last_sent + 1 - base_seqnum) < packet_count;
+  if (report_beyond_sent) {
+    for (i = 0; i < twcc->parsed_packets->len; i++) {
+      ParsedPacket *pkt =
+          &g_array_index (twcc->parsed_packets, ParsedPacket, i);
+      if (pkt->status != RTP_TWCC_PACKET_STATUS_NOT_RECV &&
+          _seqnum_in_range (pkt->seqnum, first_sent, last_sent))
+        last_sent_recv_idx = i;
+    }
   }
 
   rtp_twcc_manager_tx_start_feedback (twcc->stats_manager);
@@ -1298,11 +1368,28 @@ rtp_twcc_manager_parse_fci (RTPTWCCManager * twcc,
           pkt->seqnum, pkt->status);
     }
 
-    rtp_twcc_stats_pkt_feedback (twcc->stats_manager, pkt->seqnum,
-        pkt->remote_ts, current_time,
-        pkt->status == RTP_TWCC_PACKET_STATUS_NOT_RECV
-        ? RTP_TWCC_FECBLOCK_PKT_LOST : RTP_TWCC_FECBLOCK_PKT_RECEIVED);
+    if (report_beyond_sent && pkt->status == RTP_TWCC_PACKET_STATUS_NOT_RECV &&
+        (gint) i > last_sent_recv_idx &&
+        _seqnum_in_range (pkt->seqnum, first_sent, last_sent)) {
+      n_in_flight++;
+    } else if (!have_history ||
+        !_seqnum_in_range (pkt->seqnum, first_sent, last_sent) ||
+        !rtp_twcc_stats_pkt_feedback (twcc->stats_manager, pkt->seqnum,
+            pkt->remote_ts, current_time,
+            pkt->status == RTP_TWCC_PACKET_STATUS_NOT_RECV
+            ? RTP_TWCC_FECBLOCK_PKT_LOST : RTP_TWCC_FECBLOCK_PKT_RECEIVED)) {
+      if (n_unknown == 0)
+        first_unknown = pkt->seqnum;
+      last_unknown = pkt->seqnum;
+      n_unknown++;
+      if (pkt->status != RTP_TWCC_PACKET_STATUS_NOT_RECV)
+        n_unknown_recv++;
+    }
   }
+
+  if (n_unknown > 0)
+    _log_unknown_feedback (twcc, current_time, base_seqnum, packet_count,
+        n_unknown, first_unknown, last_unknown, n_unknown_recv, n_in_flight);
 
 done:
   rtp_twcc_manager_tx_end_feedback (twcc->stats_manager);
