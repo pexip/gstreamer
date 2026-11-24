@@ -129,6 +129,13 @@ test_caps_idle_src_start (GstBaseIdleSrc * base)
     /* give the streaming thread it kicked off time to push */
     g_usleep (50 * 1000);
   }
+
+  if (g_object_get_data (G_OBJECT (base), "fail-after-submit")) {
+    g_thread_join (g_thread_new ("submitter", submit_buffer_thread, base));
+    /* give a worker, if one got started, time to push */
+    g_usleep (50 * 1000);
+    return FALSE;
+  }
   return TRUE;
 }
 
@@ -286,6 +293,44 @@ GST_START_TEST (baseidlesrc_restart_with_busy_producers_keeps_order)
 
 GST_END_TEST;
 
+/* A start() that fails after another thread submitted data must not push
+ * anything: a worker would have to be waited for, and it can be blocked
+ * downstream. The data waits for a start() that works. */
+GST_START_TEST (baseidlesrc_failed_start_pushes_nothing)
+{
+  GstElement *src;
+  GstHarness *h = caps_idle_src_harness_new (&src);
+
+  g_object_set_data (G_OBJECT (src), "fail-after-submit",
+      GINT_TO_POINTER (TRUE));
+  fail_unless_equals_int (gst_element_set_state (src, GST_STATE_PLAYING),
+      GST_STATE_CHANGE_FAILURE);
+
+  g_mutex_lock (&seen_lock);
+  fail_unless_equals_string (seen->str, "");
+  g_mutex_unlock (&seen_lock);
+
+  /* The next start begins a new stream and nothing is left from the failed
+   * one */
+  g_object_set_data (G_OBJECT (src), "fail-after-submit", NULL);
+  fail_unless_equals_int (gst_element_set_state (src, GST_STATE_NULL),
+      GST_STATE_CHANGE_SUCCESS);
+  gst_harness_play (h);
+  gst_base_idle_src_submit_buffer (GST_BASE_IDLE_SRC (src),
+      gst_buffer_new_allocate (NULL, 100, NULL));
+  gst_buffer_unref (gst_harness_pull (h));
+
+  g_mutex_lock (&seen_lock);
+  fail_unless_equals_string (seen->str, "stream-start caps segment buffer ");
+  g_mutex_unlock (&seen_lock);
+
+  gst_harness_teardown (h);
+  g_object_unref (src);
+  g_string_free (seen, TRUE);
+}
+
+GST_END_TEST;
+
 static Suite *
 baseidlesrc_suite (void)
 {
@@ -297,6 +342,7 @@ baseidlesrc_suite (void)
   tcase_add_test (tc, baseidlesrc_submit_buffer);
   tcase_add_test (tc, baseidlesrc_submit_during_start_keeps_event_order);
   tcase_add_test (tc, baseidlesrc_restart_with_busy_producers_keeps_order);
+  tcase_add_test (tc, baseidlesrc_failed_start_pushes_nothing);
 
   return s;
 }

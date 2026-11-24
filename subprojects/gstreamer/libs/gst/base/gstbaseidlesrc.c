@@ -98,6 +98,7 @@ struct _GstBaseIdleSrcPrivate
   GQueue *obj_queue;
   GThread *thread;
   GMutex thread_lock;           /* protects thread */
+  gint starting;                /* start() is running, OBJECT_LOCK to set */
 };
 
 static GstElementClass *parent_class = NULL;
@@ -336,12 +337,18 @@ gboolean
 gst_base_idle_src_set_caps (GstBaseIdleSrc * src, GstCaps * caps)
 {
   GstBaseIdleSrcClass *bclass;
+  GstPad *pad = GST_BASE_IDLE_SRC_PAD (src);
   gboolean res = TRUE;
   GstCaps *current_caps;
 
   bclass = GST_BASE_IDLE_SRC_GET_CLASS (src);
 
-  current_caps = gst_pad_get_current_caps (GST_BASE_IDLE_SRC_PAD (src));
+  /* Looking at the current caps, setting new ones and queueing the CAPS event
+   * is one step. Another set_caps() in between could make a caps change be
+   * taken for the first one. The stream lock is recursive and the streaming
+   * path already holds it. */
+  GST_PAD_STREAM_LOCK (pad);
+  current_caps = gst_pad_get_current_caps (pad);
   if (current_caps && gst_caps_is_equal (current_caps, caps)) {
     GST_DEBUG_OBJECT (src, "New caps equal to old ones: %" GST_PTR_FORMAT,
         caps);
@@ -359,6 +366,7 @@ gst_base_idle_src_set_caps (GstBaseIdleSrc * src, GstCaps * caps)
 
   if (current_caps)
     gst_caps_unref (current_caps);
+  GST_PAD_STREAM_UNLOCK (pad);
 
   return res;
 }
@@ -1287,9 +1295,9 @@ gst_base_idle_src_func (gpointer user_data)
   GST_DEBUG_OBJECT (src, "Thread func started");
 
   GST_PAD_STREAM_LOCK (src->srcpad);
-  /* A worker started by a producer can get here after stop(), or while the
-   * next start() is still setting up. It must not negotiate or push anything
-   * then: running is published together with STREAM_START. */
+  /* A worker started by a producer can get here after stop(). It must not
+   * negotiate or push anything then: running is published together with
+   * STREAM_START. */
   if (!g_atomic_int_get (&src->running)) {
     GST_DEBUG_OBJECT (src, "Not running, nothing to do");
     GST_PAD_STREAM_UNLOCK (src->srcpad);
@@ -1320,6 +1328,17 @@ gst_base_idle_src_start_task (GstBaseIdleSrc * src, gboolean wait)
   /* Producers and start() can get here at the same time, and joining the same
    * GThread twice is a fatal error in GLib. */
   g_mutex_lock (&priv->thread_lock);
+  /* A producer must not start a worker once stop() has joined it, nothing
+   * would join that worker before the element goes away (stop() clears
+   * running before it takes thread_lock). Nor while start() is still running:
+   * its data waits for start() to start the worker, so that a start() that
+   * fails has no worker to wait for. */
+  if (!g_atomic_int_get (&src->running)
+      || g_atomic_int_get (&priv->starting)) {
+    g_mutex_unlock (&priv->thread_lock);
+    GST_DEBUG_OBJECT (src, "Not running, not starting a task");
+    return;
+  }
   /* if we already have an outstanding task, join it */
   if (priv->thread)
     g_thread_join (priv->thread);
@@ -1353,9 +1372,12 @@ gst_base_idle_src_check_pending_segment_unlocked (GstBaseIdleSrc * src)
 /* Queue @obj behind any pending SEGMENT, unless the source is not running. The
  * running check and the queueing happen in one critical section, so that a
  * producer racing with stop() can't leave anything in the queue for the next
- * start() to push ahead of its own events. */
+ * start() to push ahead of its own events. @start_worker tells whether the
+ * caller should start a worker: not while start() runs, it does that itself
+ * once the subclass is started. */
 static gboolean
-gst_base_idle_src_queue_data (GstBaseIdleSrc * src, GstMiniObject * obj)
+gst_base_idle_src_queue_data (GstBaseIdleSrc * src, GstMiniObject * obj,
+    gboolean * start_worker)
 {
   GST_OBJECT_LOCK (src);
   if (!g_atomic_int_get (&src->running)) {
@@ -1366,6 +1388,7 @@ gst_base_idle_src_queue_data (GstBaseIdleSrc * src, GstMiniObject * obj)
   gst_base_idle_src_check_pending_segment_unlocked (src);
   GST_LOG_OBJECT (src, "Queuing: %" GST_PTR_FORMAT, obj);
   g_queue_push_tail (src->priv->obj_queue, obj);
+  *start_worker = !g_atomic_int_get (&src->priv->starting);
   GST_OBJECT_UNLOCK (src);
 
   return TRUE;
@@ -1388,20 +1411,12 @@ gst_base_idle_src_new_stream_start (GstBaseIdleSrc * src)
   return event;
 }
 
-/* Join the worker and drop whatever is still queued. Callers must have
- * cleared running first, so that producers stop queueing new objects. */
+/* Drop whatever is still queued. */
 static void
-gst_base_idle_src_drain_and_join (GstBaseIdleSrc * src)
+gst_base_idle_src_drain_queue (GstBaseIdleSrc * src)
 {
   GstBaseIdleSrcPrivate *priv = src->priv;
   GstMiniObject *obj;
-
-  g_mutex_lock (&priv->thread_lock);
-  if (priv->thread) {
-    g_thread_join (priv->thread);
-    priv->thread = NULL;
-  }
-  g_mutex_unlock (&priv->thread_lock);
 
   GST_OBJECT_LOCK (src);
   while ((obj = g_queue_pop_head (priv->obj_queue))) {
@@ -1410,6 +1425,23 @@ gst_base_idle_src_drain_and_join (GstBaseIdleSrc * src)
     GST_OBJECT_LOCK (src);
   }
   GST_OBJECT_UNLOCK (src);
+}
+
+/* Join the worker and drop whatever is still queued. Callers must have
+ * cleared running first, so that producers stop queueing new objects. */
+static void
+gst_base_idle_src_drain_and_join (GstBaseIdleSrc * src)
+{
+  GstBaseIdleSrcPrivate *priv = src->priv;
+
+  g_mutex_lock (&priv->thread_lock);
+  if (priv->thread) {
+    g_thread_join (priv->thread);
+    priv->thread = NULL;
+  }
+  g_mutex_unlock (&priv->thread_lock);
+
+  gst_base_idle_src_drain_queue (src);
 }
 
 static gboolean
@@ -1434,6 +1466,7 @@ gst_base_idle_src_start (GstBaseIdleSrc * src)
   src->priv->segment_pending = TRUE;
   src->priv->segment_seqnum = gst_util_seqnum_next ();
   g_queue_push_head (src->priv->obj_queue, stream_start);
+  g_atomic_int_set (&src->priv->starting, TRUE);
   g_atomic_int_set (&src->running, TRUE);
   GST_OBJECT_UNLOCK (src);
 
@@ -1442,6 +1475,15 @@ gst_base_idle_src_start (GstBaseIdleSrc * src)
     result = bclass->start (src);
   else
     result = TRUE;
+
+  /* Data submitted meanwhile is only queued. If start() failed, running is
+   * cleared in the same step, so nothing more gets queued, and no worker has
+   * been started that would have to be joined. */
+  GST_OBJECT_LOCK (src);
+  if (!result)
+    g_atomic_int_set (&src->running, FALSE);
+  g_atomic_int_set (&src->priv->starting, FALSE);
+  GST_OBJECT_UNLOCK (src);
 
   if (!result)
     goto could_not_start;
@@ -1455,8 +1497,7 @@ could_not_start:
     GST_DEBUG_OBJECT (src, "could not start");
     /* Producers may have queued data in the meantime, don't leave it around
      * for the next start. */
-    g_atomic_int_set (&src->running, FALSE);
-    gst_base_idle_src_drain_and_join (src);
+    gst_base_idle_src_drain_queue (src);
     /* subclass is supposed to post a message but we post one as a fallback
      * just in case. We don't have to call _stop. */
     GST_ELEMENT_ERROR (src, CORE, STATE_CHANGE, (NULL), ("Failed to start"));
@@ -1548,22 +1589,28 @@ gst_base_idle_src_activate_mode (GstPad * pad, GstObject * parent,
  * @buffer: (transfer full): a #GstBuffer
  *
  * Subclasses can call this to submit a buffer to be pushed out later.
+ * Buffers submitted while the subclass' start() is running are pushed once it
+ * has returned, or dropped if it failed.
  *
  * Since: 1.22
  */
 void
 gst_base_idle_src_submit_buffer (GstBaseIdleSrc * src, GstBuffer * buffer)
 {
+  gboolean start_worker;
+
   g_return_if_fail (GST_IS_BASE_IDLE_SRC (src));
   g_return_if_fail (GST_IS_BUFFER (buffer));
 
-  if (!gst_base_idle_src_queue_data (src, GST_MINI_OBJECT_CAST (buffer))) {
+  if (!gst_base_idle_src_queue_data (src, GST_MINI_OBJECT_CAST (buffer),
+          &start_worker)) {
     GST_ERROR_OBJECT (src, "Sending buffer to stopped src is not valid");
     gst_buffer_unref (buffer);
     return;
   }
 
-  gst_base_idle_src_start_task (src, FALSE);
+  if (start_worker)
+    gst_base_idle_src_start_task (src, FALSE);
 }
 
 /**
@@ -1572,6 +1619,8 @@ gst_base_idle_src_submit_buffer (GstBaseIdleSrc * src, GstBuffer * buffer)
  * @buffer_list: (transfer full): a #GstBufferList
  *
  * Subclasses can call this to submit a buffer list to be pushed out later.
+ * Buffer lists submitted while the subclass' start() is running are pushed
+ * once it has returned, or dropped if it failed.
  *
  * Since: 1.22
  */
@@ -1579,19 +1628,23 @@ void
 gst_base_idle_src_submit_buffer_list (GstBaseIdleSrc * src,
     GstBufferList * buffer_list)
 {
+  gboolean start_worker;
+
   g_return_if_fail (GST_IS_BASE_IDLE_SRC (src));
   g_return_if_fail (GST_IS_BUFFER_LIST (buffer_list));
 
   GST_LOG_OBJECT (src, "%u buffers submitted in buffer list",
       gst_buffer_list_length (buffer_list));
 
-  if (!gst_base_idle_src_queue_data (src, GST_MINI_OBJECT_CAST (buffer_list))) {
+  if (!gst_base_idle_src_queue_data (src, GST_MINI_OBJECT_CAST (buffer_list),
+          &start_worker)) {
     GST_ERROR_OBJECT (src, "Sending bufferlist to stopped src is not valid");
     gst_buffer_list_unref (buffer_list);
     return;
   }
 
-  gst_base_idle_src_start_task (src, FALSE);
+  if (start_worker)
+    gst_base_idle_src_start_task (src, FALSE);
 }
 
 
