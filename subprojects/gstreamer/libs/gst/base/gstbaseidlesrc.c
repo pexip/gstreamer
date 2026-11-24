@@ -331,6 +331,10 @@ gst_base_idle_src_queue_caps (GstBaseIdleSrc * src, GstEvent * event,
  * Set new caps on the src source pad.
  * This *MUST* be called before submitting any buffers!
  *
+ * Whatever is queued is pushed right away, in the calling thread, also while
+ * the subclass' start() is running. Called from start(), this pushes
+ * stream-start and caps before start() has returned, even if it then fails.
+ *
  * Returns: %TRUE if the caps could be set
  */
 gboolean
@@ -1590,7 +1594,8 @@ gst_base_idle_src_activate_mode (GstPad * pad, GstObject * parent,
  *
  * Subclasses can call this to submit a buffer to be pushed out later.
  * Buffers submitted while the subclass' start() is running are pushed once it
- * has returned, or dropped if it failed.
+ * has returned, or dropped if it failed, unless gst_base_idle_src_set_caps()
+ * is called meanwhile: that pushes what is queued right away.
  *
  * Since: 1.22
  */
@@ -1620,7 +1625,9 @@ gst_base_idle_src_submit_buffer (GstBaseIdleSrc * src, GstBuffer * buffer)
  *
  * Subclasses can call this to submit a buffer list to be pushed out later.
  * Buffer lists submitted while the subclass' start() is running are pushed
- * once it has returned, or dropped if it failed.
+ * once it has returned, or dropped if it failed, unless
+ * gst_base_idle_src_set_caps() is called meanwhile: that pushes what is queued
+ * right away.
  *
  * Since: 1.22
  */
