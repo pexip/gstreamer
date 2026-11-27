@@ -1600,13 +1600,34 @@ rtp_twcc_stats_set_sock_ts (TWCCStatsManager * statsman,
   }
 }
 
+/* The send history is contiguous in TWCC seqnums: every stamped packet is
+   pushed at the tail and evictions only happen at the head. */
+gboolean
+rtp_twcc_stats_history_seqnum_range (TWCCStatsManager * statsman,
+    guint16 * first, guint16 * last)
+{
+  gboolean ret = FALSE;
+
+  SENT_PKT_LOCK (statsman);
+  if (!gst_vec_deque_is_empty (statsman->sent_packets)) {
+    SentPacket *head = gst_vec_deque_peek_head_struct (statsman->sent_packets);
+    SentPacket *tail = gst_vec_deque_peek_tail_struct (statsman->sent_packets);
+    *first = head->seqnum;
+    *last = tail->seqnum;
+    ret = TRUE;
+  }
+  SENT_PKT_UNLOCK (statsman);
+
+  return ret;
+}
+
 void
 rtp_twcc_manager_tx_start_feedback (TWCCStatsManager * statsman)
 {
   statsman->rtt = GST_CLOCK_TIME_NONE;
 }
 
-void
+gboolean
 rtp_twcc_stats_pkt_feedback (TWCCStatsManager * statsman,
     guint16 seqnum, GstClockTime remote_ts, GstClockTime current_time,
     TWCCPktState status)
@@ -1639,9 +1660,9 @@ rtp_twcc_stats_pkt_feedback (TWCCStatsManager * statsman,
         "received fb: %s", seqnum, _pkt_status_s (found->status),
         _pkt_status_s (status));
   } else {
-    GST_WARNING_OBJECT (statsman->parent, "Feedback on unknown packet #%u",
-        seqnum);
+    return FALSE;
   }
+  return TRUE;
 }
 
 void
@@ -1727,9 +1748,20 @@ void
 rtp_twcc_stats_check_for_lost_packets (TWCCStatsManager * statsman,
     guint16 base_seqnum, guint16 packet_count, guint8 fb_pkt_count)
 {
-  guint packets_lost;
+  guint16 first_sent = 0;
+  guint16 last_sent = 0;
+  gboolean have_history;
   gint8 fb_pkt_count_diff;
-  guint i;
+  gint from, to, history_len, i;
+
+  have_history =
+      rtp_twcc_stats_history_seqnum_range (statsman, &first_sent, &last_sent);
+
+  /* Feedback can't be about packets we have not sent yet: never expect the
+     next feedback to start beyond our latest packet. */
+  if (have_history &&
+      (guint16) (last_sent + 1 - base_seqnum) < packet_count)
+    packet_count = (guint16) (last_sent + 1 - base_seqnum);
 
   /* first packet */
   if (statsman->first_fci_parse) {
@@ -1767,9 +1799,20 @@ rtp_twcc_stats_check_for_lost_packets (TWCCStatsManager * statsman,
     goto done;
   }
 
-  packets_lost = (guint) seqnum_diff;
-  for (i = 0; i < packets_lost; i++) {
-    const guint16 seqnum = statsman->expected_parsed_seqnum + i;
+  if (!have_history)
+    goto done;
+
+  /* Only walk the part of the gap that is still in the send history,
+     anything outside it can't be found anyway. */
+  history_len = (guint16) (last_sent - first_sent) + 1;
+  from = gst_rtp_buffer_compare_seqnum (first_sent,
+      statsman->expected_parsed_seqnum);
+  to = from + seqnum_diff;
+  from = CLAMP (from, 0, history_len);
+  to = CLAMP (to, 0, history_len);
+
+  for (i = from; i < to; i++) {
+    const guint16 seqnum = first_sent + i;
     SentPacket *found;
     gboolean updated = FALSE;
 
