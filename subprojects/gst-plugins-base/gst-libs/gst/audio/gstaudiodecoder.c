@@ -266,6 +266,7 @@ struct _GstAudioDecoderPrivate
 
   /* properties */
   GstClockTime latency;
+  /* MT-protected (with LOCK) */
   GstClockTime reported_min_latency;
   GstClockTime tolerance;
   gboolean plc;
@@ -1083,6 +1084,8 @@ gst_audio_decoder_output (GstAudioDecoder * dec, GstBuffer * buf)
   GstAudioDecoderPrivate *priv;
   GstFlowReturn ret = GST_FLOW_OK;
   GstBuffer *inbuf = NULL;
+  GstClockTime reported_min_latency;
+  gboolean update_latency;
 
   priv = dec->priv;
 
@@ -1097,9 +1100,16 @@ gst_audio_decoder_output (GstAudioDecoder * dec, GstBuffer * buf)
         GST_TIME_ARGS (GST_BUFFER_DURATION (buf)));
   }
 
-  if (priv->ctx.min_latency != priv->reported_min_latency) {
+  /* reported-min-latency can be set from any thread, so take one snapshot of
+   * it to compare with and to report */
+  GST_OBJECT_LOCK (dec);
+  reported_min_latency = priv->reported_min_latency;
+  update_latency = priv->ctx.min_latency != reported_min_latency;
+  GST_OBJECT_UNLOCK (dec);
+
+  if (update_latency) {
     gst_audio_decoder_set_latency (dec,
-        priv->reported_min_latency, priv->reported_min_latency);
+        reported_min_latency, reported_min_latency);
   }
 
 again:
@@ -3328,7 +3338,9 @@ gst_audio_decoder_get_property (GObject * object, guint prop_id,
       g_value_set_int64 (value, dec->priv->latency);
       break;
     case PROP_REPORTED_MIN_LATENCY:
+      GST_OBJECT_LOCK (dec);
       g_value_set_int64 (value, dec->priv->ctx.min_latency);
+      GST_OBJECT_UNLOCK (dec);
       break;
     case PROP_TOLERANCE:
       g_value_set_int64 (value, dec->priv->tolerance);
@@ -3358,7 +3370,9 @@ gst_audio_decoder_set_property (GObject * object, guint prop_id,
       dec->priv->latency = g_value_get_int64 (value);
       break;
     case PROP_REPORTED_MIN_LATENCY:
+      GST_OBJECT_LOCK (dec);
       dec->priv->reported_min_latency = g_value_get_int64 (value);
+      GST_OBJECT_UNLOCK (dec);
       break;
     case PROP_TOLERANCE:
       dec->priv->tolerance = g_value_get_int64 (value);

@@ -1192,6 +1192,121 @@ GST_START_TEST (audiodecoder_plc_on_gap_event_with_delay)
 
 GST_END_TEST;
 
+static void
+fail_unless_latency_changed_events (GstHarness * h, guint expected)
+{
+  GstEvent *event;
+  guint count = 0;
+
+  while ((event = gst_harness_try_pull_event (h)) != NULL) {
+    if (GST_EVENT_TYPE (event) == GST_EVENT_LATENCY_CHANGED)
+      count++;
+    gst_event_unref (event);
+  }
+
+  fail_unless_equals_int (expected, count);
+}
+
+GST_START_TEST (audiodecoder_reported_min_latency)
+{
+  GstHarness *h = setup_audiodecodertester (NULL, NULL);
+  gint64 latency;
+  guint64 pkt = 0;
+
+  g_object_get (h->element, "reported-min-latency", &latency, NULL);
+  fail_unless_equals_int64 (0, latency);
+
+  /* the first buffer sets up the stream, there is nothing to report yet */
+  fail_unless_equals_int64 (GST_FLOW_OK,
+      gst_harness_push (h, create_test_buffer (pkt++)));
+  gst_buffer_unref (gst_harness_pull (h));
+  fail_unless_equals_uint64 (0, gst_harness_query_latency (h));
+  fail_unless_latency_changed_events (h, 0);
+
+  /* the new latency is reported when the next buffer is decoded */
+  g_object_set (h->element, "reported-min-latency",
+      (gint64) (40 * GST_MSECOND), NULL);
+  fail_unless_equals_int64 (GST_FLOW_OK,
+      gst_harness_push (h, create_test_buffer (pkt++)));
+  gst_buffer_unref (gst_harness_pull (h));
+  fail_unless_equals_uint64 (40 * GST_MSECOND, gst_harness_query_latency (h));
+  g_object_get (h->element, "reported-min-latency", &latency, NULL);
+  fail_unless_equals_int64 (40 * GST_MSECOND, latency);
+  fail_unless_latency_changed_events (h, 1);
+
+  /* an unchanged latency is not reported again */
+  fail_unless_equals_int64 (GST_FLOW_OK,
+      gst_harness_push (h, create_test_buffer (pkt++)));
+  gst_buffer_unref (gst_harness_pull (h));
+  fail_unless_equals_uint64 (40 * GST_MSECOND, gst_harness_query_latency (h));
+  fail_unless_latency_changed_events (h, 0);
+
+  /* and lowering it is reported as well */
+  g_object_set (h->element, "reported-min-latency", (gint64) 0, NULL);
+  fail_unless_equals_int64 (GST_FLOW_OK,
+      gst_harness_push (h, create_test_buffer (pkt++)));
+  gst_buffer_unref (gst_harness_pull (h));
+  fail_unless_equals_uint64 (0, gst_harness_query_latency (h));
+  g_object_get (h->element, "reported-min-latency", &latency, NULL);
+  fail_unless_equals_int64 (0, latency);
+  fail_unless_latency_changed_events (h, 1);
+
+  gst_harness_teardown (h);
+}
+
+GST_END_TEST;
+
+typedef struct
+{
+  GstElement *dec;
+  gboolean high;
+} ReportedMinLatencyToggle;
+
+static void
+toggle_reported_min_latency (G_GNUC_UNUSED gpointer thread, gpointer data)
+{
+  ReportedMinLatencyToggle *toggle = data;
+  gint64 latency;
+
+  toggle->high = !toggle->high;
+  g_object_set (toggle->dec, "reported-min-latency",
+      (gint64) (toggle->high ? 40 * GST_MSECOND : 0), NULL);
+  g_object_get (toggle->dec, "reported-min-latency", &latency, NULL);
+}
+
+GST_START_TEST (audiodecoder_reported_min_latency_stress)
+{
+  GstHarness *h = setup_audiodecodertester (NULL, NULL);
+  ReportedMinLatencyToggle toggle = { h->element, FALSE };
+  GstHarnessThread *toggle_t;
+  gint64 end_time, latency;
+  guint64 i;
+
+  gst_harness_set_drop_buffers (h, TRUE);
+
+  /* the latency is set from another thread than the one decoding */
+  toggle_t = gst_harness_stress_custom_start (h, NULL,
+      toggle_reported_min_latency, &toggle, 100);
+
+  end_time = g_get_monotonic_time () + 200 * G_TIME_SPAN_MILLISECOND;
+  for (i = 0; g_get_monotonic_time () < end_time; i++) {
+    fail_unless_equals_int64 (GST_FLOW_OK,
+        gst_harness_push (h, create_test_buffer (i)));
+  }
+
+  gst_harness_stress_thread_stop (toggle_t);
+
+  /* the last latency that was set ends up being reported */
+  fail_unless_equals_int64 (GST_FLOW_OK,
+      gst_harness_push (h, create_test_buffer (i)));
+  g_object_get (h->element, "reported-min-latency", &latency, NULL);
+  fail_unless_equals_int64 (toggle.high ? 40 * GST_MSECOND : 0, latency);
+
+  gst_harness_teardown (h);
+}
+
+GST_END_TEST;
+
 GST_START_TEST (audiodecoder_dtx)
 {
   guint pkt = 0;
@@ -1365,6 +1480,10 @@ gst_audiodecoder_suite (void)
 
   tcase_add_test (tc, audiodecoder_plc_on_gap_event);
   tcase_add_test (tc, audiodecoder_plc_on_gap_event_with_delay);
+
+  suite_add_tcase (s, tc = tcase_create ("latency"));
+  tcase_add_test (tc, audiodecoder_reported_min_latency);
+  tcase_add_test (tc, audiodecoder_reported_min_latency_stress);
 
   suite_add_tcase (s, tc = tcase_create ("dtx"));
   tcase_add_test (tc, audiodecoder_dtx);
